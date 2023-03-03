@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en-US">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>DOM Testpage</title>
+
+    <style>
+        .hidden {
+            display: none;
+        }
+
+        .fixed {
+            position: fixed;
+        }
+
+        .orange {
+            background-color: orange;
+        }
+
+        .notice {
+            width: 200px;
+            height: 40px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="hello">Hello Biloba!</div>
+    <div id="hidden-parent" class="hidden">
+        <div id="hidden-child">Can't see me!</div>
+        <div id="fixed-hidden-child" class="fixed">Can't see me either!</div>
+        <button id="hidden-button">Hidden Button</button>
+        <input type="text" id="hidden-text-input" value="my-hidden-value"></input>
+    </div>
+    <ol id="list">
+        <li>First Things</li>
+        <li>Second Things</li>
+        <li>Third Things</li>
+    </ol>
+    <div id="classy" class="dog cat"></div>
+    <div id="check-boxes">
+        <div id="checked-color"></div>
+        <input type="checkbox" id="red" oninput="manageCheckboxes()" checked>Red</input>
+        <input type="checkbox" id="blue" onchange="manageCheckboxes()">Blue</input>
+        <input type="checkbox" id="yellow" onchange="manageCheckboxes()" disabled>yellow</input>
+        <input type="checkbox" id="green" onchange="manageCheckboxes()" class="hidden">green</input>
+    </div>
+    <div id="radio-buttons">
+        <input type="radio" name="appliances" value="toaster" checked>Toaster</input>
+        <input type="radio" name="appliances" value="stove">Stove</input>
+        <input type="radio" name="appliances" value="microwave">Microwave</input>
+    </div>
+    <divv id="properties">
+        <div class="notice" magic="on">Some Text</div>
+    </divv>
+    </div>
+    <div id="counter" class="orange">A counter</div>
+    <input type="number" id="counter-input" value=0></input>
+    <button id="increment">Increment</button>
+    <button id="decrement">Decrement</button>
+
+    <div id="inputs">
+        <input type="text" id="disabled-text-input" value="i'm off" oninput="changeTextInput()" disabled></input>
+        <div id="disabled-text-input-mirror"></div>
+        <input type="text" id="text-input" value="initial value" onchange="changeTextInput()"></input>
+        <div id="text-input-mirror"></div>
+    </div>
+
+    <script>
+        window.clickedHiddenButton = false
+        document.getElementById("hidden-button").addEventListener("click", () => window.clickedHiddenButton = true)
+        let counter = document.getElementById("counter-input")
+        let value = 0
+        let manageButtons = () => {
+            document.getElementById("increment").disabled = value == 10
+            document.getElementById("decrement").disabled = value == 0
+        }
+        document.getElementById("increment").addEventListener("click", () => {
+            value += 1
+            counter.value = value
+            console.log("increment to ", value)
+            manageButtons()
+        })
+        document.getElementById("decrement").addEventListener("click", () => {
+            value -= 1
+            counter.value = value
+            console.log("decrement to ", value)
+            manageButtons()
+        })
+        manageButtons()
+        var bilobaSaysWhen = () => {
+            const when = document.createElement("div");
+            when.id = "say-when"
+            setTimeout(() => {
+                document.querySelector("body").appendChild(when)
+            }, 200)
+        }
+        var manageCheckboxes = () => {
+            let value = "black"
+            if (document.getElementById("red").checked) value = "red"
+            if (document.getElementById("blue").checked) value = (value == "red") ? "purple" : "blue"
+            if (document.getElementById("yellow").checked) value = "yellow"
+            if (document.getElementById("green").checked) value = "green"
+            document.getElementById("checked-color").innerText = value
+        }
+        var enableYellow = () => {
+            setTimeout(() => {
+                document.getElementById("yellow").disabled = false
+            }, 200)
+        }
+        manageCheckboxes()
+        var changeTextInput = () => {
+            document.getElementById("text-input-mirror").innerText = document.getElementById("text-input").value
+            document.getElementById("disabled-text-input-mirror").innerText = document.getElementById("disabled-text-input").value
+        }
+        changeTextInput()
+        var enableTextInput = () => {
+            setTimeout(() => {
+                document.getElementById("disabled-text-input").disabled = false
+            }, 200)
+        }
+        document.querySelector(".notice").count = 3
+        document.querySelector(".notice").flavor = "strawberry"
+    </script>
+
+</body>
+
+</html>

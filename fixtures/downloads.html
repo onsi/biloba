@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en-US">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Downloads Testpage</title>
+</head>
+
+<body>
+    <input type="text" id="content" value="My Content"></input>
+    <input type="text" id="filename" value="filename.txt"></input>
+    <button id="download">Download</button>
+    <a href="/downloads.html" target="_blank">Open in New Tab</a>
+
+    <script>
+        document.getElementById("download").addEventListener("click", () => {
+            let anchor = document.createElement('a');
+            anchor.setAttribute('href', 'data:text/plain;charset=utf-8,' + document.getElementById("content").value);
+            anchor.setAttribute('download', document.getElementById("filename").value);
+            anchor.click()
+        })
+    </script>
+</body>
+
+</html>

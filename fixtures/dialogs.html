@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en-US">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Dialogs Testpage</title>
+</head>
+
+<body>
+    <div id="status"></div>
+    <button onclick="redAlert()">Red Alert</button>
+    <button onclick="yellowAlert()">Yellow Alert</button>
+    <button onclick="enterWarp()">Enter Warp?</button>
+    <button onclick="setSpeed()">Set Speed</button>
+
+    <a href="./dom.html">Evacuate</a>
+
+    <script onbeforeunload="">
+        var alertLevel = "Green"
+        var warp = false
+        var speed = 0
+        function redAlert() {
+            alert("Red Alert!")
+            alertLevel = "Red"
+            updateStatus()
+        }
+        function yellowAlert() {
+            alert("Yellow Alert!")
+            alertLevel = "Yellow"
+            updateStatus()
+        }
+        function enterWarp() {
+            warp = confirm("Enter Warp?")
+            updateStatus()
+        }
+        function setSpeed() {
+            value = prompt("Set Speed", "3")
+            if (value != null) speed = value
+            updateStatus()
+        }
+
+        function updateStatus() {
+            document.getElementById("status").innerText = alertLevel + " Alert!" + (warp ? (" - Warp Speed: " + speed) : "")
+        }
+
+        updateStatus()
+
+        window.addEventListener("beforeunload", e => {
+            return e.returnValue = "Abandon ship?"
+        })
+    </script>
+</body>
+
+</html>
