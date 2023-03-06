@@ -53,14 +53,3 @@ func (b *Biloba) Run(script string, args ...any) any {
 	}
 	return res
 }
-
-func (b *Biloba) Log(script string) {
-	var result []byte
-	err := chromedp.Run(b.Context, chromedp.Evaluate(script, &result))
-	if err != nil {
-		b.gt.Fatalf("Failed to log item:\n%s\n\n%s", script, err.Error())
-		return
-	}
-	b.gt.Printf(b.gt.F("{{bold}}%s{{/}}\n", script))
-	b.gt.Printf(b.gt.Fi(1, "%s\n", string(result)))
-}

@@ -1,3 +1,13 @@
+/*
+Biloba builds on top of [chromedp] to bring stable, performant, browser automation to Ginkgo
+
+Biloba embraces three principles:
+  - Performance via parallelization
+  - Stability via pragmatism
+  - Conciseness via Ginkgo and Gomega
+
+[chromedp]: https://github.com/chromedp/chromedp/
+*/
 package biloba
 
 import (
@@ -17,8 +27,6 @@ import (
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
-
-const GOOSE_CONFIG_PATH = "./.biloba-config"
 
 type GinkgoTInterface interface {
 	Helper()
@@ -55,11 +63,15 @@ func StartingWindowSize(x int, y int) chromedp.ExecAllocatorOption {
 	return chromedp.WindowSize(x, y)
 }
 
+func gooseConfigPath(process int) string {
+	return fmt.Sprintf("./.biloba-config-%d", process)
+}
+
 func SpinUpChrome(ginkgoT GinkgoTInterface, options ...chromedp.ExecAllocatorOption) ChromeConnection {
 	ginkgoT.Helper()
 	tmp := ginkgoT.TempDir()
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		StartingWindowSize(400, 300),
+		StartingWindowSize(1024, 768),
 		chromedp.UserDataDir(tmp),
 	)
 	opts = append(opts, options...)
@@ -88,8 +100,8 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...chromedp.ExecAllocatorOpt
 		WebSocketURL: fmt.Sprintf("ws://127.0.0.1:%s%s", components[0], components[1]),
 	}
 
-	os.WriteFile(GOOSE_CONFIG_PATH, cc.encode(), 0744)
-	ginkgoT.DeferCleanup(os.Remove, GOOSE_CONFIG_PATH)
+	os.WriteFile(gooseConfigPath(ginkgoT.ParallelProcess()), cc.encode(), 0744)
+	ginkgoT.DeferCleanup(os.Remove, gooseConfigPath(ginkgoT.ParallelProcess()))
 
 	return cc
 }
@@ -131,7 +143,11 @@ func ConnectToChrome(ginkgoT GinkgoTInterface, options ...BilobaConfigOption) *B
 
 	if b.ChromeConnection.WebSocketURL == "" {
 		var cc ChromeConnection
-		data, err := os.ReadFile(GOOSE_CONFIG_PATH)
+		configFilePath := gooseConfigPath(ginkgoT.ParallelProcess())
+		if _, err := os.Stat(configFilePath); err != nil {
+			configFilePath = gooseConfigPath(1)
+		}
+		data, err := os.ReadFile(configFilePath)
 		if err != nil {
 			ginkgoT.Fatalf("failed to load ChromeConnection: %w", err)
 			return nil
@@ -242,10 +258,10 @@ func (b *Biloba) Prepare() {
 	}
 
 	b.lock.Lock()
-	defer b.lock.Unlock()
 	b.downloads = map[string]*Download{}
 	b.dialogHandlers = []*DialogHandler{}
 	b.dialogs = Dialogs{}
+	b.lock.Unlock()
 
 	if !b.disableFailureScreenshots {
 		b.gt.DeferCleanup(b.AttachScreenshotsIfFailed)
@@ -253,6 +269,8 @@ func (b *Biloba) Prepare() {
 	if !b.disableProgressReportScreenshots {
 		b.gt.DeferCleanup(b.gt.AttachProgressReporter(b.progressReporter))
 	}
+
+	b.Navigate("about:blank")
 }
 
 func (b *Biloba) NewTab() *Biloba {
@@ -293,7 +311,7 @@ also test things to validate that we do, in fact, need to do this (i.e. specific
 
 this will entail renaming these helper functions to (e.b.) configureDownloadBehaviorForAllTabsWithBrowserContextID(...)
 */
-func (b *Biloba) CloseTab() error {
+func (b *Biloba) Close() error {
 	if b.isRootTab() {
 		return fmt.Errorf("invalid attempt to close the root tab")
 	}

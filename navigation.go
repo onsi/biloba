@@ -17,7 +17,7 @@ func (b *Biloba) NavigateWithStatus(url string, status int) *Biloba {
 		b.gt.Fatalf("failed to navigate to %s: %s", url, err.Error())
 		return b
 	}
-	if status != int(resp.Status) {
+	if resp != nil && status != int(resp.Status) {
 		b.gt.Fatalf("failed to navigate to %s: expected status code %d, got %d", url, status, resp.Status)
 		return b
 	}

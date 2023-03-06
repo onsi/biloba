@@ -35,7 +35,7 @@ func (b *Biloba) WindowSize() (int, int) {
 
 func (b *Biloba) CaptureScreenshot() []byte {
 	var img []byte
-	err := chromedp.Run(b.Context, chromedp.CaptureScreenshot(&img))
+	err := chromedp.Run(b.Context, chromedp.FullScreenshot(&img, 100))
 	if err != nil {
 		b.gt.Fatalf("Failed to capture screenshot:\n%s", err.Error())
 	}
@@ -75,7 +75,7 @@ func (b *Biloba) safeAllTabScreenshots() []tabScreenshot {
 		var title string
 		err := chromedp.Run(ctx,
 			chromedp.Title(&title),
-			chromedp.CaptureScreenshot(&img),
+			chromedp.FullScreenshot(&img, 100),
 		)
 		if ctx.Err() != nil {
 			out = append(out, tabScreenshot{failure: "Timed out attempting to fetch screenshot for tab"})

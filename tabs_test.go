@@ -198,14 +198,14 @@ var _ = Describe("Tabs", func() {
 
 			Ω(b).Should(b.HaveTab(b.TabWithTitle("DOM Testpage")))
 			Ω(b.AllTabs()).Should(HaveLen(2))
-			Ω(tab.CloseTab()).Should(Succeed())
+			Ω(tab.Close()).Should(Succeed())
 
 			Eventually(b.AllTabs).Should(HaveLen(1))
 			Ω(b).ShouldNot(b.HaveTab(b.TabWithTitle("DOM Testpage")))
 		})
 
 		It("fails when attempting to close the root tab", func() {
-			Ω(b.CloseTab()).Should(MatchError("invalid attempt to close the root tab"))
+			Ω(b.Close()).Should(MatchError("invalid attempt to close the root tab"))
 		})
 	})
 
@@ -229,14 +229,14 @@ var _ = Describe("Tabs", func() {
 			Ω(g3.Title()).Should(Equal("DOM Testpage"))
 			Ω(b.AllTabs()).Should(ConsistOf(b, g2, g3))
 
-			Ω(g2.CloseTab()).Should(Succeed())
-			Ω(g3.CloseTab()).Should(Succeed())
+			Ω(g2.Close()).Should(Succeed())
+			Ω(g3.Close()).Should(Succeed())
 			Eventually(b.AllTabs).Should(ConsistOf(b))
 			Ω(b).ShouldNot(b.HaveTab(b.TabWithTitle("DOM Testpage")))
 			Ω(b).ShouldNot(b.HaveTab(b.TabWithTitle("Nav-B Testpage")))
 			Ω(b).Should(b.HaveTab(b.TabWithTitle("Nav-A Testpage")))
 
-			Ω(b.CloseTab()).Should(MatchError("invalid attempt to close the root tab"))
+			Ω(b.Close()).Should(MatchError("invalid attempt to close the root tab"))
 		})
 
 		It("cleans up tabs between tests", func() {

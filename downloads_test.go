@@ -150,7 +150,7 @@ var _ = Describe("Downloading Files", func() {
 
 		By("opening and closing another new tab")
 		otherTab := b.NewTab()
-		Ω(otherTab.CloseTab()).Should(Succeed())
+		Ω(otherTab.Close()).Should(Succeed())
 
 		By("ensuring we can still download things on the root and new tab")
 		b.SetValue("#content", "Some new content")
@@ -165,7 +165,7 @@ var _ = Describe("Downloading Files", func() {
 		By("spawning then closing a new tab (this will have the same BrowserContextID as our root tab)")
 		b.Click(b.XPath("a").WithTextContains("Open in New Tab"))
 		Eventually(b.AllSpawnedTabs).Should(HaveLen(1))
-		Eventually(b.FindSpawnedTab(b.TabWithTitle("Downloads Testpage")).CloseTab).Should(Succeed()) // only closes if any downloads are completed
+		Eventually(b.FindSpawnedTab(b.TabWithTitle("Downloads Testpage")).Close).Should(Succeed()) // only closes if any downloads are completed
 		Eventually(b.AllSpawnedTabs).Should(HaveLen(0))
 
 		By("ensuring that the closed spawned tab does not mess up the download config for the root tab")
@@ -177,7 +177,7 @@ var _ = Describe("Downloading Files", func() {
 		By("spawning then closing a new tab (this time from a different tab)")
 		tab.Click(tab.XPath("a").WithTextContains("Open in New Tab"))
 		Eventually(tab.AllSpawnedTabs).Should(HaveLen(1))
-		Eventually(tab.FindSpawnedTab(tab.TabWithTitle("Downloads Testpage")).CloseTab).Should(Succeed()) // only
+		Eventually(tab.FindSpawnedTab(tab.TabWithTitle("Downloads Testpage")).Close).Should(Succeed()) // only
 		Eventually(tab.AllSpawnedTabs).Should(HaveLen(0))
 
 		By("ensuring that the closed spawned tab does not mess up the download config for the root tab")

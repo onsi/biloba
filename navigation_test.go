@@ -28,6 +28,10 @@ var _ = Describe("Navigation", func() {
 			b.Navigate("floop")
 			ExpectFailures(ContainSubstring("Cannot navigate to invalid URL"))
 		})
+
+		It("succeeds when navigating to about:blank", func() {
+			b.Navigate("about:blank")
+		})
 	})
 
 	Describe("title", func() {
