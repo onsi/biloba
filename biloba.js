@@ -45,7 +45,7 @@ if (!window["_biloba"]) {
         return r(dispatchInputChange(n))
     })
     b.getClassList = h(n => rRes(Array.from(n.classList)))
-    b.hasProperties = h((n, p) => {
+    b.hasProperty = h((n, p) => {
         let v = n
         for (const subP of p.split(".")) {
             if (!(subP in v)) return r(false, "DOM element does not have property " + p)
@@ -53,7 +53,7 @@ if (!window["_biloba"]) {
         }
         return r(true)
     })
-    b.getProperty = h(b.hasProperties, (n, p) => rRes(p.split(".").reduce((v, subP) => v[subP], n)))
+    b.getProperty = h(b.hasProperty, (n, p) => rRes(p.split(".").reduce((v, subP) => v[subP], n)))
 
     window["_biloba"] = b
 }

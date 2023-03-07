@@ -144,19 +144,29 @@ func (b *Biloba) GetProperty(selector any, property string) any {
 	return r.Result
 }
 
-func (b *Biloba) HaveProperty(property string, expected interface{}) types.GomegaMatcher {
+func (b *Biloba) HaveProperty(property string, expected ...any) types.GomegaMatcher {
 	var data = map[string]any{}
-	var matcher = matcherOrEqual(expected)
 	data["Property"] = property
-	data["Matcher"] = matcher
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
-		r := b.runBilobaHandler("getProperty", selector, property)
-		if r.Error() != nil {
-			return false, r.Error()
-		}
-		data["Result"] = r.Result
-		return matcher.Match(data["Result"])
-	}).WithTemplate("HaveProperty \"{{.Data.Property}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	if len(expected) == 0 {
+		return gcustom.MakeMatcher(func(selector any) (bool, error) {
+			r := b.runBilobaHandler("hasProperty", selector, property)
+			if r.Error() != nil {
+				return false, r.Error()
+			}
+			return r.Success, nil
+		}).WithTemplate("Expected {{.Actual}} {{.To}} have property \"{{.Data.Property}}\"", data)
+	} else {
+		var matcher = matcherOrEqual(expected[0])
+		data["Matcher"] = matcher
+		return gcustom.MakeMatcher(func(selector any) (bool, error) {
+			r := b.runBilobaHandler("getProperty", selector, property)
+			if r.Error() != nil {
+				return false, r.Error()
+			}
+			data["Result"] = r.Result
+			return matcher.Match(data["Result"])
+		}).WithTemplate("HaveProperty \"{{.Data.Property}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}
 }
 
 func (b *Biloba) IsChecked(selector any) bool {

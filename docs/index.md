@@ -739,14 +739,23 @@ property := b.GetProperty(selector, "dataset.name") //returns any
 
 will return the `data-name` attribute defined on the element.
 
-To make assertions on properties, and to poll, use the `HaveProperty` matcher.  You can pass in Gomega matchers to make assertions on the returned property value which is a convenient way to handle the returned `any` type seamlessly:
+To make assertions on properties, and to poll, use the `HaveProperty` matcher.  There are two ways to use `HaveProperty` - to check that the property is defined at all simply provide the property:
+
+```go
+Eventually(selector).Should(b.HaveProperty("href"))
+Eventually(selector).ShouldNot(b.HaveProperty("dataset.name"))
+```
+
+To assert on the _value_ of the property, you can pass in a second argument. If you pass in a Gomega matchers, the returned property value will be matched against it (which can be a convenient way to not have to worry about types and let Gomega deal with them for you).  Alternatively you can pass in anything else to perform a `DeepEqual` match:
 
 ```go
 Eventually(selector).Should(b.HaveProperty("href", HaveSuffix("toc.html"))) //an assertion on a string
 Eventually(selector).Should(b.HaveProperty("hidden", BeFalse())) //an assertion on a bool
-Eventually(selector).Should(b.HaveProperty("clasList", HaveKeyWithValue("0", "blue"))) //an assertion on a map
+Eventually(selector).Should(b.HaveProperty("classList", HaveKeyWithValue("0", "blue"))) //an assertion on a map
 Eventually(selector).Should(b.HaveProperty("dataset.name", "henry")) // an assertion on a string
 ```
+
+`HaveProperty` ensures the element exists and, when passed a second argument, that the requested property is defined.
 
 ---
 
@@ -772,6 +781,12 @@ Eventually(selector).Should(b.HaveClass(ContainElement("published")))
 i.e. the class list should include `published`.
 
 ### Form Elements
+
+Biloba lets you get and set the `value` property on input elements
+
+#### Working with Checkboxes and Radio Buttons
+
+#### Working with Select Inputs
 
 ### Clicking on Things
 

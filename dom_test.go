@@ -312,6 +312,7 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
 		})
 	})
+
 	Describe("SetValue", func() {
 		Context("when called directly", func() {
 			It("sets the value correctly", func() {
@@ -427,6 +428,12 @@ var _ = Describe("DOM manipulators and matchers", func() {
 	})
 
 	Describe("HaveProperty", func() {
+		It("checks property existence when not passed a second argument", func() {
+			Ω(".notice").Should(b.HaveProperty("count"))
+			Ω(".notice").Should(b.HaveProperty("classList"))
+			Ω(".notice").ShouldNot(b.HaveProperty("non-existing"))
+		})
+
 		It("returns properties defined on the element", func() {
 			Ω(".notice").Should(b.HaveProperty("count", 3.0))
 			Ω(".notice").Should(b.HaveProperty("tagName", "DIV"))
@@ -446,7 +453,7 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
 		})
 
-		It("returns an error when the element does not have the property in question", func() {
+		It("returns an error when the element does not have the property in question and a second argument is provided", func() {
 			match, err := b.HaveProperty("floop", "any").Match(".notice")
 			Ω(match).Should(BeFalse())
 			Ω(err).Should(MatchError("DOM element does not have property floop: .notice"))
