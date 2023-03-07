@@ -18,6 +18,7 @@ var _ = DescribeTable("Xpath DSL",
 	//empty and specific tag variants
 	Entry(nil, b.XPath().WithAttr("type", "number"), "age-input"),
 	Entry(nil, b.XPath("input").WithAttr("type", "number"), "age-input"),
+	Entry(nil, b.XPath("input").HasAttr("disabled"), "phone-input"),
 
 	//WithClass combined with different tags
 	Entry(nil, b.XPath().WithClass("highlight"), "age-label"),
@@ -57,6 +58,16 @@ var _ = DescribeTable("Xpath DSL",
 		b.XPredicate().WithClass("octopus"),
 		b.XPredicate().WithClass("bear"),
 	), "aquarium"),
+	Entry(nil, b.XPath("div").Or(
+		b.XPredicate().And(
+			b.XPredicate().WithClass("red"),
+			b.XPredicate().WithText("Error"),
+		),
+		b.XPredicate().And(
+			b.XPredicate().WithClass("orange"),
+			b.XPredicate().WithText("Warning"),
+		),
+	).Not(b.XPredicate().HasAttr("fire-drill")), "orange-flag"),
 
 	//indexing
 	Entry(nil, b.XPath("div").WithAttr("name", "habitat").First(), "aquarium"),

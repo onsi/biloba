@@ -35,6 +35,10 @@ func (x XPath) String() string {
 	return string(x)
 }
 
+func (x XPath) HasAttr(attr string) XPath {
+	return x + XPath("[@"+attr+"]")
+}
+
 func (x XPath) WithAttr(attr string, value string) XPath {
 	return x + XPath("[@"+attr+"='"+value+"']")
 }

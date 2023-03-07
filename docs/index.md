@@ -455,7 +455,7 @@ In all three cases the tab is an instance of `*Biloba` and in general all three 
 
 ### Creating and Closing Tabs Explicitly
 
-You create Tabs using `tab := b.NewTab()`.  Here's a pseudocode example that shows us testing a multi-user chat application.  It includes an example of reusable helper function to handle logging in to the site, a well as extensive use of `Xpath` selectors to perform complex DOM queries:
+You create Tabs using `tab := b.NewTab()`.  Here's a pseudocode example that shows us testing a multi-user chat application.  It includes an example of reusable helper function to handle logging in to the site, a well as extensive use of `XPath` selectors to perform complex DOM queries:
 
 ```go
 func login(tab *Biloba, user string, password string) {
@@ -476,47 +476,47 @@ Describe("a simple chat app", func() {
 	})
 
 	It("shows all logged in users as present", func() {
-		userXpath := b.Xpath("div").WithID("user-list").Descendant()
+		userXPath := b.XPath("div").WithID("user-list").Descendant()
 		// b should show both users
-		Eventually(userXpath.WithText("Sally")).Should(b.HaveClass("online"))
-		Eventually(userXpath.WithText("Jane")).Should(b.HaveClass("online"))
+		Eventually(userXPath.WithText("Sally")).Should(b.HaveClass("online"))
+		Eventually(userXPath.WithText("Jane")).Should(b.HaveClass("online"))
 		// tab should show both users
-		Eventually(userXpath.WithText("Sally")).Should(tab.HaveClass("online"))
-		Eventually(userXpath.WithText("Jane")).Should(tab.HaveClass("online"))
+		Eventually(userXPath.WithText("Sally")).Should(tab.HaveClass("online"))
+		Eventually(userXPath.WithText("Jane")).Should(tab.HaveClass("online"))
 	})
 
 	It("shows Jane when Sally is typing", func() {
-		lastEntryXpath := tab.Xpath("#conversation").Descendant().WithClass("entry").Last()
+		lastEntryXPath := tab.XPath("#conversation").Descendant().WithClass("entry").Last()
 		b.SetValue("#input", "Hey Jane, how are you?")
-		Eventually(lastEntryXpath).Should(SatisfyAll(
+		Eventually(lastEntryXPath).Should(SatisfyAll(
 			tab.HaveInnerText("Jane is typing..."),
 			tab.HaveClass("typing"),
 		))
 
 		b.SetValue("#input", "")
-		Eventually(lastEntryXpath).ShouldNot(SatisfyAny(
+		Eventually(lastEntryXPath).ShouldNot(SatisfyAny(
 			tab.HaveInnerText("Jane is typing..."),
 			tab.HaveClass("typing"),
 		))
 	})
 
 	It("shows Jane new messages from Sally, and sally new messages from Jane", func() {
-		lastEntryXpath := tab.Xpath("#conversation").Descendant().WithClass("entry").Last()
+		lastEntryXPath := tab.XPath("#conversation").Descendant().WithClass("entry").Last()
 		b.SetValue("#input", "Hey Jane, how are you?")
 		b.Click("#send")
-		Eventually(lastEntryXpath).Should(tab.HaveInnerText("Hey Jane, how are you?"))
+		Eventually(lastEntryXPath).Should(tab.HaveInnerText("Hey Jane, how are you?"))
 
 		tab.SetValue("#input", "I'm splendid, Sally!")
 		tab.Click("#send")
-		Eventually(lastEntryXpath).Should(b.HaveInnerText("I'm splendid, Sally!"))
+		Eventually(lastEntryXPath).Should(b.HaveInnerText("I'm splendid, Sally!"))
 	})
 
 	It("tracks when users aren't online", func() {
-		userXpath := b.Xpath("div").WithID("user-list").Descendant()
-		Eventually(userXpath.WithText("Jane")).Should(b.HaveClass("online"))
+		userXPath := b.XPath("div").WithID("user-list").Descendant()
+		Eventually(userXPath.WithText("Jane")).Should(b.HaveClass("online"))
 
 		tab.Close()
-		Eventually(userXpath.WithText("Jane")).Should(b.HaveClass("offline"))
+		Eventually(userXPath.WithText("Jane")).Should(b.HaveClass("offline"))
 	})
 })
 ```
@@ -547,9 +547,9 @@ Context("when Sally sends Jane a link", func() {
 	})
 	
 	It("allows Jane to open the link in a new tab", func() {
-		lastEntryXpath := tab.Xpath("#conversation").Descendant().WithClass("entry").Last()
-		Eventually(lastEntryXpath).Should(tab.HaveInnerText("Hey Jane, check this out: YouTube"))
-		tab.Click(lastEntryXpath.Child("a"))
+		lastEntryXPath := tab.XPath("#conversation").Descendant().WithClass("entry").Last()
+		Eventually(lastEntryXPath).Should(tab.HaveInnerText("Hey Jane, check this out: YouTube"))
+		tab.Click(lastEntryXPath.Child("a"))
 		Eventually(tab).Should(tab.HaveSpawnedTab(tab.TabWithURL("https://www.youtube.com/watch?v=dQw4w9WgXcQ")))
 		youtubeTab := tab.FindSpawnedTab(tab.TabWithURL("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
 		Eventually("body").Should(youtubeTab.HaveInnerText(ContainSubstring("Never Gonna Give You Up")))
@@ -662,7 +662,7 @@ Eventually(selector).Should(b.BeVisible())
 
 Biloba's visibility check performs the following javascript as one atomic unit:
 
-- query the selector
+- query the selector and grab the first matching element
 - fail if no element is returned (validate existence)
 - check the element's visibility and return the result
 
@@ -686,9 +686,9 @@ Eventually(selector).Should(b.BeEnabled())
 
 This performs the following javascript as one atomic unit:
 
-- query the selector
+- query the selector and grab the first matching element
 - fail if no element is returned (validate existence)
-- check that the element is not disabled  and return the result
+- check that the element is not disabled and return the result
 
 Biloba's disabled check is simply:
 
@@ -721,6 +721,8 @@ Eventually(selector).Should(b.HaveInnerText(HavePrefix("Expected")))
 //etc...
 ```
 
+Both `HaveInnerText` and `InnerText` always operate on the **first** element matching `selector.
+
 ### Properties and Classes
 
 You can get any JavaScript property defined on an element via `GetProperty()` for example:
@@ -729,7 +731,7 @@ You can get any JavaScript property defined on an element via `GetProperty()` fo
 property := b.GetProperty(selector, "href") //returns any
 ```
 
-this will query the DOM immediately and return the property value.  The value will have type `any` and the actual type will depend on what was stored in the property in JavaScript.  If no element matching selector is found, or the property is not defined on the element the test will fail.
+this will query the DOM immediately and return the property value of the **first** element matching `selector`.  The value will have type `any` and the actual type will depend on what was stored in the property in JavaScript.  If no element matching `selector` is found, or the property is not defined on the element the test will fail.
 
 You can fetch subproperties using `.` notation:
 
@@ -778,19 +780,305 @@ the behavior is equivalent to:
 Eventually(selector).Should(b.HaveClass(ContainElement("published")))
 ```
 
-i.e. the class list should include `published`.
+i.e. the class list should include `published`.  `HaveClass` always operates on the **first** element found by `selector`.
 
 ### Form Elements
 
-Biloba lets you get and set the `value` property on input elements
+Biloba provides three methods to help you get and set the values of input elements. `b.GetValue` gets values, `b.SetValue` sets values, and `b.HaveValue` matches against values.  All three operate on the **first** element that matches their `selector`.
 
-#### Working with Checkboxes and Radio Buttons
+For most input elements you use them like this:
 
-#### Working with Select Inputs
+```go
+val := b.GetValue("#my-text-input")
+b.SetValue("#my-text-input", "your new value")
+Eventually("#my-text-input").Should(b.HaveValue("some other value"))
+Eventually("#my-text-input").Should(b.HaveValue(ContainSubstring("other")))
+```
+
+`GetValue` will fail the test if it can't find a DOM element matching the selector.  If it does, it will return that DOM element's value even if the DOM element is hidden or disabled.  Similarly, `HaveValue` will fail to match if it can't find an element - but will proceed if the element is hidden or disabled.
+
+`SetValue`, on the other hand, requires that the element exist, be visible, and be enabled:
+
+```go
+b.SetValue("#my-hidden-numeric-input", 3)
+```
+
+will fail the test (assuming `#my-hidden-numeric-input` is not visible).  You can, however, use `b.SetValue` _as a matcher_:
+
+```go
+Eventually("#my-temporarily-hidden-numeric-input").Should(b.SetValue(3))
+```
+
+If `SetValue` has two arguments - it operates immediately and fails the test if it runs into issues.  If it only has one argument it returns a matcher that you can poll.
+
+> What about types?  I see you sending both strings and integers to SetValue.
+
+Good question.  `SetValue` will take most things and translate them to valid javascript to send to the input element.  You can stick with strings if you'd like, but you don't need to.
+
+Similarly, `GetValue` returns `any`.  That means you'll need to do a type-check or type-assertion if you want to use the return value directly:
+
+```go
+val := b.GetValue("#my-text-input").(string)
+```
+
+but you probably won't need to as you can just use `b.HaveValue` and let Gomega manage the types for you:
+
+```go
+Expect("#my-text-input").To(b.HaveValue(WithPrefix("hello")))
+```
+
+> Why doesn't `GetValue` just always return `string`.  After all, these are input elements.  Their values are always strings.
+
+Not quite.  And this is where `GetValue`, `SetValue`, and `HaveValue` do some extra lifting to try to make your life easier.
+
+In general, most input types take and return strings (e.g. `text`, `numeric`, `color`, `date`, `email`, etc... inputs).  `textarea`s do as well.  As do `select` elements that don't have `multiple` set.  For all these you can `GetValue`, `SetValue`, and `HaveValue` with strings.  (Recall that the value of a `select` element is `value` attribute on the selected `option`).
+
+But `checkboxes`, `radio` buttons, and `<select multiple>` elements all behavior differently.  Biloba rationalizes all these differences for you through `GetValue`/`SetValue`/`HaveValue`
+
+#### Working with Checkboxes
+
+When `selector` refers to a checkbox:
+
+- `b.GetValue(selector)` returns a boolean denoting whether or not the checkbox is selected
+- `b.SetValue(selector, true/false)` and `Expect(select).To(b.SetValue(true/false))` will check the box if passed `true` and uncheck the box if passed `false`.  If you want to toggle the box use `b.Click(selector)` instead.
+- `b.HaveValue()` will receive a boolean.  So you can use `b.HaveValue(true)` or `b.HaveValue(BeTrue())` to assert the box is checked (and `false`/`BeFalse()` to assert it is not checked).
+
+### Working with Radio buttons
+
+Radio buttons are a bit trickier.  Recall that the browser groups radio buttons by their `name` attribute and that the value of the radio button is associated with its `value` attribute and whether or not the radio button is selected is determined by its `checked` property.
+
+When `selector` refers to a radio button (any radio button in a given radio button group) then:
+
+- `b.GetValue(selector)` returns the `value` attribute of the `checked` radio button in the named group associated with `selector`
+- `b.SetValue(selector, "value")` and `Expect(select).To(b.SetValue("value"))` will check the radio button in the associated named group that has value "value".
+- `b.HaveValue()` will receive the `value` attribute of the `checked` radio button.
+
+Let's look at a concrete example.  Let's say you've got:
+
+```html
+<input type="radio" name="jedi" value="luke" id="luke"><label for="luke">Luke</label>
+<input type="radio" name="jedi" value="yoda" id="yoda" checked><label for="yoda">Yoda</label>
+<input type="radio" name="jedi" value="obi-wan" id="obi-wan"><label for="obi-wan">Obi-Wan</label>
+```
+
+Then you can interact with this group of radio buttons like so:
+
+```go
+val := b.GetValue("[name='jedi']") //val will be "luke"
+Expect("[name='jedi']").To(b.HaveValue("luke"))
+Expect("#yoda").To(b.HaveValue("luke")) // #yoda refers to a radio button in the 'jedi' group, Biloba will find the value of the checked checkbox in the group and return it
+
+//we can use have property to validate that luke is checked and obi-wan is not
+Expect("#luke").To(b.HaveProperty("checked", true))
+Expect("#obi-wan").To(b.HaveProperty("checked", false))
+Expect("[name='jedi']").To(b.SetValue("obi-wan")) //We set the value to obi-wan...
+Expect("[name='jedi']").To(b.HaveValue("obi-wan")) //..so the value of the group is now obi-wan
+//...and the undelrying checked properties have changed
+Expect("#luke").To(b.HaveProperty("checked", false))
+Expect("#obi-wan").To(b.HaveProperty("checked", true))
+```
+
+Note that the `HaveProperty("checked", ...)` calls are just there for illustrative purposes.  With Biloba you don't have to worry about managing the radio buttons individually - just reference the group and get/set it's value.
+
+Lastly, `SetValue` will fail if the value does not exist (i.e. no matching radio button in the named group has the specified value) or if the radio button with the desired value is hidden or disabled.
+
+### Working with Multi-Select Inputs
+
+`<select multiple>` inputs can have more than one associated `<option>` `selected`.  Recall that each `<option>` has a `value` attribute that denotes its value.  Biloba handles multi-select inputs by returning and setting `[]string{}` values.  When `selector` refers to a `<select mulitple>` element:
+
+- `b.GetValue(selector)` returns a `[]string` that contains the `value` attributes of all of the `selected` options.  If none are selected then `[]string{}` is returned
+- `b.SetValue(selector, []string{"value1", "value2"})` and `Expect(select).To(b.SetValue([]string{"value1", "value2"}))` will ensure that exactly the options with values of `"value1"` or `"value2"` are selected.
+- `b.HaveValue()` will receive the same `[]string` slice returned by `selector` and match against it.
+
+
+Let's look at a concrete example.  Let's say you've got:
+
+```html
+<select id="away-team" mulitple>
+	<option value="picard">Picard</option>
+	<option value="riker" selected>Riker</option>
+	<option value="geordi" selected>Geordi</option>
+	<option value="data">Data</option>
+</select>
+```
+
+Then you can interact with this group of radio buttons like so:
+
+```go
+Expect("#away-team").To(b.HaveValue(ConsistOf("riker", "geordi"))) // we use gomega's ConsistOf to make assertions on the return slice of values
+
+b.SetValue("#away-team", []string{"picard", "riker"}) // we set a different selection
+Expect("#away-team").To(b.HaveValue(ConsistOf("picard", "riker"))) // note that we didn't have to deselect Geordi - Biloba does that for us
+
+b.SetValue("#away-team", []string{}) // we clear the selection
+Expect("#away-team").To(b.HaveValue(BeEmpty())) // nothing is selected
+```
+
+One last note, `SetValue` will fail if it can't find an option with the specified value _or_ if the option it finds is `disabled`.
 
 ### Clicking on Things
 
+You can click on elements with `b.Click()`.  If you run
+
+```go
+b.Click(selector)
+```
+
+Biloba will find the **first** element matching `selector`, confirm that it exists, is visible, and is enabled - and then it will call `element.Click()`.  If any of these checks fail, `b.Click` will fail the test.
+
+You can, alternatively, use `b.Click()` as a matcher:
+
+```go
+Eventually(selector).Should(b.Click())
+```
+
+this will poll the browser until `selector` points to an element that exists, is visible, and is enabled.  At which point the element will be clicked (just once) and the assertion will succeed.
+
+The ability to use `Eventually` in this way is convenient as it allow you to write code like this:
+
+```go
+b.Navigate("http://example.com/homepage")
+Eventually("#login").Should(b.Click())
+```
+
+you don't need a separate `Eventually` poll to wait for the page to load or the element to appear.
+
 ### The XPath DSL
+
+XPath queries provide a powerful way to select DOM elements.  As mentioned above, if you're new to XPath queries you can check out the [MDN docs](https://developer.mozilla.org/en-US/docs/Web/XPath) or the [XPath Cheatsheet at devhints.io](https://devhints.io/xpath).  This will not be an exhaustive XPath tutorial.
+
+XPath queries can be a bit fiddly to write and read.  To promote their use, Biloba provides a mini-DSL for constructing them.
+
+You start building an XPath query with `b.XPath()` and then chain together additional XPath components.
+
+If you call `b.XPath()` with no arguments the query will begin with `//*` (i.e. "find any element in the document").  If you call with a tag-name e.g. `b.XPath("div")` the query will begin with `//div`.  You can also simply provide a full fledged query (anything that begin with `/` or `./`) like so: `b.XPath("//div[@id='foo']")`.
+
+Once you've started your query you layer on additional components using the DSL.  Here's a few examples:
+
+```go
+// find a div
+b.XPath("div")
+
+//by id
+// find any element with id "submit"
+b.XPath().WithID("submit")
+
+//by CSS class
+// find any element with class "red"
+b.XPath().WithClass("red")
+// find a button with CSS classes "red" and "highlight"
+b.XPath().WithClass("red").WithClass("highlight")
+
+// attributes
+// find a disabled button
+b.XPath("button").HasAttr("disabled") 
+// find an input with attribute name that begin with "astro"
+b.XPath("input").WithAttr("type", "text") 
+// find an input with attribute name that begin with "astro"
+b.XPath("input").WithAttrStartsWith("name", "astro") 
+// find any element with attribute name that contains the string "bueller"
+b.XPath().WithAttrContains("name", "bueller") 
+
+// textual content
+// find a button with text "Next"
+b.XPath("button").WithText("Next") 
+// find an li with text that starts with "Table of Contents"
+b.XPath("li").WithTextStartsWith("Table of Contents") 
+// find an quote elment with text that contains "have a dream"
+b.XPath("quote").WithTextStartsWith("have a dream") 
+
+// boolean logic
+// note we need to use b.XPredicate() to build the predicate to pass to the boolean operators
+// find a button with text Add Comment that is not disabled
+b.XPath("button").WithText("Add Comment").Not(b.XPredicate().HasAttr("disabled"))
+//find a radio button that is disabled
+b.XPath("input").WithAttr("type", "radio").HasAttr("disabled")
+//find a radio button that is disabled using And
+b.XPath("input").And(b.XPredicate().WithAttr("type", "radio"), b.XPredicate().HasAttr("disabled"))
+//find a div that is either red with the text Error or orange with the text Warning but without attr "fire-drill"
+b.XPath("div").Or(
+	b.XPredicate().And(
+		b.XPredicate().WithClass("red"),
+		b.XPredicate().WithText("Error"),
+	),
+	b.XPredicate().And(
+		b.XPredicate().WithClass("orange"),
+		b.XPredicate().WithText("Warning"),
+	),
+).Not(b.XPredicate().HasAttr("fire-drill"))
+```
+
+> Hey now,  that "mini-dsl" of yours ain't looking so "mini" any more.
+
+Yes, yes, all that `XPredicate()` stuff gets verbose and all those boolean operations can pile on.  But it still beats:
+
+```
+//div[((contains(concat(' ',normalize-space(@class),' '),' red ')) and (text()='Error')) or ((contains(concat(' ',normalize-space(@class),' '),' orange ')) and (text()='Warning'))][not(@fire-drill)]
+```
+
+Back to some more examples.  Let's look at how you can navigate the DOM tree with XPath:
+
+```go
+//moving down the DOM hierarchy
+//find any (direct) child of a <div> with class "comments"
+b.XPath("div").WithClass("comments").Child()
+//find any (direct) <p> child of a div with class "comments"
+b.XPath("div").WithClass("comments").Child("p")
+//find any (direct) <p> child with class "higlight" and text "User" of a div with class "comments"
+b.XPath("div").WithClass("comments").Child("p").WithClass("highlight").WithText("User")
+
+//find any descendant of the <div> with id "top"
+b.XPath("div").WithID("top").Descendant()
+//find any <li> descendant of the <div> with id "top"
+b.XPath("div").WithID("top").Descendant("li")
+//find any <a> descendant with "target='_blank'" of the <div> with id "top"
+b.XPath("div").WithID("top").Descendant("a").WithAttr("target", "_blank")
+
+//moving up the DOM hierarchy
+//find the (direct) parent of a <div> with class "comments"
+b.XPath("div").WithClass("comments").Parent()
+
+//find any ancestor of the <div> with id "bottom"
+b.XPath("div").WithID("bottom").Ancestor()
+//find any <section> ancestor of the <div> with id "bottom"
+b.XPath("div").WithID("bottom").Ancestor("section")
+//find any <section> ancestor with class "outer" of the <div> with id "bottom"
+b.XPath("div").WithID("bottom").Ancestor("section").WithClass("outer")
+
+//moving left and right across the DOM hierarchy
+//find the next sibling of the <li> with class "red"
+b.XPath("li").WithClass("red").FollowingSibling()
+//find the next sibling <quote> of the <li> with class "red"
+b.XPath("li").WithClass("red").FollowingSibling("quote")
+//find the next sibling <li> with class "blue" of the <li> with class "red"
+b.XPath("li").WithClass("red").FollowingSibling("li").WithClass("blue")
+//ditto but for the preceding sibling
+b.XPath("li").WithClass("red").PrecedingSibling()
+b.XPath("li").WithClass("red").PrecedingSibling("quote")
+b.XPath("li").WithClass("red").PrecedingSibling("li").WithClass("blue")
+
+//selecting elements with children that satisfy a property
+//note that we need to use b.RelativeXPath - which constructs a "./" XPath - when using WithChildMatching
+//find the <ul> that has a child <li> with text "igloo"
+b.XPath("ul").WithChildMatching(b.RelativeXPath("li").WithText("igloo"))
+
+//indexing into elements
+//find the last child <li> of the second <ul> on the page
+b.XPath("ul").Nth(2).Deascendant("li").Last()
+```
+
+Under the hood, `b.XPath()` returns an object of `type XPath string`.  You can use `fmt.Println(x)` to see the XPath query generated by the DSL.
+
+And since the DSL always returns an `XPath` string you can do things like this (from our example above):
+
+```go
+//build out a partial XPath query that selects descendants of the div with id "user-list"
+userXPath := b.XPath("div").WithID("user-list").Descendant()
+
+//we can now select specific users by adding onto userXPath:
+Eventually(userXPath.WithText("Sally")).Should(b.HaveClass("online"))
+Eventually(userXPath.WithText("Jane")).Should(b.HaveClass("online"))
+```
 
 ## Dialogs, Downloads, and Windows
 
