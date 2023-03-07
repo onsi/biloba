@@ -50,11 +50,59 @@
     <div id="radio-buttons">
         <input type="radio" name="appliances" value="toaster" checked>Toaster</input>
         <input type="radio" name="appliances" value="stove">Stove</input>
-        <input type="radio" name="appliances" value="microwave">Microwave</input>
+        <input type="radio" class="hidden" name="appliances" value="microwave">Microwave</input>
     </div>
-    <divv id="properties">
+    <div id="other-radio-buttons">
+        <input type="radio" name="transportation" value="car">Car</input>
+        <input type="radio" name="transportation" value="bike" disabled>Bike</input>
+        <input type="radio" name="transportation" value="hovercraft" checked>Hovercraft</input>
+    </div>
+    <div id="unselectedradio-buttons">
+        <input type="radio" name="turtle" value="leonardo">Leonardo</input>
+        <input type="radio" name="turtle" value="donatello">Donatello</input>
+        <input type="radio" name="turtle" value="raphael">Raphael</input>
+        <input type="radio" name="turtle" value="michaelangelo">michaelangelo</input>
+    </div>
+    <textarea id="text-area" rows="5" cols="30">Something long</textarea>
+    <div>
+        <select id="droid">
+            <option value="c3po">C-3PO</option>
+            <option value="r2d2" selected>R2-D2</option>
+            <option value="bb8">BB-8</option>
+        </select>
+    </div>
+    <div>
+        <select id="party" multiple>
+            <optgroup label="Heros">
+                <option value="luke" selected>Luke</option>
+                <option value="leia" disabled>Leia</option>
+                <option value="han" selected>Han</option>
+                <option value="obi-wan">Obi-Wan</option>
+            </optgroup>
+            <optgroup label="Villains">
+                <option value="tarkin">Tarkin</option>
+                <option value="vader" selected>Vader</option>
+                <option value="emperor">The Emperor</option>
+            </optgroup>
+        </select>
+        <select id="empty-party" multiple>
+            <optgroup label="Heros">
+                <option value="luke">Luke</option>
+                <option value="leia">Leia</option>
+                <option value="han">Han</option>
+                <option value="obi-wan">Obi-Wan</option>
+            </optgroup>
+            <optgroup label="Villains">
+                <option value="tarkin">Tarkin</option>
+                <option value="vader">Vader</option>
+                <option value="emperor">The Emperor</option>
+            </optgroup>
+        </select>
+    </div>
+
+    <div id="properties">
         <div class="notice" magic="on" data-name="henry">Some Text</div>
-    </divv>
+    </div>
     </div>
     <div id="counter" class="orange">A counter</div>
     <input type="number" id="counter-input" value=0></input>

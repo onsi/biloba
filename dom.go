@@ -1,6 +1,7 @@
 package biloba
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -70,6 +71,9 @@ func (b *Biloba) runBilobaHandler(name string, selector any, args ...any) *bilob
 			parameters = append(parameters, fmt.Sprintf("%f", x))
 		case int:
 			parameters = append(parameters, fmt.Sprintf("%d", x))
+		case []string:
+			p, _ := json.Marshal(x)
+			parameters = append(parameters, string(p))
 		case bool:
 			if x {
 				parameters = append(parameters, "true")
@@ -169,43 +173,13 @@ func (b *Biloba) HaveProperty(property string, expected ...any) types.GomegaMatc
 	}
 }
 
-func (b *Biloba) IsChecked(selector any) bool {
-	b.gt.Helper()
-	r := b.runBilobaHandler("isChecked", selector)
-	if r.Error() != nil {
-		b.gt.Fatalf("Failed to determine if checked:\n%s", r.Error())
-	}
-	return r.Success
-}
-
-func (b *Biloba) BeChecked() types.GomegaMatcher {
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
-		return b.runBilobaHandler("isChecked", selector).MatcherResult()
-	}).WithMessage("be checked")
-}
-
-func (b *Biloba) SetChecked(args ...any) types.GomegaMatcher {
-	b.gt.Helper()
-	if len(args) == 2 {
-		r := b.runBilobaHandler("setChecked", args[0], args[1])
-		if r.Error() != nil {
-			b.gt.Fatalf("Failed to set checked:\n%s", r.Error())
-		}
-		return nil
-	} else {
-		return gcustom.MakeMatcher(func(selector any) (bool, error) {
-			return b.runBilobaHandler("setChecked", selector, args[0]).MatcherResult()
-		}).WithMessage("be checkable")
-	}
-}
-
-func (b *Biloba) GetValue(selector any) string {
+func (b *Biloba) GetValue(selector any) any {
 	b.gt.Helper()
 	r := b.runBilobaHandler("getValue", selector)
 	if r.Error() != nil {
 		b.gt.Fatalf("Failed to get value:\n%s", r.Error())
 	}
-	return r.ResultString()
+	return r.Result
 }
 
 func (b *Biloba) HaveValue(expected any) types.GomegaMatcher {
@@ -217,7 +191,7 @@ func (b *Biloba) HaveValue(expected any) types.GomegaMatcher {
 		if r.Error() != nil {
 			return false, r.Error()
 		}
-		data["Result"] = r.ResultString()
+		data["Result"] = r.Result
 		return matcher.Match(data["Result"])
 	}).WithTemplate("HaveValue for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
 }

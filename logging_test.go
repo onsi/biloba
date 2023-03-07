@@ -10,6 +10,8 @@ var _ = Describe("Logging", func() {
 	It("redirects logs to the GinkgoWriter", func() {
 		b.Run("console.log('hello log', 3, [1,2,3])")
 		Ω(gt.buffer).Should(gbytes.Say("\"hello log\" - 3 - \\[1, 2, 3\\]"))
+		b.Run("console.log(null)")
+		Ω(gt.buffer).Should(gbytes.Say("<nil>"))
 		b.Run("console.log('hello log', 3, 'this is very very long', ['a', 3, 'b'], {dog: 'woof', cat: 'meow'}, 100, ['a', 'b', 'c', 'd', 'e'], 'still very very very long', 100, true, 'come on!')")
 		Ω(gt.buffer).Should(gbytes.Say("hello log"))
 		Ω(gt.buffer).Should(gbytes.Say("3\n"))

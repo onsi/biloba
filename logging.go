@@ -63,7 +63,9 @@ func (b *Biloba) renderRemoteObject(obj *runtime.RemoteObject) string {
 		return string(obj.Value)
 	} else {
 		out := ""
-		if obj.Preview.Subtype == "array" {
+		if obj.Preview == nil {
+			out += "<nil>"
+		} else if obj.Preview.Subtype == "array" {
 			out += "["
 			for i, property := range obj.Preview.Properties {
 				out += fmt.Sprintf("%v", property.Value)

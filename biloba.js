@@ -22,7 +22,9 @@ if (!window["_biloba"]) {
             let r = chain[i](n, ...args)
             if (!r.success) return !!r.error ? r : rErr(r.guard + ": " + s.slice(1))
         }
-        return chain[chain.length - 1](n, ...args)
+        let result = chain[chain.length - 1](n, ...args)
+        if (!!result.error) result.error = result.error + ": " + s.slice(1)
+        return result
     }
     let dispatchInputChange = (n) => {
         n.dispatchEvent(new Event('input', { bubbles: true }))
@@ -34,14 +36,47 @@ if (!window["_biloba"]) {
     b.isEnabled = h(n => r(!n.disabled, "DOM element is not enabled"))
     b.click = h(b.isVisible, b.isEnabled, n => r(n.click()))
     b.getInnerText = h(n => rRes(n.innerText))
-    b.getValue = h(n => rRes(n.value))
-    b.setValue = h(b.isVisible, b.isEnabled, (n, v) => {
-        n.value = v
-        return r(dispatchInputChange(n))
+    b.getValue = h(n => {
+        if (n.type == "checkbox") {
+            return rRes(n.checked)
+        } else if (n.type == "radio") {
+            let selected = [...document.querySelectorAll(`input[type="radio"][name="${n.name}"]`)].find(o => o.checked)
+            if (!!selected) return rRes(selected.value)
+            return rRes(null)
+        } else if (n.type == "select-multiple") {
+            return rRes([...n.selectedOptions].map(o => o.value))
+        }
+        return rRes(n.value)
     })
-    b.isChecked = h(n => r(n.checked, "DOM element is not checked"))
-    b.setChecked = h(b.isVisible, b.isEnabled, (n, v) => {
-        n.checked = v
+    b.setValue = h(b.isVisible, b.isEnabled, (n, v) => {
+        if (n.type == "select-one" && !n.querySelector(`[value="${v}"]`)) {
+            return rErr(`Select input does not have option with value "${v}"`)
+        } else if (n.type == "checkbox") {
+            if (typeof v != "boolean") return rErr("Checkboxes only accept boolean values")
+            n.checked = v
+        } else if (n.type == "radio") {
+            if (typeof v != "string") return rErr("Radio inputs only accept string values")
+            let o = document.querySelector(`input[type="radio"][name="${n.name}"][value="${v}"]`)
+            if (!o) return rErr(`Radio input does not have option with value "${v}"`)
+            if (!b.isVisible(o).success) return rErr(`The "${v}" option is not visible`)
+            if (!b.isEnabled(o).success) return rErr(`The "${v}" option is not enabled`)
+            o.checked = true
+            return r(dispatchInputChange(o))
+        } else if (n.type == "select-multiple") {
+            if (!Array.isArray(v)) return rErr("Multi-select inputs only accept []string values")
+            let options = [...n.options]
+            let optionsToSelect = []
+            for (value of v) {
+                let o = options.find(o => o.value == value)
+                if (!o) return rErr(`The "${value}" option does not exist`)
+                if (!b.isEnabled(o).success) return rErr(`The "${value}" option is not enabled`)
+                optionsToSelect.push(o)
+            }
+            options.forEach(o => o.selected = false)
+            optionsToSelect.forEach(o => o.selected = true)
+        } else {
+            n.value = v
+        }
         return r(dispatchInputChange(n))
     })
     b.getClassList = h(n => rRes(Array.from(n.classList)))

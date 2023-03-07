@@ -147,243 +147,401 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 	})
 
-	Describe("IsChecked", func() {
-		It("matches if the checkbox is checked", func() {
-			Ω(b.IsChecked("#red")).Should(BeTrue())
-			Ω(b.IsChecked("#blue")).Should(BeFalse())
-			Ω(b.IsChecked("#yellow")).Should(BeFalse())
+	Describe("Working with inputs that honor value", func() {
+		Describe("GetValue", func() {
+			It("returns the value associated with the input", func() {
+				Ω(b.GetValue("#hidden-text-input")).Should(Equal("my-hidden-value"))
+				Ω(b.GetValue("#counter-input")).Should(Equal("0"))
+				Ω(b.GetValue("#disabled-text-input")).Should(Equal("i'm off"))
+				Ω(b.GetValue("#text-area")).Should(Equal("Something long"))
+				Ω(b.GetValue("#droid")).Should(Equal("r2d2"))
+			})
+
+			It("auto-fails if the element does not exist", func() {
+				Ω(b.GetValue("#non-existing")).Should(BeNil())
+				ExpectFailures("Failed to get value:\ncould not find DOM element matching selector: #non-existing")
+			})
 		})
 
-		It("auto-fails if the element does not exist", func() {
-			Ω(b.IsChecked("#non-existing")).Should(BeFalse())
-			ExpectFailures("Failed to determine if checked:\ncould not find DOM element matching selector: #non-existing")
+		Describe("HaveValue", func() {
+			It("matches if returned value matches", func() {
+				Ω("#hidden-text-input").Should(b.HaveValue("my-hidden-value"))
+				Ω("#counter-input").Should(b.HaveValue("0"))
+				Ω("#disabled-text-input").Should(b.HaveValue("i'm off"))
+				Ω("#text-area").Should(b.HaveValue("Something long"))
+				Ω("#droid").Should(b.HaveValue("r2d2"))
+			})
+			It("works with nested matchers", func() {
+				Ω("#counter-input").Should(b.HaveValue(WithTransform(strconv.Atoi, BeNumerically("==", 0))))
+				Ω("#counter-input").ShouldNot(b.HaveValue(WithTransform(strconv.Atoi, BeNumerically("==", 10))))
+
+				matcher := b.HaveValue(WithTransform(strconv.Atoi, BeNumerically("==", 1)))
+				match, err := matcher.Match("#counter-input")
+				Ω(err).ShouldNot(HaveOccurred())
+				Ω(match).Should(BeFalse())
+				Ω(matcher.FailureMessage("#counter-input")).Should(Equal("HaveValue for #counter-input:\nExpected\n    <int>: 0\nto be ==\n    <int>: 1"))
+			})
+
+			It("errors if the DOM element does not exist", func() {
+				match, err := b.HaveValue("foo").Match("#non-existing")
+				Ω(match).Should(BeFalse())
+				Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
+			})
+		})
+
+		Describe("SetValue", func() {
+			Context("when called directly", func() {
+				It("sets the value correctly", func() {
+					Eventually("#text-input-mirror").Should(b.HaveInnerText("initial value"))
+					Ω("#text-input").Should(b.HaveValue("initial value"))
+					b.SetValue("#text-input", "new value")
+					Ω("#text-input").Should(b.HaveValue("new value"))
+					Ω("#text-input-mirror").Should(b.HaveInnerText("new value"))
+
+					Ω("#counter-input").Should(b.HaveValue("0"))
+					b.SetValue("#counter-input", 3)
+					Ω("#counter-input").Should(b.HaveValue("3"))
+
+					b.SetValue("#text-area", "Something even longer")
+					Ω("#text-area").Should(b.HaveValue("Something even longer"))
+
+					b.SetValue("#droid", "bb8")
+					Ω("#droid").Should(b.HaveValue("bb8"))
+					Ω(b.XPath("option").WithAttr("value", "bb8")).Should(b.HaveProperty("selected", BeTrue()))
+				})
+
+				It("auto-fails if the element does not exist", func() {
+					b.SetValue("#non-existing", "foo")
+					ExpectFailures("Failed to set value:\ncould not find DOM element matching selector: #non-existing")
+				})
+
+				It("auto-fails if the element is not visible", func() {
+					b.SetValue("#hidden-text-input", "foo")
+					ExpectFailures("Failed to set value:\nDOM element is not visible: #hidden-text-input")
+					Ω("#hidden-text-input").Should(b.HaveValue("my-hidden-value"))
+				})
+
+				It("auto-fails if the element is not enabled", func() {
+					b.SetValue("#disabled-text-input", "foo")
+					ExpectFailures("Failed to set value:\nDOM element is not enabled: #disabled-text-input")
+					Ω("#disabled-text-input").Should(b.HaveValue("i'm off"))
+				})
+
+				It("fails if attempting to set the value of a select input to an option that does not exist", func() {
+					b.SetValue("#droid", "grogu")
+					ExpectFailures("Failed to set value:\nSelect input does not have option with value \"grogu\": #droid")
+				})
+			})
+
+			Context("when used as a matcher", func() {
+				It("sets the values correctly", func() {
+					Eventually("#text-input-mirror").Should(b.HaveInnerText("initial value"))
+					Ω("#text-input").Should(b.HaveValue("initial value"))
+					Ω("#text-input").Should(b.SetValue("new value"))
+					Ω("#text-input").Should(b.HaveValue("new value"))
+					Ω("#text-input-mirror").Should(b.HaveInnerText("new value"))
+
+					Ω("#counter-input").Should(b.HaveValue("0"))
+					Ω("#counter-input").Should(b.SetValue(3))
+					Ω("#counter-input").Should(b.HaveValue("3"))
+
+					Ω("#text-area").Should(b.SetValue("Something even longer"))
+					Ω("#text-area").Should(b.HaveValue("Something even longer"))
+
+					Ω("#droid").Should(b.SetValue("bb8"))
+					Ω("#droid").Should(b.HaveValue("bb8"))
+					Ω(b.XPath("option").WithAttr("value", "bb8")).Should(b.HaveProperty("selected", BeTrue()))
+				})
+
+				It("retries when called in an eventually", func() {
+					Eventually("#disabled-text-input-mirror").Should(b.HaveInnerText("i'm off"))
+					Ω("#disabled-text-input").ShouldNot(b.BeEnabled())
+					b.Run("enableTextInput()")
+					Eventually("#disabled-text-input").Should(b.SetValue("i'm on"))
+					Ω("#disabled-text-input").Should(b.HaveValue("i'm on"))
+					Ω("#disabled-text-input-mirror").Should(b.HaveInnerText("i'm on"))
+				})
+
+				It("returns an error when the element does not exist", func() {
+					match, err := b.SetValue("foo").Match("#non-existing")
+					Ω(match).Should(BeFalse())
+					Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
+				})
+
+				It("returns an error when the element is not visible", func() {
+					match, err := b.SetValue("foo").Match("#hidden-text-input")
+					Ω(match).Should(BeFalse())
+					Ω(err).Should(MatchError("DOM element is not visible: #hidden-text-input"))
+				})
+
+				It("returns an error when the element is not enabled", func() {
+					match, err := b.SetValue("foo").Match("#disabled-text-input")
+					Ω(match).Should(BeFalse())
+					Ω(err).Should(MatchError("DOM element is not enabled: #disabled-text-input"))
+				})
+
+				It("fails if attempting to set the value of a select input to an option that does not exist", func() {
+					match, err := b.SetValue("grogu").Match("#droid")
+					Ω(match).Should(BeFalse())
+					Ω(err).Should(MatchError("Select input does not have option with value \"grogu\": #droid"))
+				})
+			})
 		})
 	})
 
-	Describe("BeChecked", func() {
-		It("matches if the checkbox is checked", func() {
-			Ω("#red").Should(b.BeChecked())
-			Ω("#blue").ShouldNot(b.BeChecked())
-			Ω("#yellow").ShouldNot(b.BeChecked())
-		})
-
-		It("errors if the checkbox does not exist", func() {
-			match, err := b.BeChecked().Match("#non-existing")
-			Ω(match).Should(BeFalse())
-			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
-		})
-	})
-
-	Describe("SetChecked", func() {
+	Describe("Working with Checkboxes", func() {
 		BeforeEach(func() {
 			Eventually("#checked-color").Should(b.HaveInnerText("red"))
 		})
 
-		Context("when called directly", func() {
+		It("returns booleans", func() {
+			Ω(b.GetValue("#red")).Should(BeTrue())
+			Ω(b.GetValue("#blue")).Should(BeFalse())
+		})
+
+		Context("when setting values directly", func() {
 			It("sets the checkboxes correctly", func() {
-				b.SetChecked("#red", true)
-				Ω("#red").Should(b.BeChecked())
+				b.SetValue("#red", true)
+				Ω("#red").Should(b.HaveValue(true))
 				Ω("#checked-color").Should(b.HaveInnerText("red"))
 
-				b.SetChecked("#red", false)
-				Ω("#red").ShouldNot(b.BeChecked())
+				b.SetValue("#red", false)
+				Ω("#red").Should(b.HaveValue(false))
 				Ω("#checked-color").Should(b.HaveInnerText("black"))
 
-				b.SetChecked("#blue", true)
-				Ω("#blue").Should(b.BeChecked())
+				b.SetValue("#blue", true)
+				Ω("#blue").Should(b.HaveValue(true))
 				Ω("#checked-color").Should(b.HaveInnerText("blue"))
 
-				b.SetChecked("#red", true)
-				Ω("#red").Should(b.BeChecked())
+				b.SetValue("#red", true)
+				Ω("#red").Should(b.HaveValue(true))
 				Ω("#checked-color").Should(b.HaveInnerText("purple"))
 			})
 
-			It("auto-fails if the element does not exist", func() {
-				b.SetChecked("#non-existing", true)
-				ExpectFailures("Failed to set checked:\ncould not find DOM element matching selector: #non-existing")
-			})
-
 			It("auto-fails if the element is not visible", func() {
-				b.SetChecked("#green", true)
-				ExpectFailures("Failed to set checked:\nDOM element is not visible: #green")
+				b.SetValue("#green", true)
+				ExpectFailures("Failed to set value:\nDOM element is not visible: #green")
 				Ω("#checked-color").Should(b.HaveInnerText("red"))
 			})
 
 			It("auto-fails if the element is not enabled", func() {
-				b.SetChecked("#yellow", true)
-				ExpectFailures("Failed to set checked:\nDOM element is not enabled: #yellow")
+				b.SetValue("#yellow", true)
+				ExpectFailures("Failed to set value:\nDOM element is not enabled: #yellow")
 				Ω("#checked-color").Should(b.HaveInnerText("red"))
+			})
+
+			It("fails if not provided a boolean value", func() {
+				b.SetValue("#red", "true")
+				ExpectFailures("Failed to set value:\nCheckboxes only accept boolean values: #red")
 			})
 		})
 
-		Context("when used as a matcher", func() {
+		Context("when setting values as a matcher", func() {
 			It("sets the checkboxes correctly", func() {
-				Ω("#red").Should(b.SetChecked(true))
-				Ω("#red").Should(b.BeChecked())
+				Ω("#red").Should(b.SetValue(true))
+				Ω("#red").Should(b.HaveValue(true))
 				Ω("#checked-color").Should(b.HaveInnerText("red"))
 
-				Ω("#red").Should(b.SetChecked(false))
-				Ω("#red").ShouldNot(b.BeChecked())
+				Ω("#red").Should(b.SetValue(false))
+				Ω("#red").Should(b.HaveValue(false))
 				Ω("#checked-color").Should(b.HaveInnerText("black"))
 
-				Ω("#blue").Should(b.SetChecked(true))
-				Ω("#blue").Should(b.BeChecked())
+				Ω("#blue").Should(b.SetValue(true))
+				Ω("#blue").Should(b.HaveValue(true))
 				Ω("#checked-color").Should(b.HaveInnerText("blue"))
 
-				Ω("#red").Should(b.SetChecked(true))
-				Ω("#red").Should(b.BeChecked())
+				Ω("#red").Should(b.SetValue(true))
+				Ω("#red").Should(b.HaveValue(true))
 				Ω("#checked-color").Should(b.HaveInnerText("purple"))
 			})
 
 			It("retries when called in an eventually", func() {
-				Ω("#yellow").ShouldNot(Or(b.BeChecked(), b.BeEnabled()))
+				Ω("#yellow").ShouldNot(Or(b.HaveValue(true), b.BeEnabled()))
 				Ω("#checked-color").Should(b.HaveInnerText("red"))
 				b.Run("enableYellow()")
-				Eventually("#yellow").Should(b.SetChecked(true))
+				Eventually("#yellow").Should(b.SetValue(true))
 				Ω("#checked-color").Should(b.HaveInnerText("yellow"))
 			})
 
-			It("returns an error when the element does not exist", func() {
-				match, err := b.SetChecked(true).Match("#non-existing")
-				Ω(match).Should(BeFalse())
-				Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
-			})
-
 			It("returns an error when the element is not visible", func() {
-				match, err := b.SetChecked(true).Match("#green")
+				match, err := b.SetValue(true).Match("#green")
 				Ω(match).Should(BeFalse())
 				Ω(err).Should(MatchError("DOM element is not visible: #green"))
 			})
 
 			It("returns an error when the element is not enabled", func() {
-				match, err := b.SetChecked(true).Match("#yellow")
+				match, err := b.SetValue(true).Match("#yellow")
 				Ω(match).Should(BeFalse())
 				Ω(err).Should(MatchError("DOM element is not enabled: #yellow"))
+			})
+
+			It("returns an error when not provided a boolean value", func() {
+				match, err := b.SetValue("true").Match("#red")
+				Ω(match).Should(BeFalse())
+				Ω(err).Should(MatchError("Checkboxes only accept boolean values: #red"))
 			})
 		})
 	})
 
 	Describe("working with radio buttons", func() {
-		It("can set and read the checked property correctly", func() {
-			Ω("input[name='appliances'][value='toaster']").Should(b.BeChecked())
-			b.SetChecked("input[name='appliances'][value='microwave']", true)
-			Ω("input[name='appliances'][value='microwave']").Should(b.BeChecked())
-			Ω("input[name='appliances'][value='toaster']").ShouldNot(b.BeChecked())
-			b.Click("input[name='appliances'][value='stove']")
-			Ω("input[name='appliances'][value='microwave']").ShouldNot(b.BeChecked())
-			Ω("input[name='appliances'][value='stove']").Should(b.BeChecked())
-		})
-	})
+		It("returns the value of the group, regardless of which radio button is selected", func() {
+			Ω(b.GetValue("input[name='appliances']")).Should(Equal("toaster"))
+			Ω(b.GetValue("input[name='appliances'][value='stove']")).Should(Equal("toaster"))
+			Ω(b.GetValue("input[name='transportation']")).Should(Equal("hovercraft"))
 
-	Describe("GetValue", func() {
-		It("returns the value associated with the input", func() {
-			Ω(b.GetValue("#hidden-text-input")).Should(Equal("my-hidden-value"))
-			Ω(b.GetValue("#counter-input")).Should(Equal("0"))
-			Ω(b.GetValue("#disabled-text-input")).Should(Equal("i'm off"))
+			Ω("input[name='appliances']").Should(b.HaveValue("toaster"))
+			Ω("input[name='transportation'][value='bike']").Should(b.HaveValue("hovercraft"))
 		})
 
-		It("auto-fails if the element does not exist", func() {
-			Ω(b.GetValue("#non-existing")).Should(BeEmpty())
-			ExpectFailures("Failed to get value:\ncould not find DOM element matching selector: #non-existing")
-		})
-	})
-
-	Describe("HaveValue", func() {
-		It("matches if returned value matches", func() {
-			Ω("#hidden-text-input").Should(b.HaveValue("my-hidden-value"))
-			Ω("#counter-input").Should(b.HaveValue("0"))
-			Ω("#disabled-text-input").Should(b.HaveValue("i'm off"))
+		It("returns nil if no options is selected", func() {
+			Ω(b.GetValue("input[name='turtle']")).Should(BeNil())
+			Ω("input[name='turtle']").Should(b.HaveValue(BeNil()))
 		})
 
-		It("works with nested matchers", func() {
-			Ω("#counter-input").Should(b.HaveValue(WithTransform(strconv.Atoi, BeNumerically("==", 0))))
-			Ω("#counter-input").ShouldNot(b.HaveValue(WithTransform(strconv.Atoi, BeNumerically("==", 10))))
+		Context("when setting values directly", func() {
+			It("sets the appropriate radio button in the group correctly", func() {
+				b.SetValue("input[name='appliances']", "stove")
+				Ω("input[name='appliances']").Should(b.HaveValue("stove"))
+				Ω("input[name='appliances'][value='toaster']").Should(b.HaveProperty("checked", false))
+				Ω("input[name='appliances'][value='stove']").Should(b.HaveProperty("checked", true))
 
-			matcher := b.HaveValue(WithTransform(strconv.Atoi, BeNumerically("==", 1)))
-			match, err := matcher.Match("#counter-input")
-			Ω(err).ShouldNot(HaveOccurred())
-			Ω(match).Should(BeFalse())
-			Ω(matcher.FailureMessage("#counter-input")).Should(Equal("HaveValue for #counter-input:\nExpected\n    <int>: 0\nto be ==\n    <int>: 1"))
-		})
+				Ω("input[name='transportation']").Should(b.HaveValue("hovercraft"))
+				Ω("input[name='transportation'][value='hovercraft']").Should(b.HaveProperty("checked", true))
 
-		It("errors if the DOM element does not exist", func() {
-			match, err := b.HaveValue("foo").Match("#non-existing")
-			Ω(match).Should(BeFalse())
-			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
-		})
-	})
-
-	Describe("SetValue", func() {
-		Context("when called directly", func() {
-			It("sets the value correctly", func() {
-				Eventually("#text-input-mirror").Should(b.HaveInnerText("initial value"))
-				Ω("#text-input").Should(b.HaveValue("initial value"))
-				b.SetValue("#text-input", "new value")
-				Ω("#text-input").Should(b.HaveValue("new value"))
-				Ω("#text-input-mirror").Should(b.HaveInnerText("new value"))
-
-				Ω("#counter-input").Should(b.HaveValue("0"))
-				b.SetValue("#counter-input", 3)
-				Ω("#counter-input").Should(b.HaveValue("3"))
-			})
-
-			It("auto-fails if the element does not exist", func() {
-				b.SetValue("#non-existing", "foo")
-				ExpectFailures("Failed to set value:\ncould not find DOM element matching selector: #non-existing")
+				b.SetValue("input[name='transportation'][value='hovercraft']", "car")
+				Ω("input[name='transportation']").Should(b.HaveValue("car"))
+				Ω("input[name='transportation'][value='hovercraft']").Should(b.HaveProperty("checked", false))
+				Ω("input[name='transportation'][value='car']").Should(b.HaveProperty("checked", true))
 			})
 
 			It("auto-fails if the element is not visible", func() {
-				b.SetValue("#hidden-text-input", "foo")
-				ExpectFailures("Failed to set value:\nDOM element is not visible: #hidden-text-input")
-				Ω("#hidden-text-input").Should(b.HaveValue("my-hidden-value"))
+				b.SetValue("input[name='appliances']", "microwave")
+				ExpectFailures("Failed to set value:\nThe \"microwave\" option is not visible: input[name='appliances']")
+				Ω("input[name='appliances']").Should(b.HaveValue("toaster"))
 			})
 
 			It("auto-fails if the element is not enabled", func() {
-				b.SetValue("#disabled-text-input", "foo")
-				ExpectFailures("Failed to set value:\nDOM element is not enabled: #disabled-text-input")
-				Ω("#disabled-text-input").Should(b.HaveValue("i'm off"))
+				b.SetValue("input[name='transportation']", "bike")
+				ExpectFailures("Failed to set value:\nThe \"bike\" option is not enabled: input[name='transportation']")
+				Ω("input[name='transportation']").Should(b.HaveValue("hovercraft"))
+			})
+
+			It("fails if provided an invalid value", func() {
+				b.SetValue("input[name='turtle']", "splinter")
+				ExpectFailures("Failed to set value:\nRadio input does not have option with value \"splinter\": input[name='turtle']")
+			})
+
+			It("fails if provided a boolean value", func() {
+				b.SetValue("input[name='appliances'][value='stove']", true)
+				ExpectFailures("Failed to set value:\nRadio inputs only accept string values: input[name='appliances'][value='stove']")
 			})
 		})
 
-		Context("when used as a matcher", func() {
-			It("sets the values correctly", func() {
-				Eventually("#text-input-mirror").Should(b.HaveInnerText("initial value"))
-				Ω("#text-input").Should(b.HaveValue("initial value"))
-				Ω("#text-input").Should(b.SetValue("new value"))
-				Ω("#text-input").Should(b.HaveValue("new value"))
-				Ω("#text-input-mirror").Should(b.HaveInnerText("new value"))
+		Context("when setting values as a matcher", func() {
+			It("sets the appropriate radio button in the group correctly", func() {
+				Ω("input[name='appliances']").Should(b.SetValue("stove"))
+				Ω("input[name='appliances']").Should(b.HaveValue("stove"))
+				Ω("input[name='appliances'][value='toaster']").Should(b.HaveProperty("checked", false))
+				Ω("input[name='appliances'][value='stove']").Should(b.HaveProperty("checked", true))
 
-				Ω("#counter-input").Should(b.HaveValue("0"))
-				Ω("#counter-input").Should(b.SetValue(3))
-				Ω("#counter-input").Should(b.HaveValue("3"))
+				Ω("input[name='transportation']").Should(b.HaveValue("hovercraft"))
+				Ω("input[name='transportation'][value='hovercraft']").Should(b.HaveProperty("checked", true))
+
+				Ω("input[name='transportation'][value='hovercraft']").Should(b.SetValue("car"))
+				Ω("input[name='transportation']").Should(b.HaveValue("car"))
+				Ω("input[name='transportation'][value='hovercraft']").Should(b.HaveProperty("checked", false))
+				Ω("input[name='transportation'][value='car']").Should(b.HaveProperty("checked", true))
 			})
 
-			It("retries when called in an eventually", func() {
-				Eventually("#disabled-text-input-mirror").Should(b.HaveInnerText("i'm off"))
-				Ω("#disabled-text-input").ShouldNot(b.BeEnabled())
-				b.Run("enableTextInput()")
-				Eventually("#disabled-text-input").Should(b.SetValue("i'm on"))
-				Ω("#disabled-text-input").Should(b.HaveValue("i'm on"))
-				Ω("#disabled-text-input-mirror").Should(b.HaveInnerText("i'm on"))
-			})
-
-			It("returns an error when the element does not exist", func() {
-				match, err := b.SetValue("foo").Match("#non-existing")
+			It("auto-fails if the element is not visible", func() {
+				match, err := b.SetValue("microwave").Match("input[name='appliances']")
 				Ω(match).Should(BeFalse())
-				Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
+				Ω(err).Should(MatchError("The \"microwave\" option is not visible: input[name='appliances']"))
+				Ω("input[name='appliances']").Should(b.HaveValue("toaster"))
 			})
 
-			It("returns an error when the element is not visible", func() {
-				match, err := b.SetValue("foo").Match("#hidden-text-input")
+			It("auto-fails if the element is not enabled", func() {
+				match, err := b.SetValue("bike").Match("input[name='transportation']")
 				Ω(match).Should(BeFalse())
-				Ω(err).Should(MatchError("DOM element is not visible: #hidden-text-input"))
+				Ω(err).Should(MatchError("The \"bike\" option is not enabled: input[name='transportation']"))
+				Ω("input[name='transportation']").Should(b.HaveValue("hovercraft"))
 			})
 
-			It("returns an error when the element is not enabled", func() {
-				match, err := b.SetValue("foo").Match("#disabled-text-input")
+			It("fails if provided an invalid value", func() {
+				match, err := b.SetValue("splinter").Match("input[name='turtle']")
 				Ω(match).Should(BeFalse())
-				Ω(err).Should(MatchError("DOM element is not enabled: #disabled-text-input"))
+				Ω(err).Should(MatchError("Radio input does not have option with value \"splinter\": input[name='turtle']"))
 			})
+
+			It("fails if provided a boolean value", func() {
+				match, err := b.SetValue(true).Match("input[name='appliances'][value='stove']")
+				Ω(match).Should(BeFalse())
+				Ω(err).Should(MatchError("Radio inputs only accept string values: input[name='appliances'][value='stove']"))
+			})
+		})
+	})
+
+	Describe("working with multi-select inputs", func() {
+		It("returns the selected options as a slice of strings", func() {
+			Ω(b.GetValue("#party")).Should(ConsistOf("luke", "han", "vader"))
+		})
+
+		It("returns an empty slice if no options are selected", func() {
+			Ω(b.GetValue("#empty-party")).Should(BeEmpty())
+		})
+
+		Context("when setting values directly", func() {
+			It("sets the appropriate options on the group correctly", func() {
+				b.SetValue("#party", []string{"obi-wan", "han", "emperor"})
+				Ω(b.GetValue("#party")).Should(ConsistOf("obi-wan", "han", "emperor"))
+
+				b.SetValue("#party", []string{})
+				Ω(b.GetValue("#party")).Should(BeEmpty())
+			})
+
+			It("auto-fails if one of the options is not enabled", func() {
+				b.SetValue("#party", []string{"obi-wan", "han", "leia", "tarkin"})
+				ExpectFailures("Failed to set value:\nThe \"leia\" option is not enabled: #party")
+			})
+
+			It("fails if provided an invalid value", func() {
+				b.SetValue("#party", []string{"obi-wan", "han", "chewie", "tarkin"})
+				ExpectFailures("Failed to set value:\nThe \"chewie\" option does not exist: #party")
+			})
+
+			It("fails if provided a non-slice value", func() {
+				b.SetValue("#party", "han")
+				ExpectFailures("Failed to set value:\nMulti-select inputs only accept []string values: #party")
+			})
+		})
+
+		Context("when setting values as a matcher", func() {
+			It("sets the appropriate options on the group correctly", func() {
+				Ω("#party").Should(b.SetValue([]string{"obi-wan", "han", "emperor"}))
+				Ω(b.GetValue("#party")).Should(ConsistOf("obi-wan", "han", "emperor"))
+
+				Ω("#party").Should(b.SetValue([]string{}))
+				Ω(b.GetValue("#party")).Should(BeEmpty())
+			})
+
+			It("auto-fails if one of the options is not enabled", func() {
+				match, err := b.SetValue([]string{"obi-wan", "han", "leia", "tarkin"}).Match("#party")
+				Ω(match).Should(BeFalse())
+				Ω(err).Should(MatchError("The \"leia\" option is not enabled: #party"))
+			})
+
+			It("fails if provided an invalid value", func() {
+				match, err := b.SetValue([]string{"obi-wan", "han", "chewie", "tarkin"}).Match("#party")
+				Ω(match).Should(BeFalse())
+				Ω(err).Should(MatchError("The \"chewie\" option does not exist: #party"))
+			})
+
+			It("fails if provided a non-slice value", func() {
+				match, err := b.SetValue("han").Match("#party")
+				Ω(match).Should(BeFalse())
+				Ω(err).Should(MatchError("Multi-select inputs only accept []string values: #party"))
+			})
+
 		})
 	})
 
