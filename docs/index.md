@@ -388,7 +388,7 @@ BeforeEach(func() {
 	// set the login cookie
 	chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
 		expr := cdp.TimeSinceEpoch(time.Now().Add(180 * 24 * time.Hour))
-		return storage.SetCookies([]*network.CookieParam{Name:"user", User:"Joe", Expires:&expr, Domain:"localhost").WithBrowserContextID(b.BrowserContextID()).Do(ctx)
+		return storage.SetCookies([]*network.CookieParam{{Name:"user", Value:"Joe", Expires:&expr, Domain:"localhost"}}).WithBrowserContextID(b.BrowserContextID()).Do(ctx)
 	}))
 
 	// clear all cookies after each test
