@@ -17,7 +17,7 @@ if (!window["_biloba"]) {
 
     let h = (...chain) => (s, ...args) => {
         let n = sel(s)
-        if (!n) return rErr("could not find DOM node matching selector: " + s.slice(1))
+        if (!n) return rErr("could not find DOM element matching selector: " + s.slice(1))
         for (let i = 0; i < chain.length - 1; i++) {
             let r = chain[i](n, ...args)
             if (!r.success) return !!r.error ? r : rErr(r.guard + ": " + s.slice(1))
@@ -30,8 +30,8 @@ if (!window["_biloba"]) {
     }
 
     b.exists = s => r(!!sel(s))
-    b.isVisible = h(n => r(n.offsetWidth > 0 || n.offsetHeight > 0 || n.offsetParent != null, "DOM node is not visible"))
-    b.isEnabled = h(n => r(!n.disabled, "DOM node is not enabled"))
+    b.isVisible = h(n => r(n.offsetWidth > 0 || n.offsetHeight > 0 || n.offsetParent != null, "DOM element is not visible"))
+    b.isEnabled = h(n => r(!n.disabled, "DOM element is not enabled"))
     b.click = h(b.isVisible, b.isEnabled, n => r(n.click()))
     b.getInnerText = h(n => rRes(n.innerText))
     b.getValue = h(n => rRes(n.value))
@@ -39,14 +39,21 @@ if (!window["_biloba"]) {
         n.value = v
         return r(dispatchInputChange(n))
     })
-    b.isChecked = h(n => r(n.checked, "DOM node is not checked"))
+    b.isChecked = h(n => r(n.checked, "DOM element is not checked"))
     b.setChecked = h(b.isVisible, b.isEnabled, (n, v) => {
         n.checked = v
         return r(dispatchInputChange(n))
     })
     b.getClassList = h(n => rRes(Array.from(n.classList)))
-    b.hasProperty = h((n, p) => r(p in n, "DOM node does not have property " + p))
-    b.getProperty = h(b.hasProperty, (n, p) => rRes(n[p]))
+    b.hasProperties = h((n, p) => {
+        let v = n
+        for (const subP of p.split(".")) {
+            if (!(subP in v)) return r(false, "DOM element does not have property " + p)
+            v = v[subP]
+        }
+        return r(true)
+    })
+    b.getProperty = h(b.hasProperties, (n, p) => rRes(p.split(".").reduce((v, subP) => v[subP], n)))
 
     window["_biloba"] = b
 }

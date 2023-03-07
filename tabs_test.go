@@ -113,10 +113,10 @@ var _ = Describe("Tabs", func() {
 		})
 
 		It("returns nil when the tab can't be found", func() {
-			Ω(b.FindSpawnedTab(b.TabWithDOMNode("#non-existing"))).Should(BeNil())
+			Ω(b.FindSpawnedTab(b.TabWithDOMElement("#non-existing"))).Should(BeNil())
 			Ω(b.FindSpawnedTab(b.TabWithTitle("non-existing"))).Should(BeNil())
 			Ω(b.FindSpawnedTab(b.TabWithURL("non-existing.html"))).Should(BeNil())
-			Ω(b.FindTab(b.TabWithDOMNode("#non-existing"))).Should(BeNil())
+			Ω(b.FindTab(b.TabWithDOMElement("#non-existing"))).Should(BeNil())
 			Ω(b.FindTab(b.TabWithTitle("non-existing"))).Should(BeNil())
 			Ω(b.FindTab(b.TabWithURL("non-existing.html"))).Should(BeNil())
 		})
@@ -134,7 +134,7 @@ var _ = Describe("Tabs", func() {
 			tab.Navigate(fixtureServer + "/auto-open.html")
 			Eventually(tab).Should(tab.HaveSpawnedTab(tab.TabWithTitle("DOM Testpage")))
 			Ω(tab.AllSpawnedTabs()).Should(HaveLen(1))
-			spawnedTab := tab.FindSpawnedTab(tab.TabWithDOMNode("#hello"))
+			spawnedTab := tab.FindSpawnedTab(tab.TabWithDOMElement("#hello"))
 			Ω(spawnedTab.Title()).Should(Equal("DOM Testpage"))
 
 			By("this is currently a bit weird, but spawned tabs consider everything in the browser context to be their spawned tabs")
@@ -145,7 +145,7 @@ var _ = Describe("Tabs", func() {
 			By("the root tab doens't have any of these spawned tabs")
 			Ω(b.AllSpawnedTabs()).Should(BeEmpty())
 			Ω(b).ShouldNot(b.HaveSpawnedTab(b.TabWithTitle("DOM Testpage")))
-			Ω(b.FindSpawnedTab(b.TabWithDOMNode("#hello"))).Should(BeNil())
+			Ω(b.FindSpawnedTab(b.TabWithDOMElement("#hello"))).Should(BeNil())
 
 			By("and when we open a tab from the root tab - it dosn't get attached to the other tabs")
 			b.Click("#to-b-new")
@@ -170,24 +170,24 @@ var _ = Describe("Tabs", func() {
 			Eventually("#increment").Should(tab.Exist())
 		})
 
-		It("can find tabs by DOM node", func() {
-			tab := b.FindTab(b.TabWithDOMNode("#increment"))
+		It("can find tabs by DOM element", func() {
+			tab := b.FindTab(b.TabWithDOMElement("#increment"))
 			Ω(tab.Title()).Should(Equal("DOM Testpage"))
 
-			tab = b.FindTab(b.TabWithDOMNode(b.XPath().WithID("aquarium")))
+			tab = b.FindTab(b.TabWithDOMElement(b.XPath().WithID("aquarium")))
 			Ω(tab.Title()).Should(Equal("XPath Testpage"))
 		})
 
-		It("can match by title, URL, and DOM node", func() {
+		It("can match by title, URL, and DOM element", func() {
 			Ω(b).Should(b.HaveTab(b.TabWithTitle("Nav-A Testpage")))
 			Ω(b).ShouldNot(b.HaveTab(b.TabWithTitle("Nav-B Testpage")))
 
 			Ω(b).Should(b.HaveTab(b.TabWithURL(fixtureServer + "/dom.html")))
 			Ω(b).ShouldNot(b.HaveTab(b.TabWithURL(HaveSuffix(".htm"))))
 
-			Ω(b).Should(b.HaveTab(b.TabWithDOMNode(b.XPath().WithID("increment"))))
-			Ω(b).Should(b.HaveTab(b.TabWithDOMNode("#aquarium")))
-			Ω(b).ShouldNot(b.HaveTab(b.TabWithDOMNode("#non-existing")))
+			Ω(b).Should(b.HaveTab(b.TabWithDOMElement(b.XPath().WithID("increment"))))
+			Ω(b).Should(b.HaveTab(b.TabWithDOMElement("#aquarium")))
+			Ω(b).ShouldNot(b.HaveTab(b.TabWithDOMElement("#non-existing")))
 		})
 	})
 
@@ -219,7 +219,7 @@ var _ = Describe("Tabs", func() {
 			Eventually(b).Should(b.HaveSpawnedTab(b.TabWithTitle("Nav-B Testpage")))
 			g2 := b.FindTab(b.TabWithTitle("Nav-B Testpage"))
 			Ω(g2).Should(Equal(b.FindSpawnedTab(b.TabWithURL(ContainSubstring("/nav-b.html")))))
-			Ω(g2).Should(Equal(b.FindSpawnedTab(b.TabWithDOMNode("#to-a"))))
+			Ω(g2).Should(Equal(b.FindSpawnedTab(b.TabWithDOMElement("#to-a"))))
 
 			g3 := b.NewTab().Navigate(fixtureServer + "/dom.html")
 			Eventually(g3.Title).Should(Equal("DOM Testpage"))

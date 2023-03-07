@@ -15,16 +15,16 @@ var _ = Describe("DOM manipulators and matchers", func() {
 	})
 
 	Describe("exist", func() {
-		It("does not match when the dom node does not exist", func() {
+		It("does not match when the dom element does not exist", func() {
 			Ω("#non-existing").ShouldNot(b.Exist())
 		})
 
-		It("does not match when the dom node exists", func() {
+		It("does not match when the dom element exists", func() {
 			Ω("#hello").Should(b.Exist())
 			Ω("#hidden-parent").Should(b.Exist())
 		})
 
-		It("matches eventually if a dom node pops into existence", func() {
+		It("matches eventually if a dom element pops into existence", func() {
 			Consistently("#say-when").ShouldNot(b.Exist())
 			b.Run("bilobaSaysWhen()")
 			Eventually("#say-when").Should(b.Exist())
@@ -76,7 +76,7 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		It("errors when the element does not exist", func() {
 			match, err := b.BeVisible().Match("#non-existing")
 			Ω(match).Should(BeFalse())
-			Ω(err).Should(MatchError("could not find DOM node matching selector: #non-existing"))
+			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
 		})
 	})
 
@@ -97,7 +97,7 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		It("errors when the element does not exist", func() {
 			match, err := b.BeEnabled().Match("#non-existing")
 			Ω(match).Should(BeFalse())
-			Ω(err).Should(MatchError("could not find DOM node matching selector: #non-existing"))
+			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
 		})
 	})
 
@@ -110,7 +110,7 @@ var _ = Describe("DOM manipulators and matchers", func() {
 
 		It("auto-fails if the element does not exist", func() {
 			Ω(b.InnerText("#non-existing")).Should(Equal(""))
-			ExpectFailures("Failed to get inner text:\ncould not find DOM node matching selector: #non-existing")
+			ExpectFailures("Failed to get inner text:\ncould not find DOM element matching selector: #non-existing")
 		})
 	})
 
@@ -143,7 +143,7 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		It("errors if the element does not exist", func() {
 			match, err := b.HaveInnerText("").Match("#non-existing")
 			Ω(match).Should(BeFalse())
-			Ω(err).Should(MatchError("could not find DOM node matching selector: #non-existing"))
+			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
 		})
 	})
 
@@ -156,7 +156,7 @@ var _ = Describe("DOM manipulators and matchers", func() {
 
 		It("auto-fails if the element does not exist", func() {
 			Ω(b.IsChecked("#non-existing")).Should(BeFalse())
-			ExpectFailures("Failed to determine if checked:\ncould not find DOM node matching selector: #non-existing")
+			ExpectFailures("Failed to determine if checked:\ncould not find DOM element matching selector: #non-existing")
 		})
 	})
 
@@ -170,7 +170,7 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		It("errors if the checkbox does not exist", func() {
 			match, err := b.BeChecked().Match("#non-existing")
 			Ω(match).Should(BeFalse())
-			Ω(err).Should(MatchError("could not find DOM node matching selector: #non-existing"))
+			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
 		})
 	})
 
@@ -200,18 +200,18 @@ var _ = Describe("DOM manipulators and matchers", func() {
 
 			It("auto-fails if the element does not exist", func() {
 				b.SetChecked("#non-existing", true)
-				ExpectFailures("Failed to set checked:\ncould not find DOM node matching selector: #non-existing")
+				ExpectFailures("Failed to set checked:\ncould not find DOM element matching selector: #non-existing")
 			})
 
 			It("auto-fails if the element is not visible", func() {
 				b.SetChecked("#green", true)
-				ExpectFailures("Failed to set checked:\nDOM node is not visible: #green")
+				ExpectFailures("Failed to set checked:\nDOM element is not visible: #green")
 				Ω("#checked-color").Should(b.HaveInnerText("red"))
 			})
 
 			It("auto-fails if the element is not enabled", func() {
 				b.SetChecked("#yellow", true)
-				ExpectFailures("Failed to set checked:\nDOM node is not enabled: #yellow")
+				ExpectFailures("Failed to set checked:\nDOM element is not enabled: #yellow")
 				Ω("#checked-color").Should(b.HaveInnerText("red"))
 			})
 		})
@@ -246,19 +246,19 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			It("returns an error when the element does not exist", func() {
 				match, err := b.SetChecked(true).Match("#non-existing")
 				Ω(match).Should(BeFalse())
-				Ω(err).Should(MatchError("could not find DOM node matching selector: #non-existing"))
+				Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
 			})
 
 			It("returns an error when the element is not visible", func() {
 				match, err := b.SetChecked(true).Match("#green")
 				Ω(match).Should(BeFalse())
-				Ω(err).Should(MatchError("DOM node is not visible: #green"))
+				Ω(err).Should(MatchError("DOM element is not visible: #green"))
 			})
 
 			It("returns an error when the element is not enabled", func() {
 				match, err := b.SetChecked(true).Match("#yellow")
 				Ω(match).Should(BeFalse())
-				Ω(err).Should(MatchError("DOM node is not enabled: #yellow"))
+				Ω(err).Should(MatchError("DOM element is not enabled: #yellow"))
 			})
 		})
 	})
@@ -284,7 +284,7 @@ var _ = Describe("DOM manipulators and matchers", func() {
 
 		It("auto-fails if the element does not exist", func() {
 			Ω(b.GetValue("#non-existing")).Should(BeEmpty())
-			ExpectFailures("Failed to get value:\ncould not find DOM node matching selector: #non-existing")
+			ExpectFailures("Failed to get value:\ncould not find DOM element matching selector: #non-existing")
 		})
 	})
 
@@ -306,10 +306,10 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(matcher.FailureMessage("#counter-input")).Should(Equal("HaveValue for #counter-input:\nExpected\n    <int>: 0\nto be ==\n    <int>: 1"))
 		})
 
-		It("errors if the DOM node does not exist", func() {
+		It("errors if the DOM element does not exist", func() {
 			match, err := b.HaveValue("foo").Match("#non-existing")
 			Ω(match).Should(BeFalse())
-			Ω(err).Should(MatchError("could not find DOM node matching selector: #non-existing"))
+			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
 		})
 	})
 	Describe("SetValue", func() {
@@ -328,18 +328,18 @@ var _ = Describe("DOM manipulators and matchers", func() {
 
 			It("auto-fails if the element does not exist", func() {
 				b.SetValue("#non-existing", "foo")
-				ExpectFailures("Failed to set value:\ncould not find DOM node matching selector: #non-existing")
+				ExpectFailures("Failed to set value:\ncould not find DOM element matching selector: #non-existing")
 			})
 
 			It("auto-fails if the element is not visible", func() {
 				b.SetValue("#hidden-text-input", "foo")
-				ExpectFailures("Failed to set value:\nDOM node is not visible: #hidden-text-input")
+				ExpectFailures("Failed to set value:\nDOM element is not visible: #hidden-text-input")
 				Ω("#hidden-text-input").Should(b.HaveValue("my-hidden-value"))
 			})
 
 			It("auto-fails if the element is not enabled", func() {
 				b.SetValue("#disabled-text-input", "foo")
-				ExpectFailures("Failed to set value:\nDOM node is not enabled: #disabled-text-input")
+				ExpectFailures("Failed to set value:\nDOM element is not enabled: #disabled-text-input")
 				Ω("#disabled-text-input").Should(b.HaveValue("i'm off"))
 			})
 		})
@@ -369,19 +369,19 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			It("returns an error when the element does not exist", func() {
 				match, err := b.SetValue("foo").Match("#non-existing")
 				Ω(match).Should(BeFalse())
-				Ω(err).Should(MatchError("could not find DOM node matching selector: #non-existing"))
+				Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
 			})
 
 			It("returns an error when the element is not visible", func() {
 				match, err := b.SetValue("foo").Match("#hidden-text-input")
 				Ω(match).Should(BeFalse())
-				Ω(err).Should(MatchError("DOM node is not visible: #hidden-text-input"))
+				Ω(err).Should(MatchError("DOM element is not visible: #hidden-text-input"))
 			})
 
 			It("returns an error when the element is not enabled", func() {
 				match, err := b.SetValue("foo").Match("#disabled-text-input")
 				Ω(match).Should(BeFalse())
-				Ω(err).Should(MatchError("DOM node is not enabled: #disabled-text-input"))
+				Ω(err).Should(MatchError("DOM element is not enabled: #disabled-text-input"))
 			})
 		})
 	})
@@ -397,12 +397,12 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		It("returns an error when the element does not exist", func() {
 			match, err := b.HaveClass("foo").Match("#non-existing")
 			Ω(match).Should(BeFalse())
-			Ω(err).Should(MatchError("could not find DOM node matching selector: #non-existing"))
+			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
 		})
 	})
 
 	Describe("GetProperty", func() {
-		It("returns properties defined on the node", func() {
+		It("returns properties defined on the element", func() {
 			Ω(b.GetProperty(".notice", "count")).Should(Equal(3.0))
 			Ω(b.GetProperty(".notice", "tagName")).Should(Equal("DIV"))
 			Ω(b.GetProperty(".notice", "flavor")).Should(Equal("strawberry"))
@@ -411,22 +411,23 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(b.GetProperty(".notice", "innerText")).Should(Equal("Some Text"))
 			Ω(b.GetProperty(".notice", "hidden")).Should(Equal(false))
 			Ω(b.GetProperty(".notice", "classList")).Should(HaveKeyWithValue("0", "notice"))
+			Ω(b.GetProperty(".notice", "dataset.name")).Should(Equal("henry"))
 			Ω(b.GetProperty("#hidden-text-input", "value")).Should(Equal("my-hidden-value"))
 		})
 
 		It("returns an error when the element does not exist", func() {
 			b.GetProperty("#non-existing", "tagName")
-			ExpectFailures("Failed to get property tagName:\ncould not find DOM node matching selector: #non-existing")
+			ExpectFailures("Failed to get property tagName:\ncould not find DOM element matching selector: #non-existing")
 		})
 
 		It("returns an error when the element does not have the property in question", func() {
 			b.GetProperty(".notice", "floop")
-			ExpectFailures("Failed to get property floop:\nDOM node does not have property floop: .notice")
+			ExpectFailures("Failed to get property floop:\nDOM element does not have property floop: .notice")
 		})
 	})
 
 	Describe("HaveProperty", func() {
-		It("returns properties defined on the node", func() {
+		It("returns properties defined on the element", func() {
 			Ω(".notice").Should(b.HaveProperty("count", 3.0))
 			Ω(".notice").Should(b.HaveProperty("tagName", "DIV"))
 			Ω(".notice").Should(b.HaveProperty("flavor", "strawberry"))
@@ -435,19 +436,20 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(".notice").Should(b.HaveProperty("innerText", "Some Text"))
 			Ω(".notice").Should(b.HaveProperty("hidden", false))
 			Ω(".notice").Should(b.HaveProperty("classList", HaveKeyWithValue("0", "notice")))
+			Ω(".notice").Should(b.HaveProperty("dataset.name", "henry"))
 			Ω("#hidden-text-input").Should(b.HaveProperty("value", "my-hidden-value"))
 		})
 
 		It("returns an error when the element does not exist", func() {
 			match, err := b.HaveProperty("tagName", "any").Match("#non-existing")
 			Ω(match).Should(BeFalse())
-			Ω(err).Should(MatchError("could not find DOM node matching selector: #non-existing"))
+			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
 		})
 
 		It("returns an error when the element does not have the property in question", func() {
 			match, err := b.HaveProperty("floop", "any").Match(".notice")
 			Ω(match).Should(BeFalse())
-			Ω(err).Should(MatchError("DOM node does not have property floop: .notice"))
+			Ω(err).Should(MatchError("DOM element does not have property floop: .notice"))
 		})
 	})
 
@@ -467,17 +469,17 @@ var _ = Describe("DOM manipulators and matchers", func() {
 
 			It("auto-fails if the element does not exist", func() {
 				b.Click("#non-existing")
-				ExpectFailures("Failed to click:\ncould not find DOM node matching selector: #non-existing")
+				ExpectFailures("Failed to click:\ncould not find DOM element matching selector: #non-existing")
 			})
 
 			It("auto-fails if the element is not visible", func() {
 				b.Click("#hidden-button")
-				ExpectFailures("Failed to click:\nDOM node is not visible: #hidden-button")
+				ExpectFailures("Failed to click:\nDOM element is not visible: #hidden-button")
 			})
 
 			It("auto-fails if the element is not enabled", func() {
 				b.Click("#decrement")
-				ExpectFailures("Failed to click:\nDOM node is not enabled: #decrement")
+				ExpectFailures("Failed to click:\nDOM element is not enabled: #decrement")
 			})
 		})
 
@@ -500,25 +502,25 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			It("returns an error when the element does not exist", func() {
 				match, err := b.Click().Match("#non-existing")
 				Ω(match).Should(BeFalse())
-				Ω(err).Should(MatchError("could not find DOM node matching selector: #non-existing"))
+				Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
 			})
 
 			It("returns an error when the element is not visible", func() {
 				match, err := b.Click().Match("#hidden-button")
 				Ω(match).Should(BeFalse())
-				Ω(err).Should(MatchError("DOM node is not visible: #hidden-button"))
+				Ω(err).Should(MatchError("DOM element is not visible: #hidden-button"))
 			})
 
 			It("returns an error when the element is not enabled", func() {
 				match, err := b.Click().Match("#decrement")
 				Ω(match).Should(BeFalse())
-				Ω(err).Should(MatchError("DOM node is not enabled: #decrement"))
+				Ω(err).Should(MatchError("DOM element is not enabled: #decrement"))
 			})
 		})
 	})
 
 	Describe("using xpath selectors", func() {
-		It("uses the first node returned by the xpath selector", func() {
+		It("uses the first element returned by the xpath selector", func() {
 			b.Click(b.XPath("button").WithText("Increment"))
 			Ω("#counter-input").Should(b.HaveValue("1"))
 			Ω(b.XPath("button").WithID("decrement")).Should(b.Click())
@@ -527,9 +529,9 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(b.XPath().WithID("counter-input"))
 		})
 
-		It("errors when the node does not exist", func() {
+		It("errors when the element does not exist", func() {
 			b.Click(b.XPath("button").WithText("nope"))
-			ExpectFailures("Failed to click:\ncould not find DOM node matching selector: //button[text()='nope']")
+			ExpectFailures("Failed to click:\ncould not find DOM element matching selector: //button[text()='nope']")
 		})
 	})
 })

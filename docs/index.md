@@ -224,7 +224,7 @@ There's an additional approach Biloba takes to optimize for stability and perfor
 
 Let's explain by way of example.  This is a sketch of how Puppeteer and chromedp (inspired by Puppeteer) click on an element - each step here is (typically) at least one roundtrip between the test suite and chrome:
 
-1. Query the document for a node matching the selector passed to `click`
+1. Query the document for a DOM element matching the selector passed to `click`
 2. Scroll the element into view
 3. Compute the `(x,y)` centroid of the element in page coordinates
 4. Tell the page to click on `(x,y)`
@@ -235,9 +235,9 @@ But.  All this realism comes at a cost.  One is performance - there are several 
 
 > Whatever.  Computers are plenty fast - so the performance concerns here are relatively minor.
 
-True.  But it's the potential stability issues that raise deeper concerns.  Each step during the `click` event is an asynchronous call to Chrome and so the entire click event does not constitute a single atomic unit - all sorts of stuff can happen between those individual steps.  That node you found during your query?  Well, by the time you're scrolling it into view... it's gone, perhaps because [React](https://reactjs.org) or [Mithril](https://mithril.js.org) or what-have-you was performing an asynchronous redraw.  Sure, the _selector_ would still return a valid element.  But the concrete, specific, node identified by it the first time around is no longer present.  Fail.
+True.  But it's the potential stability issues that raise deeper concerns.  Each step during the `click` event is an asynchronous call to Chrome and so the entire click event does not constitute a single atomic unit - all sorts of stuff can happen between those individual steps.  That DOM element you found during your query?  Well, by the time you're scrolling it into view... it's gone, perhaps because [React](https://reactjs.org) or [Mithril](https://mithril.js.org) or what-have-you was performing an asynchronous redraw.  Sure, the _selector_ would still return a valid element.  But the concrete, specific, element identified by it the first time around is no longer present.  Fail.
 
-Or, perhaps you've computed the `(x,y)` centroid and are about to click on the element when some image download/ajax request/what-have-you completes and causes the page to reflow.  The element moves.  The click misses, perhaps hitting some other dom node, leading to a fairly difficult to debug Heisenbug.
+Or, perhaps you've computed the `(x,y)` centroid and are about to click on the element when some image download/ajax request/what-have-you completes and causes the page to reflow.  The element moves.  The click misses, perhaps hitting some other DOM element, leading to a fairly difficult to debug Heisenbug.
 
 > But surely that would happen so rarely.
 
@@ -258,7 +258,7 @@ Every time a page loads, Biloba invokes a short piece of javascript to install a
 - Find the element matching `selector`
 - Validate that it is visible
 - Validate that it is not disabled
-- Click on it via Javascripts `node.Click()`
+- Click on it via Javascripts `element.Click()`
 
 All of these steps happen synchronously, and atomically, in the browser.  And the implementation of each step is simple and pragmatic.  The visibility check simply asserts the element has a non-zero `offsetWidth` and `offsetHeight` - there's no scrolling or confirming that it isn't hidden behind some other element.  The interactibility check simply asserts that the element doesn't have the `disabled` attribute set.
 
@@ -533,7 +533,7 @@ If a browser action results in a _new_ tab being opened you'll need to get a Bil
 
 You can either query `AllSpawnedTabs` and search through them for the tab you're looking for, or use `FindSpanwedTab` with a filter function that has signature `func(*Biloba) bool`.  Biloba provides three filter functions out of the box:
 
-- `TabWithDOMNode(selector)` matches if the spawned tab has a DOM node satisfying `selector`.
+- `TabWithDOMNode(selector)` matches if the spawned tab has a DOM element satisfying `selector`.
 - `TabWithURL(url)` matches if the spawned tab has a matching url
 - `TabWithTitle(title)` matches if the spawned tab has a matching title
 
@@ -564,9 +564,218 @@ Note that `b.HaveSpawnedTab` will have failed.  That's because Biloba associates
 There are analogous `b.AllTabs()`, `b.HaveTab()` and `b.FindTab()` functions that let you search through _all_ tabs associated with this Biloba Chrome connection.  This won't include any tabs opened by other Ginkgo processes running in parallel - but any tabs that are associated with the current process (whether explicitly created Tabs or Spawned Tabs) will be returned by these methods.
 
 ## Working with the DOM
-#### Mental Model: how Biloba works with the dom
 
-### XPath Queries
+Most of what you'll be doing with Biloba will involve working with the DOM: selecting DOM elements, clicking on them, making assertions about their properties, changing their properties, etc...
+
+If you haven't yet, you should pause and read the "[Pragmatism: How Biloba Interacts with the DOM](#pragmatism-how-biloba-interacts-with-the-dom)" section above: it covers Biloba's basic approach to DOM interactions and how it differs from other browser automation frameworks.
+
+Assuming you've read that section, we'll dive into problem number one: telling Biloba _which_ DOM element you want to interact with.
+
+### Selecting DOM Elements
+
+Biloba supports two mechanisms for selecting DOM elements.  CSS selectors (i.e. what you'd pass into `document.QuerySelector()`) and XPath Queries (i.e. what you'd pass into `document.evaluate`).  Throughout this chapter you'll use the word `selector` in code snippets and examples.  If you pass a `string` in as `selector`, Biloba interprets that string as a CSS query.  For example:
+
+```go
+b.Click("button.submit")
+```
+
+will select the **first** `<button>` DOM element with class `submit` and click on it.  If you'd like to learn more about CSS query selectors the [MDN docs](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors) are fantastic.
+
+To perform an XPath query you pass a Biloba `XPath()` object in as `selector.  `XPath` objects can be constructed using `b.XPath()`.  You can specify the XPath manually:
+
+```go
+b.Click(b.XPath("//button[contains(concat(' ',normalize-space(@class),' '),'submit')]"))
+```
+
+or using Biloba's mini-XPath DSL:
+
+```go
+b.Click(b.XPath("button").WithClass("submit"))
+```
+
+We'll dive into the XPath DSL in more details at the end of this chapter.  As you can see from this example, it can help generate some fairly complex XPath queries with a much simpler series of invocations.
+
+If you'd like to learn more about XPath queries the [MDN docs](https://developer.mozilla.org/en-US/docs/Web/XPath) will give you a good mental model while the [XPath Cheatsheet at devhints.io](https://devhints.io/xpath) is a fantastic, concise, reference.  If you're more familiar with CSS queries it's definitely a worthwhile investment of effort to learn XPath - as a whole class of queries that aren't possible with CSS queries are straightforward with XPath.
+
+Before we go further and explore the catalog of DOM interactions Biloba provides we should pause and point out an important design decision in Biloba.
+
+When you're interacting with the DOM you **don't** ask Biloba to fetch a DOM element and then take action on it:
+
+```go
+/* INVALID */
+el := b.FindElement(selector)
+el.Click()
+```
+
+you're always passing in a selector to the action:
+
+```go
+b.Click(selector)
+```
+
+This design decision helps reduce flakiness in your test suite.  It's possible that the concrete DOM element returned by a hypothetical `FindElement` function is gone (perhaps it was asynchronously re-rendered by your front-end view layer) by the time you attempt to `Click()` it.  Instead, Biloba runs a single synchronous snippet of JavaScript in the browser that fetches the element and then performs the action on it.
+
+Finally - some Biloba methods use the **first** element returned by the `selector` while others use **all** elements returned by the selector.  The difference is usually clear based on the name of the method.
+
+Now that we know how to `select` DOM elements - let's dig into what we can do with them.
+
+### Existence, Visibility, and Interactibility
+
+You can check if a tab has an element matching `selector` with:
+
+```go
+hasEl := b.HasElement(selector) //returns bool
+```
+
+this runs immediately on the reusable root tab.  To check a different tab, call `tab.HasElement(selector)`.  **The DOM method always operates on the tab it is invoked on.**
+
+As discussed [above](#ginkgo-and-gomega-integration) - Biloba never polls unless you ask it to.  It's common to want to wait until an element exists before taking some action on the page.  To do that you'd need to poll `b.HaElement`... which, with Gomega, could look like this:
+
+```go
+Eventually(b.HasElement).WithArguments(selector).Should(BeTrue())
+```
+
+...but that's wordy and hideous and will have the deeply unsatisfying failure message of `"Expected false to be true"`.  Instead you should use `b.Exist()` which returns a matcher:
+
+```go
+Expect(selector).To(b.Exist()) // assert that the element is there right now
+Eventually(selector).Should(b.Exist()) // assert that the element exists, eventually
+```
+
+if you want to assert the existing of `selector` on a different tab you would:
+
+```go
+Eventually(selector).Should(tab.Exist())
+```
+
+note that we use `tab`'s `Exist()` matcher here instead of the reusable root tab `b`.
+
+Both `HasElement()` and `Exist()` succeed simply if the `selector` query returns an element.
+
+---
+
+To assert that an element is visible use `BeVisible()`:
+
+```go
+Eventually(selector).Should(b.BeVisible())
+```
+
+Biloba's visibility check performs the following javascript as one atomic unit:
+
+- query the selector
+- fail if no element is returned (validate existence)
+- check the element's visibility and return the result
+
+Biloba's visibility check is simple and pragmatic.  The element must satisfy:
+
+```js
+el.offsetWidth > 0 || el.offsetHeight > 0
+```
+
+This will catch cases where the DOM element has `display:none` or if it's parent is hidden.  It will not cover the case where the DOM element is transparent or is occluded by some other element.
+
+Since `BeVisible()` validates existence you do not need to have an `Eventually(selector).Should(b.Exist())` before checking `BeVisible()`
+
+---
+
+To assert that an element can be interacted with use `BeEnabled()`:
+
+```go
+Eventually(selector).Should(b.BeEnabled())
+```
+
+This performs the following javascript as one atomic unit:
+
+- query the selector
+- fail if no element is returned (validate existence)
+- check that the element is not disabled  and return the result
+
+Biloba's disabled check is simply:
+
+```js
+!el.disabled
+```
+
+As with `BeVisible()` you don't need to assert existence before asserting `BeEnabled()` - existence is implicitly validated by `BeEnabled()`
+
+### Contents
+
+You can get the `innerText` of an element with `InnerText()`:
+
+```go
+text := b.InnerText(selector) //returns string
+```
+
+If the element does not exist, `InnerText` will fail the test for you.  If you want to make an assertion on the text and, especially, if you want to pull until the text matches an assertion use `HaveInnerText()`:
+
+```go
+Eventually(selector).Should(b.HaveInnerText("Expected text goes here"))
+```
+
+you can pass `b.HaveInnerText` a string to require an exact match, or an appropriate Gomega Matcher:
+
+
+```go
+Eventually(selector).Should(b.HaveInnerText(ContainSubstring("text")))
+Eventually(selector).Should(b.HaveInnerText(HavePrefix("Expected")))
+//etc...
+```
+
+### Properties and Classes
+
+You can get any JavaScript property defined on an element via `GetProperty()` for example:
+
+```go
+property := b.GetProperty(selector, "href") //returns any
+```
+
+this will query the DOM immediately and return the property value.  The value will have type `any` and the actual type will depend on what was stored in the property in JavaScript.  If no element matching selector is found, or the property is not defined on the element the test will fail.
+
+You can fetch subproperties using `.` notation:
+
+```go
+property := b.GetProperty(selector, "dataset.name") //returns any
+```
+
+will return the `data-name` attribute defined on the element.
+
+To make assertions on properties, and to poll, use the `HaveProperty` matcher.  You can pass in Gomega matchers to make assertions on the returned property value which is a convenient way to handle the returned `any` type seamlessly:
+
+```go
+Eventually(selector).Should(b.HaveProperty("href", HaveSuffix("toc.html"))) //an assertion on a string
+Eventually(selector).Should(b.HaveProperty("hidden", BeFalse())) //an assertion on a bool
+Eventually(selector).Should(b.HaveProperty("clasList", HaveKeyWithValue("0", "blue"))) //an assertion on a map
+Eventually(selector).Should(b.HaveProperty("dataset.name", "henry")) // an assertion on a string
+```
+
+---
+
+You can assert that an element has a given set of CSS classes using the `HaveClass()` matcher.  You can either pass `HaveClass` a Gomega matcher or a string.  The matcher will receive the entire list of classes associated with the object as a slice of strings.  That means you can do things like:
+
+```go
+Expect(selector).To(b.HaveClass(ConsistOf("blue", "heading", "published")))
+Expect(selector).To(b.HaveClass(ContainElements("blue", "heading")))
+```
+
+When passed a single string:
+
+```go
+Eventually(selector).Should(b.HaveClass("published"))
+```
+
+the behavior is equivalent to:
+
+```go
+Eventually(selector).Should(b.HaveClass(ContainElement("published")))
+```
+
+i.e. the class list should include `published`.
+
+### Form Elements
+
+### Clicking on Things
+
+### The XPath DSL
 
 ## Dialogs, Downloads, and Windows
 

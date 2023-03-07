@@ -45,7 +45,7 @@ func (b *Biloba) FindTab(f func(*Biloba) bool) *Biloba {
 	return nil
 }
 
-func (b *Biloba) TabWithDOMNode(selector any) func(*Biloba) bool {
+func (b *Biloba) TabWithDOMElement(selector any) func(*Biloba) bool {
 	return func(tab *Biloba) bool {
 		return tab.HasElement(selector)
 	}
