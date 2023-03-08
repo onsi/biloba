@@ -37,7 +37,7 @@ func (d *Download) IsCanceled() bool {
 	return d.canceled
 }
 
-func (d *Download) isActive() bool {
+func (d *Download) IsActive() bool {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 	return !d.canceled && !d.complete
@@ -129,7 +129,7 @@ func (b *Biloba) hasActiveDownloads() bool {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	for _, dl := range b.downloads {
-		if dl.isActive() {
+		if dl.IsActive() {
 			return true
 		}
 	}
