@@ -770,6 +770,21 @@ Eventually(selector).Should(b.HaveProperty("dataset.name", "henry")) // an asser
 
 `HaveProperty` ensures the element exists and, when passed a second argument, that the requested property is defined.
 
+You can also set properties with `b.SetProperty()`.  When passed three arguments `b.SetProperty` operates immediately:
+
+```go
+b.SetProperty(selector, "href", "http://www.example.com/")
+b.SetProperty(selector, "dataset.name", "Bob")
+```
+
+when passed two arguments, it returns a matcher that can be polled:
+
+```go
+Eventually(selector).Should(b.SetProperty("dataset.name", "George"))
+```
+
+`SetProperty` fails if selector doesn't match an element.  It will also fail if a delimited property (e.g. `foo.bar.baz`) can't be accessed.
+
 ---
 
 You can assert that an element has a given set of CSS classes using the `HaveClass()` matcher.  You can either pass `HaveClass` a Gomega matcher or a string.  The matcher will receive the entire list of classes associated with the object as a slice of strings.  That means you can do things like:
@@ -853,6 +868,8 @@ When `selector` refers to a checkbox:
 - `b.GetValue(selector)` returns a boolean denoting whether or not the checkbox is selected
 - `b.SetValue(selector, true/false)` and `Expect(select).To(b.SetValue(true/false))` will check the box if passed `true` and uncheck the box if passed `false`.  If you want to toggle the box use `b.Click(selector)` instead.
 - `b.HaveValue()` will receive a boolean.  So you can use `b.HaveValue(true)` or `b.HaveValue(BeTrue())` to assert the box is checked (and `false`/`BeFalse()` to assert it is not checked).
+
+If you want to set/get the Checkboxes' `intermediate` property - or if you prefer to work with the `checked` property directly, use `b.GetProperty/b.SetProperty/b.HaveProperty`.
 
 ### Working with Radio buttons
 

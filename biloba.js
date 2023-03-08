@@ -83,12 +83,22 @@ if (!window["_biloba"]) {
     b.hasProperty = h((n, p) => {
         let v = n
         for (const subP of p.split(".")) {
-            if (!(subP in v)) return r(false, "DOM element does not have property " + p)
+            if (!(subP in v)) return r(false, `DOM element does not have property "${p}"`)
             v = v[subP]
         }
         return r(true)
     })
     b.getProperty = h(b.hasProperty, (n, p) => rRes(p.split(".").reduce((v, subP) => v[subP], n)))
+    b.setProperty = h((n, p, v) => {
+        p = p.split(".")
+        for (const subP of p.slice(0, -1)) {
+            if (!(subP in n)) return rErr(`could not resolve property component ".${subP}"`)
+            n = n[subP]
+        }
+        console.log("setting", p[p.length - 1], "to", v)
+        n[p[p.length - 1]] = v
+        return r()
+    })
 
     window["_biloba"] = b
 }

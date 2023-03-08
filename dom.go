@@ -123,7 +123,7 @@ func (b *Biloba) GetProperty(selector any, property string) any {
 	b.gt.Helper()
 	r := b.runBilobaHandler("getProperty", selector, property)
 	if r.Error() != nil {
-		b.gt.Fatalf("Failed to get property %s:\n%s", property, r.Error())
+		b.gt.Fatalf("Failed to get property \"%s\":\n%s", property, r.Error())
 	}
 	return r.Result
 }
@@ -150,6 +150,21 @@ func (b *Biloba) HaveProperty(property string, expected ...any) types.GomegaMatc
 			data["Result"] = r.Result
 			return matcher.Match(data["Result"])
 		}).WithTemplate("HaveProperty \"{{.Data.Property}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}
+}
+
+func (b *Biloba) SetProperty(args ...any) types.GomegaMatcher {
+	b.gt.Helper()
+	if len(args) == 3 {
+		r := b.runBilobaHandler("setProperty", args[0], args[1], args[2])
+		if r.Error() != nil {
+			b.gt.Fatalf("Failed to set property \"%s\":\n%s", args[1], r.Error())
+		}
+		return nil
+	} else {
+		return gcustom.MakeMatcher(func(selector any) (bool, error) {
+			return b.runBilobaHandler("setProperty", selector, args[0], args[1]).MatcherResult()
+		}).WithMessage("be property-settable")
 	}
 }
 

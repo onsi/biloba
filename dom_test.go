@@ -576,12 +576,12 @@ var _ = Describe("DOM manipulators and matchers", func() {
 
 		It("returns an error when the element does not exist", func() {
 			b.GetProperty("#non-existing", "tagName")
-			ExpectFailures("Failed to get property tagName:\ncould not find DOM element matching selector: #non-existing")
+			ExpectFailures("Failed to get property \"tagName\":\ncould not find DOM element matching selector: #non-existing")
 		})
 
 		It("returns an error when the element does not have the property in question", func() {
 			b.GetProperty(".notice", "floop")
-			ExpectFailures("Failed to get property floop:\nDOM element does not have property floop: .notice")
+			ExpectFailures("Failed to get property \"floop\":\nDOM element does not have property \"floop\": .notice")
 		})
 	})
 
@@ -614,7 +614,45 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		It("returns an error when the element does not have the property in question and a second argument is provided", func() {
 			match, err := b.HaveProperty("floop", "any").Match(".notice")
 			Ω(match).Should(BeFalse())
-			Ω(err).Should(MatchError("DOM element does not have property floop: .notice"))
+			Ω(err).Should(MatchError("DOM element does not have property \"floop\": .notice"))
+		})
+	})
+
+	Describe("SetProperty", func() {
+		It("modifies properties set on dom elements", func() {
+			Ω(".notice").Should(b.HaveProperty("count", 3.0))
+			b.SetProperty(".notice", "count", 7.0)
+			Ω(".notice").Should(b.HaveProperty("count", 7.0))
+
+			Ω(".notice").Should(b.BeVisible())
+			Ω(".notice").Should(b.SetProperty("hidden", true))
+			Eventually(".notice").ShouldNot(b.BeVisible())
+
+			Ω(".notice").Should(b.HaveProperty("dataset.name", "henry"))
+			b.SetProperty(".notice", "dataset.name", "bob")
+			Ω(".notice").Should(b.HaveProperty("dataset.name", "bob"))
+
+			Ω(".notice").ShouldNot(b.HaveProperty("dataset.age"))
+			b.SetProperty(".notice", "dataset.age", 17.0)
+			Ω(".notice").Should(b.HaveProperty("dataset.age", "17"))
+
+			Ω("#hidden-text-input").Should(b.HaveProperty("value", "my-hidden-value"))
+			b.SetProperty("#hidden-text-input", "value", "new-hidden-value")
+			Ω("#hidden-text-input").Should(b.HaveProperty("value", "new-hidden-value"))
+		})
+
+		It("returns an error when the property chain can't be traversed", func() {
+			b.SetProperty(".notice", "foo.bar", "baz")
+			ExpectFailures("Failed to set property \"foo.bar\":\ncould not resolve property component \".foo\": .notice")
+		})
+
+		It("returns an error when the element does not exist", func() {
+			match, err := b.SetProperty("tagName", "any").Match("#non-existing")
+			Ω(match).Should(BeFalse())
+			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
+
+			b.SetProperty("#non-existing", "foo", "bar")
+			ExpectFailures("Failed to set property \"foo\":\ncould not find DOM element matching selector: #non-existing")
 		})
 	})
 
