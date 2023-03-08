@@ -44,6 +44,13 @@ func (r *bilobaJSResponse) ResultStringSlice() []string {
 	return out
 }
 
+func (r *bilobaJSResponse) ResultAnySlice() []any {
+	if r.Result == nil {
+		return []any{}
+	}
+	return r.Result.([]any)
+}
+
 func (b *Biloba) runBilobaHandler(name string, selector any, args ...any) *bilobaJSResponse {
 	b.ensureBiloba()
 	result := &bilobaJSResponse{}
@@ -119,6 +126,36 @@ func (b *Biloba) HaveInnerText(expected interface{}) types.GomegaMatcher {
 	}).WithTemplate("HaveInnerText for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
 }
 
+func (b *Biloba) InnerTexts(selector any) []string {
+	b.gt.Helper()
+	r := b.runBilobaHandler("getInnerTexts", selector)
+	if r.Error() != nil {
+		b.gt.Fatalf("Failed to get inner texts:\n%s", r.Error())
+	}
+	return r.ResultStringSlice()
+}
+
+func (b *Biloba) HaveInnerTexts(args ...any) types.GomegaMatcher {
+	var data = map[string]any{}
+	var matcher types.GomegaMatcher
+	if len(args) == 0 {
+		matcher = gomega.BeEmpty()
+	} else if x, ok := args[0].(types.GomegaMatcher); ok && len(args) == 1 {
+		matcher = x
+	} else {
+		matcher = gomega.HaveExactElements(nilSafeSlice(args)...)
+	}
+	data["Matcher"] = matcher
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		r := b.runBilobaHandler("getInnerTexts", selector)
+		if r.Error() != nil {
+			return false, r.Error()
+		}
+		data["Result"] = r.ResultStringSlice()
+		return matcher.Match(data["Result"])
+	}).WithTemplate("HaveInnerText for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+}
+
 func (b *Biloba) GetProperty(selector any, property string) any {
 	b.gt.Helper()
 	r := b.runBilobaHandler("getProperty", selector, property)
@@ -126,6 +163,15 @@ func (b *Biloba) GetProperty(selector any, property string) any {
 		b.gt.Fatalf("Failed to get property \"%s\":\n%s", property, r.Error())
 	}
 	return r.Result
+}
+
+func (b *Biloba) GetPropertyFromEach(selector any, property string) []any {
+	b.gt.Helper()
+	r := b.runBilobaHandler("getPropertyFromEach", selector, property)
+	if r.Error() != nil {
+		b.gt.Fatalf("Failed to get property \"%s\" from each:\n%s", property, r.Error())
+	}
+	return r.ResultAnySlice()
 }
 
 func (b *Biloba) HaveProperty(property string, expected ...any) types.GomegaMatcher {
@@ -153,6 +199,37 @@ func (b *Biloba) HaveProperty(property string, expected ...any) types.GomegaMatc
 	}
 }
 
+func (b *Biloba) EachHaveProperty(property string, args ...any) types.GomegaMatcher {
+	var data = map[string]any{}
+	data["Property"] = property
+	if len(args) == 0 {
+		return gcustom.MakeMatcher(func(selector any) (bool, error) {
+			r := b.runBilobaHandler("eachHasProperty", selector, property)
+			if r.Error() != nil {
+				return false, r.Error()
+			}
+			return r.Success, nil
+		}).WithTemplate("Expected all {{.Actual}} {{.To}} each have property \"{{.Data.Property}}\"", data)
+	} else {
+		var matcher types.GomegaMatcher
+		if x, ok := args[0].(types.GomegaMatcher); ok && len(args) == 1 {
+			matcher = x
+		} else {
+			matcher = gomega.HaveExactElements(nilSafeSlice(args)...)
+		}
+
+		data["Matcher"] = matcher
+		return gcustom.MakeMatcher(func(selector any) (bool, error) {
+			r := b.runBilobaHandler("getPropertyFromEach", selector, property)
+			if r.Error() != nil {
+				return false, r.Error()
+			}
+			data["Result"] = r.Result
+			return matcher.Match(data["Result"])
+		}).WithTemplate("EachHaveProperty \"{{.Data.Property}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}
+}
+
 func (b *Biloba) SetProperty(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
 	if len(args) == 3 {
@@ -165,6 +242,14 @@ func (b *Biloba) SetProperty(args ...any) types.GomegaMatcher {
 		return gcustom.MakeMatcher(func(selector any) (bool, error) {
 			return b.runBilobaHandler("setProperty", selector, args[0], args[1]).MatcherResult()
 		}).WithMessage("be property-settable")
+	}
+}
+
+func (b *Biloba) SetPropertyForEach(selector any, property string, value any) {
+	b.gt.Helper()
+	r := b.runBilobaHandler("setPropertyForEach", selector, property, value)
+	if r.Error() != nil {
+		b.gt.Fatalf("Failed to set property \"%s\" for all:\n%s", property, r.Error())
 	}
 }
 
@@ -235,13 +320,29 @@ func (b *Biloba) Click(args ...any) types.GomegaMatcher {
 	}
 }
 
-func matcherOrEqual(expected interface{}) types.GomegaMatcher {
+func matcherOrEqual(expected any) types.GomegaMatcher {
 	var matcher types.GomegaMatcher
 	switch v := expected.(type) {
 	case types.GomegaMatcher:
 		matcher = v
 	default:
-		matcher = gomega.Equal(v)
+		if v == nil {
+			matcher = gomega.BeNil()
+		} else {
+			matcher = gomega.Equal(v)
+		}
 	}
 	return matcher
+}
+
+func nilSafeSlice(expected []any) []any {
+	safeExpected := make([]any, len(expected))
+	for i, v := range expected {
+		if v == nil {
+			safeExpected[i] = gomega.BeNil()
+		} else {
+			safeExpected[i] = v
+		}
+	}
+	return safeExpected
 }

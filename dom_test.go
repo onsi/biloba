@@ -114,6 +114,18 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 	})
 
+	Describe("InnerTexts", func() {
+		It("returns the InnerText of the element", func() {
+			Ω(b.InnerTexts(b.XPath().WithID("party").Descendant("optgroup").WithAttr("label", "Heros").Descendant("option"))).Should(HaveExactElements("Luke", "Leia", "Han", "Obi-Wan"))
+
+			Ω(b.InnerTexts("#list li")).Should(HaveExactElements("First Things", "Second Things", "Third Things"))
+		})
+
+		It("returns an empty slice if no elements exist", func() {
+			Ω(b.InnerTexts(".non-existing")).Should(BeEmpty())
+		})
+	})
+
 	Describe("HaveInnerText", func() {
 		It("matches if the element in question has the specified inner text", func() {
 			Ω("#hello").Should(b.HaveInnerText("Hello Biloba!"))
@@ -144,6 +156,16 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			match, err := b.HaveInnerText("").Match("#non-existing")
 			Ω(match).Should(BeFalse())
 			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
+		})
+	})
+
+	Describe("HaveInnerTexts", func() {
+		It("matches if the elements in question have the specified inner text", func() {
+			Ω(b.XPath().WithID("party").Descendant("optgroup").WithAttr("label", "Heros").Descendant("option")).Should(b.HaveInnerTexts("Luke", "Leia", "Han", "Obi-Wan"))
+
+			Ω("#list li").Should(b.HaveInnerTexts(ConsistOf("Second Things", "First Things", "Third Things")))
+			Ω("#list li").Should(b.HaveInnerTexts(ContainElement("Second Things")))
+			Ω("#non-existing").Should(b.HaveInnerTexts())
 		})
 	})
 
@@ -572,16 +594,13 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(b.GetProperty(".notice", "classList")).Should(HaveKeyWithValue("0", "notice"))
 			Ω(b.GetProperty(".notice", "dataset.name")).Should(Equal("henry"))
 			Ω(b.GetProperty("#hidden-text-input", "value")).Should(Equal("my-hidden-value"))
+			Ω(b.GetProperty(".notice", "floop")).Should(BeNil())
+
 		})
 
 		It("returns an error when the element does not exist", func() {
 			b.GetProperty("#non-existing", "tagName")
 			ExpectFailures("Failed to get property \"tagName\":\ncould not find DOM element matching selector: #non-existing")
-		})
-
-		It("returns an error when the element does not have the property in question", func() {
-			b.GetProperty(".notice", "floop")
-			ExpectFailures("Failed to get property \"floop\":\nDOM element does not have property \"floop\": .notice")
 		})
 	})
 
@@ -600,6 +619,7 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(".notice").Should(b.HaveProperty("innerText", "Some Text"))
 			Ω(".notice").Should(b.HaveProperty("innerText", "Some Text"))
 			Ω(".notice").Should(b.HaveProperty("hidden", false))
+			Ω(".notice").ShouldNot(b.HaveProperty("floop", "any"))
 			Ω(".notice").Should(b.HaveProperty("classList", HaveKeyWithValue("0", "notice")))
 			Ω(".notice").Should(b.HaveProperty("dataset.name", "henry"))
 			Ω("#hidden-text-input").Should(b.HaveProperty("value", "my-hidden-value"))
@@ -611,11 +631,6 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
 		})
 
-		It("returns an error when the element does not have the property in question and a second argument is provided", func() {
-			match, err := b.HaveProperty("floop", "any").Match(".notice")
-			Ω(match).Should(BeFalse())
-			Ω(err).Should(MatchError("DOM element does not have property \"floop\": .notice"))
-		})
 	})
 
 	Describe("SetProperty", func() {
@@ -653,6 +668,74 @@ var _ = Describe("DOM manipulators and matchers", func() {
 
 			b.SetProperty("#non-existing", "foo", "bar")
 			ExpectFailures("Failed to set property \"foo\":\ncould not find DOM element matching selector: #non-existing")
+		})
+	})
+
+	Describe("GetPropertyFromEach", func() {
+		It("fetches the requested property from all elements matching the selector", func() {
+			values := b.GetPropertyFromEach("input[type='radio'][name='appliances']", "value")
+			Expect(values).To(HaveExactElements("toaster", "stove", "microwave"))
+
+			values = b.GetPropertyFromEach(b.XPath("div").WithID("check-boxes").Descendant("input").WithAttr("type", "checkbox"), "id")
+			Expect(values).To(HaveExactElements("red", "blue", "yellow", "green"))
+
+			values = b.GetPropertyFromEach(".notice", "dataset.name")
+			Expect(values).To(HaveExactElements("henry", "bob", BeNil()))
+		})
+
+		It("returns an empty array when no elements are found", func() {
+			values := b.GetPropertyFromEach("#non-existing", "href")
+			Expect(values).To(BeEmpty())
+		})
+
+		It("returns nil values for elements that are found but don't have the property", func() {
+			values := b.GetPropertyFromEach("input[type='radio'][name='appliances']", "href")
+			Expect(values).To(HaveExactElements(BeNil(), BeNil(), BeNil()))
+		})
+	})
+
+	Describe("SetPropertyForEach", func() {
+		It("sets the specified property to the same value on any matching elements", func() {
+			Expect("#check-boxes input[type='checkbox']").To(b.EachHaveProperty("checked", true, false, false, false))
+			b.SetPropertyForEach("#check-boxes input[type='checkbox']", "checked", true)
+			Expect("#check-boxes input[type='checkbox']").To(b.EachHaveProperty("checked", true, true, true, true))
+
+			Expect(".notice").To(b.EachHaveProperty("dataset.name", "henry", "bob", nil))
+			b.SetPropertyForEach(".notice", "dataset.name", "John")
+			Expect(".notice").To(b.EachHaveProperty("dataset.name", HaveEach("John")))
+		})
+
+		It("does nothing if no elements match", func() {
+			b.SetPropertyForEach(".non-existing", "href", "http://example.com")
+		})
+
+		It("fails if a property can't be set because of delimiter issues", func() {
+			b.SetPropertyForEach("li", "foo.bar", 3)
+			ExpectFailures("Failed to set property \"foo.bar\" for all:\ncould not resolve property component \".foo\": li")
+		})
+	})
+
+	Describe("EachHaveProperty", func() {
+		It("simply asserts that the property is defined if it is only passed in a property", func() {
+			Expect("#party optgroup[label='Heros'] option").To(b.EachHaveProperty("value"))
+			Expect(".notice").NotTo(b.EachHaveProperty("data-name"))
+
+			Expect(".non-existing").NotTo(b.EachHaveProperty("href"))
+		})
+
+		It("verifies that the returned values all match the expected properties if provided", func() {
+			Expect(".notice").To(b.EachHaveProperty("dataset.name", "henry", "bob", nil))
+		})
+
+		It("uses the passed-in matcher if there is only one argument", func() {
+			Expect(".notice").To(b.EachHaveProperty("dataset.name", ContainElement("bob")))
+			Expect(".notice").NotTo(b.EachHaveProperty("dataset.name", ContainElement("john")))
+			Expect("input").To(b.EachHaveProperty("tagName", HaveEach("INPUT")))
+		})
+
+		It("returns empty if no elements are found", func() {
+			Expect(".non-existing").NotTo(b.EachHaveProperty("href"))
+			Expect(".non-existing").To(b.EachHaveProperty("href", BeEmpty()))
 		})
 	})
 

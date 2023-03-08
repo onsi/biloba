@@ -734,6 +734,28 @@ Eventually(selector).Should(b.HaveInnerText(HavePrefix("Expected")))
 
 Both `HaveInnerText` and `InnerText` always operate on the **first** element matching `selector.
 
+You can fetch the content for a bunch of elements simultaneously with `InnerTexts()/HaveInnerTexts()`:
+
+```go
+texts := b.InnerTexts(selector) // returns []string
+```
+
+returns a slice of strings for all elements matching selector.  For example:
+
+```go
+list := b.InnerTexts("ol.movies li")
+```
+
+will return the individual inner texts for each list element under all `<ol>`s with class `movies`.  If no elements are found `list` will be an empty slice.
+
+You can assert on InnerTexts with `b.HaveInnerTexts()` like so:
+
+```go
+Expect(selector).To(b.HaveInnerTexts("A", "B", "C")) //uses Gomega's HaveExactElements matcher to assert the texts match, in order
+Expect(selector).To(b.HaveInnerTexts(ContainElement("B")) //passes the entire slice to the matcher
+Expect("#non-existing").To(b.HaveInnerTexts()) // this will succeed - an empty slice is returned when there is no selector match and `b.HaveInnerTexts() will assert that the slice is empty
+```
+
 ### Properties and Classes
 
 You can get any JavaScript property defined on an element via `GetProperty()` for example:
@@ -742,7 +764,7 @@ You can get any JavaScript property defined on an element via `GetProperty()` fo
 property := b.GetProperty(selector, "href") //returns any
 ```
 
-this will query the DOM immediately and return the property value of the **first** element matching `selector`.  The value will have type `any` and the actual type will depend on what was stored in the property in JavaScript.  If no element matching `selector` is found, or the property is not defined on the element the test will fail.
+this will query the DOM immediately and return the property value of the **first** element matching `selector`.  The value will have type `any` and the actual type will depend on what was stored in the property in JavaScript.  If no element matching `selector` is found the test will fail.  If an element is found, but doesn't have the requested property then - in keeping with JavaScript - `nil` is returned.
 
 You can fetch subproperties using `.` notation:
 
@@ -766,9 +788,10 @@ Eventually(selector).Should(b.HaveProperty("href", HaveSuffix("toc.html"))) //an
 Eventually(selector).Should(b.HaveProperty("hidden", BeFalse())) //an assertion on a bool
 Eventually(selector).Should(b.HaveProperty("classList", HaveKeyWithValue("0", "blue"))) //an assertion on a map
 Eventually(selector).Should(b.HaveProperty("dataset.name", "henry")) // an assertion on a string
+Eventually(selector).Should(b.HaveProperty("dataset.missing", BeNil())) // an assertion on an undefined property
 ```
 
-`HaveProperty` ensures the element exists and, when passed a second argument, that the requested property is defined.
+`HaveProperty` ensures the element exists and.
 
 You can also set properties with `b.SetProperty()`.  When passed three arguments `b.SetProperty` operates immediately:
 
@@ -784,6 +807,50 @@ Eventually(selector).Should(b.SetProperty("dataset.name", "George"))
 ```
 
 `SetProperty` fails if selector doesn't match an element.  It will also fail if a delimited property (e.g. `foo.bar.baz`) can't be accessed.
+
+The `GetProperty/HaveProperty/SetProperty` triad operate on the **first** element matched by `selector`.  To operate on all elements use `GetPropertyFromEach/EachHaveProperty/SetPropertyFroEach`.  Here's how they work:
+
+```go
+b.GetPropertyFromEach(".notice", "id")
+```
+
+will return a slice of type `[]any` that contains the `id` property of all elements matching the `.notice` selector.  If no elements are found, an empty slice is returned.  If any elements don't have the requested property, the value in the slice for that element will be `nil`.  You can make assertions on the returned value like so:
+
+```go
+Expect(b.GetPropertyFromEach(".notice", "id")).To(HaveExactElements("A", BeNil(), "C"))
+Expect(b.GetPropertyFromEach(".notice", "dataset.name")).To(ContainElement("Bob"))
+Expect(b.GetPropertyFromEach(".does-not-exist", "foo")).To(BeEmpty())
+```
+
+(note that you must use `BeNil` instead of `nil` in Gomega's collection matchers)
+
+Alternatively, you can use `EachHaveProperty` to make an assertion directly and/or to poll:
+
+```go
+//assert that every .notice has a dataset.name defined on it
+Eventually(".notice").Should(EachHaveProperty("dataset.name"))
+
+//require an exact match - note that you can specify nil to assert that an element does not have this property
+Eventually(".notice").Should(EachHaveProperty("dataset.name", "Bob", "George", nil, "John"))
+
+//use a matcher - this ensures that there are is at least a .notice with name Bob and one with name George
+Eventually(".notice").Should(EachHaveProperty("dataset.name", ContainElements("Bob", "George")))
+
+//if you don't care about order, use ConsistOf 
+Eventually(".notice").Should(EachHaveProperty("dataset.name", ConsistOf(BeNil(), "John", "Bob", "George")))
+
+// if you want all attribute values to be the same, use Gomega's `HaveEach`:
+Eventually(".notice").Should(EachHaveProperty("disabled", HaveEach(BeFalse())))
+```
+
+Finally - you can use `SetPropertyForEach` to set the specified property to the specified value for **all** matched elements.  Since we're pointing at the set of _all_ elements matched by a selector it makes less sense to poll while setting so `SetPropertyForEach` does not provide a matcher variant.  You can use it like this:
+
+```go
+b.SetPropertyForEach(b.XPath("li").WithText("Seventeen"), "count", 17)
+b.SetPropertyForEach(".notice", "dataset.name", "John")
+```
+
+Now all elements matching `<li>Seventeen</li>` will have a `count` property set to `17`; and all elements with class `notice` will have a `name` data attribute with value `John`.  If no elements match... nothing happens.  The only way `SetPropertyForEach` fails is if you provide a delimited property that it cannot traverse (e.g. `foo.bar.baz` - if either `foo` or `bar` do not already exist).
 
 ---
 
