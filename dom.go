@@ -13,7 +13,7 @@ import (
 type bilobaJSResponse struct {
 	Success bool   `json:"success"`
 	Err     string `json:"error"`
-	Result  any    `json: "result"`
+	Result  any    `json:"result"`
 }
 
 func (r *bilobaJSResponse) Error() error {
