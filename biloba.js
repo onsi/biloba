@@ -55,7 +55,7 @@ if (!window["_biloba"]) {
     b.isEnabled = one(n => r(!n.disabled, "DOM element is not enabled"))
     b.click = one(b.isVisible, b.isEnabled, n => r(n.click()))
     b.getInnerText = one(n => rRes(n.innerText))
-    b.getInnerTexts = many(ns => rRes(ns.map(n => n.innerText)))
+    b.getInnerTextForEach = many(ns => rRes(ns.map(n => n.innerText)))
     b.getValue = one(n => {
         if (n.type == "checkbox") {
             return rRes(n.checked)
@@ -117,7 +117,7 @@ if (!window["_biloba"]) {
         }
         return rRes(v)
     })
-    b.getPropertyFromEach = many((ns, p) => rRes(ns.map(n => b.getProperty(n, p).result)))
+    b.getPropertyForEach = many((ns, p) => rRes(ns.map(n => b.getProperty(n, p).result)))
     b.setProperty = one((n, p, v) => {
         p = p.split(".")
         for (const subP of p.slice(0, -1)) {

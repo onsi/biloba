@@ -114,15 +114,15 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 	})
 
-	Describe("InnerTexts", func() {
+	Describe("InnerTextForEach", func() {
 		It("returns the InnerText of the element", func() {
-			Ω(b.InnerTexts(b.XPath().WithID("party").Descendant("optgroup").WithAttr("label", "Heros").Descendant("option"))).Should(HaveExactElements("Luke", "Leia", "Han", "Obi-Wan"))
+			Ω(b.InnerTextForEach(b.XPath().WithID("party").Descendant("optgroup").WithAttr("label", "Heros").Descendant("option"))).Should(HaveExactElements("Luke", "Leia", "Han", "Obi-Wan"))
 
-			Ω(b.InnerTexts("#list li")).Should(HaveExactElements("First Things", "Second Things", "Third Things"))
+			Ω(b.InnerTextForEach("#list li")).Should(HaveExactElements("First Things", "Second Things", "Third Things"))
 		})
 
 		It("returns an empty slice if no elements exist", func() {
-			Ω(b.InnerTexts(".non-existing")).Should(BeEmpty())
+			Ω(b.InnerTextForEach(".non-existing")).Should(BeEmpty())
 		})
 	})
 
@@ -159,13 +159,13 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 	})
 
-	Describe("HaveInnerTexts", func() {
+	Describe("EachHaveInnerText", func() {
 		It("matches if the elements in question have the specified inner text", func() {
-			Ω(b.XPath().WithID("party").Descendant("optgroup").WithAttr("label", "Heros").Descendant("option")).Should(b.HaveInnerTexts("Luke", "Leia", "Han", "Obi-Wan"))
+			Ω(b.XPath().WithID("party").Descendant("optgroup").WithAttr("label", "Heros").Descendant("option")).Should(b.EachHaveInnerText("Luke", "Leia", "Han", "Obi-Wan"))
 
-			Ω("#list li").Should(b.HaveInnerTexts(ConsistOf("Second Things", "First Things", "Third Things")))
-			Ω("#list li").Should(b.HaveInnerTexts(ContainElement("Second Things")))
-			Ω("#non-existing").Should(b.HaveInnerTexts())
+			Ω("#list li").Should(b.EachHaveInnerText(ConsistOf("Second Things", "First Things", "Third Things")))
+			Ω("#list li").Should(b.EachHaveInnerText(ContainElement("Second Things")))
+			Ω("#non-existing").Should(b.EachHaveInnerText())
 		})
 	})
 
@@ -671,25 +671,25 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 	})
 
-	Describe("GetPropertyFromEach", func() {
+	Describe("GetPropertyForEach", func() {
 		It("fetches the requested property from all elements matching the selector", func() {
-			values := b.GetPropertyFromEach("input[type='radio'][name='appliances']", "value")
+			values := b.GetPropertyForEach("input[type='radio'][name='appliances']", "value")
 			Expect(values).To(HaveExactElements("toaster", "stove", "microwave"))
 
-			values = b.GetPropertyFromEach(b.XPath("div").WithID("check-boxes").Descendant("input").WithAttr("type", "checkbox"), "id")
+			values = b.GetPropertyForEach(b.XPath("div").WithID("check-boxes").Descendant("input").WithAttr("type", "checkbox"), "id")
 			Expect(values).To(HaveExactElements("red", "blue", "yellow", "green"))
 
-			values = b.GetPropertyFromEach(".notice", "dataset.name")
+			values = b.GetPropertyForEach(".notice", "dataset.name")
 			Expect(values).To(HaveExactElements("henry", "bob", BeNil()))
 		})
 
 		It("returns an empty array when no elements are found", func() {
-			values := b.GetPropertyFromEach("#non-existing", "href")
+			values := b.GetPropertyForEach("#non-existing", "href")
 			Expect(values).To(BeEmpty())
 		})
 
 		It("returns nil values for elements that are found but don't have the property", func() {
-			values := b.GetPropertyFromEach("input[type='radio'][name='appliances']", "href")
+			values := b.GetPropertyForEach("input[type='radio'][name='appliances']", "href")
 			Expect(values).To(HaveExactElements(BeNil(), BeNil(), BeNil()))
 		})
 	})
@@ -711,7 +711,7 @@ var _ = Describe("DOM manipulators and matchers", func() {
 
 		It("fails if a property can't be set because of delimiter issues", func() {
 			b.SetPropertyForEach("li", "foo.bar", 3)
-			ExpectFailures("Failed to set property \"foo.bar\" for all:\ncould not resolve property component \".foo\": li")
+			ExpectFailures("Failed to set property \"foo.bar\" for each:\ncould not resolve property component \".foo\": li")
 		})
 	})
 

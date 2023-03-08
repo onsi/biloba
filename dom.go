@@ -126,16 +126,16 @@ func (b *Biloba) HaveInnerText(expected interface{}) types.GomegaMatcher {
 	}).WithTemplate("HaveInnerText for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
 }
 
-func (b *Biloba) InnerTexts(selector any) []string {
+func (b *Biloba) InnerTextForEach(selector any) []string {
 	b.gt.Helper()
-	r := b.runBilobaHandler("getInnerTexts", selector)
+	r := b.runBilobaHandler("getInnerTextForEach", selector)
 	if r.Error() != nil {
 		b.gt.Fatalf("Failed to get inner texts:\n%s", r.Error())
 	}
 	return r.ResultStringSlice()
 }
 
-func (b *Biloba) HaveInnerTexts(args ...any) types.GomegaMatcher {
+func (b *Biloba) EachHaveInnerText(args ...any) types.GomegaMatcher {
 	var data = map[string]any{}
 	var matcher types.GomegaMatcher
 	if len(args) == 0 {
@@ -147,13 +147,13 @@ func (b *Biloba) HaveInnerTexts(args ...any) types.GomegaMatcher {
 	}
 	data["Matcher"] = matcher
 	return gcustom.MakeMatcher(func(selector any) (bool, error) {
-		r := b.runBilobaHandler("getInnerTexts", selector)
+		r := b.runBilobaHandler("getInnerTextForEach", selector)
 		if r.Error() != nil {
 			return false, r.Error()
 		}
 		data["Result"] = r.ResultStringSlice()
 		return matcher.Match(data["Result"])
-	}).WithTemplate("HaveInnerText for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}).WithTemplate("EachHaveInnerText for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
 }
 
 func (b *Biloba) GetProperty(selector any, property string) any {
@@ -165,9 +165,9 @@ func (b *Biloba) GetProperty(selector any, property string) any {
 	return r.Result
 }
 
-func (b *Biloba) GetPropertyFromEach(selector any, property string) []any {
+func (b *Biloba) GetPropertyForEach(selector any, property string) []any {
 	b.gt.Helper()
-	r := b.runBilobaHandler("getPropertyFromEach", selector, property)
+	r := b.runBilobaHandler("getPropertyForEach", selector, property)
 	if r.Error() != nil {
 		b.gt.Fatalf("Failed to get property \"%s\" from each:\n%s", property, r.Error())
 	}
@@ -209,7 +209,7 @@ func (b *Biloba) EachHaveProperty(property string, args ...any) types.GomegaMatc
 				return false, r.Error()
 			}
 			return r.Success, nil
-		}).WithTemplate("Expected all {{.Actual}} {{.To}} each have property \"{{.Data.Property}}\"", data)
+		}).WithTemplate("Expected each {{.Actual}} {{.To}} each have property \"{{.Data.Property}}\"", data)
 	} else {
 		var matcher types.GomegaMatcher
 		if x, ok := args[0].(types.GomegaMatcher); ok && len(args) == 1 {
@@ -220,7 +220,7 @@ func (b *Biloba) EachHaveProperty(property string, args ...any) types.GomegaMatc
 
 		data["Matcher"] = matcher
 		return gcustom.MakeMatcher(func(selector any) (bool, error) {
-			r := b.runBilobaHandler("getPropertyFromEach", selector, property)
+			r := b.runBilobaHandler("getPropertyForEach", selector, property)
 			if r.Error() != nil {
 				return false, r.Error()
 			}
@@ -249,7 +249,7 @@ func (b *Biloba) SetPropertyForEach(selector any, property string, value any) {
 	b.gt.Helper()
 	r := b.runBilobaHandler("setPropertyForEach", selector, property, value)
 	if r.Error() != nil {
-		b.gt.Fatalf("Failed to set property \"%s\" for all:\n%s", property, r.Error())
+		b.gt.Fatalf("Failed to set property \"%s\" for each:\n%s", property, r.Error())
 	}
 }
 

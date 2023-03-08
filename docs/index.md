@@ -734,26 +734,26 @@ Eventually(selector).Should(b.HaveInnerText(HavePrefix("Expected")))
 
 Both `HaveInnerText` and `InnerText` always operate on the **first** element matching `selector.
 
-You can fetch the content for a bunch of elements simultaneously with `InnerTexts()/HaveInnerTexts()`:
+You can fetch the content for a bunch of elements simultaneously with `InnerTextForEach()/EachHaveInnerText()`:
 
 ```go
-texts := b.InnerTexts(selector) // returns []string
+texts := b.InnerTextForEach(selector) // returns []string
 ```
 
 returns a slice of strings for all elements matching selector.  For example:
 
 ```go
-list := b.InnerTexts("ol.movies li")
+list := b.InnerTextForEach("ol.movies li")
 ```
 
 will return the individual inner texts for each list element under all `<ol>`s with class `movies`.  If no elements are found `list` will be an empty slice.
 
-You can assert on InnerTexts with `b.HaveInnerTexts()` like so:
+You can assert on InnerTextForEach with `b.EachHaveInnerText()` like so:
 
 ```go
-Expect(selector).To(b.HaveInnerTexts("A", "B", "C")) //uses Gomega's HaveExactElements matcher to assert the texts match, in order
-Expect(selector).To(b.HaveInnerTexts(ContainElement("B")) //passes the entire slice to the matcher
-Expect("#non-existing").To(b.HaveInnerTexts()) // this will succeed - an empty slice is returned when there is no selector match and `b.HaveInnerTexts() will assert that the slice is empty
+Expect(selector).To(b.EachHaveInnerText("A", "B", "C")) //uses Gomega's HaveExactElements matcher to assert the texts match, in order
+Expect(selector).To(b.EachHaveInnerText(ContainElement("B")) //passes the entire slice to the matcher
+Expect("#non-existing").To(b.EachHaveInnerText()) // this will succeed - an empty slice is returned when there is no selector match and `b.EachHaveInnerText() will assert that the slice is empty
 ```
 
 ### Properties and Classes
@@ -808,18 +808,18 @@ Eventually(selector).Should(b.SetProperty("dataset.name", "George"))
 
 `SetProperty` fails if selector doesn't match an element.  It will also fail if a delimited property (e.g. `foo.bar.baz`) can't be accessed.
 
-The `GetProperty/HaveProperty/SetProperty` triad operate on the **first** element matched by `selector`.  To operate on all elements use `GetPropertyFromEach/EachHaveProperty/SetPropertyFroEach`.  Here's how they work:
+The `GetProperty/HaveProperty/SetProperty` triad operate on the **first** element matched by `selector`.  To operate on all elements use `GetPropertyForEach/EachHaveProperty/SetPropertyFroEach`.  Here's how they work:
 
 ```go
-b.GetPropertyFromEach(".notice", "id")
+b.GetPropertyForEach(".notice", "id")
 ```
 
 will return a slice of type `[]any` that contains the `id` property of all elements matching the `.notice` selector.  If no elements are found, an empty slice is returned.  If any elements don't have the requested property, the value in the slice for that element will be `nil`.  You can make assertions on the returned value like so:
 
 ```go
-Expect(b.GetPropertyFromEach(".notice", "id")).To(HaveExactElements("A", BeNil(), "C"))
-Expect(b.GetPropertyFromEach(".notice", "dataset.name")).To(ContainElement("Bob"))
-Expect(b.GetPropertyFromEach(".does-not-exist", "foo")).To(BeEmpty())
+Expect(b.GetPropertyForEach(".notice", "id")).To(HaveExactElements("A", BeNil(), "C"))
+Expect(b.GetPropertyForEach(".notice", "dataset.name")).To(ContainElement("Bob"))
+Expect(b.GetPropertyForEach(".does-not-exist", "foo")).To(BeEmpty())
 ```
 
 (note that you must use `BeNil` instead of `nil` in Gomega's collection matchers)
