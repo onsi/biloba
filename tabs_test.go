@@ -213,7 +213,7 @@ var _ = Describe("Tabs", func() {
 		It("can spawn new tabs, etc.", func() {
 			b.Navigate(fixtureServer + "/nav-a.html")
 			Eventually(b.Title).Should(Equal("Nav-A Testpage"))
-			Ω(b.AllTabs()).Should(ConsistOf(b))
+			Ω(b.AllTabs()).Should(ConsistOf(HaveField("Title()", "Nav-A Testpage")))
 
 			b.Click("#to-b-new")
 			Eventually(b).Should(b.HaveSpawnedTab(b.TabWithTitle("Nav-B Testpage")))
@@ -227,11 +227,15 @@ var _ = Describe("Tabs", func() {
 			Ω(b.Title()).Should(Equal("Nav-A Testpage"))
 			Ω(g2.Title()).Should(Equal("Nav-B Testpage"))
 			Ω(g3.Title()).Should(Equal("DOM Testpage"))
-			Ω(b.AllTabs()).Should(ConsistOf(b, g2, g3))
+			Ω(b.AllTabs()).Should(ConsistOf(
+				HaveField("Title()", "Nav-A Testpage"),
+				HaveField("Title()", "DOM Testpage"),
+				HaveField("Title()", "Nav-B Testpage"),
+			))
 
 			Ω(g2.Close()).Should(Succeed())
 			Ω(g3.Close()).Should(Succeed())
-			Eventually(b.AllTabs).Should(ConsistOf(b))
+			Eventually(b.AllTabs).Should(ConsistOf(HaveField("Title()", "Nav-A Testpage")))
 			Ω(b).ShouldNot(b.HaveTab(b.TabWithTitle("DOM Testpage")))
 			Ω(b).ShouldNot(b.HaveTab(b.TabWithTitle("Nav-B Testpage")))
 			Ω(b).Should(b.HaveTab(b.TabWithTitle("Nav-A Testpage")))

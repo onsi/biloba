@@ -218,6 +218,15 @@ type Biloba struct {
 	disableProgressReportScreenshots bool
 }
 
+func (b *Biloba) GomegaString() string {
+	s := &strings.Builder{}
+	if b.isRootTab() {
+		s.WriteString("Root ")
+	}
+	fmt.Fprintf(s, "Biloba Tab %p: %s (TargetID=%s, BrowserContextID=%s)", b, b.Title(), b.targetID, b.browserContextID)
+	return s.String()
+}
+
 func newBiloba(ginkgoT GinkgoTInterface) *Biloba {
 	b := &Biloba{
 		gt:              ginkgoT,
