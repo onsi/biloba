@@ -1,9 +1,7 @@
 package biloba
 
 import (
-	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/onsi/gomega"
 	"github.com/onsi/gomega/gcustom"
@@ -49,40 +47,22 @@ func (r *bilobaJSResponse) ResultStringSlice() []string {
 func (b *Biloba) runBilobaHandler(name string, selector any, args ...any) *bilobaJSResponse {
 	b.ensureBiloba()
 	result := &bilobaJSResponse{}
-	parameters := []string{}
+	parameters := []any{}
 	switch x := selector.(type) {
 	case XPath:
-		parameters = append(parameters, `"x`+string(x)+`"`)
+		parameters = append(parameters, "x"+string(x))
 	case string:
 		if x[0] == '/' {
-			parameters = append(parameters, `"x`+x+`"`)
+			parameters = append(parameters, "x"+x)
 		} else {
-			parameters = append(parameters, `"s`+x+`"`)
+			parameters = append(parameters, "s"+x)
 		}
 	default:
 		result.Err = fmt.Sprintf("invalid selector type %T", x)
 		return result
 	}
-	for _, arg := range args {
-		switch x := arg.(type) {
-		case string:
-			parameters = append(parameters, `"`+x+`"`)
-		case float64:
-			parameters = append(parameters, fmt.Sprintf("%f", x))
-		case int:
-			parameters = append(parameters, fmt.Sprintf("%d", x))
-		case []string:
-			p, _ := json.Marshal(x)
-			parameters = append(parameters, string(p))
-		case bool:
-			if x {
-				parameters = append(parameters, "true")
-			} else {
-				parameters = append(parameters, "false")
-			}
-		}
-	}
-	_, err := b.RunErr("_biloba."+name+"("+strings.Join(parameters, ", ")+")", result)
+	parameters = append(parameters, args...)
+	_, err := b.RunErr(b.JSFunc("_biloba."+name).Invoke(parameters...), result)
 	if err != nil {
 		result.Err = err.Error()
 	}

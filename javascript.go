@@ -3,6 +3,8 @@ package biloba
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
+	"sync/atomic"
 
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
@@ -53,3 +55,45 @@ func (b *Biloba) Run(script string, args ...any) any {
 	}
 	return res
 }
+
+type JSFunc string
+
+func (b *Biloba) JSFunc(f string) JSFunc {
+	return JSFunc("(" + f + ")")
+}
+
+func (j JSFunc) Invoke(args ...any) string {
+	if len(args) == 0 {
+		return string(j) + "()"
+	}
+
+	encodedArgsBytes, err := json.Marshal(args)
+	if err != nil {
+		panic(err)
+	}
+	encodedArgs := string(encodedArgsBytes)
+	for _, arg := range args {
+		if v, ok := arg.(JSVar); ok {
+			encodedArgs = v.interpolate(encodedArgs)
+		}
+	}
+
+	return string(j) + "(..." + string(encodedArgs) + ")"
+}
+
+func (b *Biloba) JSVar(v string) JSVar {
+	return JSVar{
+		v:          v,
+		identifier: fmt.Sprintf(`"__biloba_var_%d"`, atomic.AddInt64(&jsVarCounter, 1)),
+	}
+}
+
+var jsVarCounter int64
+
+type JSVar struct {
+	v          string
+	identifier string
+}
+
+func (j JSVar) MarshalJSON() ([]byte, error)   { return []byte(j.identifier), nil }
+func (j JSVar) interpolate(json string) string { return strings.Replace(json, j.identifier, j.v, 1) }

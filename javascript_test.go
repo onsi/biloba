@@ -74,4 +74,21 @@ var _ = Describe("Javascript", func() {
 			Ω(err).Should(MatchError("Failed to run script:\n1+\n\nexception \"Uncaught\" (0:2): SyntaxError: Unexpected end of input"))
 		})
 	})
+
+	Describe("invoking functions", func() {
+		It("provides a convenient mechanism for invoking functions that handles JSON encoding for you", func() {
+			b.Run(b.JSFunc("console.log").Invoke(1, []int{2, 3, 4}, "hello", true, nil))
+			Ω(string(gt.buffer.Contents())).Should(ContainSubstring(`1 - [2, 3, 4] - "hello" - true - <nil>`))
+
+			adder := b.JSFunc("(...nums) => nums.reduce((s, n) => s + n, 0)")
+			var result int
+			b.Run(adder.Invoke(1, 2, 3, 4, 5, 10), &result)
+			Ω(result).Should(Equal(25))
+
+			Ω(adder.Invoke(1, 2, 3.7, 4, 5)).Should(b.EvaluateTo(15.7))
+
+			b.Run("var counter = 17")
+			Ω(adder.Invoke(1, 2, 3.7, 4, 5, b.JSVar("counter + 3"))).Should(b.EvaluateTo(35.7))
+		})
+	})
 })

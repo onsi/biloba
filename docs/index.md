@@ -1358,21 +1358,57 @@ You can also save a step by using Biloba's `EvaluateTo` matcher:
 Expect("[1+2], 4]").To(b.EvaluateTo(HaveExactElements(3.0, 4.0)))
 ```
 
-The Chrome DevTools basically run these JavaScript snippets via `eval`.  There is one small gotcha.  The following:
+That covers how we get values _out_ of a JavaScript invocation.  What if you want to _provide_ arguments to a JavaScript function?  Biloba has a nifty little helper for that: `b.JSFunc()`.
+
+`b.JSFunc(script)` takes an **invocable** snippet of JavaScript.  Invocable simply means that:
 
 ```go
-var result map[string]int
-b.Run("{a:1, b:2}", &result)
+"(" + script + ")()"
 ```
 
-will fail with a syntax error.  That's because `eval("{a:1, b:2}")` interprets the `{}` as a [block statement and not an object literal](https://github.com/chromedp/chromedp/issues/1275#issuecomment-1459079119).  You can work around this with:
+is a valid JavaScript invocation.  `JSFunc` lets you populate the JavaScript invocation with arguments using `.Invoke()`.  Here are some examples:
 
 ```go
-var result map[string]int
-b.Run("({a:1, b:2})", &result)
+//this will run console.log(1, [2,3,4], "hello", true, null)
+b.Run(b.JSFunc("console.log").Invoke(1, []int{2, 3, 4}, "hello", true, nil))
+
+//here we save off a reusable JSFunc:
+adder := b.JSFunc("(...nums) => nums.reduce((s, n) => s + n, 0)")
+//and use it to sum up numbers:
+var result int
+b.Run(adder.Invoke(1, 2, 3, 4, 5, 10), &result)
+Ω(adder.Invoke(1, 2, 3.7, 4, 5)).Should(b.EvaluateTo(15.7))
 ```
 
-One last note: all this Javascript runs on the global window object.  That means you can do stuff like this:
+`Invoke` simply takes the arguments you pass to it, JSON encodes them, and then invokes the function.  In the case of our `adder` example the literal JavaScript code that is invoked looks like:
+
+```js
+((...nums) => nums.reduce((s, n) => s + n, 0))(...[1,2,3,4,5,10])
+```
+
+If you want to refer to an existing JavaScript variable or add a JavaScript expression to your function invocation, use `b.JSVar`:
+
+```go
+adder := b.JSFunc("(...nums) => nums.reduce((s, n) => s + n, 0)")
+//first we define a variable
+b.Run("var counter = 10")
+//and now we reference it using b.JSVar
+Ω(adder.Invoke(1, 2, 3.7, 4, 5, b.JSVar("counter"))).Should(b.EvaluateTo(25.7))
+//JS experssion work too
+Ω(adder.Invoke(1, 2, 3.7, 4, 5, b.JSVar("counter * 2"))).Should(b.EvaluateTo(35.7))
+```
+
+For that last expression the evaluated JavaScript is:
+
+```js
+((...nums) => nums.reduce((s, n) => s + n, 0))(...[1,2,3,4,5,counter * 2])
+```
+
+you can always inspect the generated JavaScript with `fmt.Println(b.JSFunc(...).Invoke(...))` a `Invoke` simply returns a string.
+
+> Wait slow down - what happened in that last example up there.  Why was `adder` able to access `counter`?
+
+Great catch. all this Javascript runs on the global window object.  That means you can do stuff like this:
 
 ```go
 var _ = Describe("rendering documents", func() {
@@ -1404,6 +1440,21 @@ var _ = Describe("rendering documents", func() {
 > Wait.  Are you writing Javascript unit tests in Ginkgo?
 
 You said it, not me.
+
+One last thing before we leave the subject of running Javacript.  The Chrome DevTools basically run these JavaScript snippets via `eval`.  There is one small gotcha.  The following:
+
+```go
+var result map[string]int
+b.Run("{a:1, b:2}", &result)
+```
+
+will fail with a syntax error.  That's because `eval("{a:1, b:2}")` interprets the `{}` as a [block statement and not an object literal](https://github.com/chromedp/chromedp/issues/1275#issuecomment-1459079119).  You can work around this with:
+
+```go
+var result map[string]int
+b.Run("({a:1, b:2})", &result)
+```
+
 
 ## Window Size, Screenshots, and Configuration
 
