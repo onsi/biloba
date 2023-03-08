@@ -82,3 +82,7 @@ Describe("a simple chat app", func() {
 ```
 
 Run these in series with `ginkgo`.  And in parallel with `ginkgo -p` for fast, stable, browser tests.
+
+---
+
+Ginkgo Tree Graphics Designed By 可行 From <a href="https://lovepik.com/image-401791345/ginkgo-branches-in-autumn.html">LovePik.com</a>
