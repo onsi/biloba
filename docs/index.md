@@ -1,6 +1,15 @@
-# Biloba
+---
+layout: default
+title: Biloba
+---
+{% raw  %}
+![Biloba](./images/biloba.png)
+<div class="image-attribution">Ginkgo Tree Graphics Designed By 可行 From <a href="https://lovepik.com/image-401791345/ginkgo-branches-in-autumn.html">LovePik.com</a></div>
 
-> "Automated browser testing is slow and flaky" - _every developer, ever_
+<blockquote>
+"Automated browser testing is slow and flaky"
+<div class="attribution">- every developer, ever</div>
+</blockquote>
 
 Biloba builds on top of [chromedp](https://github.com/chromedp/chromedp) to bring stable, performant, automated browser testing to Ginkgo. It embraces three principles:
   - Performance via parallelization
@@ -9,11 +18,13 @@ Biloba builds on top of [chromedp](https://github.com/chromedp/chromedp) to brin
 
 We'll unpack these throughout this document - which is intended as a supplement to the API-level [godocs](https://pkg.go.dev/github.com/onsi/biloba) to give you a mental model for Biloba.
 
+## Getting Started
+
 ### Support Policy
 
 Biloba is currently under development.  Until a v1.0 release is made there are no guarantees about the stability of its public API.
 
-## Getting Started
+### Installing Biloba
 
 Biloba requires you use the latest versions of Ginkgo v2 and Gomega to build your test suite.  You can add Biloba to a project via:
 
@@ -107,7 +118,7 @@ b = biloba.ConnectToChrome(GinkgoT())
 
 ...there isn't any.  Or, more correctly, it's all happening for you.  In both of these statements, `GinkgoT()` serves as the connection point between Biloba and Ginkgo.  If an error occurs when spinning up or connecting to Chrome, Biloba will tell Ginkgo... and fail the test suite.
 
-> "Why are 'spinning up Chrome' and 'connecting to Chrome'" separate commands?"
+> "Why are 'spinning up Chrome' and 'connecting to Chrome' separate commands?"
 
 Good question, we'll dig into that in the [Performance and Stability](#performance-and-stability) section below.
 
@@ -439,7 +450,7 @@ this test will:
 - keep trying until it successfully clicks on an element that has text that begins with "Introduction"
 - assert that the tab eventually ends up on a page whose title ends with "Introduction"
 
-## Tabs
+## Managing Tabs
 
 Biloba encourages you to reuse the root tab (`b`) for most of your specs.  Of course some tests will require you to interact with multiple tabs.  There are, loosely speaking, three different "kinds" of tabs at play in Biloba:
 
@@ -1467,3 +1478,5 @@ and sit back and watch those windows appear and disappear as you run your specs.
 - `BilobaConfigDisableFailureScreenshots()` disables Biloba's screenshots on failure
 - `BilobaConfigDisableProgressReportScreenshots()` disables Biloba's screenshots when progress reports are requested
 
+
+{% endraw  %}
