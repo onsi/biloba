@@ -2,6 +2,7 @@ package biloba
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/onsi/gomega"
 	"github.com/onsi/gomega/gcustom"
@@ -21,56 +22,11 @@ func (r *bilobaJSResponse) Error() error {
 	return fmt.Errorf(r.Err)
 }
 func (r *bilobaJSResponse) MatcherResult() (bool, error) { return r.Success, r.Error() }
-func (r *bilobaJSResponse) ResultString() string {
-	if r.Result == nil {
-		return ""
-	}
-	return r.Result.(string)
-}
-func (r *bilobaJSResponse) ResultInt() int {
-	if r.Result == nil {
-		return 0
-	}
-	return int(r.Result.(float64))
-}
-func (r *bilobaJSResponse) ResultBool() bool {
-	if r.Result == nil {
-		return false
-	}
-	return r.Result.(bool)
-}
-func (r *bilobaJSResponse) ResultStringSlice() []string {
-	if r.Result == nil {
-		return []string{}
-	}
-	out := []string{}
-	for _, el := range r.Result.([]any) {
-		out = append(out, el.(string))
-	}
-	return out
-}
-
-func (r *bilobaJSResponse) ResultAnySlice() []any {
-	if r.Result == nil {
-		return []any{}
-	}
-	return r.Result.([]any)
-}
-
-func convertToString(input any) string {
-	if input == nil {
-		return ""
-	}
-	return input.(string)
-}
-
-func convertToStringSlice(input []any) []string {
-	out := make([]string, len(input))
-	for i, v := range input {
-		out[i] = convertToString(v)
-	}
-	return out
-}
+func (r *bilobaJSResponse) ResultString() string         { return toString(r.Result) }
+func (r *bilobaJSResponse) ResultInt() int               { return toInt(r.Result) }
+func (r *bilobaJSResponse) ResultBool() bool             { return toBool(r.Result) }
+func (r *bilobaJSResponse) ResultStringSlice() []string  { return toStringSlice(r.Result) }
+func (r *bilobaJSResponse) ResultAnySlice() []any        { return toAnySlice(r.Result) }
 
 func (b *Biloba) runBilobaHandler(name string, selector any, args ...any) *bilobaJSResponse {
 	b.ensureBiloba()
@@ -149,7 +105,7 @@ func (b *Biloba) BeEnabled() types.GomegaMatcher {
 
 func (b *Biloba) InnerText(selector any) string {
 	b.gt.Helper()
-	return convertToString(b.GetProperty(selector, "innerText"))
+	return toString(b.GetProperty(selector, "innerText"))
 }
 
 func (b *Biloba) HaveInnerText(expected any) types.GomegaMatcher {
@@ -158,7 +114,7 @@ func (b *Biloba) HaveInnerText(expected any) types.GomegaMatcher {
 
 func (b *Biloba) InnerTextForEach(selector any) []string {
 	b.gt.Helper()
-	return convertToStringSlice(b.GetPropertyForEach(selector, "innerText"))
+	return toStringSlice(b.GetPropertyForEach(selector, "innerText"))
 }
 
 func (b *Biloba) EachHaveInnerText(args ...any) types.GomegaMatcher {
@@ -181,7 +137,7 @@ func (b *Biloba) GetPropertyForEach(selector any, property string) []any {
 	b.gt.Helper()
 	r := b.runBilobaHandler("getPropertyForEach", selector, property)
 	if r.Error() != nil {
-		b.gt.Fatalf("Failed to get property \"%s\" from each:\n%s", property, r.Error())
+		b.gt.Fatalf("Failed to get property \"%s\" for each:\n%s", property, r.Error())
 	}
 	return r.ResultAnySlice()
 }
@@ -265,6 +221,33 @@ func (b *Biloba) SetPropertyForEach(selector any, property string, value any) {
 	}
 }
 
+func (b *Biloba) GetProperties(selector any, properties ...string) Properties {
+	b.gt.Helper()
+	if len(properties) == 0 {
+		b.gt.Fatalf("GetProperties requires at least one property to fetch")
+		return nil
+	}
+	r := b.runBilobaHandler("getProperties", selector, properties)
+	if r.Error() != nil {
+		b.gt.Fatalf("Failed to get properties %s:\n%s", strings.Join(properties, ", "), r.Error())
+		return nil
+	}
+	return newProperties(r.Result)
+}
+
+func (b *Biloba) GetPropertiesForEach(selector any, properties ...string) SliceOfProperties {
+	b.gt.Helper()
+	if len(properties) == 0 {
+		b.gt.Fatalf("GetPropertiesForEach requires at least one property to fetch")
+		return nil
+	}
+	r := b.runBilobaHandler("getPropertiesForEach", selector, properties)
+	if r.Error() != nil {
+		b.gt.Fatalf("Failed to get properties %s for each:\n%s", strings.Join(properties, ", "), r.Error())
+	}
+	return newSliceOfProperties(r.ResultAnySlice())
+}
+
 func (b *Biloba) GetValue(selector any) any {
 	b.gt.Helper()
 	r := b.runBilobaHandler("getValue", selector)
@@ -346,7 +329,6 @@ func matcherOrEqual(expected any) types.GomegaMatcher {
 	}
 	return matcher
 }
-
 func nilSafeSlice(expected []any) []any {
 	safeExpected := make([]any, len(expected))
 	for i, v := range expected {
@@ -357,4 +339,45 @@ func nilSafeSlice(expected []any) []any {
 		}
 	}
 	return safeExpected
+}
+func toString(input any) string {
+	if input == nil {
+		return ""
+	}
+	return input.(string)
+}
+func toBool(input any) bool {
+	if input == nil {
+		return false
+	}
+	return input.(bool)
+}
+func toInt(input any) int {
+	if input == nil {
+		return 0
+	}
+	return int(input.(float64))
+}
+func toFloat64(input any) float64 {
+	if input == nil {
+		return 0
+	}
+	return input.(float64)
+}
+func toAnySlice(input any) []any {
+	if input == nil {
+		return []any{}
+	}
+	return input.([]any)
+}
+func toStringSlice(input any) []string {
+	if input == nil {
+		return []string{}
+	}
+	vs := input.([]any)
+	out := make([]string, len(vs))
+	for i, v := range vs {
+		out[i] = toString(v)
+	}
+	return out
 }

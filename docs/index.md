@@ -726,7 +726,7 @@ Biloba's disabled check is simply:
 
 As with `BeVisible()` you don't need to assert existence before asserting `BeEnabled()` - existence is implicitly validated by `BeEnabled()`
 
-### Contents
+### Contents and Classes
 
 You can get the `innerText` of an element with `InnerText()`:
 
@@ -773,12 +773,49 @@ Expect(selector).To(b.EachHaveInnerText(ContainElement("B")) //passes the entire
 Expect("#non-existing").To(b.EachHaveInnerText()) // this will succeed - an empty slice is returned when there is no selector match and `b.EachHaveInnerText() will assert that the slice is empty
 ```
 
-### Properties and Classes
+---
 
-You can get any JavaScript property defined on an element via `GetProperty()` for example:
+You can assert that an element has a given set of CSS classes using the `HaveClass()` matcher.  You can either pass `HaveClass` a Gomega matcher or a string.  The matcher will receive the entire list of classes associated with the object as a slice of strings.  That means you can do things like:
 
 ```go
-property := b.GetProperty(selector, "href") //returns any
+Expect(selector).To(b.HaveClass(ConsistOf("blue", "heading", "published")))
+Expect(selector).To(b.HaveClass(ContainElements("blue", "heading")))
+```
+
+When passed a single string:
+
+```go
+Eventually(selector).Should(b.HaveClass("published"))
+```
+
+the behavior is equivalent to:
+
+```go
+Eventually(selector).Should(b.HaveClass(ContainElement("published")))
+```
+
+i.e. the class list should include `published`.  `HaveClass` always operates on the **first** element found by `selector`.
+
+### Properties
+
+Biloba provides a bunch of methods for getting, setting, and asserting on properties:
+
+You use `GetProperty/SetProperty/HaveProperty` to work with a **single** property on a **single** element (the first returned by `selector`).  You use `GetPropertyForEach/SetPropertyForEach/EachHaveProperty` to work with a **single** property for **all** elements matching `selector`.  You use `GetProperties` to fetch **multiple** properties for a **single** element and `GetPropertiesForEach` to fetch **multiple** properties for **all** elements matching `selector`.
+
+All of these methods follow the following rules:
+
+- If the method operates on a **single** element, it always fails if the element is not found
+- If the method is an `Each` method that operates on **all** elements it returns an empty slice if no element is found.  Otherwise it returns a slice matching the length of the number of elements found.
+- The `Get*` methods return `nil` if no property is found.  The `Each` variants will include `nil` in their returned slice for elements that don't have the property.
+- All methods support `.` property delimiters.  For example you can access `data` attributes using `dataset.key`.  `Set*` methods will fail if the delimiter chain cannot be traversed (e.g. setting `foo.bar.baz` fails if either `foo` or `bar` re not defined on the element.  But `dataset.newKey` will succeed as `dataset` _is_ defined).  `Get*` do not fail, but simply return `nil` if the delimiter chain cannot be traversed.
+- All properties are returned from JavaScript without type conversions: numbers will be `float64`, booleans will be `bool`, and strings will be `string`.  Arrays will be `[]any` and maps `[any]any`.  Anything `null`/`undefined` will be `nil`.  There are, however, two exceptions:
+	- JavaScript properties that are [iterable](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Iteration_protocols) will be turned into `[]any` when returned (this allows `GetProperty(selector, "classList")` to return a slice).  
+	- JavaScript properties of type `DOMStringMap` will be turned into `map[any]any` - this allows you get all `data` attributes via `GetProperty(selector, "dataset")`.
+
+Let's show these in use to cover some additional nuances.  You can get any JavaScript property defined on an element via `GetProperty()` for example:
+
+```go
+property := b.GetProperty(selector, "href") //returns type any
 ```
 
 this will query the DOM immediately and return the property value of the **first** element matching `selector`.  The value will have type `any` and the actual type will depend on what was stored in the property in JavaScript.  If no element matching `selector` is found the test will fail.  If an element is found, but doesn't have the requested property then - in keeping with JavaScript - `nil` is returned.
@@ -798,7 +835,7 @@ Eventually(selector).Should(b.HaveProperty("href"))
 Eventually(selector).ShouldNot(b.HaveProperty("dataset.name"))
 ```
 
-To assert on the _value_ of the property, you can pass in a second argument. If you pass in a Gomega matchers, the returned property value will be matched against it (which can be a convenient way to not have to worry about types and let Gomega deal with them for you).  Alternatively you can pass in anything else to perform a `DeepEqual` match:
+To assert on the _value_ of the property, you can pass in a second argument. If you pass in a Gomega matcher, the returned property value will be matched against it (which can be a convenient way to not have to worry about types and let Gomega deal with them for you).  Alternatively you can pass in anything else to perform a `DeepEqual` match:
 
 ```go
 Eventually(selector).Should(b.HaveProperty("href", HaveSuffix("toc.html"))) //an assertion on a string
@@ -807,8 +844,6 @@ Eventually(selector).Should(b.HaveProperty("classList", HaveKeyWithValue("0", "b
 Eventually(selector).Should(b.HaveProperty("dataset.name", "henry")) // an assertion on a string
 Eventually(selector).Should(b.HaveProperty("dataset.missing", BeNil())) // an assertion on an undefined property
 ```
-
-`HaveProperty` ensures the element exists and.
 
 You can also set properties with `b.SetProperty()`.  When passed three arguments `b.SetProperty` operates immediately:
 
@@ -825,13 +860,13 @@ Eventually(selector).Should(b.SetProperty("dataset.name", "George"))
 
 `SetProperty` fails if selector doesn't match an element.  It will also fail if a delimited property (e.g. `foo.bar.baz`) can't be accessed.
 
-The `GetProperty/HaveProperty/SetProperty` triad operate on the **first** element matched by `selector`.  To operate on all elements use `GetPropertyForEach/EachHaveProperty/SetPropertyFroEach`.  Here's how they work:
+To operate on every element returned by the `selector` use `GetPropertyForEach/EachHaveProperty/SetPropertyForEach`.  Here's how they work:
 
 ```go
 b.GetPropertyForEach(".notice", "id")
 ```
 
-will return a slice of type `[]any` that contains the `id` property of all elements matching the `.notice` selector.  If no elements are found, an empty slice is returned.  If any elements don't have the requested property, the value in the slice for that element will be `nil`.  You can make assertions on the returned value like so:
+will return a **slice** of type `[]any` that contains the `id` property of all elements matching the `.notice` selector.  If no elements are found, an empty slice is returned.  If any elements don't have the requested property, the value in the slice for that element will be `nil`.  You can make assertions on the returned value like so:
 
 ```go
 Expect(b.GetPropertyForEach(".notice", "id")).To(HaveExactElements("A", BeNil(), "C"))
@@ -860,7 +895,7 @@ Eventually(".notice").Should(EachHaveProperty("dataset.name", ConsistOf(BeNil(),
 Eventually(".notice").Should(EachHaveProperty("disabled", HaveEach(BeFalse())))
 ```
 
-Finally - you can use `SetPropertyForEach` to set the specified property to the specified value for **all** matched elements.  Since we're pointing at the set of _all_ elements matched by a selector it makes less sense to poll while setting so `SetPropertyForEach` does not provide a matcher variant.  You can use it like this:
+You can use `SetPropertyForEach` to set the specified property to the specified value for **all** matched elements.  Since we're pointing at the set of _all_ elements matched by a selector it makes less sense to poll, so `SetPropertyForEach` does not provide a matcher variant.  You can use it like this:
 
 ```go
 b.SetPropertyForEach(b.XPath("li").WithText("Seventeen"), "count", 17)
@@ -869,28 +904,82 @@ b.SetPropertyForEach(".notice", "dataset.name", "John")
 
 Now all elements matching `<li>Seventeen</li>` will have a `count` property set to `17`; and all elements with class `notice` will have a `name` data attribute with value `John`.  If no elements match... nothing happens.  The only way `SetPropertyForEach` fails is if you provide a delimited property that it cannot traverse (e.g. `foo.bar.baz` - if either `foo` or `bar` do not already exist).
 
----
+Often it can be more convenient, and efficient, to work with multiple properties at once.  You can do this with `GetProperties` and `GetPropertiesForEach`.  Unlike the other property-related methods in this section these return type `biloba.Properties` and `biloba.SliceOfProperties` to help with managing types (which can quickly get unwieldy when you're working with `[]map[string]any`).
 
-You can assert that an element has a given set of CSS classes using the `HaveClass()` matcher.  You can either pass `HaveClass` a Gomega matcher or a string.  The matcher will receive the entire list of classes associated with the object as a slice of strings.  That means you can do things like:
-
-```go
-Expect(selector).To(b.HaveClass(ConsistOf("blue", "heading", "published")))
-Expect(selector).To(b.HaveClass(ContainElements("blue", "heading")))
-```
-
-When passed a single string:
+You use `GetProperties` to get multiple properties for a `selector` at once:
 
 ```go
-Eventually(selector).Should(b.HaveClass("published"))
+props := b.GetProperties(".notice", "classList", "tagName", "disabled", "offsetWidth", "dataset.name")
 ```
 
-the behavior is equivalent to:
+this will fail if no element matches `selector`.  The object returned, `props`, will have `type Properties map[string]any` - you can access defined properties with map notation: e.g. `props["classList"]`.  However this will always return type `any`.  You can, instead, use `Properties`' various getters to force a type conversion:
 
 ```go
-Eventually(selector).Should(b.HaveClass(ContainElement("published")))
+props.GetString("tagName") //returns a string
+props.GetInt("offsetWidth") //returns an integer
+props.GetFloat64("offsetWidth") //returns a float64
+props.GetBool("disabled") //returns a bool
+props.GetStringSlice("classList") //returns []string - any `nil` entries in the original []any slice are converted to the empty string ""
 ```
 
-i.e. the class list should include `published`.  `HaveClass` always operates on the **first** element found by `selector`.
+all of these always return the zero or empty value if the requested property does not exist or came back as `nil` from JavaScript.  e.g. `props.GetFloat64("offsetHeight")` will return `0.0` in our example since we did not request `offsetHeight` in our call to `GetProperties`.  If you choose the wrong type, Biloba will panic - which Ginkgo will catch and fail the test.
+
+Lastly, to fetch multiple properties from multiple elements use:
+
+```go
+propsForEach := b.GetPropertiesForEach(".notice", "classList", "tagName", "disabled", "offsetWidth", "dataset.name")
+```
+
+here `propsForEach` is `type SliceOfProperties []Properties` and will have zero length if no elements are found.  You can, of course, use index notation to access a particular property and then fetch a particular key: `propsForEach[0].GetString("tagName")` **or** you can generate a typed slice of a particular key for all elements:
+
+```go
+propsForEach.GetString("tagName") //returns a []string
+propsForEach.GetInt("offsetWidth") //returns a []integer
+propsForEach.GetFloat64("offsetWidth") //returns a []float64
+propsForEach.GetBool("disabled") //returns a []bool
+propsForEach.GetStringSlice("classList") //returns [][]string
+```
+
+if you ask for a key that isn't defined you'll get the empty slice of the relevant type:
+
+```go
+propsForEach.GetBool("missing") //returns []bool{}
+```
+
+also - while constructing the slice - `SliceOfProperties` calls the relevant type-getter on `Properties`.  that means `nil` values are turned into their zero/empty value in the slice.  For example, say our DOM looks like this:
+
+```html
+<div class="notice" id="new-user-1">Hi Newcomer</div>
+<div class="notice extrovert" id="jane-127", data-name="jane">Hey Jane!</div>
+<a class="notice introvert" id="molly-4" data-name="molly" href="nod.html">Sup</a>
+```
+
+then the following will succeed:
+
+```go
+p := b.GetPropertiesForEach(".notice", "id", "classList", "tagName", "data.name", "href")
+Expect(p.GetString("tagName")).To(Equal([]string{"DIV", "DIV", "A"}))
+Expect(p.GetString("data.name")).To(Equal([]string{"", "jane", "molly"})
+Expect(p.GetString("id")).To(Equal([]string{"new-user-1", "jane-127", "molly-4"})
+Expect(p.GetString("href")).To(Equal([]string{"", "", "nod.html"})
+Expect(p.GetStringSlice("classlist")).To(Equal([][]string{{"notice"}, {"notice", "extrovert"}, {"notice", "introvert"}})
+```
+of course you can also use Gomega's collection matchers which obviate the need for all this type extraction.  if you use `p.Get` you'll get `[]any`:
+
+```go
+Expect(p.Get("classList")).To(ContainElement(ConsistOf("notice", "extrovert")))
+```
+
+You can look up the first element whose key matches a value or matcher, or filter the :
+
+```go
+p.Find("id", "jane-127") //returns the matching `Properties`
+p.Find("id", ContainSubstring("new-user")) //returns the matching `Properties`
+p.Filter("tagName", "DIV") //returns `SliceOfProperties` containing only elements that match
+p.Filter("id", Not(ContainSubstring("new-user"))) //returns `SliceOfProperties` containing only elements that match
+```
+
+`Find` returns the matching `Properties` object or `nil` if none is found; `Filter` returns `SliceOfProperties` with matching elements (possibly empty if none matched).  This lets you fetch all the properties you might need to assert on and then efficiently dig through the `SliceOfProperties` in your test to make assertions.
 
 ### Form Elements
 

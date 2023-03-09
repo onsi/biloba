@@ -39,7 +39,9 @@ var _ = SynchronizedBeforeSuite(func() {
 
 var _ = BeforeEach(func() {
 	gt.reset()
-	b.Prepare()
+	if matches, _ := CurrentSpecReport().MatchesLabelFilter("!no-browser"); matches {
+		b.Prepare()
+	}
 }, OncePerOrdered)
 
 var _ = AfterEach(func() {

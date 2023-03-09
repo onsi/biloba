@@ -612,11 +612,17 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(b.GetProperty(".notice", "innerText")).Should(Equal("Some Text"))
 			Ω(b.GetProperty(".notice", "innerText")).Should(Equal("Some Text"))
 			Ω(b.GetProperty(".notice", "hidden")).Should(Equal(false))
-			Ω(b.GetProperty(".notice", "classList")).Should(HaveKeyWithValue("0", "notice"))
 			Ω(b.GetProperty(".notice", "dataset.name")).Should(Equal("henry"))
 			Ω(b.GetProperty("#hidden-text-input", "value")).Should(Equal("my-hidden-value"))
 			Ω(b.GetProperty(".notice", "floop")).Should(BeNil())
+		})
 
+		It("converts iterables into arrays", func() {
+			Ω(b.GetProperty(".notice", "classList")).Should(ConsistOf("notice"))
+		})
+
+		It("converts DOMStringMaps into objects", func() {
+			Ω(b.GetProperty(".notice", "dataset")).Should(HaveKeyWithValue("name", "henry"))
 		})
 
 		It("returns an error when the element does not exist", func() {
@@ -641,7 +647,8 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(".notice").Should(b.HaveProperty("innerText", "Some Text"))
 			Ω(".notice").Should(b.HaveProperty("hidden", false))
 			Ω(".notice").ShouldNot(b.HaveProperty("floop", "any"))
-			Ω(".notice").Should(b.HaveProperty("classList", HaveKeyWithValue("0", "notice")))
+			Ω(".notice").Should(b.HaveProperty("classList", ConsistOf("notice")))
+			Ω(".notice").Should(b.HaveProperty("dataset", HaveKeyWithValue("name", "henry")))
 			Ω(".notice").Should(b.HaveProperty("dataset.name", "henry"))
 			Ω("#hidden-text-input").Should(b.HaveProperty("value", "my-hidden-value"))
 		})
@@ -757,6 +764,71 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		It("returns empty if no elements are found", func() {
 			Expect(".non-existing").NotTo(b.EachHaveProperty("href"))
 			Expect(".non-existing").To(b.EachHaveProperty("href", BeEmpty()))
+		})
+	})
+
+	Describe("GetProperties", func() {
+		It("returns the requested properties defined on the element", func() {
+			p := b.GetProperties(".notice", "count", "disabled", "tagName", "flavor", "dataset.name", "classList", "innerText", "dataset", "nonExisting", "foo.bar.baz")
+			Expect(p["count"]).To(Equal(3.0))
+			Expect(p.GetInt("count")).To(Equal(3))
+			Expect(p.GetBool("disabled")).To(Equal(false))
+			Expect(p["tagName"]).To(Equal("DIV"))
+			Expect(p["flavor"]).To(Equal("strawberry"))
+			Expect(p["dataset.name"]).To(Equal("henry"))
+			Expect(p["dataset"]).To(HaveKeyWithValue("name", "henry"))
+			Expect(p.GetStringSlice("classList")).To(Equal([]string{"notice"}))
+			Expect(p["innerText"]).To(Equal("Some Text"))
+			Expect(p["nonExisting"]).To(BeNil())
+			Expect(p["foo.bar.baz"]).To(BeNil())
+			Expect(p.Get("blah")).To(BeNil())
+		})
+
+		It("fails if no properties are requested when the element does not exist", func() {
+			b.GetProperties(".notice")
+			ExpectFailures("GetProperties requires at least one property to fetch")
+		})
+
+		It("fails when the element does not exist", func() {
+			b.GetProperties("#non-existing", "tagName", "classList")
+			ExpectFailures("Failed to get properties tagName, classList:\ncould not find DOM element matching selector: #non-existing")
+		})
+	})
+
+	Describe("GetPropertiesForEach", func() {
+		It("returns all the requested properties defined on all matched elements", func() {
+			p := b.GetPropertiesForEach(".notice", "count", "disabled", "tagName", "flavor", "dataset.name", "classList", "innerText", "dataset", "nonExisting", "foo.bar.baz")
+			Expect(p).To(HaveLen(3))
+			Expect(p[0]["count"]).To(Equal(3.0))
+			Expect(p[0].GetInt("count")).To(Equal(3))
+			Expect(p[0].GetBool("disabled")).To(Equal(false))
+			Ω(p.GetInt("count")).Should(Equal([]int{3, 0, 0}))
+			Ω(p.GetBool("disabled")).Should(Equal([]bool{false, false, false}))
+			Ω(p.GetString("tagName")).Should(Equal([]string{"DIV", "DIV", "DIV"}))
+			Ω(p.GetString("flavor")).Should(Equal([]string{"strawberry", "", ""}))
+			Ω(p.GetString("dataset.name")).Should(Equal([]string{"henry", "bob", ""}))
+			Ω(p.GetStringSlice("classList")).Should(Equal([][]string{{"notice"}, {"notice"}, {"notice", "anon"}}))
+			Ω(p.GetString("innerText")).Should(Equal([]string{"Some Text", "Some Other Text", "Nameless"}))
+			Ω(p.Get("dataset")).Should(HaveExactElements(
+				HaveKeyWithValue("name", "henry"),
+				HaveKeyWithValue("name", "bob"),
+				BeEmpty(),
+			))
+			Ω(p.GetString("nonExisting")).Should(HaveEach(""))
+			Ω(p.GetString("foo.bar.baz")).Should(HaveEach(""))
+			Ω(p.GetInt("floop")).Should(HaveEach(0))
+			Ω(p.GetString("floop")).Should(HaveEach(""))
+			Ω(p.GetStringSlice("floop")).Should(HaveEach([]string{}))
+			Ω(p.Get("floop")).Should(HaveLen(3))
+		})
+
+		It("fails if no properties are requested when the element does not exist", func() {
+			b.GetPropertiesForEach(".notice")
+			ExpectFailures("GetPropertiesForEach requires at least one property to fetch")
+		})
+
+		It("returns an empty slice if no element is found", func() {
+			Ω(b.GetPropertiesForEach("#non-existing", "tagName", "classList")).Should(HaveLen(0))
 		})
 	})
 

@@ -114,9 +114,20 @@ if (!window["_biloba"]) {
             if (!(subP in v)) return rRes(null)
             v = v[subP]
         }
+        if (v !== null && v !== undefined && !Array.isArray(v) && (typeof v == "object") && (typeof v[Symbol.iterator] == "function")) {
+            v = Array.from(v)
+        } else if (v instanceof DOMStringMap) {
+            v = { ...v }
+        }
         return rRes(v)
     })
     b.getPropertyForEach = many((ns, p) => rRes(ns.map(n => b.getProperty(n, p).result)))
+    b.getProperties = one((n, ps) => rRes(ps.reduce((m, p) => {
+        m[p] = b.getProperty(n, p).result
+        return m
+    }, {})))
+    b.getPropertiesForEach = many((ns, ps) => rRes(ns.map(n => b.getProperties(n, ps).result)))
+
     b.setProperty = one((n, p, v) => {
         p = p.split(".")
         for (const subP of p.slice(0, -1)) {
