@@ -95,3 +95,44 @@ func (sp SliceOfProperties) GetAnySlice(k string) [][]any {
 	}
 	return out
 }
+func toString(input any) string {
+	if input == nil {
+		return ""
+	}
+	return input.(string)
+}
+func toBool(input any) bool {
+	if input == nil {
+		return false
+	}
+	return input.(bool)
+}
+func toInt(input any) int {
+	if input == nil {
+		return 0
+	}
+	return int(input.(float64))
+}
+func toFloat64(input any) float64 {
+	if input == nil {
+		return 0
+	}
+	return input.(float64)
+}
+func toAnySlice(input any) []any {
+	if input == nil {
+		return []any{}
+	}
+	return input.([]any)
+}
+func toStringSlice(input any) []string {
+	if input == nil {
+		return []string{}
+	}
+	vs := input.([]any)
+	out := make([]string, len(vs))
+	for i, v := range vs {
+		out[i] = toString(v)
+	}
+	return out
+}
