@@ -98,7 +98,6 @@ if (!window["_biloba"]) {
         }
         return r(dispatchInputChange(n))
     })
-    b.getClassList = one(n => rRes(Array.from(n.classList)))
     b.hasProperty = one((n, p) => {
         let v = n
         for (const subP of p.split(".")) {

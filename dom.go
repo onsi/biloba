@@ -286,12 +286,12 @@ func (b *Biloba) SetValue(args ...any) types.GomegaMatcher {
 	}
 }
 
-func (b *Biloba) HaveClass(expected any) types.GomegaMatcher {
+func (b *Biloba) HaveClass(expected string) types.GomegaMatcher {
 	var data = map[string]any{}
 	var matcher = gomega.ContainElement(expected)
 	data["Matcher"] = matcher
 	return gcustom.MakeMatcher(func(selector any) (bool, error) {
-		r := b.runBilobaHandler("getClassList", selector)
+		r := b.runBilobaHandler("getProperty", selector, "classList")
 		if r.Error() != nil {
 			return false, r.Error()
 		}
