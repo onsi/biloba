@@ -626,11 +626,11 @@ b.Click(selector)
 
 This design decision helps reduce flakiness in your test suite.  It's possible that the concrete DOM element returned by a hypothetical `FindElement` function is gone (perhaps it was asynchronously re-rendered by your front-end view layer) by the time you attempt to `Click()` it.  Instead, Biloba runs a single synchronous snippet of JavaScript in the browser that fetches the element and then performs the action on it.
 
-Finally - some Biloba methods use the **first** element returned by the `selector` while others use **all** elements returned by the selector.  The difference is usually clear based on the name of the method.
+Finally - some Biloba methods use the **first** element returned by the `selector` while others use **every** element returned by the selector.  The difference is usually clear based on the name of the method.
 
 Now that we know how to `select` DOM elements - let's dig into what we can do with them.
 
-### Existence, Visibility, and Interactibility
+### Existence, Counting, Visibility, and Interactibility
 
 You can check if a tab has an element matching `selector` with:
 
@@ -662,6 +662,23 @@ Eventually(selector).Should(tab.Exist())
 note that we use `tab`'s `Exist()` matcher here instead of the reusable root tab `b`.
 
 Both `HasElement()` and `Exist()` succeed simply if the `selector` query returns an element.
+
+---
+
+You can count the number of elements that match a selector with:
+
+```go
+b.Count(selector)
+```
+
+or - as a matcher:
+
+```go
+Expect("a").To(b.HaveCount(7))
+Eventually("img.thumbnail").Should(b.HaveCount(BeNumerically(">", 10)))
+```
+
+if no elements match the `selector`, `Count/HaveMatch` return `0`.  Obviously.
 
 ---
 

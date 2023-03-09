@@ -51,11 +51,10 @@ if (!window["_biloba"]) {
         n.dispatchEvent(new Event('change', { bubbles: true }))
     }
     b.exists = s => r(!!sel(s))
+    b.count = many(ns => rRes(ns.length))
     b.isVisible = one(n => r(n.offsetWidth > 0 || n.offsetHeight > 0 || n.offsetParent != null, "DOM element is not visible"))
     b.isEnabled = one(n => r(!n.disabled, "DOM element is not enabled"))
     b.click = one(b.isVisible, b.isEnabled, n => r(n.click()))
-    b.getInnerText = one(n => rRes(n.innerText))
-    b.getInnerTextForEach = many(ns => rRes(ns.map(n => n.innerText)))
     b.getValue = one(n => {
         if (n.type == "checkbox") {
             return rRes(n.checked)

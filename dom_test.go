@@ -34,7 +34,28 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			match, err := b.Exist().Match(b.XPath("//[blarg]"))
 			Ω(match).Should(BeFalse())
 			Ω(err).Should(MatchError(ContainSubstring("'//[blarg]' is not a valid XPath expression")))
+		})
+	})
 
+	Describe("counting elements", func() {
+		It("count returns the number of elements", func() {
+			Ω(b.Count("#non-existing")).Should(Equal(0))
+			Ω(b.Count("#hello")).Should(Equal(1))
+			Ω(b.Count(b.XPath("div").WithID("hidden-parent").Descendant())).Should(Equal(4))
+			Ω(b.Count("input[type='radio']")).Should(Equal(10))
+		})
+
+		It("HaveCount does the same, as a matcher", func() {
+			Ω("#non-existing").Should(b.HaveCount(0))
+			Ω("#hello").Should(b.HaveCount(1))
+			Ω(b.XPath("div").WithID("hidden-parent").Descendant()).Should(b.HaveCount(4))
+			Ω("input[type='radio']").Should(b.HaveCount(10))
+
+			matcher := b.HaveCount(BeNumerically("<", 8))
+			match, err := matcher.Match("input[type='radio']")
+			Ω(match).Should(BeFalse())
+			Ω(err).Should(BeNil())
+			Ω(matcher.FailureMessage("input[type='radio']")).Should(Equal("HaveCount for input[type='radio']:\nExpected\n    <int>: 10\nto be <\n    <int>: 8"))
 		})
 	})
 
@@ -110,7 +131,7 @@ var _ = Describe("DOM manipulators and matchers", func() {
 
 		It("auto-fails if the element does not exist", func() {
 			Ω(b.InnerText("#non-existing")).Should(Equal(""))
-			ExpectFailures("Failed to get inner text:\ncould not find DOM element matching selector: #non-existing")
+			ExpectFailures("Failed to get property \"innerText\":\ncould not find DOM element matching selector: #non-existing")
 		})
 	})
 
@@ -142,14 +163,14 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			match, err := matcher.Match("#hello")
 			Ω(match).Should(BeFalse())
 			Ω(err).ShouldNot(HaveOccurred())
-			Ω(matcher.FailureMessage("#hello")).Should(Equal("HaveInnerText for #hello:\nExpected\n    <string>: Hello Biloba!\nto equal\n    <string>: Hello"))
-			Ω(matcher.NegatedFailureMessage("#hello")).Should(Equal("HaveInnerText for #hello:\nExpected\n    <string>: Hello Biloba!\nnot to equal\n    <string>: Hello"))
+			Ω(matcher.FailureMessage("#hello")).Should(Equal("HaveProperty \"innerText\" for #hello:\nExpected\n    <string>: Hello Biloba!\nto equal\n    <string>: Hello"))
+			Ω(matcher.NegatedFailureMessage("#hello")).Should(Equal("HaveProperty \"innerText\" for #hello:\nExpected\n    <string>: Hello Biloba!\nnot to equal\n    <string>: Hello"))
 
 			nestedMatcher := b.HaveInnerText(ContainSubstring("Fourth Things"))
 			match, err = nestedMatcher.Match("#list")
 			Ω(match).Should(BeFalse())
 			Ω(err).ShouldNot(HaveOccurred())
-			Ω(nestedMatcher.FailureMessage("#list")).Should(Equal("HaveInnerText for #list:\nExpected\n    <string>: First Things\n    Second Things\n    Third Things\nto contain substring\n    <string>: Fourth Things"))
+			Ω(nestedMatcher.FailureMessage("#list")).Should(Equal("HaveProperty \"innerText\" for #list:\nExpected\n    <string>: First Things\n    Second Things\n    Third Things\nto contain substring\n    <string>: Fourth Things"))
 		})
 
 		It("errors if the element does not exist", func() {
