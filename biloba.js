@@ -13,7 +13,7 @@ if (!window["_biloba"]) {
         }
         return s
     }
-    let selMany = (s) => {
+    let selEach = (s) => {
         if (typeof s == "string") {
             if (s.charAt(0) == "x") {
                 let xPathResult = document.evaluate(s.slice(1), document, null, XPathResult.UNORDERED_NODE_ITERATOR_TYPE, null)
@@ -38,8 +38,8 @@ if (!window["_biloba"]) {
         if (!!result.error) result.error = result.error + errAnnotation
         return result
     }
-    let many = (cb) => (s, ...args) => {
-        let ns = selMany(s)
+    let each = (cb) => (s, ...args) => {
+        let ns = selEach(s)
         let errAnnotation = (typeof s == "string" ? ": " + s.slice(1) : "")
 
         let result = cb(ns, ...args)
@@ -51,10 +51,14 @@ if (!window["_biloba"]) {
         n.dispatchEvent(new Event('change', { bubbles: true }))
     }
     b.exists = s => r(!!sel(s))
-    b.count = many(ns => rRes(ns.length))
+    b.count = each(ns => rRes(ns.length))
     b.isVisible = one(n => r(n.offsetWidth > 0 || n.offsetHeight > 0 || n.offsetParent != null, "DOM element is not visible"))
     b.isEnabled = one(n => r(!n.disabled, "DOM element is not enabled"))
     b.click = one(b.isVisible, b.isEnabled, n => r(n.click()))
+    b.clickEach = each(ns => {
+        ns.forEach(n => b.click(n))
+        return r()
+    })
     b.getValue = one(n => {
         if (n.type == "checkbox") {
             return rRes(n.checked)
@@ -106,7 +110,7 @@ if (!window["_biloba"]) {
         }
         return r(true)
     })
-    b.eachHasProperty = many((ns, p) => ns.length == 0 ? r(false) : r(ns.every(n => b.hasProperty(n, p).success)))
+    b.eachHasProperty = each((ns, p) => ns.length == 0 ? r(false) : r(ns.every(n => b.hasProperty(n, p).success)))
     b.getProperty = one((n, p) => {
         let v = n
         for (const subP of p.split(".")) {
@@ -120,13 +124,12 @@ if (!window["_biloba"]) {
         }
         return rRes(v)
     })
-    b.getPropertyForEach = many((ns, p) => rRes(ns.map(n => b.getProperty(n, p).result)))
+    b.getPropertyForEach = each((ns, p) => rRes(ns.map(n => b.getProperty(n, p).result)))
     b.getProperties = one((n, ps) => rRes(ps.reduce((m, p) => {
         m[p] = b.getProperty(n, p).result
         return m
     }, {})))
-    b.getPropertiesForEach = many((ns, ps) => rRes(ns.map(n => b.getProperties(n, ps).result)))
-
+    b.getPropertiesForEach = each((ns, ps) => rRes(ns.map(n => b.getProperties(n, ps).result)))
     b.setProperty = one((n, p, v) => {
         p = p.split(".")
         for (const subP of p.slice(0, -1)) {
@@ -136,12 +139,20 @@ if (!window["_biloba"]) {
         n[p[p.length - 1]] = v
         return r()
     })
-    b.setPropertyForEach = many((ns, p, v) => {
+    b.setPropertyForEach = each((ns, p, v) => {
         for (const n of ns) {
             let res = b.setProperty(n, p, v)
             if (!res.success) return res
         }
         return r()
     })
+    b.invokeOn = one((n, f, ...args) => {
+        if (!(f in n) || (typeof n[f] != "function")) return rErr(`element does not implement "${f}"`)
+        return rRes(n[f](...args))
+    })
+    b.invokeOnEach = each((ns, f, ...args) => rRes(ns.map(n => b.invokeOn(n, f, ...args).result)))
+    b.invokeWith = one((n, script, ...args) => rRes(eval(script)(n, ...args)))
+    b.invokeWithEach = each((ns, script, ...args) => rRes(ns.map(n => b.invokeWith(n, script, ...args).result)))
+
     window["_biloba"] = b
 }

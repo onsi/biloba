@@ -315,6 +315,62 @@ func (b *Biloba) Click(args ...any) types.GomegaMatcher {
 	}
 }
 
+func (b *Biloba) ClickEach(selector any) {
+	b.gt.Helper()
+	r := b.runBilobaHandler("clickEach", selector)
+	if r.Error() != nil {
+		b.gt.Fatalf("Failed to click each:\n%s", r.Error())
+	}
+}
+
+func (b *Biloba) InvokeOn(selector string, fName string, args ...any) any {
+	b.gt.Helper()
+	finalArgs := []any{fName}
+	finalArgs = append(finalArgs, args...)
+	r := b.runBilobaHandler("invokeOn", selector, finalArgs...)
+	if r.Error() != nil {
+		b.gt.Fatalf("Failed to invoke \"%s\":\n%s", fName, r.Error())
+		return nil
+	}
+	return r.Result
+}
+
+func (b *Biloba) InvokeOnEach(selector string, fName string, args ...any) []any {
+	b.gt.Helper()
+	finalArgs := []any{fName}
+	finalArgs = append(finalArgs, args...)
+	r := b.runBilobaHandler("invokeOnEach", selector, finalArgs...)
+	if r.Error() != nil {
+		b.gt.Fatalf("Failed to invoke \"%s\" on each:\n%s", fName, r.Error())
+		return nil
+	}
+	return r.ResultAnySlice()
+}
+
+func (b *Biloba) InvokeWith(selector string, script string, args ...any) any {
+	b.gt.Helper()
+	finalArgs := []any{script}
+	finalArgs = append(finalArgs, args...)
+	r := b.runBilobaHandler("invokeWith", selector, finalArgs...)
+	if r.Error() != nil {
+		b.gt.Fatalf("Failed to InvokeWith:\n%s", r.Error())
+		return nil
+	}
+	return r.Result
+}
+
+func (b *Biloba) InvokeWithEach(selector string, script string, args ...any) []any {
+	b.gt.Helper()
+	finalArgs := []any{script}
+	finalArgs = append(finalArgs, args...)
+	r := b.runBilobaHandler("invokeWithEach", selector, finalArgs...)
+	if r.Error() != nil {
+		b.gt.Fatalf("Failed to InvokeWithEach:\n%s", script, r.Error())
+		return nil
+	}
+	return r.ResultAnySlice()
+}
+
 func matcherOrEqual(expected any) types.GomegaMatcher {
 	var matcher types.GomegaMatcher
 	switch v := expected.(type) {

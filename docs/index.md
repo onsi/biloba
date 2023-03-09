@@ -1144,6 +1144,56 @@ Eventually("#login").Should(b.Click())
 
 you don't need a separate `Eventually` poll to wait for the page to load or the element to appear.
 
+You can also click on every element matching `selector` using:
+
+```go
+b.ClickEach(selector)
+```
+
+unlike `Click`, `ClickEach` does not have a matcher variant.  It simply clicks on all the elements that match the selector that are also visible and enabled.  Elements that are not visible or enabled are silently skipped.
+
+### Invoking JavaScript on and with selected elements
+
+At the end of the day, Biloba can give you a pile of DOM methods and matchers but you'll still come across a usecase that isn't implemented.  For that, you can head straight to JavaScript and get the job done yourself.  The [Running Arbitrary Javascript](#running-arbitrary-javascript) chapter below discusses how to run JavaScript with Biloba in _general_.  But in this section we focus on how to use Biloba to run JavaScript against selected DOM elements (which - of course, you can do with arbitrary JavaScript, but the API outlined here does the work of slecting elements for you using the same `selector` infrastructure we've discussed throughtout this chapter).
+
+You can invoke a method defined on a DOM element (e.g. `focus()` or `scrollIntoView()`) with:
+
+```go
+b.InvokeOn(selector, methodName, <optional args>)
+```
+
+`InvokeOn` operates on the **first** matching element (failing if none are found) and returns whatever the called method returns.  You can also pass arguments in - some examples:
+
+```go
+b.InvokeOn("#submit", "click") //though you should really just use b.Click("#submit")
+b.InvokeOn("input[type='text']", "focus") //finds the first matching element then calles el.focus()
+b.InvokeOn("input[type='text']", "scrollIntoView") //finds the first matching element then calles el.scrollIntoView()
+b.InvokeOn("h1.title", "append", " - Hello") //calls el.append(" - Hello")
+r := b.InvokeOn(".notice", "getAttributeNames") // r has type any but is a slice of strings containing all attribute names
+b.InvokeOn(".notice", "setAttribute", "data-age", "17") // calls el.setAttribute("data-age", "17")
+Expect(b.InvokOn(".notice", "getAttribute", "data-age")).To(Equal("17")) // will now pass
+```
+
+Similarly, you can use `InvokeOnEach` to invoke a method and arguments on a **all** matching elements.  Nothing happens if no elements match and there is no way, currently, to specify different arguments for different matching elements.
+
+The upshot is that `InvokeOn/InvokeOnEach` find elements then call `el[methodName](...args)`.  This works well if the element has a relevant method defined on it.
+
+If you want to do something more complex with the element - or you want to call several methods atomically - you can use `InvokeWith/InvokeWithEach`.  These take a callable snippet of JavaScript and invoke it - passing in the element along with any optional arguments you've provided, and returning the result.  Here's an example:
+
+```go
+countCharacters := `(el) => len(el.innerText)`
+Expect(b.InvokeWith(".notice", countCharacters)).To(Equal(12.0))
+Expect(b.InvokeWithEach(".notice", countCharacters)).To(HaveExactElements(12.0, 4.0, 73.0))
+
+appendLi := `(el, text) => {
+	let li = document.createElement('li')
+	li.innerText = text
+	el.appendChild(li);
+}`
+b.InvokeWith("ul", appendLi, "Another Item") //runs on the first <ul>
+b.InvokeWithEach("ul", appendLi, "Another Item For All") //runs on all <ul>s
+```
+
 ### The XPath DSL
 
 XPath queries provide a powerful way to select DOM elements.  As mentioned above, if you're new to XPath queries you can check out the [MDN docs](https://developer.mozilla.org/en-US/docs/Web/XPath) or the [XPath Cheatsheet at devhints.io](https://devhints.io/xpath).  This will not be an exhaustive XPath tutorial.
@@ -1496,7 +1546,7 @@ There are a couple of gotchas that exist in Chrome that Biloba tries to paper ov
 
 ## Running Arbitrary Javascript
 
-Biloba will happily allow you to run arbitrary JavaScript on the page for any tab.  This can often be a convenient shortcut to make a more complex assertion in JavaScript, or to make assertions on the state of your web application that may be overly difficult/complex to make simply by interrogating the DOM alone.
+We covered running JavaScript that's scoped to a particular element using `b.InvokeOn/b.InvokeWith` - but Biloba will also happily allow you to run arbitrary JavaScript on the page for any tab.  This can often be a convenient shortcut to make a more complex assertion in JavaScript, or to make assertions on the state of your web application that may be overly difficult/complex to make simply by interrogating the DOM alone.
 
 To run JavaScript:
 

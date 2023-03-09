@@ -898,6 +898,95 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 	})
 
+	Describe("ClickEach", func() {
+		It("clicks on all matching elements - but only if they turn out to be clickable", func() {
+			Ω("#red").Should(b.HaveValue(true))
+			Ω("#blue").Should(b.HaveValue(false))
+			Ω("#yellow").Should(b.HaveValue(false))
+			Ω("#green").Should(b.HaveValue(false))
+			b.ClickEach("[type='checkbox']")
+			Ω("#red").Should(b.HaveValue(false))
+			Ω("#blue").Should(b.HaveValue(true))
+			Ω("#yellow").Should(b.HaveValue(false)) //disabled
+			Ω("#green").Should(b.HaveValue(false))  //hidden
+		})
+	})
+
+	Describe("invokeOn and invokeOnEach", func() {
+		It("invokes the requested function on the selected dom element", func() {
+			b.InvokeOn("#increment", "click")
+			Ω("#counter-input").Should(b.HaveValue("1"))
+
+			checked := b.GetPropertiesForEach(".clickable[type='checkbox']", "checked").GetBool("checked")
+			b.InvokeOnEach(".clickable[type='checkbox']", "click")
+			newChecked := b.GetPropertiesForEach(".clickable[type='checkbox']", "checked").GetBool("checked")
+			for i := range checked {
+				Ω(newChecked[i]).Should(Equal(!checked[i]))
+			}
+
+			b.InvokeOn(".notice", "append", " I Can Add To")
+			Ω(".notice").Should(b.HaveInnerText("Some Text I Can Add To"))
+
+			texts := b.InnerTextForEach("li")
+			b.InvokeOnEach("li", "append", "!")
+			newTexts := b.InnerTextForEach("li")
+			for i := range texts {
+				Ω(newTexts[i]).Should(Equal(texts[i] + "!"))
+			}
+
+			result := b.InvokeOn(".notice", "getAttributeNames")
+			Ω(result).Should(ConsistOf("class", "magic", "data-name"))
+
+			initial := b.InvokeOnEach(".notice", "getAttribute", "magic")
+			Ω(initial).Should(HaveExactElements("on", "on", "off"))
+			b.InvokeOnEach(".notice", "setAttribute", "magic", "on")
+			subsequent := b.InvokeOnEach(".notice", "getAttribute", "magic")
+			Ω(subsequent).Should(HaveExactElements("on", "on", "on"))
+		})
+
+		It("fails if the dom element does not exist", func() {
+			b.InvokeOn("#non-existing", "click")
+			ExpectFailures("Failed to invoke \"click\":\ncould not find DOM element matching selector: #non-existing")
+
+			b.InvokeOnEach("#non-existing", "click") // does nothing
+		})
+
+		It("fails if the function does not exist", func() {
+			b.InvokeOn(".notice", "encabulate")
+			ExpectFailures("Failed to invoke \"encabulate\":\nelement does not implement \"encabulate\": .notice")
+
+			b.InvokeOnEach(".notice", "encabulate") // does nothing
+		})
+	})
+
+	Describe("invokeWith and invokeWithEach", func() {
+		It("invokes the passed in script passing it the node and any additional arguments", func() {
+			count := b.Count("ol li")
+			r := b.InvokeWith("ol", "(n) => { li = document.createElement('li'); li.innerText = 'new' ; n.appendChild(li); return 'done' }")
+			Ω(r).Should(Equal("done"))
+			Ω(b.Count("ol li")).Should(Equal(count + 1))
+
+			b.InvokeWith("ol", "(n, text) => { li = document.createElement('li'); li.innerText = text ; n.appendChild(li)}", "yet another")
+			Ω(b.Count("ol li")).Should(Equal(count + 2))
+			Ω(b.XPath("ol").Descendant("li").Last()).Should(b.HaveInnerText("yet another"))
+
+			r = b.InvokeWithEach(".notice", "(n) => n.dataset.name ? n.dataset.name + '!' : 'who?'")
+			Ω(r).Should(ConsistOf("henry!", "bob!", "who?"))
+
+			Ω(b.GetPropertiesForEach(".notice", "count").GetInt("count")).Should(HaveExactElements(3, 0, 0))
+			b.InvokeWithEach(".notice", "(n, count) => n.count = n.count || count", 17)
+			Ω(b.GetPropertiesForEach(".notice", "count").GetInt("count")).Should(HaveExactElements(3, 17, 17))
+		})
+
+		It("fails if the dom element does not exist", func() {
+			b.InvokeWith("#non-existing", "(n) => 1")
+			ExpectFailures("Failed to InvokeWith:\ncould not find DOM element matching selector: #non-existing")
+
+			r := b.InvokeOnEach("#non-existing", "(n) => 1") // does nothing
+			Ω(r).Should(BeEmpty())
+		})
+	})
+
 	Describe("using xpath selectors", func() {
 		It("uses the first element returned by the xpath selector", func() {
 			b.Click(b.XPath("button").WithText("Increment"))
