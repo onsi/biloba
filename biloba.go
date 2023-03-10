@@ -1,12 +1,13 @@
 /*
-Biloba builds on top of [chromedp] to bring stable, performant, browser automation to Ginkgo
-
-Biloba embraces three principles:
+Biloba builds on top of [chromedp] to bring stable, performant, automated browser testing to Ginkgo.  It embraces three principles:
   - Performance via parallelization
   - Stability via pragmatism
   - Conciseness via Ginkgo and Gomega
 
+The godoc documentation you are reading now is meant to be a sparse reference.  To build a mental model for how to use Biloba please peruse the [documentation].
+
 [chromedp]: https://github.com/chromedp/chromedp/
+[documentation]: https://onsi.github.io/biloba
 */
 package biloba
 
@@ -28,6 +29,9 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
+/*
+GinkgoTInterface is the interface by which Biloba receives GinkgoT()
+*/
 type GinkgoTInterface interface {
 	Helper()
 	Fatal(args ...interface{})
@@ -50,6 +54,9 @@ type GinkgoTInterface interface {
 	AttachProgressReporter(func() string) func()
 }
 
+/*
+ChromeConnection captures the details necessary for [ConnectToChrome] to connect to Chrome
+*/
 type ChromeConnection struct {
 	WebSocketURL string
 }
@@ -59,6 +66,9 @@ func (gc ChromeConnection) encode() []byte {
 	return data
 }
 
+/*
+Pass StartingWindowSize into [SpinUpChrome] to set the default window size for all tabs
+*/
 func StartingWindowSize(x int, y int) chromedp.ExecAllocatorOption {
 	return chromedp.WindowSize(x, y)
 }
@@ -67,6 +77,11 @@ func gooseConfigPath(process int) string {
 	return fmt.Sprintf("./.biloba-config-%d", process)
 }
 
+/*
+Call SpinUpChrome(GinkgoT()) to spin up a Chrome browser
+
+Read https://onsi.github.io/biloba/#bootstrapping-biloba for details on how to set up your Ginkgo suite and use SpinUpChrome correctly
+*/
 func SpinUpChrome(ginkgoT GinkgoTInterface, options ...chromedp.ExecAllocatorOption) ChromeConnection {
 	ginkgoT.Helper()
 	tmp := ginkgoT.TempDir()
@@ -106,32 +121,54 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...chromedp.ExecAllocatorOpt
 	return cc
 }
 
+/*
+BilobaConfigOptions are passed in to [ConnectToChrome] to configure a given connection to Chrome
+*/
 type BilobaConfigOption func(*Biloba)
 
+/*
+Pass BilobaConfigEnableDebugLogging to [ConnectToChrome] to send all Chrome debug logging to the GinkgoWriter
+*/
 func BilobaConfigEnableDebugLogging() func(*Biloba) {
 	return func(b *Biloba) {
 		b.enableDebugLogging = true
 	}
 }
 
+/*
+Pass BilobaConfigWithChromeConnection to [ConnectToChrome] to provide your own [ChromeConnection] details
+*/
 func BilobaConfigWithChromeConnection(cc ChromeConnection) func(*Biloba) {
 	return func(b *Biloba) {
 		b.ChromeConnection = cc
 	}
 }
 
+/*
+Pass BilobaConfigWithChromeConnection to [ConnectToChrome] to disable screenshots on failure
+*/
 func BilobaConfigDisableFailureScreenshots() func(*Biloba) {
 	return func(b *Biloba) {
 		b.disableFailureScreenshots = true
 	}
 }
 
+/*
+Pass BilobaConfigWithChromeConnection to [ConnectToChrome] to disable screenshots when Progress Reports are emitted
+*/
 func BilobaConfigDisableProgressReportScreenshots() func(*Biloba) {
 	return func(b *Biloba) {
 		b.disableProgressReportScreenshots = true
 	}
 }
 
+/*
+Call ConnectToChrome(GinkgoT()) to connect to a Chrome browser
+
+Returns a *Biloba struct that you use to interact with the browser
+
+Read https://onsi.github.io/biloba/#bootstrapping-biloba for details on how to set up your Ginkgo suite and use ConnectToChrome correctly
+*/
 func ConnectToChrome(ginkgoT GinkgoTInterface, options ...BilobaConfigOption) *Biloba {
 	ginkgoT.Helper()
 	b := newBiloba(ginkgoT)
@@ -191,7 +228,17 @@ func ConnectToChrome(ginkgoT GinkgoTInterface, options ...BilobaConfigOption) *B
 	return b
 }
 
+/*
+Biloba is the main object provided by Biloba for interacting with Chrome.  You get an instance of Biloba when you [ConnectToChrome].  This instance is the reusable root tab and cannot be closed.
+
+Any new tabs created or spawned while your tests run will be represented as different instances of Biloba.
+
+To send commands to a particular tab you use the Biloba instance associated with that tab.
+
+Read https://onsi.github.io/biloba/#parallelization-how-biloba-manages-browsers-and-tabs to build a mental model of how Biloba manages tabs
+*/
 type Biloba struct {
+	//Context is the underlying chromedp context.  Pass this in to chromedp to be take actions on this tab
 	Context          context.Context
 	gt               GinkgoTInterface
 	ChromeConnection ChromeConnection
@@ -238,14 +285,22 @@ func newBiloba(ginkgoT GinkgoTInterface) *Biloba {
 	return b
 }
 
+/*
+The Chrome DevTools BrowserContextID() associated with this Biloba tab.
+
+BrowserContextID is an isolation mechanism provided by Chrome DevTools - you may need to pass this in explicitly if you intend to make some low-level calls to chromedp.
+*/
 func (b *Biloba) BrowserContextID() cdp.BrowserContextID {
 	return b.browserContextID
 }
 
-func (b *Biloba) Description() string {
-	return fmt.Sprintf("%s - Target-ID: %s | Browser-ID: %s ", b.Title(), b.targetID, b.browserContextID)
-}
+/*
+Prepare() should be called before every spec.  It prepares the reusable Biloba tab for reuse.
 
+Read https://onsi.github.io/biloba/#bootstrapping-biloba for details on how to set up your Ginkgo suite and use Prepare() correctly
+
+Read https://onsi.github.io/biloba/#parallelization-how-biloba-manages-browsers-and-tabs to build a mental model of how Biloba manages tabs
+*/
 func (b *Biloba) Prepare() {
 	if !b.isRootTab() {
 		return
@@ -273,7 +328,7 @@ func (b *Biloba) Prepare() {
 	b.lock.Unlock()
 
 	if !b.disableFailureScreenshots {
-		b.gt.DeferCleanup(b.AttachScreenshotsIfFailed)
+		b.gt.DeferCleanup(b.attachScreenshotsIfFailed)
 	}
 	if !b.disableProgressReportScreenshots {
 		b.gt.DeferCleanup(b.gt.AttachProgressReporter(b.progressReporter))
@@ -282,16 +337,26 @@ func (b *Biloba) Prepare() {
 	b.Navigate("about:blank")
 }
 
+/*
+NewTab() creates a new browser tab and returns a Biloba instance pointing to it
+
+Read https://onsi.github.io/biloba/#managing-tabs to learn more about managing tabs
+*/
 func (b *Biloba) NewTab() *Biloba {
 	return b.registerTabFor(chromedp.NewContext(b.root.Context, chromedp.WithNewBrowserContext()))
 }
 
-func (b *Biloba) AllTabs() []*Biloba {
+/*
+AllTabs() returns all Biloba tabs currently associated with the current spec
+
+Read https://onsi.github.io/biloba/#managing-tabs to learn more about managing tabs
+*/
+func (b *Biloba) AllTabs() Tabs {
 	targets, err := chromedp.Targets(b.root.Context)
 	if err != nil {
 		b.gt.Fatalf("Failed to list tabs:\n%s", err.Error())
 	}
-	tabs := []*Biloba{}
+	tabs := Tabs{}
 
 	for _, target := range targets {
 		b.root.lock.Lock()
@@ -316,9 +381,13 @@ func (b *Biloba) isRootTab() bool {
 }
 
 /*
-also test things to validate that we do, in fact, need to do this (i.e. specifically - is it true that a tab that has the same browser context as other tabs will nuke those tabs' download configuration if it is closed?)
+Close() closes a Biloba tab.  It is an error to call Close() on the reusable root tab.
 
-this will entail renaming these helper functions to (e.b.) configureDownloadBehaviorForAllTabsWithBrowserContextID(...)
+There is one additional edge case in which Close() can return an error.  You can learn about it here: https://onsi.github.io/biloba/#going-the-extra-mile-for-stability
+
+In short - if you have a test that involves both downloading files and tabs spawned by the browser (i.e. tabs that you didn't explicitly Create()) you should call:
+
+	Eventually(tab.Close).Should(Succeed())
 */
 func (b *Biloba) Close() error {
 	if b.isRootTab() {
@@ -346,7 +415,7 @@ func (b *Biloba) Close() error {
 	return nil
 }
 
-func (b *Biloba) AttachScreenshotsIfFailed() {
+func (b *Biloba) attachScreenshotsIfFailed() {
 	if b.gt.Failed() {
 		for _, screenshot := range b.safeAllTabScreenshots() {
 			if screenshot.failure != "" {

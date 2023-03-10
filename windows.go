@@ -4,6 +4,9 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
+/*
+SetWindowSize() sets the window size for this tab.  A DeferCleanup is automatically registered to reset the window size after the spec ends
+*/
 func (b *Biloba) SetWindowSize(width, height int, opts ...chromedp.EmulateViewportOption) {
 	originalWidth, originalHeight := b.WindowSize()
 	b.gt.Helper()
@@ -20,6 +23,9 @@ func (b *Biloba) SetWindowSize(width, height int, opts ...chromedp.EmulateViewpo
 	})
 }
 
+/*
+WindowSize() returns the current window size of this tab.
+*/
 func (b *Biloba) WindowSize() (int, int) {
 	b.gt.Helper()
 	var dimensions []int

@@ -10,6 +10,9 @@ import (
 	"golang.org/x/net/context"
 )
 
+/*
+CaptureScreenshot() returns a full screenshot of the current tab as a []byte array (you can decode it with the image package)
+*/
 func (b *Biloba) CaptureScreenshot() []byte {
 	var img []byte
 	err := chromedp.Run(b.Context, chromedp.FullScreenshot(&img, 100))
@@ -19,6 +22,9 @@ func (b *Biloba) CaptureScreenshot() []byte {
 	return img
 }
 
+/*
+CaptureImgCatScreenshot() returns a full screenshot of the current tab as an iTerm2 imgcat-compatible string.  Simply print it out to see images on your terminal.
+*/
 func (b *Biloba) CaptureImgcatScreenshot() string {
 	return b.asImgCat(b.CaptureScreenshot())
 }

@@ -6,10 +6,20 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
+/*
+Navigate() causes this tab to navigate to the provided URL.  The spec fails if the response does not have status code 200
+
+Read https://onsi.github.io/biloba/#navigation to learn more about navigation
+*/
 func (b *Biloba) Navigate(url string) *Biloba {
 	return b.NavigateWithStatus(url, http.StatusOK)
 }
 
+/*
+NavigateWithStatus() causes this tab to navigate to the provided URL and asserts that the response has the provided status code.
+
+Read https://onsi.github.io/biloba/#navigation to learn more about navigation
+*/
 func (b *Biloba) NavigateWithStatus(url string, status int) *Biloba {
 	b.gt.Helper()
 	resp, err := chromedp.RunResponse(b.Context, chromedp.Navigate(url))
@@ -24,6 +34,9 @@ func (b *Biloba) NavigateWithStatus(url string, status int) *Biloba {
 	return b
 }
 
+/*
+Location() returns the location (i.e. url) of the current tab.
+*/
 func (b *Biloba) Location() string {
 	var location string
 	err := chromedp.Run(b.Context, chromedp.Location(&location))
@@ -34,6 +47,9 @@ func (b *Biloba) Location() string {
 	return location
 }
 
+/*
+Title() returns the window title of the current tab.
+*/
 func (b *Biloba) Title() string {
 	var title string
 	err := chromedp.Run(b.Context, chromedp.Title(&title))

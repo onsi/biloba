@@ -66,7 +66,7 @@ var _ = Describe("Navigation", func() {
 			Eventually("#to-b-new").Should(b.Click())
 			Eventually(b).Should(b.HaveSpawnedTab(b.TabWithTitle("Nav-B Testpage")))
 			Ω(b.Location()).Should(Equal(fixtureServer + "/nav-a.html"))
-			Ω(b.FindSpawnedTab(b.TabWithTitle("Nav-B Testpage")).Location()).Should(HaveSuffix("nav-b.html"))
+			Ω(b.AllSpawnedTabs().Find(b.TabWithTitle("Nav-B Testpage")).Location()).Should(HaveSuffix("nav-b.html"))
 		})
 	})
 })

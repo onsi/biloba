@@ -6,68 +6,103 @@ import (
 	"github.com/onsi/gomega/types"
 )
 
+/*
+DialogType is used to distinguish between different types of Dialogs
+*/
 type DialogType = page.DialogType
 
-var DialogTypeAlert = page.DialogTypeAlert
-var DialogTypeBeforeunload = page.DialogTypeBeforeunload
-var DialogTypeConfirm = page.DialogTypeConfirm
-var DialogTypePrompt = page.DialogTypePrompt
+const DialogTypeAlert = page.DialogTypeAlert
+const DialogTypeBeforeunload = page.DialogTypeBeforeunload
+const DialogTypeConfirm = page.DialogTypeConfirm
+const DialogTypePrompt = page.DialogTypePrompt
 
-// has to be on b
 var handlerCounter uint
 
+/*
+DialogHandler is returned by Biloba's Handle*Dialogs methods
+
+Use DialogHandler's methods to configure how you want Biloba to handle the response.
+
+Read https://onsi.github.io/biloba/#handling-dialogs to learn more
+*/
 type DialogHandler struct {
-	Type           DialogType
-	MessageMatcher types.GomegaMatcher
-	Response       bool
-	Text           *string
+	dialogType     DialogType
+	messageMatcher types.GomegaMatcher
+	response       bool
+	text           *string
 	id             uint
 }
 
+/*
+Set MatchingMessage to only handle dialogs whose message matches
+
+You can pass in a string or Gomega matcher
+*/
 func (d *DialogHandler) MatchingMessage(message any) *DialogHandler {
-	d.MessageMatcher = matcherOrEqual(message)
+	d.messageMatcher = matcherOrEqual(message)
 	return d
 }
 
+/*
+WithResponse controls whether Biloba should accept or decline the dialog
+*/
 func (d *DialogHandler) WithResponse(r bool) *DialogHandler {
-	d.Response = r
+	d.response = r
 	return d
 }
 
+/*
+WithText controls what text Biloba should provide to prompt dialogs
+
+If none i provided the default prompt given by the browser is used
+*/
 func (d *DialogHandler) WithText(text string) *DialogHandler {
-	d.Text = &text
-	d.Response = true
+	d.text = &text
+	d.response = true
 	return d
 }
 
-func (d *DialogHandler) Match(dialog *Dialog) bool {
-	if dialog.Type != d.Type {
+func (d *DialogHandler) match(dialog *Dialog) bool {
+	if dialog.Type != d.dialogType {
 		return false
 	}
-	if d.MessageMatcher == nil {
+	if d.messageMatcher == nil {
 		return true
 	}
-	match, err := d.MessageMatcher.Match(dialog.Message)
+	match, err := d.messageMatcher.Match(dialog.Message)
 	return match && (err == nil)
 }
 
+/*
+Dialog represents a Dialog handled by Biloba
+
+Read https://onsi.github.io/biloba/#inspecting-handled-dialogs to learn more
+*/
 type Dialog struct {
 	Type           page.DialogType
 	Message        string
 	DefaultPrompt  string
 	HandleResponse bool
 	HandleText     string
-	Autohandled    bool
+	//Autohandled is true if Biloba's default handlers handled this dialog
+	Autohandled bool
 }
 
 type Dialogs []*Dialog
 
+/*
+MostRecent() returns the last element of Dialogs
+*/
 func (d Dialogs) MostRecent() *Dialog {
 	if len(d) == 0 {
 		return nil
 	}
 	return d[len(d)-1]
 }
+
+/*
+OfType() filters Dialogs by DialogType
+*/
 func (d Dialogs) OfType(t DialogType) Dialogs {
 	out := Dialogs{}
 	for _, dialog := range d {
@@ -77,6 +112,10 @@ func (d Dialogs) OfType(t DialogType) Dialogs {
 	}
 	return out
 }
+
+/*
+OfType() filters Dialogs by message.  You may pass in a string or Gomega matcher
+*/
 func (d Dialogs) MatchingMessage(message any) Dialogs {
 	matcher := matcherOrEqual(message)
 	out := Dialogs{}
@@ -101,16 +140,16 @@ func (b *Biloba) handleEventJavascriptDialogOpening(ev *page.EventJavascriptDial
 	var handler *DialogHandler
 	b.lock.Lock()
 	for i := len(b.dialogHandlers) - 1; i >= 0; i-- {
-		if b.dialogHandlers[i].Match(d) {
+		if b.dialogHandlers[i].match(d) {
 			handler = b.dialogHandlers[i]
 			break
 		}
 	}
 	if handler != nil {
-		d.HandleResponse = handler.Response
+		d.HandleResponse = handler.response
 		if d.HandleResponse {
-			if handler.Text != nil {
-				d.HandleText = *(handler.Text)
+			if handler.text != nil {
+				d.HandleText = *(handler.text)
 			} else {
 				d.HandleText = d.DefaultPrompt
 			}
@@ -136,20 +175,40 @@ func (b *Biloba) handleEventJavascriptDialogOpening(ev *page.EventJavascriptDial
 	}()
 }
 
+/*
+HandleAlertDialogs() registers an alert DialogHandler
+
+Read https://onsi.github.io/biloba/#handling-dialogs to learn more about handling dialogs
+*/
 func (b *Biloba) HandleAlertDialogs() *DialogHandler {
-	return b.addDialogHandler(&DialogHandler{Type: DialogTypeAlert})
+	return b.addDialogHandler(&DialogHandler{dialogType: DialogTypeAlert})
 }
 
+/*
+HandleBeforeunloadDialogs() registers an beforeunload DialogHandler
+
+Read https://onsi.github.io/biloba/#handling-dialogs to learn more about handling dialogs
+*/
 func (b *Biloba) HandleBeforeunloadDialogs() *DialogHandler {
-	return b.addDialogHandler(&DialogHandler{Type: DialogTypeBeforeunload})
+	return b.addDialogHandler(&DialogHandler{dialogType: DialogTypeBeforeunload})
 }
 
+/*
+HandleConfirmDialogs() registers a confirm DialogHandler
+
+Read https://onsi.github.io/biloba/#handling-dialogs to learn more about handling dialogs
+*/
 func (b *Biloba) HandleConfirmDialogs() *DialogHandler {
-	return b.addDialogHandler(&DialogHandler{Type: DialogTypeConfirm})
+	return b.addDialogHandler(&DialogHandler{dialogType: DialogTypeConfirm})
 }
 
+/*
+HandlePromptDialogs() registers a prompt Dialoghandler
+
+Read https://onsi.github.io/biloba/#handling-dialogs to learn more about handling dialogs
+*/
 func (b *Biloba) HandlePromptDialogs() *DialogHandler {
-	return b.addDialogHandler(&DialogHandler{Type: DialogTypePrompt})
+	return b.addDialogHandler(&DialogHandler{dialogType: DialogTypePrompt})
 }
 
 func (b *Biloba) addDialogHandler(handler *DialogHandler) *DialogHandler {
@@ -161,6 +220,11 @@ func (b *Biloba) addDialogHandler(handler *DialogHandler) *DialogHandler {
 	return handler
 }
 
+/*
+Pass RemoveDialogHandler() a handler returned by one of the Handle*Dialogs methods to unregister it
+
+Read https://onsi.github.io/biloba/#handling-dialogs to learn more about handling dialogs
+*/
 func (b *Biloba) RemoveDialogHandler(handler *DialogHandler) {
 	handlers := []*DialogHandler{}
 	b.lock.Lock()
@@ -173,6 +237,11 @@ func (b *Biloba) RemoveDialogHandler(handler *DialogHandler) {
 	b.lock.Unlock()
 }
 
+/*
+Dialogs() returns all dialogs handled by this Biloba tab in this spec
+
+Read https://onsi.github.io/biloba/#inspecting-handled-dialogs to learn more about inspecting handled dialogs
+*/
 func (b *Biloba) Dialogs() Dialogs {
 	b.lock.Lock()
 	defer b.lock.Unlock()

@@ -17,7 +17,7 @@ var _ = Describe("Downloading Files", func() {
 	It("can download files and make them available", func() {
 		b.Click("#download")
 		Eventually(b.AllCompleteDownloads).Should(HaveLen(1))
-		dl := b.FindCompleteDownload(b.DownloadWithFilename("filename.txt"))
+		dl := b.AllCompleteDownloads().Find(b.DownloadWithFilename("filename.txt"))
 		Ω(string(dl.Content())).Should(Equal("My Content"))
 	})
 
@@ -28,10 +28,10 @@ var _ = Describe("Downloading Files", func() {
 		b.Click("#download")
 		Eventually(b.AllCompleteDownloads).Should(HaveLen(2))
 
-		dl := b.FindCompleteDownload(b.DownloadWithFilename("filename.txt"))
+		dl := b.AllCompleteDownloads().Find(b.DownloadWithFilename("filename.txt"))
 		Ω(string(dl.Content())).Should(Equal("My Content"))
 
-		dl = b.FindCompleteDownload(b.DownloadWithFilename("new-file.txt"))
+		dl = b.AllCompleteDownloads().Find(b.DownloadWithFilename("new-file.txt"))
 		Ω(string(dl.Content())).Should(Equal("Some new content"))
 	})
 
@@ -70,7 +70,7 @@ var _ = Describe("Downloading Files", func() {
 	It("can handle many downloads (when the downloads come from a tab spawned from the root tab)", func(ctx SpecContext) {
 		b.Click(b.XPath("a").WithTextContains("Open in New Tab"))
 		Eventually(b.AllSpawnedTabs).Should(HaveLen(1))
-		newTab := b.FindSpawnedTab(b.TabWithTitle("Downloads Testpage"))
+		newTab := b.AllSpawnedTabs().Find(b.TabWithTitle("Downloads Testpage"))
 
 		b.Click("#download")
 		b.Click("#download")
@@ -138,7 +138,7 @@ var _ = Describe("Downloading Files", func() {
 		By("ensuring we can download from the root tab")
 		b.Click("#download")
 		Eventually(b.AllCompleteDownloads).Should(HaveLen(1))
-		dl := b.FindCompleteDownload(b.DownloadWithFilename("filename.txt"))
+		dl := b.AllCompleteDownloads().Find(b.DownloadWithFilename("filename.txt"))
 		Ω(string(dl.Content())).Should(Equal("My Content"))
 
 		By("ensuring we can download from a new tab")
@@ -157,7 +157,7 @@ var _ = Describe("Downloading Files", func() {
 		b.SetValue("#filename", "new-file.txt")
 		b.Click("#download")
 		Eventually(b.AllCompleteDownloads).Should(HaveLen(2))
-		dl = b.FindCompleteDownload(b.DownloadWithFilename("new-file.txt"))
+		dl = b.AllCompleteDownloads().Find(b.DownloadWithFilename("new-file.txt"))
 		Ω(string(dl.Content())).Should(Equal("Some new content"))
 		tab.Click("#download")
 		Eventually(tab.AllCompleteDownloads).Should(HaveLen(2))
@@ -165,7 +165,7 @@ var _ = Describe("Downloading Files", func() {
 		By("spawning then closing a new tab (this will have the same BrowserContextID as our root tab)")
 		b.Click(b.XPath("a").WithTextContains("Open in New Tab"))
 		Eventually(b.AllSpawnedTabs).Should(HaveLen(1))
-		Eventually(b.FindSpawnedTab(b.TabWithTitle("Downloads Testpage")).Close).Should(Succeed()) // only closes if any downloads are completed
+		Eventually(b.AllSpawnedTabs().Find(b.TabWithTitle("Downloads Testpage")).Close).Should(Succeed()) // only closes if any downloads are completed
 		Eventually(b.AllSpawnedTabs).Should(HaveLen(0))
 
 		By("ensuring that the closed spawned tab does not mess up the download config for the root tab")
@@ -177,7 +177,7 @@ var _ = Describe("Downloading Files", func() {
 		By("spawning then closing a new tab (this time from a different tab)")
 		tab.Click(tab.XPath("a").WithTextContains("Open in New Tab"))
 		Eventually(tab.AllSpawnedTabs).Should(HaveLen(1))
-		Eventually(tab.FindSpawnedTab(tab.TabWithTitle("Downloads Testpage")).Close).Should(Succeed()) // only
+		Eventually(tab.AllSpawnedTabs().Find(tab.TabWithTitle("Downloads Testpage")).Close).Should(Succeed()) // only
 		Eventually(tab.AllSpawnedTabs).Should(HaveLen(0))
 
 		By("ensuring that the closed spawned tab does not mess up the download config for the root tab")

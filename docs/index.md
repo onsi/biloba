@@ -24,7 +24,7 @@ We'll unpack these throughout this document - which is intended as a supplement 
 
 Biloba is currently under development.  Until a v1.0 release is made there are no guarantees about the stability of its public API.
 
-### Installing Biloba
+### Bootstrapping Biloba
 
 Biloba requires you use the latest versions of Ginkgo v2 and Gomega to build your test suite.  You can add Biloba to a project via:
 
@@ -532,17 +532,16 @@ Describe("a simple chat app", func() {
 })
 ```
 
-Since each created tab is in its own `BrowserContextID` we don't have to worry about cookie pollution and can log Sally and Jane in on the separate tabs.  As you can see we direct matchers and actions towards a given tab by using the version of the matcher/action on that tab instance (e.g. `tab.HaveClass` vs `b.HaveClass`).  You can also see that non-root tabs can be closed via `tab.Close()`.
+Since each created tab is in its own `BrowserContextID` we don't have to worry about cookie pollution and can log Sally and Jane in on the separate tabs.  As you can see we direct matchers and actions towards a given tab by using the version of the matcher/action on that tab instance (e.g. `tab.HaveClass` vs `b.HaveClass`).  You can also see that non-root tabs can be closed via `tab.Close()`.  Note that `tab.Close()` can return an error - it so happens that when an [active download](#going-the-extra-mile-for-stability) is taking place Biloba may be unable to close a tab.  You can use `Eventually(tab.Close).Should(Succeed())` in such cases to wait for the tab to close.
 
 ### Finding and Managing Spawned Tabs
 
 If a browser action results in a _new_ tab being opened you'll need to get a Biloba instance that attaches to that tab in order to be able to use it.  There are three methods that support this:
 
 - `tab.AllSpanedTabs()` returns a list of tabs (wrapped in Biloba instances) that were spawned by a user action performed on `tab`.
-- `tab.FindSpawnedTab(filter)` returns a Biloba tab matching the passed-in filter (see below)
-- `tab.HaveSpawnedTab(filter)` returns a matcher that asserts whether or not a spawned tab matches the passed-in filter (see below)
+- `tab.HaveSpawnedTab(filter)` returns a matcher that asserts whether or not a spawned tab matches the passed-in Tab filter (see below)
 
-You can either query `AllSpawnedTabs` and search through them for the tab you're looking for, or use `FindSpanwedTab` with a filter function that has signature `func(*Biloba) bool`.  Biloba provides three filter functions out of the box:
+You can query `AllSpawnedTabs` and search through them for the tab you're looking for using `Find()` and `Filter()` - passing in a `TabFilter` (a function of type `func(*Biloba) bool`). Biloba provides three tab filters out of the box:
 
 - `TabWithDOMNode(selector)` matches if the spawned tab has a DOM element satisfying `selector`.
 - `TabWithURL(url)` matches if the spawned tab has a matching url
@@ -562,17 +561,17 @@ Context("when Sally sends Jane a link", func() {
 		Eventually(lastEntryXPath).Should(tab.HaveInnerText("Hey Jane, check this out: YouTube"))
 		tab.Click(lastEntryXPath.Child("a"))
 		Eventually(tab).Should(tab.HaveSpawnedTab(tab.TabWithURL("https://www.youtube.com/watch?v=dQw4w9WgXcQ")))
-		youtubeTab := tab.FindSpawnedTab(tab.TabWithURL("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+		youtubeTab := tab.AllSpawnedTabs().Find(tab.TabWithURL("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
 		Eventually("body").Should(youtubeTab.HaveInnerText(ContainSubstring("Never Gonna Give You Up")))
 	})
 })
 ```
 
-As you can see, we poll `tab.HaveSpanwedTab` until the tab appears and then use `tab.FindSpawnedTab` to get a reference to it. From here we can make assertions against the spawned tab and/or close it.
+As you can see, we poll `tab.HaveSpanwedTab` until the tab appears and then use `tab.AllSpawnedTabs().Find()` to get a reference to it. From here we can make assertions against the spawned tab and/or close it.
 
 Note that `b.HaveSpawnedTab` will have failed.  That's because Biloba associates spawned tabs with the `BrowserContextID` of the tab that opened them.  And both `b` and `tab` (which is an explicitly created tab) have _different_ `BrowserContextID`s.
 
-There are analogous `b.AllTabs()`, `b.HaveTab()` and `b.FindTab()` functions that let you search through _all_ tabs associated with this Biloba Chrome connection.  This won't include any tabs opened by other Ginkgo processes running in parallel - but any tabs that are associated with the current process (whether explicitly created Tabs or Spawned Tabs) will be returned by these methods.
+There are analogous `b.AllTabs()` and `b.HaveTab()` functions that let you search through _all_ tabs associated with this Biloba Chrome connection.  This won't include any tabs opened by other Ginkgo processes running in parallel - but any tabs that are associated with the current process (whether explicitly created Tabs or Spawned Tabs) will be returned by these methods.
 
 ## Working with the DOM
 
@@ -1174,7 +1173,7 @@ b.InvokeOn(".notice", "setAttribute", "data-age", "17") // calls el.setAttribute
 Expect(b.InvokOn(".notice", "getAttribute", "data-age")).To(Equal("17")) // will now pass
 ```
 
-Similarly, you can use `InvokeOnEach` to invoke a method and arguments on a **all** matching elements.  Nothing happens if no elements match and there is no way, currently, to specify different arguments for different matching elements.
+Similarly, you can use `InvokeOnEach` to invoke a method and arguments on **all** matching elements.  Nothing happens if no elements match and there is no way, currently, to specify different arguments for different matching elements.
 
 The upshot is that `InvokeOn/InvokeOnEach` find elements then call `el[methodName](...args)`.  This works well if the element has a relevant method defined on it.
 
@@ -1497,19 +1496,19 @@ Of course, asserting on length can be brittle and lead to unsatisfying failure m
 
 ```go
 // we should get a download with the specified filename
-Eventually(b.AllCompleteDownloads).Should(HaveCompleteDownload(b.DownloadWithFilename("hello.pdf")))
+Eventually(b).Should(b.HaveCompleteDownload(b.DownloadWithFilename("hello.pdf")))
 
 // we should get a download with the specified content
-Eventually(b.AllCompleteDownloads).Should(HaveCompleteDownload(b.DownloadWithContent([]byte{"hello world"})))
+Eventually(b).Should(b.HaveCompleteDownload(b.DownloadWithContent([]byte{"hello world"})))
 ```
 
 `b.HaveCompleteDownload()`  takes a download filter of type `func(d *Download) bool` and `b.DownloadWithFilename` and `b.DownloadWithContent` provide such filters.  Note that `b.DownloadWithFilename` is matching on the _suggested_ filename provided by the browser.  The actual filename on disk is opaque and not something you'll need to worry about.
 
-Once the download has completed you can get a reference to it either by accessing `b.AllCompleteDownloads()` or with `b.FindCompleteDownload(filter)`
+Once the download has completed you can get a reference to it  by accessing `b.AllCompleteDownloads()` directly or using its `Find()` method:
 
 ```go
 dl := b.AllCompleteDownloads[0]
-dl := b.FindCompleteDonwload(b.DownloadWithFilename("hello.pdf))
+dl := b.AllCompleteDownloads.Find(b.DownloadWithFilename("hello.pdf"))
 ```
 
 Once you've got a reference to the download you can do the following:
@@ -1519,7 +1518,7 @@ url := dl.URL //get the originating URL of the download
 fname := dl.Filename //get the recommended filename fo the download
 
 dl.IsComplete() //true if complete
-dl.IsCanceled() //true if canceled
+dl.IsCancelled() //true if cancelled
 dl.IsActive() //true if the download is still in progress
 
 dl.Content() //returns the downloaded content as a []byte array.
@@ -1535,7 +1534,7 @@ There are a couple of gotchas that exist in Chrome that Biloba tries to paper ov
 
 	OK, fine.  Some details: since Biloba's created tabs all live in separate `BrowserContextID` universes this is typically not a problem.  However if you spawn a tab, and then close it, the download configuration for all other tabs in that `BrowserContextID` (including, potentially, the reusable root tab) will be blown away.  This will immediately cancel any in-flight downloads and prevent any future downloads from happening.  Biloba prevents this by preventing a spawned tab from closing _until_ all downloads associated with its `BrowserContextID` are complete.  Once closed, Biloba reregisters the download configuration for all the sibling tabs.
 
-	**Good news**: you can forget that you read that last paragraph and just use Biloba's APIs without worrying about such things.
+	**Good news**: you can forget that you read that last paragraph and just use Biloba's APIs without worrying about such things.  Just make sure to use `Eventually(tab.Close).Should(Succeed())` to retry closing a spawned tab in the presence of downloads.
 
 2. Did you know that Chrome limits downloads to a maximum of 10 downloads per tab within any given second?  This can lead to all sorts of fascinating flaky specs.  All is well - until you add that extra spec that does that extra download and the spec randomization happens to align it with the other 5 specs that do a bunch of downloads and they all run within a second and **bam**: failure.
 
@@ -1634,7 +1633,7 @@ adder := b.JSFunc("(...nums) => nums.reduce((s, n) => s + n, 0)")
 b.Run("var counter = 10")
 //and now we reference it using b.JSVar
 Ω(adder.Invoke(1, 2, 3.7, 4, 5, b.JSVar("counter"))).Should(b.EvaluateTo(25.7))
-//JS experssion work too
+//JS expressions work too
 Ω(adder.Invoke(1, 2, 3.7, 4, 5, b.JSVar("counter * 2"))).Should(b.EvaluateTo(35.7))
 ```
 
@@ -1644,9 +1643,25 @@ For that last expression the evaluated JavaScript is:
 ((...nums) => nums.reduce((s, n) => s + n, 0))(...[1,2,3,4,5,counter * 2])
 ```
 
-you can always inspect the generated JavaScript with `fmt.Println(b.JSFunc(...).Invoke(...))` a `Invoke` simply returns a string.
+if you hadn't used `b.JSVar` the invocation
 
-> Wait slow down - what happened in that last example up there.  Why was `adder` able to access `counter`?
+```go
+/* === INVALID === */
+Ω(adder.Invoke(1, 2, 3.7, 4, 5, "counter * 2")).Should(b.EvaluateTo(35.7))
+```
+
+would have turned into
+
+```js
+/* === INVALID === */
+((...nums) => nums.reduce((s, n) => s + n, 0))(...[1,2,3,4,5,"counter * 2"])
+```
+
+which would evaluate to `"15counter * 2"` 🤦‍♀️
+
+You can always inspect the generated JavaScript with `fmt.Println(b.JSFunc(...).Invoke(...))` a `Invoke` simply returns a string.
+
+> Wait slow down - what happened in that example up there.  Why was `adder` able to access `counter`?
 
 Great catch. all this Javascript runs on the global window object.  That means you can do stuff like this:
 

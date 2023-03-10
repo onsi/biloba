@@ -13,6 +13,13 @@ func newSliceOfProperties(input []any) SliceOfProperties {
 	return out
 }
 
+/*
+Properties is returned by [Biloba.GetProperties] and provides getters that perform type assertions and nil-conversions for you
+
+For each of the Get* methods if the requested property does not exist or is nil, the getter will return the zero value of the associated type (or an empty slice of correct type for the Get*Slice methods)
+
+Read https://onsi.github.io/biloba/#properties to learn more about properties
+*/
 type Properties map[string]any
 
 func (p Properties) Get(k string) any                 { return p[k] }
@@ -23,8 +30,24 @@ func (p Properties) GetBool(k string) bool            { return toBool(p[k]) }
 func (p Properties) GetStringSlice(k string) []string { return toStringSlice(p[k]) }
 func (p Properties) GetAnySlice(k string) []any       { return toAnySlice(p[k]) }
 
+/*
+SliceOfProperties has underlying type []Properties and is returned by [GetPropertiesForEach].  SliceOfProperties provides getters that perform type assertions and nil-conversions for you.
+
+For each of the Get* methods the return value is a slice of appropriate type. The slice will have the same length as the SliceOfProperties instance and will be filled with the values returned by each Properties invocation of Get* (i.e. nil and missing types will return the zero value.)
+
+Read https://onsi.github.io/biloba/#properties to learn more about properties
+*/
 type SliceOfProperties []Properties
 
+/*
+Find() the first Properties in SliceOfProperties that satisfies the provided search criteria.
+
+If search is a a Gomega matcher then the return Properties will have a value for key k that is successfully matched by the matcher.
+
+# If search is not a matcher then Equal(search) is used to perform the match
+
+Read https://onsi.github.io/biloba/#properties to learn more about properties
+*/
 func (sp SliceOfProperties) Find(k string, search any) Properties {
 	matcher := matcherOrEqual(search)
 	for _, p := range sp {
@@ -35,6 +58,13 @@ func (sp SliceOfProperties) Find(k string, search any) Properties {
 	return nil
 }
 
+/*
+Filter() returns the subset of Properties in SliceOfProperties that satisfies the provided search criteria.
+
+The search behaves similarly to [Biloba.Find].
+
+Read https://onsi.github.io/biloba/#properties to learn more about properties
+*/
 func (sp SliceOfProperties) Filter(k string, search any) SliceOfProperties {
 	out := SliceOfProperties{}
 	matcher := matcherOrEqual(search)

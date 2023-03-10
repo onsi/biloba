@@ -12,12 +12,17 @@ import (
 	"github.com/onsi/gomega/types"
 )
 
+/*
+Download represents a downloaded file
+
+Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
+*/
 type Download struct {
 	GUID        string
 	URL         string
 	Filename    string
 	complete    bool
-	canceled    bool
+	cancelled   bool
 	fetched     bool
 	downloadDir string
 
@@ -25,24 +30,44 @@ type Download struct {
 	lock    *sync.Mutex
 }
 
+/*
+IsComplete() returns true if the download is complete
+
+Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
+*/
 func (d *Download) IsComplete() bool {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 	return d.complete
 }
 
-func (d *Download) IsCanceled() bool {
+/*
+IsComplete() returns true if the download was cancelled
+
+Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
+*/
+func (d *Download) IsCancelled() bool {
 	d.lock.Lock()
 	defer d.lock.Unlock()
-	return d.canceled
+	return d.cancelled
 }
 
+/*
+IsActive() returns true if the download is still in progress
+
+Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
+*/
 func (d *Download) IsActive() bool {
 	d.lock.Lock()
 	defer d.lock.Unlock()
-	return !d.canceled && !d.complete
+	return !d.cancelled && !d.complete
 }
 
+/*
+Content() returns the contents of the file that was downloaded
+
+Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
+*/
 func (d *Download) Content() []byte {
 	d.lock.Lock()
 	defer d.lock.Unlock()
@@ -60,7 +85,7 @@ func (d *Download) Content() []byte {
 	return d.content
 }
 
-const CHROME_DOWNLOAD_LIMIT = 10
+const _CHROME_DOWNLOAD_LIMIT = 10
 
 func minDt(a, b time.Duration) time.Duration {
 	if a < b {
@@ -72,7 +97,7 @@ func minDt(a, b time.Duration) time.Duration {
 
 func (b *Biloba) blockIfNecessaryToEnsureSuccessfulDownloads() {
 	b.lock.Lock()
-	if len(b.downloadHistory) < CHROME_DOWNLOAD_LIMIT {
+	if len(b.downloadHistory) < _CHROME_DOWNLOAD_LIMIT {
 		b.lock.Unlock()
 		return
 	}
@@ -96,27 +121,71 @@ func (b *Biloba) blockIfNecessaryToEnsureSuccessfulDownloads() {
 			delete(b.downloadHistory, guid)
 		}
 		b.lock.Unlock()
-		if active < CHROME_DOWNLOAD_LIMIT {
+		if active < _CHROME_DOWNLOAD_LIMIT {
 			return
 		}
 		time.Sleep(waitingTime)
 	}
 }
 
-func (b *Biloba) AllDownloads() []*Download {
+/*
+Downloads represents a slice of *Download
+*/
+type Downloads []*Download
+
+/*
+Find returns the first download that matches DownloadFilter, or nil if none match
+
+Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
+*/
+func (d Downloads) Find(f DownloadFilter) *Download {
+	for _, dl := range d {
+		if f(dl) {
+			return dl
+		}
+	}
+	return nil
+}
+
+/*
+Filter returns a Downloads slice containing all matching *Download objects
+
+Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
+*/
+func (d Downloads) Filter(f DownloadFilter) Downloads {
+	out := Downloads{}
+	for _, dl := range d {
+		if f(dl) {
+			out = append(out, dl)
+		}
+	}
+	return out
+}
+
+/*
+AllDownloads() returns all downloads associated with this tab
+
+Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
+*/
+func (b *Biloba) AllDownloads() Downloads {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	out := []*Download{}
+	out := Downloads{}
 	for _, dl := range b.downloads {
 		out = append(out, dl)
 	}
 	return out
 }
 
-func (b *Biloba) AllCompleteDownloads() []*Download {
+/*
+AllCompleteDownloads() returns all downloads associated with this tab that are complete
+
+Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
+*/
+func (b *Biloba) AllCompleteDownloads() Downloads {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	out := []*Download{}
+	out := Downloads{}
 	for _, dl := range b.downloads {
 		if dl.IsComplete() {
 			out = append(out, dl)
@@ -137,14 +206,7 @@ func (b *Biloba) hasActiveDownloads() bool {
 }
 
 func (b *Biloba) activeDownloadsShouldBlockTabFromClosing(closingTab *Biloba) bool {
-	closingTabBrowserId := closingTab.browserContextID
-	for _, tab := range b.AllTabs() {
-		if tab == closingTab {
-			continue
-		}
-		if tab.browserContextID != closingTabBrowserId {
-			continue
-		}
+	for _, tab := range b.AllTabs().Filter(b.isSiblingTab) {
 		if tab.hasActiveDownloads() {
 			return true
 		}
@@ -152,22 +214,30 @@ func (b *Biloba) activeDownloadsShouldBlockTabFromClosing(closingTab *Biloba) bo
 	return false
 }
 
-func (b *Biloba) HaveCompleteDownload(f func(*Download) bool) types.GomegaMatcher {
+/*
+DownloadFilter is used to filter downloads
+
+Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
+*/
+type DownloadFilter func(*Download) bool
+
+/*
+HaveCompleteDownload() is a matcher that passes if this tab has a complete download that satisfies the passed in DownloadFilter
+
+Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
+*/
+func (b *Biloba) HaveCompleteDownload(f DownloadFilter) types.GomegaMatcher {
 	return gcustom.MakeMatcher(func(_ *Biloba) (bool, error) {
-		return b.FindCompleteDownload(f) != nil, nil
+		return b.AllCompleteDownloads().Find(f) != nil, nil
 	}).WithTemplate("Did not find download satisfying requirements.")
 }
 
-func (b *Biloba) FindCompleteDownload(f func(*Download) bool) *Download {
-	for _, dl := range b.AllCompleteDownloads() {
-		if f(dl) {
-			return dl
-		}
-	}
-	return nil
-}
+/*
+DownloadWithURL() returns a filter that selects Downloads with a matching url.  url may be a string (exact match) or Gomega matcher
 
-func (b *Biloba) DownloadWithURL(url any) func(*Download) bool {
+Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
+*/
+func (b *Biloba) DownloadWithURL(url any) DownloadFilter {
 	m := matcherOrEqual(url)
 	return func(dl *Download) bool {
 		match, _ := m.Match(dl.URL)
@@ -175,7 +245,12 @@ func (b *Biloba) DownloadWithURL(url any) func(*Download) bool {
 	}
 }
 
-func (b *Biloba) DownloadWithFilename(filename any) func(*Download) bool {
+/*
+DownloadWithFilename() returns a filter that selects Downloads with a matching filename - this is the filename suggested to the browser when the download commences.  filename may be a string (exact match) or Gomega matcher
+
+Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
+*/
+func (b *Biloba) DownloadWithFilename(filename any) DownloadFilter {
 	m := matcherOrEqual(filename)
 	return func(dl *Download) bool {
 		match, _ := m.Match(dl.Filename)
@@ -183,7 +258,12 @@ func (b *Biloba) DownloadWithFilename(filename any) func(*Download) bool {
 	}
 }
 
-func (b *Biloba) DownloadWithContent(content any) func(*Download) bool {
+/*
+DownloadWithContent() returns a filter that selects Downloads with matching content (a []byte slice).  content may be a []byte slice (exact match) or Gomega matcher
+
+Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
+*/
+func (b *Biloba) DownloadWithContent(content any) DownloadFilter {
 	m := matcherOrEqual(content)
 	return func(dl *Download) bool {
 		match, _ := m.Match(dl.Content())
@@ -212,7 +292,7 @@ func (b *Biloba) handleEventDownloadProgress(ev *browser.EventDownloadProgress) 
 	switch ev.State {
 	case browser.DownloadProgressStateCanceled:
 		dl.lock.Lock()
-		dl.canceled = true
+		dl.cancelled = true
 		dl.lock.Unlock()
 		b.downloadHistory[ev.GUID] = time.Now()
 	case browser.DownloadProgressStateCompleted:
