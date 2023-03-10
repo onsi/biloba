@@ -1033,6 +1033,15 @@ In general, most input types take and return strings (e.g. `text`, `numeric`, `c
 
 But `checkboxes`, `radio` buttons, and `<select multiple>` elements all behavior differently.  Biloba rationalizes all these differences for you through `GetValue`/`SetValue`/`HaveValue`
 
+When Biloba sets a value it does the following:
+- focus the element
+- update its value (either by setting `el.value` or `el.checked` or `el.selected` etc.)
+- blur the element
+- dispatch an `input` event
+- dispatch a `change` event
+
+That should get _most_ web applications to realize that a form input has been set.  Some applications, though, may be wired up to keyboard events.  Unfortunately it is not possible to simulate these atomically in JavaScript (for security reasons, the browser does not allow synthetic key events to actually type in the application); for these cases you'll need to use `chromedp`s [SendKeys](https://pkg.go.dev/github.com/chromedp/chromedp#SendKeys).
+
 #### Working with Checkboxes
 
 When `selector` refers to a checkbox:
@@ -1042,6 +1051,7 @@ When `selector` refers to a checkbox:
 - `b.HaveValue()` will receive a boolean.  So you can use `b.HaveValue(true)` or `b.HaveValue(BeTrue())` to assert the box is checked (and `false`/`BeFalse()` to assert it is not checked).
 
 If you want to set/get the Checkboxes' `intermediate` property - or if you prefer to work with the `checked` property directly, use `b.GetProperty/b.SetProperty/b.HaveProperty`.
+
 
 ### Working with Radio buttons
 

@@ -92,6 +92,9 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...chromedp.ExecAllocatorOpt
 		chromedp.UserDataDir(tmp),
 	)
 	opts = append(opts, options...)
+	if os.Getenv("BILOBA_INTERACTIVE") != "" {
+		opts = append(opts, chromedp.Flag("headless", false))
+	}
 
 	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
 	ginkgoT.DeferCleanup(cancel)
@@ -334,6 +337,14 @@ func (b *Biloba) Prepare() {
 	}
 	if !b.disableProgressReportScreenshots {
 		b.gt.DeferCleanup(b.gt.AttachProgressReporter(b.progressReporter))
+	}
+	if os.Getenv("BILOBA_INTERACTIVE") != "" {
+		b.gt.DeferCleanup(func(ctx context.Context) {
+			if b.gt.Failed() {
+				fmt.Println(b.gt.F("{{red}}{{bold}}This spec failed and you are running in interactive mode.  Biloba will sleep so you can interact with the browser.  Hit ^C when you're done to shut down the suite{{/}}"))
+				<-ctx.Done()
+			}
+		})
 	}
 
 	b.Navigate("about:blank")

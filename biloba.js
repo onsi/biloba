@@ -76,15 +76,19 @@ if (!window["_biloba"]) {
             return rErr(`Select input does not have option with value "${v}"`)
         } else if (n.type == "checkbox") {
             if (typeof v != "boolean") return rErr("Checkboxes only accept boolean values")
+            n.focus()
             n.checked = v
+            n.blur()
         } else if (n.type == "radio") {
             if (typeof v != "string") return rErr("Radio inputs only accept string values")
             let o = document.querySelector(`input[type="radio"][name="${n.name}"][value="${v}"]`)
             if (!o) return rErr(`Radio input does not have option with value "${v}"`)
             if (!b.isVisible(o).success) return rErr(`The "${v}" option is not visible`)
             if (!b.isEnabled(o).success) return rErr(`The "${v}" option is not enabled`)
+            o.focus()
             o.checked = true
-            return r(dispatchInputChange(o))
+            o.blur()
+            n = o
         } else if (n.type == "select-multiple") {
             if (!Array.isArray(v)) return rErr("Multi-select inputs only accept []string values")
             let options = [...n.options]
@@ -98,9 +102,13 @@ if (!window["_biloba"]) {
             options.forEach(o => o.selected = false)
             optionsToSelect.forEach(o => o.selected = true)
         } else {
+            n.focus()
             n.value = v
+            n.blur()
         }
-        return r(dispatchInputChange(n))
+        n.dispatchEvent(new Event('input', { bubbles: true }))
+        n.dispatchEvent(new Event('change', { bubbles: true }))
+        return r()
     })
     b.hasProperty = one((n, p) => {
         let v = n
