@@ -58,7 +58,7 @@ func TestBrowser(t *testing.T) {
 	RunSpecs(t, "Browser Suite")
 }
 
-var b *Biloba
+var b *biloba.Biloba
 
 var _ = SynchronizedBeforeSuite(func() {
 	biloba.SpinUpChrome(GinkgoT())
@@ -1153,7 +1153,7 @@ unlike `Click`, `ClickEach` does not have a matcher variant.  It simply clicks o
 
 ### Invoking JavaScript on and with selected elements
 
-At the end of the day, Biloba can give you a pile of DOM methods and matchers but you'll still come across a usecase that isn't implemented.  For that, you can head straight to JavaScript and get the job done yourself.  The [Running Arbitrary Javascript](#running-arbitrary-javascript) chapter below discusses how to run JavaScript with Biloba in _general_.  But in this section we focus on how to use Biloba to run JavaScript against selected DOM elements (which - of course, you can do with arbitrary JavaScript, but the API outlined here does the work of slecting elements for you using the same `selector` infrastructure we've discussed throughtout this chapter).
+At the end of the day, Biloba can give you a pile of DOM methods and matchers but you'll still come across a usecase that isn't implemented.  For that, you can head straight to JavaScript and get the job done yourself.  The [Running Arbitrary Javascript](#running-arbitrary-javascript) chapter below discusses how to run JavaScript with Biloba in _general_.  But in this section we focus on how to use Biloba to run JavaScript against selected DOM elements (which - of course, you can do with arbitrary JavaScript, but the API outlined here does the work of selecting elements for you using the same `selector` infrastructure we've discussed throughout this chapter).
 
 You can invoke a method defined on a DOM element (e.g. `focus()` or `scrollIntoView()`) with:
 
@@ -1170,7 +1170,7 @@ b.InvokeOn("input[type='text']", "scrollIntoView") //finds the first matching el
 b.InvokeOn("h1.title", "append", " - Hello") //calls el.append(" - Hello")
 r := b.InvokeOn(".notice", "getAttributeNames") // r has type any but is a slice of strings containing all attribute names
 b.InvokeOn(".notice", "setAttribute", "data-age", "17") // calls el.setAttribute("data-age", "17")
-Expect(b.InvokOn(".notice", "getAttribute", "data-age")).To(Equal("17")) // will now pass
+Expect(b.InvokeOn(".notice", "getAttribute", "data-age")).To(Equal("17")) // will now pass
 ```
 
 Similarly, you can use `InvokeOnEach` to invoke a method and arguments on **all** matching elements.  Nothing happens if no elements match and there is no way, currently, to specify different arguments for different matching elements.
@@ -1538,7 +1538,7 @@ There are a couple of gotchas that exist in Chrome that Biloba tries to paper ov
 
 2. Did you know that Chrome limits downloads to a maximum of 10 downloads per tab within any given second?  This can lead to all sorts of fascinating flaky specs.  All is well - until you add that extra spec that does that extra download and the spec randomization happens to align it with the other 5 specs that do a bunch of downloads and they all run within a second and **bam**: failure.
 
-    Biloba prevents this from happening.  It keeps track of the number of downloads in a sliding time window and rate-limits any actions that might generate more downloads for you.  There are limits to what Biloba can do, though, without cluttering up the API.  If you have a single action (example a button click) that genrates 8 different downloads it may be possible for flaky specs to resurface.
+    Biloba prevents this from happening.  It keeps track of the number of downloads in a sliding time window and rate-limits any actions that might generate more downloads for you.  There are limits to what Biloba can do, though, without cluttering up the API.  If you have a single action (example a button click) that generates 8 different downloads it may be possible for flaky specs to resurface.
 
 	If demand warrants (and someone someday opens a GitHub issue) - we can add a `b.BlockUntilSafeToDownload(8)` method.  Or some such.
 
@@ -1696,7 +1696,7 @@ var _ = Describe("rendering documents", func() {
 
 You said it, not me.
 
-One last thing before we leave the subject of running Javacript.  The Chrome DevTools basically run these JavaScript snippets via `eval`.  There is one small gotcha.  The following:
+One last thing before we leave the subject of running Javascript.  The Chrome DevTools basically run these JavaScript snippets via `eval`.  There is one small gotcha.  The following:
 
 ```go
 var result map[string]int
@@ -1756,13 +1756,13 @@ b.CaptureImgcatScreenshot()
 returns a `string` representation in [iTerm's ImgCat format](https://iterm2.com/documentation-images.html).  If you'd like to have your spec emit additional screenshots at specific points in time the recommended pattern is to use Ginkgo's `AddReportEntry` for example:
 
 ```go
-AddReportEntry("some description", b.CaptureImgCatScreenshot())
+AddReportEntry("some description", b.CaptureImgcatScreenshot())
 ```
 
 You can use the `ReportEntryVisibilityFailureOrVerbose` decorator to only emit the screenshot if the spec fails:
 
 ```go
-AddReportEntry("some description", b.CaptureImgCatScreenshot(), ReportEntryVisibilityFailureOrVerbose)
+AddReportEntry("some description", b.CaptureImgcatScreenshot(), ReportEntryVisibilityFailureOrVerbose)
 ```
 
 ### Configuration
