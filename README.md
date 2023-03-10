@@ -13,7 +13,7 @@ Biloba builds on top of [chromedp](https://github.com/chromedp/chromedp) to brin
   - Stability via pragmatism
   - Conciseness via Ginkgo and Gomega
 
-Take a look at the [documentation](https://onsi.github.io/biloba) to learn more and get started!.
+Take a look at the [documentation](https://onsi.github.io/biloba) to learn more and get started!
 
 Here's a quick taste of what Biloba specs look like:
 
@@ -82,6 +82,8 @@ Describe("a simple chat app", func() {
 ```
 
 Run these in series with `ginkgo`.  And in parallel with `ginkgo -p` for fast, stable, browser tests.
+
+Biloba is quite feature complete and in active development.  However, a 1.0 release milestone has not been reached yet, so the public API contract may shift as the project evolves.
 
 ---
 
