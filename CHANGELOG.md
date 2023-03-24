@@ -1,3 +1,8 @@
+## 0.1.2
+
+### Maintenance
+- bump ginkgo and gomega [37c6e75]
+
 ## 0.1.1
 
 ### Fixes
