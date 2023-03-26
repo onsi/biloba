@@ -85,6 +85,18 @@ Run these in series with `ginkgo`.  And in parallel with `ginkgo -p` for fast, s
 
 Biloba is quite feature complete and in active development.  However, a 1.0 release milestone has not been reached yet, so the public API contract may shift as the project evolves.
 
+## Development
+
+To handle interaction with the page, go:generate is used to compile the js/biloba.ts file, which includes injected JavaScript.
+
+To compile the TypeScript to JavaScript, run the following command:
+
+```bash
+go generate ./...
+```
+
+This will generate the necessary JavaScript files and the interaction with the page.
+
 ---
 
 Ginkgo Tree Graphics Designed By 可行 From <a href="https://lovepik.com/image-401791345/ginkgo-branches-in-autumn.html">LovePik.com</a>

@@ -488,6 +488,7 @@ func (b *Biloba) registerTabFor(c context.Context, cancel context.CancelFunc) *B
 	return newG
 }
 
+//go:generate go run github.com/evanw/esbuild/cmd/esbuild js/biloba.ts --sourcemap=inline --outfile=biloba.js
 //go:embed biloba.js
 var bilobaJS string
 

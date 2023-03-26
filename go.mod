@@ -12,6 +12,7 @@ require (
 
 require (
 	github.com/chromedp/sysutil v1.0.0 // indirect
+	github.com/evanw/esbuild v0.17.13 // indirect
 	github.com/go-logr/logr v1.2.3 // indirect
 	github.com/go-task/slim-sprig v0.0.0-20230315185526-52ccab3ef572 // indirect
 	github.com/gobwas/httphead v0.1.0 // indirect
