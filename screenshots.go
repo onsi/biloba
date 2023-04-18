@@ -49,17 +49,34 @@ type tabScreenshot struct {
 	failure          string
 }
 
-func (b *Biloba) safeAllTabScreenshots() []tabScreenshot {
+func (b *Biloba) safeAllTabScreenshots(width int, height int) []tabScreenshot {
 	out := []tabScreenshot{}
 	for _, tab := range b.AllTabs() {
 		ctx, cancel := context.WithTimeout(tab.Context, time.Second)
 		defer cancel()
+
+		var originalWidth, originalHeight int
+		if width > 0 && height > 0 {
+			originalWidth, originalHeight = b.WindowSize()
+			err := chromedp.Run(ctx, chromedp.EmulateViewport(int64(width), int64(height)))
+			if err != nil {
+				out = append(out, tabScreenshot{failure: fmt.Sprintf("failed to set window size: %s", err.Error())})
+				continue
+			}
+		}
 		var img []byte
 		var title string
 		err := chromedp.Run(ctx,
 			chromedp.Title(&title),
 			chromedp.FullScreenshot(&img, 100),
 		)
+		if width > 0 && height > 0 {
+			err := chromedp.Run(ctx, chromedp.EmulateViewport(int64(originalWidth), int64(originalHeight), chromedp.EmulatePortrait))
+			if err != nil {
+				out = append(out, tabScreenshot{failure: fmt.Sprintf("failed to reset window size: %s", err.Error())})
+				continue
+			}
+		}
 		if ctx.Err() != nil {
 			out = append(out, tabScreenshot{failure: "Timed out attempting to fetch screenshot for tab"})
 			continue

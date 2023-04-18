@@ -1720,7 +1720,6 @@ var result map[string]int
 b.Run("({a:1, b:2})", &result)
 ```
 
-
 ## Window Size, Screenshots, and Configuration
 
 There are a few other odds and ends to cover, let's dive in
@@ -1746,6 +1745,8 @@ b.SetWindowSize(width, height)
 ```
 
 this also accepts any [`chromedp.EmulateViewportOption`](https://pkg.go.dev/github.com/chromedp/chromedp#EmulateViewportOption) after `height`.  `b.SetWindowSize` automatically sets up a Ginkgo `DeferCleanup` to reset the window size when the spec ends.  You can query the window size of a tab at any time using `b.WindowSize()`.
+
+One quick hack to speed up a test suite is to use the _smallest_ viable window size to run the tests.  You can then pass `BilobaConfigFailureScreenshotsSize(width, height)` to `ConnectToChrome(...)` to configure the size of Biloba's automatically generated screenshots.  Biloba will scale the window up on failure, take a screenshot, then scale it back down to proceed with other tests.  As an anecdotal data-point a 30% speed-up was observed for a Biloba test suite against a complex web-app running in parallel when the screen-size was minimized in this way.
 
 ### Capturing Screenshots
 
@@ -1792,7 +1793,11 @@ and sit back and watch those windows appear and disappear as you run your specs.
 - `BilobaConfigEnableDebugLogging()` will send all Chrome DevTools protocol traffic to the `GinkgoWriter`.  This can be useful when debugging specs and/or implementing your own more advanced `chromedp` behavior.  Fair warning, though: these logs are verbose!
 - `BilobaConfigWithChromeConnection(cc ChromeConnection)` allows you to specify your own Chrome connection settings (typically a `WebSocketURL`)
 - `BilobaConfigDisableFailureScreenshots()` disables Biloba's screenshots on failure
+- `BilobaConfigDisableFailureScreenshots()` disables Biloba's screenshots on failure
 - `BilobaConfigDisableProgressReportScreenshots()` disables Biloba's screenshots when progress reports are requested
+- `BilobaConfigFailureScreenshotsSize(width, height)` specifies the window size to use when generating a screenshot on failure
+- `BilobaConfigProgressReportScreenshotSize(width, height)` specifies the window size to use when generating a screenshot when progress reports are requested
+
 
 
 {% endraw  %}

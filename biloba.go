@@ -159,11 +159,31 @@ func BilobaConfigDisableFailureScreenshots() func(*Biloba) {
 }
 
 /*
-Pass BilobaConfigWithChromeConnection to [ConnectToChrome] to disable screenshots when Progress Reports are emitted
+Pass BilobaConfigFailureScreenshotsSize to [ConnectToChrome] to set the size for the screenshots generated on failure
+*/
+func BilobaConfigFailureScreenshotsSize(width, height int) func(*Biloba) {
+	return func(b *Biloba) {
+		b.failureScreenshotWidth = width
+		b.failureScreenshotHeight = height
+	}
+}
+
+/*
+Pass BilobaConfigDisableProgressReportScreenshots to [ConnectToChrome] to disable screenshots when Progress Reports are emitted
 */
 func BilobaConfigDisableProgressReportScreenshots() func(*Biloba) {
 	return func(b *Biloba) {
 		b.disableProgressReportScreenshots = true
+	}
+}
+
+/*
+Pass BilobaConfigProgressReportScreenshotSize to [ConnectToChrome] to set the size for the screenshots generated when a progress report is requested
+*/
+func BilobaConfigProgressReportScreenshotSize(width, height int) func(*Biloba) {
+	return func(b *Biloba) {
+		b.progressReportScreenshotWidth = width
+		b.progressReportScreenshotHeight = height
 	}
 }
 
@@ -268,6 +288,10 @@ type Biloba struct {
 	enableDebugLogging               bool
 	disableFailureScreenshots        bool
 	disableProgressReportScreenshots bool
+	failureScreenshotWidth           int
+	failureScreenshotHeight          int
+	progressReportScreenshotWidth    int
+	progressReportScreenshotHeight   int
 }
 
 func (b *Biloba) GomegaString() string {
@@ -430,7 +454,7 @@ func (b *Biloba) Close() error {
 
 func (b *Biloba) attachScreenshotsIfFailed() {
 	if b.gt.Failed() {
-		for _, screenshot := range b.safeAllTabScreenshots() {
+		for _, screenshot := range b.safeAllTabScreenshots(b.failureScreenshotWidth, b.failureScreenshotHeight) {
 			if screenshot.failure != "" {
 				b.gt.AddReportEntryVisibilityFailureOrVerbose(screenshot.failure)
 			} else {
@@ -442,7 +466,7 @@ func (b *Biloba) attachScreenshotsIfFailed() {
 
 func (b *Biloba) progressReporter() string {
 	out := ""
-	for _, screenshot := range b.safeAllTabScreenshots() {
+	for _, screenshot := range b.safeAllTabScreenshots(b.progressReportScreenshotWidth, b.progressReportScreenshotHeight) {
 		if screenshot.failure != "" {
 			out += b.gt.F("{{red}}" + screenshot.failure + "{{/}}\n")
 		} else {
