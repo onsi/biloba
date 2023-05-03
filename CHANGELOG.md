@@ -1,3 +1,8 @@
+## 0.1.4
+
+### Features
+- emit failure message when running with BILOBA_INTERACTIVE=true [777f184]
+
 ## 0.1.3
 
 ### Features
