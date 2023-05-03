@@ -35,6 +35,7 @@ const BILOBA_VERSION = "0.1.3"
 GinkgoTInterface is the interface by which Biloba receives GinkgoT()
 */
 type GinkgoTInterface interface {
+	Name() string
 	Helper()
 	Fatal(args ...interface{})
 	Fatalf(format string, args ...interface{})
@@ -54,6 +55,7 @@ type GinkgoTInterface interface {
 	ParallelProcess() int
 	ParallelTotal() int
 	AttachProgressReporter(func() string) func()
+	RenderTimeline() string
 }
 
 /*
@@ -107,7 +109,6 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...chromedp.ExecAllocatorOpt
 		ginkgoT.Fatalf("failed to spin up chrome: %w", err)
 		return ChromeConnection{}
 	}
-
 	bs, err := os.ReadFile(filepath.Join(tmp, "DevToolsActivePort"))
 	if err != nil {
 		ginkgoT.Fatalf("failed to spin up chrome: %w", err)
@@ -365,7 +366,11 @@ func (b *Biloba) Prepare() {
 	if os.Getenv("BILOBA_INTERACTIVE") != "" {
 		b.gt.DeferCleanup(func(ctx context.Context) {
 			if b.gt.Failed() {
-				fmt.Println(b.gt.F("{{red}}{{bold}}This spec failed and you are running in interactive mode.  Biloba will sleep so you can interact with the browser.  Hit ^C when you're done to shut down the suite{{/}}"))
+				fmt.Println(b.gt.F("{{red}}{{bold}}This spec failed and you are running in interactive mode.  Here's a timeline of the spec:{{/}}"))
+				fmt.Println(b.gt.Fi(1, b.gt.Name()))
+				fmt.Println(b.gt.Fi(1, b.gt.RenderTimeline()))
+
+				fmt.Println(b.gt.F("{{red}}{{bold}}Biloba will now sleep so you can interact with the browser.  Hit ^C when you're done to shut down the suite{{/}}"))
 				<-ctx.Done()
 			}
 		})

@@ -1720,7 +1720,7 @@ var result map[string]int
 b.Run("({a:1, b:2})", &result)
 ```
 
-## Window Size, Screenshots, and Configuration
+## Window Size, Screenshots, Configuration, and Debugging
 
 There are a few other odds and ends to cover, let's dive in
 
@@ -1798,6 +1798,14 @@ and sit back and watch those windows appear and disappear as you run your specs.
 - `BilobaConfigFailureScreenshotsSize(width, height)` specifies the window size to use when generating a screenshot on failure
 - `BilobaConfigProgressReportScreenshotSize(width, height)` specifies the window size to use when generating a screenshot when progress reports are requested
 
+### Debugging
 
+The configuration outlined above has to be added to your code.  But sometimes you just want to focus a single failing test, run chrome with headless mode turned off, watch as the test fails, and then play with the browser.  You can do this by setting the `BILOBA_INTERACTIVE=true` environment variable:
+
+```bash
+BILOBA_INTERACTIVE=true ginkgo
+```
+
+Biloba will run with `headless` set to `false` and will emit the failure message when a spec fails and then pause until you send a `^C` signal to end the suite.  You should generally do this with a small handful of focused spec and only in serial (running in non-headless mode in parallel is... a lot).
 
 {% endraw  %}

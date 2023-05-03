@@ -76,7 +76,8 @@ func (b *bilobaT) reset() {
 	b.failures = []string{}
 }
 
-func (b *bilobaT) Helper() { types.MarkAsHelper(1) }
+func (b *bilobaT) Name() string { return b.ginkgoT.Name() }
+func (b *bilobaT) Helper()      { types.MarkAsHelper(1) }
 func (b *bilobaT) Logf(format string, args ...interface{}) {
 	fmt.Fprintf(b.buffer, format, args...)
 	GinkgoWriter.Printf(format+"\n", args...)
@@ -122,6 +123,9 @@ func (b *bilobaT) ParallelTotal() int {
 }
 func (b *bilobaT) AttachProgressReporter(f func() string) func() {
 	return b.ginkgoT.AttachProgressReporter(f)
+}
+func (b *bilobaT) RenderTimeline() string {
+	return b.ginkgoT.RenderTimeline()
 }
 
 func matcherOrEqual(expected interface{}) OmegaMatcher {
