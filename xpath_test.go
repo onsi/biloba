@@ -90,7 +90,7 @@ var _ = DescribeTable("Xpath DSL",
 
 	// - parent
 	Entry(nil, b.XPath("li").WithID("critters").Parent(), "all-microbiota"),
-	Entry(nil, b.XPath("li").WithText("English").Parent(), "all-languages"),
+	Entry(nil, b.XPath("li").WithText("Engli\"sh").Parent(), "all-languages"),
 
 	// - ancestor
 	Entry(nil, b.XPath("li").WithID("critters").Ancestor(), "critters"),

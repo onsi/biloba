@@ -999,7 +999,31 @@ var _ = Describe("DOM manipulators and matchers", func() {
 
 		It("errors when the element does not exist", func() {
 			b.Click(b.XPath("button").WithText("nope"))
-			ExpectFailures("Failed to click:\ncould not find DOM element matching selector: //button[text()='nope']")
+			ExpectFailures("Failed to click:\ncould not find DOM element matching selector: //button[text()=\"nope\"]")
+		})
+	})
+
+	Describe("escaping strings correctly", func() {
+		It("honors the user's escaping of strings when using css selectors", func() {
+			Ω(`[data-name="McDonald's"]`).Should(b.HaveInnerText("Big Mac"))
+			Ω(`[data-name='McDonald"s']`).Should(b.HaveInnerText("Bigger Mac"))
+			Ω(`[data-name='Burger King']`).Should(b.HaveInnerText("Filet'o'fish"))
+			Ω(`#weird\:strings\#oh\"oh`).Should(b.Exist())
+			Ω(`.weirder\:strings\#oh\'oh`).Should(b.Exist())
+		})
+		It("correctly escapes weird strings when using XPath", func() {
+			Ω(b.XPath().WithID(`weird:strings#oh"oh`)).Should(b.Exist())
+			Ω(b.XPath().WithClass(`weirder:strings#oh"oh`)).Should(b.Exist())
+			Ω(b.XPath().WithID("weird:strings#oh\"oh")).Should(b.Exist())
+			Ω(b.XPath().WithClass("weirder:strings#oh\"oh")).Should(b.Exist())
+			Ω(b.XPath().WithText("Filet'o'fish")).Should(b.HaveProperty("dataset.name", "Burger King"))
+			Ω(b.XPath().WithText("Filet'o'fish")).Should(b.HaveProperty("dataset.name", "Burger King"))
+			Ω(b.XPath().WithAttr("data-name", "McDonald's")).Should(b.HaveInnerText("Big Mac"))
+			Ω(b.XPath().WithClass("weirder:strings#oh'oh")).Should(b.HaveInnerText("Big Mac"))
+			Ω(b.XPath().WithAttr("data-name", "McDonald\"s")).Should(b.HaveInnerText("Bigger Mac"))
+			Ω(b.XPath().WithText(`"Something magic"al""!!'`)).Should(b.HaveProperty("dataset.name", "White-Castle"))
+			Ω(b.XPath().WithTextContains(`"Something magic"al""!!'`)).Should(b.HaveProperty("dataset.name", "White-Castle"))
+			Ω(b.XPath().WithTextStartsWith(`"Something magic"al""!!'`)).Should(b.HaveProperty("dataset.name", "White-Castle"))
 		})
 	})
 })
