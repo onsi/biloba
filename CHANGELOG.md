@@ -1,3 +1,8 @@
+## 0.1.5
+
+### Fixes
+- Correctly escape quote characters when constructing XPath queries [7ef2785]
+
 ## 0.1.4
 
 ### Features
