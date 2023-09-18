@@ -1,3 +1,11 @@
+## 0.1.6
+
+### Fixes
+- catch edge case where the _biloba object isn't available because the browser is in the middle of a redirect [d9df233]
+
+### Maintenance
+- bump ginkgo [09da081]
+
 ## 0.1.5
 
 ### Fixes
