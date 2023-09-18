@@ -533,6 +533,10 @@ func (b *Biloba) ensureBiloba() {
 	if installed {
 		return
 	}
+	b.reloadBiloba()
+}
+
+func (b *Biloba) reloadBiloba() {
 	b.Run(bilobaJS)
 	b.lock.Lock()
 	b.bilobaIsInstalled = true

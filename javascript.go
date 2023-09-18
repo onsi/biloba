@@ -50,6 +50,10 @@ func (b *Biloba) RunErr(script string, args ...any) (any, error) {
 	}
 	err := chromedp.Run(b.Context, chromedp.EvaluateAsDevTools(script, &encodedResult, withUserGesture))
 	if err != nil {
+		if strings.Contains(err.Error(), "_biloba is not defined") {
+			b.reloadBiloba()
+			return b.RunErr(script, args...)
+		}
 		return nil, err
 	}
 
