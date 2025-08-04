@@ -122,7 +122,10 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...chromedp.ExecAllocatorOpt
 	}
 
 	os.WriteFile(gooseConfigPath(ginkgoT.ParallelProcess()), cc.encode(), 0744)
-	ginkgoT.DeferCleanup(os.Remove, gooseConfigPath(ginkgoT.ParallelProcess()))
+	ginkgoT.DeferCleanup(func() error {
+		chromedp.Cancel(browserCtx)
+		return os.Remove(gooseConfigPath(ginkgoT.ParallelProcess()))
+	})
 
 	return cc
 }
