@@ -74,6 +74,153 @@ var _ = Describe("Screenshots", func() {
 		})
 	})
 
+	Describe("inlineImagesSupported", Label("no-browser"), func() {
+		var origTermProgram, origNoImgcat, origImgcat string
+
+		BeforeEach(func() {
+			origTermProgram = os.Getenv("TERM_PROGRAM")
+			origNoImgcat = os.Getenv("BILOBA_NO_IMGCAT")
+			origImgcat = os.Getenv("BILOBA_IMGCAT")
+		})
+
+		AfterEach(func() {
+			os.Setenv("TERM_PROGRAM", origTermProgram)
+			os.Setenv("BILOBA_NO_IMGCAT", origNoImgcat)
+			os.Setenv("BILOBA_IMGCAT", origImgcat)
+		})
+
+		It("returns true when TERM_PROGRAM=iTerm.app", func() {
+			os.Setenv("TERM_PROGRAM", "iTerm.app")
+			os.Unsetenv("BILOBA_NO_IMGCAT")
+			os.Unsetenv("BILOBA_IMGCAT")
+			Ω(biloba.InlineImagesSupportedForTest()).Should(BeTrue())
+		})
+
+		It("returns false for an unknown TERM_PROGRAM", func() {
+			os.Setenv("TERM_PROGRAM", "xterm")
+			os.Unsetenv("BILOBA_NO_IMGCAT")
+			os.Unsetenv("BILOBA_IMGCAT")
+			Ω(biloba.InlineImagesSupportedForTest()).Should(BeFalse())
+		})
+
+		It("returns false when TERM_PROGRAM is unset", func() {
+			os.Unsetenv("TERM_PROGRAM")
+			os.Unsetenv("BILOBA_NO_IMGCAT")
+			os.Unsetenv("BILOBA_IMGCAT")
+			Ω(biloba.InlineImagesSupportedForTest()).Should(BeFalse())
+		})
+
+		It("returns false when BILOBA_NO_IMGCAT=true regardless of TERM_PROGRAM", func() {
+			os.Setenv("TERM_PROGRAM", "iTerm.app")
+			os.Setenv("BILOBA_NO_IMGCAT", "true")
+			os.Unsetenv("BILOBA_IMGCAT")
+			Ω(biloba.InlineImagesSupportedForTest()).Should(BeFalse())
+		})
+
+		It("returns true when BILOBA_IMGCAT=true regardless of TERM_PROGRAM", func() {
+			os.Unsetenv("TERM_PROGRAM")
+			os.Unsetenv("BILOBA_NO_IMGCAT")
+			os.Setenv("BILOBA_IMGCAT", "true")
+			Ω(biloba.InlineImagesSupportedForTest()).Should(BeTrue())
+		})
+
+		It("BILOBA_NO_IMGCAT=true wins over BILOBA_IMGCAT=true", func() {
+			os.Setenv("BILOBA_NO_IMGCAT", "true")
+			os.Setenv("BILOBA_IMGCAT", "true")
+			Ω(biloba.InlineImagesSupportedForTest()).Should(BeFalse())
+		})
+	})
+
+	Describe("BilobaConfigDisableInlineScreenshots", Label("no-browser"), func() {
+		var origTermProgram, origNoImgcat, origImgcat string
+
+		BeforeEach(func() {
+			origTermProgram = os.Getenv("TERM_PROGRAM")
+			origNoImgcat = os.Getenv("BILOBA_NO_IMGCAT")
+			origImgcat = os.Getenv("BILOBA_IMGCAT")
+		})
+
+		AfterEach(func() {
+			os.Setenv("TERM_PROGRAM", origTermProgram)
+			os.Setenv("BILOBA_NO_IMGCAT", origNoImgcat)
+			os.Setenv("BILOBA_IMGCAT", origImgcat)
+		})
+
+		It("disables inline screenshots even when iTerm2 is detected", func() {
+			os.Setenv("TERM_PROGRAM", "iTerm.app")
+			os.Unsetenv("BILOBA_NO_IMGCAT")
+			os.Unsetenv("BILOBA_IMGCAT")
+			bDisabled := biloba.ConnectToChrome(gt, biloba.BilobaConfigDisableInlineScreenshots())
+			Ω(bDisabled.InlineScreenshotsEnabledForTest()).Should(BeFalse())
+		})
+
+		It("still uses inline screenshots when not configured and iTerm2 is detected", func() {
+			os.Setenv("TERM_PROGRAM", "iTerm.app")
+			os.Unsetenv("BILOBA_NO_IMGCAT")
+			os.Unsetenv("BILOBA_IMGCAT")
+			bEnabled := biloba.ConnectToChrome(gt)
+			Ω(bEnabled.InlineScreenshotsEnabledForTest()).Should(BeTrue())
+		})
+	})
+
+	Describe("imgcat suppression in safeAllTabScreenshots", func() {
+		BeforeEach(func() {
+			b.Navigate(fixtureServer + "/screenshots.html")
+			Eventually(`body`).Should(b.Exist())
+		})
+
+		Context("when BILOBA_NO_IMGCAT=true", func() {
+			var origNoImgcat, origImgcat, origTermProgram string
+
+			BeforeEach(func() {
+				origTermProgram = os.Getenv("TERM_PROGRAM")
+				origNoImgcat = os.Getenv("BILOBA_NO_IMGCAT")
+				origImgcat = os.Getenv("BILOBA_IMGCAT")
+				os.Setenv("BILOBA_NO_IMGCAT", "true")
+				os.Unsetenv("BILOBA_IMGCAT")
+				os.Unsetenv("TERM_PROGRAM")
+			})
+
+			AfterEach(func() {
+				os.Setenv("TERM_PROGRAM", origTermProgram)
+				os.Setenv("BILOBA_NO_IMGCAT", origNoImgcat)
+				os.Setenv("BILOBA_IMGCAT", origImgcat)
+			})
+
+			It("does not include an imgcat blob in the screenshot", func() {
+				shots := b.SafeAllTabScreenshotsForTest(0, 0)
+				Ω(shots).ShouldNot(BeEmpty())
+				Ω(shots[0].ImgcatScreenshot).Should(BeEmpty())
+			})
+		})
+
+		Context("when BILOBA_IMGCAT=true", func() {
+			var origNoImgcat, origImgcat, origTermProgram string
+
+			BeforeEach(func() {
+				origTermProgram = os.Getenv("TERM_PROGRAM")
+				origNoImgcat = os.Getenv("BILOBA_NO_IMGCAT")
+				origImgcat = os.Getenv("BILOBA_IMGCAT")
+				os.Setenv("BILOBA_IMGCAT", "true")
+				os.Unsetenv("BILOBA_NO_IMGCAT")
+				os.Unsetenv("TERM_PROGRAM")
+			})
+
+			AfterEach(func() {
+				os.Setenv("TERM_PROGRAM", origTermProgram)
+				os.Setenv("BILOBA_NO_IMGCAT", origNoImgcat)
+				os.Setenv("BILOBA_IMGCAT", origImgcat)
+			})
+
+			It("includes an imgcat blob in the screenshot", func() {
+				shots := b.SafeAllTabScreenshotsForTest(0, 0)
+				Ω(shots).ShouldNot(BeEmpty())
+				Ω(shots[0].ImgcatScreenshot).ShouldNot(BeEmpty())
+				Ω(shots[0].ImgcatScreenshot).Should(HavePrefix("\033]1337"))
+			})
+		})
+	})
+
 	Describe("sanitizeForFilename", Label("no-browser"), func() {
 		It("replaces non-filename characters with underscores and collapses them", func() {
 			Ω(biloba.SanitizeForFilenameForTest("My Suite/some spec")).Should(Equal("My_Suite_some_spec"))

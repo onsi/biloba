@@ -14,6 +14,23 @@ import (
 	"golang.org/x/net/context"
 )
 
+// inlineImagesSupported reports whether the current terminal can render iTerm2
+// inline image sequences.  The decision order is:
+//
+//  1. BILOBA_NO_IMGCAT=true → force off (returns false).
+//  2. BILOBA_IMGCAT=true    → force on  (returns true).
+//  3. TERM_PROGRAM=iTerm.app → on (iTerm2 detected).
+//  4. Otherwise             → off.
+func inlineImagesSupported() bool {
+	if os.Getenv("BILOBA_NO_IMGCAT") == "true" {
+		return false
+	}
+	if os.Getenv("BILOBA_IMGCAT") == "true" {
+		return true
+	}
+	return os.Getenv("TERM_PROGRAM") == "iTerm.app"
+}
+
 /*
 CaptureScreenshot() returns a full screenshot of the current tab as a []byte array (you can decode it with the image package)
 */
@@ -132,8 +149,10 @@ func (b *Biloba) safeAllTabScreenshots(width int, height int) []tabScreenshot {
 			continue
 		}
 		ts := tabScreenshot{
-			title:            title,
-			imgcatScreenshot: b.asImgCat(img),
+			title: title,
+		}
+		if b.root.inlineScreenshotsEnabled() {
+			ts.imgcatScreenshot = b.asImgCat(img)
 		}
 		if b.root.screenshotsDir != "" {
 			specName := sanitizeForFilename(b.gt.Name())

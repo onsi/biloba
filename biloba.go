@@ -204,6 +204,19 @@ func BilobaConfigProgressReportScreenshotSize(width, height int) func(*Biloba) {
 }
 
 /*
+Pass BilobaConfigDisableInlineScreenshots to [ConnectToChrome] to suppress the iTerm2 imgcat inline-image escape sequences from failure and progress-report output.  When inline images are disabled, Biloba still captures screenshots and writes them to the configured directory (if any); the file path is printed to test output.
+
+This is equivalent to setting the BILOBA_NO_IMGCAT=true environment variable and is useful when running in terminals that do not support the iTerm2 image protocol, where the base64 blob would otherwise pollute the output stream.
+
+Read https://onsi.github.io/biloba/#capturing-screenshots for details.
+*/
+func BilobaConfigDisableInlineScreenshots() func(*Biloba) {
+	return func(b *Biloba) {
+		b.disableInlineScreenshots = true
+	}
+}
+
+/*
 Pass BilobaConfigScreenshotsToDir to [ConnectToChrome] to write failure screenshots to PNG files in the specified directory.
 When set, each tab's screenshot is written to <dir>/screenshot-<spec>-<tab>.png on failure, and the absolute path is printed to the test output.
 This is complementary to the inline imgcat path: both run when a dir is configured.
@@ -350,11 +363,23 @@ type Biloba struct {
 	enableDebugLogging               bool
 	disableFailureScreenshots        bool
 	disableProgressReportScreenshots bool
+	disableInlineScreenshots         bool
 	failureScreenshotWidth           int
 	failureScreenshotHeight          int
 	progressReportScreenshotWidth    int
 	progressReportScreenshotHeight   int
 	screenshotsDir                   string
+}
+
+// inlineScreenshotsEnabled returns true when iTerm2 imgcat output should be
+// emitted.  It respects the per-instance disableInlineScreenshots flag (set by
+// BilobaConfigDisableInlineScreenshots) and the package-level inlineImagesSupported
+// helper (which checks BILOBA_NO_IMGCAT / BILOBA_IMGCAT / TERM_PROGRAM).
+func (b *Biloba) inlineScreenshotsEnabled() bool {
+	if b.root.disableInlineScreenshots {
+		return false
+	}
+	return inlineImagesSupported()
 }
 
 func (b *Biloba) GomegaString() string {
@@ -541,11 +566,18 @@ func (b *Biloba) attachScreenshotsIfFailed() {
 			if screenshot.failure != "" {
 				b.gt.AddReportEntryVisibilityFailureOrVerbose(screenshot.failure)
 			} else {
+				inlineEnabled := b.inlineScreenshotsEnabled()
 				if screenshot.filePath != "" {
 					b.gt.Printf("Screenshot for '%s' written to: %s\n", screenshot.title, screenshot.filePath)
-					b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("Screenshot for: '%s'", screenshot.title), fmt.Sprintf("File: %s\n\n%s", screenshot.filePath, screenshot.imgcatScreenshot))
-				} else {
+					if inlineEnabled {
+						b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("Screenshot for: '%s'", screenshot.title), fmt.Sprintf("File: %s\n\n%s", screenshot.filePath, screenshot.imgcatScreenshot))
+					} else {
+						b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("Screenshot for: '%s'", screenshot.title), fmt.Sprintf("File: %s", screenshot.filePath))
+					}
+				} else if inlineEnabled {
 					b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("Screenshot for: '%s'", screenshot.title), screenshot.imgcatScreenshot)
+				} else {
+					b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("Screenshot for: '%s'", screenshot.title), "(inline screenshots disabled; configure BilobaConfigScreenshotsToDir to save screenshot files)")
 				}
 			}
 		}
@@ -554,12 +586,19 @@ func (b *Biloba) attachScreenshotsIfFailed() {
 
 func (b *Biloba) progressReporter() string {
 	out := ""
+	inlineEnabled := b.inlineScreenshotsEnabled()
 	for _, screenshot := range b.safeAllTabScreenshots(b.progressReportScreenshotWidth, b.progressReportScreenshotHeight) {
 		if screenshot.failure != "" {
 			out += b.gt.F("{{red}}" + screenshot.failure + "{{/}}\n")
 		} else {
 			out += b.gt.F("{{bold}}Screenshot for: '%s'{{/}}\n", screenshot.title)
-			out += screenshot.imgcatScreenshot + "\n"
+			if inlineEnabled {
+				out += screenshot.imgcatScreenshot + "\n"
+			} else if screenshot.filePath != "" {
+				out += screenshot.filePath + "\n"
+			} else {
+				out += "(inline screenshots disabled; configure BilobaConfigScreenshotsToDir to save screenshot files)\n"
+			}
 		}
 	}
 	return out

@@ -170,7 +170,7 @@ Here's a partial list:
 - Fill out forms
 - Handle downloads and dialog boxes
 - Forward all `console.log`s to the `GinkgoWriter`
-- Automatically emit [ImgCat screenshots to supported terminals](https://iterm2.com/documentation-images.html) when a test fails...
+- Automatically emit [ImgCat screenshots to supported terminals](https://iterm2.com/documentation-images.html) when a test fails (gated to iTerm2-capable terminals; see [Inline image gating](#inline-image-gating))...
 - ...or whenever a [Ginkgo Progress Report](https://onsi.github.io/ginkgo/#getting-visibility-into-long-running-specs) is generated
 - Run your specs in parallel with `ginkgo -p`
 
@@ -364,7 +364,7 @@ Here are some of the ways Biloba integrates with Ginkgo and Gomega so you can fo
 
 	This happens in `b.Prepare()`.
 	
-	Biloba registers a Ginkgo hook that runs after each spec.  If the spec has failed a screenshot of every tab associated with that spec is taken and is emitted to the terminal via iTerm2's [image protocol](https://iterm2.com/documentation-images.html) (have a different terminal image protocol?  Open an [issue](https://github.com/onsi/biloba/issues/new)!)
+	Biloba registers a Ginkgo hook that runs after each spec.  If the spec has failed, a DOM text outline and a screenshot of every tab associated with that spec are captured.  Screenshots are emitted to the terminal via iTerm2's [image protocol](https://iterm2.com/documentation-images.html) **only when the terminal supports it** (see [Inline image gating](#inline-image-gating) below).
 
 	In addition, Biloba registers a Ginkgo ProgressReporter that will emit screenshots whenever a [progress report](https://onsi.github.io/ginkgo/#getting-visibility-into-long-running-specs) is requested.  This can happen when a spec times out, or when a spec decorated with `PollProgressAfter(X duration)` has taken longer than `X` to complete.  On MacOS you can get a progress report instantly by sending a `SIGINFO` signal with `^T`.  On Linux you can send a `SIGUSR2` signal.
 
@@ -1794,7 +1794,26 @@ Pass `BilobaConfigScreenshotsToDir(dir)` to `ConnectToChrome` to have Biloba aut
 b = biloba.ConnectToChrome(GinkgoT(), biloba.BilobaConfigScreenshotsToDir("/tmp/screenshots"))
 ```
 
-When a spec fails, Biloba writes `screenshot-<spec>-<tab>.png` to the configured directory and prints the absolute path alongside the usual inline imgcat output.  The directory is created if it does not already exist, and the files survive the spec (unlike Ginkgo's `TempDir()`) so they can be opened after the run.
+When a spec fails, Biloba writes `screenshot-<spec>-<tab>.png` to the configured directory and prints the absolute path alongside any inline imgcat output.  The directory is created if it does not already exist, and the files survive the spec (unlike Ginkgo's `TempDir()`) so they can be opened after the run.
+
+#### Inline image gating {#inline-image-gating}
+
+Biloba emits iTerm2 inline image escape sequences (`\033]1337;File=...`) **only when the terminal supports them**.  Inline images are enabled when:
+
+- `TERM_PROGRAM=iTerm.app` is set in the environment (the default iTerm2 value), **and**
+- `BILOBA_NO_IMGCAT=true` is **not** set.
+
+You can also force the behavior explicitly:
+
+- `BILOBA_NO_IMGCAT=true` — disable inline images regardless of terminal (useful in CI or non-iTerm terminals such as Claude Code where the base64 blob is pure noise).
+- `BILOBA_IMGCAT=true` — force-enable inline images regardless of `TERM_PROGRAM` (takes lower precedence than `BILOBA_NO_IMGCAT`).
+- Pass `BilobaConfigDisableInlineScreenshots()` to `ConnectToChrome` to disable inline images programmatically for a specific connection.
+
+When inline images are disabled:
+
+- The iTerm2 base64 blob is **never emitted**, eliminating ~70 KB of unreadable output per tab per failure.
+- If `BilobaConfigScreenshotsToDir` is configured, the file path is still printed and included in the failure report so that tools that can render PNG files (e.g. Claude Code's `Read` tool) can show the screenshot.
+- The DOM text outline (see [Outline](#outline)) is always attached on failure regardless of this setting.
 
 ### Outline {#outline}
 
@@ -1850,6 +1869,7 @@ and sit back and watch those windows appear and disappear as you run your specs.
 - `BilobaConfigFailureScreenshotsSize(width, height)` specifies the window size to use when generating a screenshot on failure
 - `BilobaConfigProgressReportScreenshotSize(width, height)` specifies the window size to use when generating a screenshot when progress reports are requested
 - `BilobaConfigScreenshotsToDir(dir)` writes each tab's failure screenshot to a PNG file in the given directory and prints the absolute path to test output (see [Saving screenshots to files](#capturing-screenshots))
+- `BilobaConfigDisableInlineScreenshots()` suppresses the iTerm2 imgcat inline-image blob from failure and progress-report output (see [Inline image gating](#inline-image-gating))
 
 ### Debugging
 
