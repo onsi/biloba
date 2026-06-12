@@ -111,6 +111,10 @@ if (!window["_biloba"]) {
         n.dispatchEvent(new Event('change', { bubbles: true }))
         return r()
     })
+    b.getAttribute = one((n, a) => rRes(n.getAttribute(a)))
+    b.hasAttribute = one((n, a) => r(n.hasAttribute(a)))
+    b.isFocused = one(n => r(n === document.activeElement, "DOM element is not focused"))
+    b.getComputedStyle = one((n, p) => rRes(window.getComputedStyle(n)[p]))
     b.hasProperty = one((n, p) => {
         let v = n
         for (const subP of p.split(".")) {

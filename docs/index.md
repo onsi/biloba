@@ -440,6 +440,15 @@ this test will:
 - keep trying until it successfully clicks on an element that has text that begins with "Introduction"
 - assert that the tab eventually ends up on a page whose title ends with "Introduction"
 
+In addition to polling the `b.Location`/`b.Title` functions directly, you can apply the `HaveURL()` and `HaveTitle()` matchers to the tab itself.  This reads more naturally and parallels the [tab matchers](#finding-and-managing-spawned-tabs):
+
+```go
+Eventually(b).Should(b.HaveURL("http://example.com/table-of-contents"))
+Eventually(b).Should(b.HaveTitle(HaveSuffix("Introduction")))
+```
+
+Both accept either a string (for an exact match) or a Gomega matcher.
+
 ## Cookies and Storage {#cookies-and-storage}
 
 A huge fraction of browser suites need to seed some browser state before exercising the app - most commonly an authentication cookie or a `localStorage` entry - so they can skip the login flow and get straight to the behavior under test.  Biloba provides first-class helpers for cookies, `localStorage`, and `sessionStorage`.
@@ -809,6 +818,16 @@ Eventually(selector).Should(b.HaveInnerText(HavePrefix("Expected")))
 
 Both `HaveInnerText` and `InnerText` always operate on the **first** element matching `selector.
 
+`HaveInnerText` requires an _exact_ match (modulo any Gomega matcher you provide).  This can be annoying when templating introduces incidental whitespace - leading/trailing spaces, newlines, or runs of spaces that you don't care about.  For those cases reach for `HaveText()`, which trims and collapses all internal whitespace runs down to single spaces _before_ matching:
+
+```go
+//if the element's innerText is "\n  Hello   there\n\n  Biloba!\n"
+Eventually(selector).Should(b.HaveText("Hello there Biloba!")) //passes
+Eventually(selector).Should(b.HaveText(ContainSubstring("there Biloba"))) //passes
+```
+
+Like `HaveInnerText`, `HaveText` accepts either a string (for an exact, post-normalization match) or a Gomega matcher, and operates on the **first** element matching `selector`.
+
 You can fetch the content for a bunch of elements simultaneously with `InnerTextForEach()/EachHaveInnerText()`:
 
 ```go
@@ -853,6 +872,39 @@ Eventually(selector).Should(b.HaveClass(ContainElement("published")))
 ```
 
 i.e. the class list should include `published`.  `HaveClass` always operates on the **first** element found by `selector`.
+
+---
+
+A handful of additional matchers cover common assertions on the **first** element matching `selector`:
+
+`HaveAttribute()` asserts on an element's HTML _attribute_ (via `getAttribute`).  This is distinct from `HaveProperty` (below), which asserts on a javascript _property_ - the two frequently diverge (e.g. the `href` attribute is the raw `"/about"` whereas the `href` property is the resolved absolute URL).  Pass just a name to assert the attribute exists, or a name and an expected value (string or Gomega matcher):
+
+```go
+Eventually(selector).Should(b.HaveAttribute("href")) //the attribute is present
+Eventually(selector).Should(b.HaveAttribute("href", "/about")) //exact value
+Eventually(selector).Should(b.HaveAttribute("href", HaveSuffix("about"))) //matcher
+```
+
+`BeChecked()` asserts that a checkbox or radio button is checked (it's sugar for `b.HaveProperty("checked", true)`):
+
+```go
+Eventually("input[type='checkbox']").Should(b.BeChecked())
+Eventually("input[type='radio']").ShouldNot(b.BeChecked())
+```
+
+`BeFocused()` asserts that the element is the document's `activeElement`:
+
+```go
+Eventually(selector).Should(b.BeFocused())
+```
+
+`HaveComputedStyle(property, expected)` asserts on the element's computed CSS style (via `getComputedStyle`).  Biloba's notion of visibility is deliberately pragmatic (non-zero `offsetWidth`/`offsetHeight`) - when you need to assert on an explicit style use `HaveComputedStyle`.  `expected` can be a string or a Gomega matcher:
+
+```go
+Eventually(selector).Should(b.HaveComputedStyle("display", "none"))
+Eventually(selector).Should(b.HaveComputedStyle("color", "rgb(255, 0, 0)"))
+Eventually(selector).Should(b.HaveComputedStyle("color", ContainSubstring("255")))
+```
 
 ### Properties
 

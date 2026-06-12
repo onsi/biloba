@@ -48,6 +48,30 @@ var _ = Describe("Navigation", func() {
 		})
 	})
 
+	Describe("HaveURL", func() {
+		It("matches against the tab's location", func() {
+			b.Navigate(fixtureServer + "/nav-a.html")
+			Eventually(b).Should(b.HaveURL(fixtureServer + "/nav-a.html"))
+			Eventually(b).Should(b.HaveURL(HaveSuffix("nav-a.html")))
+			Ω(b).ShouldNot(b.HaveURL(HaveSuffix("nav-b.html")))
+		})
+
+		It("can be used to poll for navigation", func() {
+			b.Navigate(fixtureServer + "/nav-a.html")
+			Eventually("#to-b").Should(b.Click())
+			Eventually(b).Should(b.HaveURL(fixtureServer + "/nav-b.html"))
+		})
+	})
+
+	Describe("HaveTitle", func() {
+		It("matches against the tab's title", func() {
+			b.Navigate(fixtureServer + "/nav-a.html")
+			Eventually(b).Should(b.HaveTitle("Nav-A Testpage"))
+			Eventually(b).Should(b.HaveTitle(HavePrefix("Nav-A")))
+			Ω(b).ShouldNot(b.HaveTitle("Nav-B Testpage"))
+		})
+	})
+
 	Describe("navigation flow", func() {
 		It("allows the user to navigate across urls", func() {
 			b.Navigate(fixtureServer + "/nav-a.html")

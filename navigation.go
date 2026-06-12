@@ -7,6 +7,8 @@ import (
 
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
+	"github.com/onsi/gomega/gcustom"
+	"github.com/onsi/gomega/types"
 )
 
 /*
@@ -76,6 +78,24 @@ func (b *Biloba) Location() string {
 }
 
 /*
+HaveURL(expected) is a Gomega matcher that matches against the current tab's [Biloba.Location].  Apply it to the tab itself so you can poll for navigation:
+
+	Eventually(b).Should(b.HaveURL("https://onsi.github.io/biloba/"))
+	Eventually(b).Should(b.HaveURL(HaveSuffix("biloba/")))
+
+expected can be a string (exact match) or a Gomega matcher.
+*/
+func (b *Biloba) HaveURL(expected any) types.GomegaMatcher {
+	var data = map[string]any{}
+	var matcher = matcherOrEqual(expected)
+	data["Matcher"] = matcher
+	return gcustom.MakeMatcher(func(_ *Biloba) (bool, error) {
+		data["Result"] = b.Location()
+		return matcher.Match(data["Result"])
+	}).WithTemplate("HaveURL:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+}
+
+/*
 Title() returns the window title of the current tab.
 */
 func (b *Biloba) Title() string {
@@ -86,4 +106,22 @@ func (b *Biloba) Title() string {
 		return ""
 	}
 	return title
+}
+
+/*
+HaveTitle(expected) is a Gomega matcher that matches against the current tab's [Biloba.Title].  Apply it to the tab itself so you can poll for the title to change:
+
+	Eventually(b).Should(b.HaveTitle("Introduction"))
+	Eventually(b).Should(b.HaveTitle(HaveSuffix("Introduction")))
+
+expected can be a string (exact match) or a Gomega matcher.
+*/
+func (b *Biloba) HaveTitle(expected any) types.GomegaMatcher {
+	var data = map[string]any{}
+	var matcher = matcherOrEqual(expected)
+	data["Matcher"] = matcher
+	return gcustom.MakeMatcher(func(_ *Biloba) (bool, error) {
+		data["Result"] = b.Title()
+		return matcher.Match(data["Result"])
+	}).WithTemplate("HaveTitle:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
 }

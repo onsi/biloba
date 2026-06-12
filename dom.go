@@ -531,6 +531,131 @@ func (b *Biloba) HaveClass(expected string) types.GomegaMatcher {
 }
 
 /*
+HaveText(expected) is a Gomega matcher that passes if the first element returned by selector has innerText matching expected, after whitespace normalization.
+
+Unlike [Biloba.HaveInnerText], HaveText trims leading/trailing whitespace and collapses internal runs of whitespace down to a single space before matching.  This prevents spurious failures caused by templating whitespace.  expected can be a string, or a Gomega matcher.
+
+Use it like this:
+
+	Expect("div.comment").To(tab.HaveText("hello world"))
+	Expect("div.comment").To(tab.HaveText(HaveSuffix("world")))
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+*/
+func (b *Biloba) HaveText(expected any) types.GomegaMatcher {
+	var data = map[string]any{}
+	var matcher = matcherOrEqual(expected)
+	data["Matcher"] = matcher
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		r := b.runBilobaHandler("getProperty", selector, "innerText")
+		if r.Error() != nil {
+			return false, r.Error()
+		}
+		data["Result"] = normalizeWhitespace(r.ResultString())
+		return matcher.Match(data["Result"])
+	}).WithTemplate("HaveText for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+}
+
+/*
+HaveAttribute() is a Gomega matcher with two modes of operation that matches against an element's HTML attribute (via getAttribute) - distinct from [Biloba.HaveProperty], which matches against a javascript property.
+
+When invoked with only the attribute name, it passes if the first element matching selector has the requested attribute:
+
+	Eventually("a").Should(tab.HaveAttribute("href"))
+
+When invoked with a name and an expected value, it only passes if the value of the attribute matches expected.  expected can be a string or a Gomega matcher:
+
+	Eventually("a").Should(tab.HaveAttribute("href", "/about"))
+	Eventually("a").Should(tab.HaveAttribute("href", HaveSuffix("about")))
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+*/
+func (b *Biloba) HaveAttribute(name string, expected ...any) types.GomegaMatcher {
+	var data = map[string]any{}
+	data["Name"] = name
+	if len(expected) == 0 {
+		return gcustom.MakeMatcher(func(selector any) (bool, error) {
+			r := b.runBilobaHandler("hasAttribute", selector, name)
+			if r.Error() != nil {
+				return false, r.Error()
+			}
+			return r.Success, nil
+		}).WithTemplate("Expected {{.Actual}} {{.To}} have attribute \"{{.Data.Name}}\"", data)
+	}
+	var matcher = matcherOrEqual(expected[0])
+	data["Matcher"] = matcher
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		r := b.runBilobaHandler("getAttribute", selector, name)
+		if r.Error() != nil {
+			return false, r.Error()
+		}
+		data["Result"] = r.Result
+		return matcher.Match(data["Result"])
+	}).WithTemplate("HaveAttribute \"{{.Data.Name}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+}
+
+/*
+BeChecked() is a Gomega matcher that passes if the first element matching selector (a checkbox or radio button) is checked.  It is sugar for HaveProperty("checked", true).
+
+Use it like this:
+
+	Expect("input[type='checkbox']").To(tab.BeChecked())
+	Eventually("input[type='radio']").Should(tab.BeChecked())
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+*/
+func (b *Biloba) BeChecked() types.GomegaMatcher {
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		r := b.runBilobaHandler("getProperty", selector, "checked")
+		if r.Error() != nil {
+			return false, r.Error()
+		}
+		return r.ResultBool(), nil
+	}).WithMessage("be checked")
+}
+
+/*
+BeFocused() is a Gomega matcher that passes if the first element matching selector is the document's activeElement (i.e. it has focus).
+
+Use it like this:
+
+	Expect("input").To(tab.BeFocused())
+	Eventually("input").Should(tab.BeFocused())
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+*/
+func (b *Biloba) BeFocused() types.GomegaMatcher {
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return b.runBilobaHandler("isFocused", selector).MatcherResult()
+	}).WithMessage("be focused")
+}
+
+/*
+HaveComputedStyle(property, expected) is a Gomega matcher that passes if the computed CSS style (via getComputedStyle) of the named property on the first element matching selector matches expected.  expected can be a string or a Gomega matcher.
+
+Use it like this:
+
+	Expect("div.notice").To(tab.HaveComputedStyle("display", "none"))
+	Eventually("div.notice").Should(tab.HaveComputedStyle("color", "rgb(255, 0, 0)"))
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+*/
+func (b *Biloba) HaveComputedStyle(property string, expected any) types.GomegaMatcher {
+	var data = map[string]any{}
+	data["Property"] = property
+	var matcher = matcherOrEqual(expected)
+	data["Matcher"] = matcher
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		r := b.runBilobaHandler("getComputedStyle", selector, property)
+		if r.Error() != nil {
+			return false, r.Error()
+		}
+		data["Result"] = r.Result
+		return matcher.Match(data["Result"])
+	}).WithTemplate("HaveComputedStyle \"{{.Data.Property}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+}
+
+/*
 Click() has two modes of operation:
 
 When invoked with a selector:
@@ -675,6 +800,10 @@ func (b *Biloba) InvokeWithEach(selector string, callableScript string, args ...
 		return nil
 	}
 	return r.ResultAnySlice()
+}
+
+func normalizeWhitespace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func matcherOrEqual(expected any) types.GomegaMatcher {

@@ -603,6 +603,108 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 	})
 
+	Describe("HaveText", func() {
+		It("matches against the whitespace-normalized innerText", func() {
+			Ω("#hello").Should(b.HaveText("Hello Biloba!"))
+			Ω("#spacey-text").Should(b.HaveText("Hello there Biloba!"))
+			Ω("#spacey-text").ShouldNot(b.HaveText("Hello   there\n\n        Biloba!"))
+		})
+
+		It("supports matchers", func() {
+			Ω("#spacey-text").Should(b.HaveText(ContainSubstring("there Biloba")))
+			Eventually("#spacey-text").Should(b.HaveText(HavePrefix("Hello there")))
+		})
+
+		It("returns an error when the element does not exist", func() {
+			match, err := b.HaveText("foo").Match("#non-existing")
+			Ω(match).Should(BeFalse())
+			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
+		})
+	})
+
+	Describe("HaveAttribute", func() {
+		It("checks attribute existence when given only a name", func() {
+			Ω("#link").Should(b.HaveAttribute("href"))
+			Ω("#link").Should(b.HaveAttribute("data-role"))
+			Ω("#link").ShouldNot(b.HaveAttribute("data-missing"))
+		})
+
+		It("checks the attribute value when given a second argument", func() {
+			Ω("#link").Should(b.HaveAttribute("href", "/about"))
+			Ω("#link").Should(b.HaveAttribute("data-role", "nav"))
+			Ω("#link").Should(b.HaveAttribute("href", HaveSuffix("about")))
+			Ω("#link").ShouldNot(b.HaveAttribute("href", "/contact"))
+		})
+
+		It("is distinct from HaveProperty (attribute vs property)", func() {
+			//the href property is resolved to an absolute URL; the attribute is the raw value
+			Ω("#link").Should(b.HaveAttribute("href", "/about"))
+			Ω("#link").Should(b.HaveProperty("href", HaveSuffix("/about")))
+			Ω("#link").ShouldNot(b.HaveProperty("href", "/about"))
+		})
+
+		It("returns an error when the element does not exist", func() {
+			match, err := b.HaveAttribute("href").Match("#non-existing")
+			Ω(match).Should(BeFalse())
+			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
+
+			match, err = b.HaveAttribute("href", "/about").Match("#non-existing")
+			Ω(match).Should(BeFalse())
+			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
+		})
+	})
+
+	Describe("BeChecked", func() {
+		It("matches checked checkboxes and radio buttons", func() {
+			Ω("#red").Should(b.BeChecked())
+			Ω("#blue").ShouldNot(b.BeChecked())
+			Ω("input[name='appliances'][value='toaster']").Should(b.BeChecked())
+			Ω("input[name='appliances'][value='stove']").ShouldNot(b.BeChecked())
+		})
+
+		It("updates as the checkbox state changes", func() {
+			b.SetValue("#blue", true)
+			Eventually("#blue").Should(b.BeChecked())
+		})
+
+		It("returns an error when the element does not exist", func() {
+			match, err := b.BeChecked().Match("#non-existing")
+			Ω(match).Should(BeFalse())
+			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
+		})
+	})
+
+	Describe("BeFocused", func() {
+		It("matches the document's activeElement", func() {
+			Ω("#focus-input").ShouldNot(b.BeFocused())
+			b.InvokeOn("#focus-input", "focus")
+			Eventually("#focus-input").Should(b.BeFocused())
+			Ω("#hello").ShouldNot(b.BeFocused())
+		})
+
+		It("returns an error when the element does not exist", func() {
+			match, err := b.BeFocused().Match("#non-existing")
+			Ω(match).Should(BeFalse())
+			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
+		})
+	})
+
+	Describe("HaveComputedStyle", func() {
+		It("matches the computed style of the element", func() {
+			Ω("#styled").Should(b.HaveComputedStyle("display", "none"))
+			Ω("#styled").Should(b.HaveComputedStyle("color", "rgb(255, 0, 0)"))
+			Ω("#styled").Should(b.HaveComputedStyle("color", ContainSubstring("255")))
+			Ω("#hello").Should(b.HaveComputedStyle("display", "block"))
+			Ω("#hello").ShouldNot(b.HaveComputedStyle("display", "none"))
+		})
+
+		It("returns an error when the element does not exist", func() {
+			match, err := b.HaveComputedStyle("display", "none").Match("#non-existing")
+			Ω(match).Should(BeFalse())
+			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
+		})
+	})
+
 	Describe("GetProperty", func() {
 		It("returns properties defined on the element", func() {
 			Ω(b.GetProperty(".notice", "count")).Should(Equal(3.0))
