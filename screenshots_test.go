@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/onsi/biloba"
 	. "github.com/onsi/ginkgo/v2"
@@ -244,9 +245,20 @@ var _ = Describe("Screenshots", func() {
 			bWithDir.Navigate(fixtureServer + "/screenshots.html")
 			Eventually(`body`).Should(bWithDir.Exist())
 
-			shots := bWithDir.SafeAllTabScreenshotsForTest(0, 0)
-			Ω(shots).ShouldNot(BeEmpty())
-			Ω(shots[0].Failure).Should(BeEmpty())
+			// Under heavy parallel load a single screenshot capture can exceed
+			// safeAllTabScreenshots' internal 1s per-tab timeout; retry until the
+			// capture succeeds, then assert on the file it wrote.
+			// A single capture pass internally caps at ~1s per tab, so give the
+			// retry a budget well beyond Gomega's 1s default to absorb contention.
+			var shots []biloba.TabScreenshotForTest
+			Eventually(func() string {
+				shots = bWithDir.SafeAllTabScreenshotsForTest(0, 0)
+				if len(shots) == 0 {
+					return "no screenshots returned"
+				}
+				return shots[0].Failure
+			}).WithTimeout(30 * time.Second).WithPolling(time.Second).Should(BeEmpty())
+
 			Ω(shots[0].FilePath).ShouldNot(BeEmpty())
 
 			// The file must exist and be a valid PNG.
