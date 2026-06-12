@@ -146,6 +146,30 @@ var _ = Describe("Cookies", func() {
 		})
 	})
 
+	Describe("searching cookies with Find/Filter", func() {
+		BeforeEach(func() {
+			b.SetCookie(
+				biloba.Cookie{Name: "session", Value: "abc123", Domain: "localhost", Path: "/"},
+				biloba.Cookie{Name: "session", Value: "def456", Domain: "localhost", Path: "/admin"},
+				biloba.Cookie{Name: "theme", Value: "dark", Domain: "localhost", Path: "/"},
+			)
+		})
+
+		It("uses the same query (spelled CookieMatching) as a predicate", func() {
+			cookie, ok := b.GetCookies().Find(b.CookieMatching("session").WithPath("/admin"))
+			Ω(ok).Should(BeTrue())
+			Ω(cookie.Value).Should(Equal("def456"))
+
+			_, ok = b.GetCookies().Find(b.CookieMatching("nope"))
+			Ω(ok).Should(BeFalse())
+		})
+
+		It("can Filter down to all matching cookies", func() {
+			Ω(b.GetCookies().Filter(b.CookieMatching("session"))).Should(HaveLen(2))
+			Ω(b.GetCookies().Filter(b.CookieMatching(ContainSubstring("e")).WithPath("/"))).Should(HaveLen(2)) // session(/) + theme(/)
+		})
+	})
+
 	Describe("the HaveNumCookies matcher", func() {
 		It("matches the cookie count with literal and matcher args", func() {
 			Ω(b).Should(b.HaveNumCookies(0))

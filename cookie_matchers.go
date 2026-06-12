@@ -48,6 +48,30 @@ func (b *Biloba) HaveCookie(name any) *CookieMatcher {
 }
 
 /*
+CookieMatching() is an alias for [Biloba.HaveCookie] that reads as a predicate.  It returns the same chainable [CookieMatcher], spelled for use with [Cookies.Find] / [Cookies.Filter]:
+
+	cookie, ok := b.GetCookies().Find(b.CookieMatching("session").WithSecure())
+
+Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
+*/
+func (b *Biloba) CookieMatching(name any) *CookieMatcher {
+	return b.HaveCookie(name)
+}
+
+// matches is the predicate role: does this single cookie satisfy the name and every refinement?
+func (m *CookieMatcher) matches(cookie Cookie) bool {
+	if nameMatches, _ := m.nameMatcher.Match(cookie.Name); !nameMatches {
+		return false
+	}
+	for _, fm := range m.fieldMatchers {
+		if fieldMatches, _ := fm.matcher.Match(fm.value(cookie)); !fieldMatches {
+			return false
+		}
+	}
+	return true
+}
+
+/*
 WithValue() refines the [CookieMatcher] to also require the cookie's Value to match.  value may be a string (exact match) or a Gomega matcher.
 
 Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage

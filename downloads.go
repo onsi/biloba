@@ -209,7 +209,7 @@ func (b *Biloba) hasActiveDownloads() bool {
 }
 
 func (b *Biloba) activeDownloadsShouldBlockTabFromClosing(closingTab *Biloba) bool {
-	for _, tab := range b.AllTabs().Filter(b.isSiblingTab) {
+	for _, tab := range b.AllSpawnedTabs() {
 		if tab.hasActiveDownloads() {
 			return true
 		}

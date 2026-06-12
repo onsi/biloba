@@ -88,9 +88,9 @@ var _ = Describe("Navigation", func() {
 		It("allows the user to navigate to new tabs", func() {
 			b.Navigate(fixtureServer + "/nav-a.html")
 			Eventually("#to-b-new").Should(b.Click())
-			Eventually(b).Should(b.HaveSpawnedTab(b.TabWithTitle("Nav-B Testpage")))
+			Eventually(b).Should(b.HaveSpawnedTab().WithTitle("Nav-B Testpage"))
 			Ω(b.Location()).Should(Equal(fixtureServer + "/nav-a.html"))
-			Ω(b.AllSpawnedTabs().Find(b.TabWithTitle("Nav-B Testpage")).Location()).Should(HaveSuffix("nav-b.html"))
+			Ω(b.AllSpawnedTabs().Find(b.TabMatching().WithTitle("Nav-B Testpage")).Location()).Should(HaveSuffix("nav-b.html"))
 		})
 	})
 })

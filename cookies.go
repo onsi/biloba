@@ -71,13 +71,51 @@ func (b *Biloba) SetCookie(cookies ...Cookie) {
 }
 
 /*
+Cookies represents a slice of Cookie.  Search it with Find/Filter and a [Biloba.CookieMatching] query.
+
+Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
+*/
+type Cookies []Cookie
+
+/*
+Find returns the first cookie matching the passed-in CookieMatcher (see [Biloba.CookieMatching]), or the zero Cookie if none match.  The returned bool reports whether a match was found:
+
+	cookie, ok := b.GetCookies().Find(b.CookieMatching("session").WithPath("/"))
+
+Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
+*/
+func (c Cookies) Find(query *CookieMatcher) (Cookie, bool) {
+	for _, cookie := range c {
+		if query.matches(cookie) {
+			return cookie, true
+		}
+	}
+	return Cookie{}, false
+}
+
+/*
+Filter returns all cookies matching the passed-in CookieMatcher (see [Biloba.CookieMatching])
+
+Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
+*/
+func (c Cookies) Filter(query *CookieMatcher) Cookies {
+	out := Cookies{}
+	for _, cookie := range c {
+		if query.matches(cookie) {
+			out = append(out, cookie)
+		}
+	}
+	return out
+}
+
+/*
 GetCookies() returns all the cookies associated with this tab's BrowserContextID:
 
 	cookies := b.GetCookies()
 
 Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
 */
-func (b *Biloba) GetCookies() []Cookie {
+func (b *Biloba) GetCookies() Cookies {
 	b.gt.Helper()
 	var networkCookies []*network.Cookie
 	err := b.runWithBrowserExecutor(func(ctx context.Context) error {
@@ -89,7 +127,7 @@ func (b *Biloba) GetCookies() []Cookie {
 		b.gt.Fatalf("Failed to get cookies:\n%s", err.Error())
 		return nil
 	}
-	cookies := make([]Cookie, len(networkCookies))
+	cookies := make(Cookies, len(networkCookies))
 	for i, c := range networkCookies {
 		cookie := Cookie{
 			Name:     c.Name,

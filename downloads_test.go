@@ -58,8 +58,8 @@ var _ = Describe("Downloading Files", func() {
 
 	It("can handle many downloads (when the downloads come from a tab spawned from the root tab)", func(ctx SpecContext) {
 		b.Click(b.XPath("a").WithTextContains("Open in New Tab"))
-		Eventually(b).Should(b.HaveSpawnedTab(b.TabWithTitle("Downloads Testpage")))
-		newTab := b.AllSpawnedTabs().Find(b.TabWithTitle("Downloads Testpage"))
+		Eventually(b).Should(b.HaveSpawnedTab().WithTitle("Downloads Testpage"))
+		newTab := b.AllSpawnedTabs().Find(b.TabMatching().WithTitle("Downloads Testpage"))
 		Ω(newTab).ShouldNot(BeNil())
 
 		t := time.Now()
@@ -132,8 +132,8 @@ var _ = Describe("Downloading Files", func() {
 
 		By("spawning then closing a new tab (this will have the same BrowserContextID as our root tab)")
 		b.Click(b.XPath("a").WithTextContains("Open in New Tab"))
-		Eventually(b).Should(b.HaveSpawnedTab(b.TabWithTitle("Downloads Testpage")))
-		spawnedTab1 := b.AllSpawnedTabs().Find(b.TabWithTitle("Downloads Testpage"))
+		Eventually(b).Should(b.HaveSpawnedTab().WithTitle("Downloads Testpage"))
+		spawnedTab1 := b.AllSpawnedTabs().Find(b.TabMatching().WithTitle("Downloads Testpage"))
 		Ω(spawnedTab1).ShouldNot(BeNil())
 		Eventually(spawnedTab1.Close).Should(Succeed()) // only closes if any downloads are completed
 		Eventually(b.AllSpawnedTabs).Should(HaveLen(0))
@@ -146,8 +146,8 @@ var _ = Describe("Downloading Files", func() {
 
 		By("spawning then closing a new tab (this time from a different tab)")
 		tab.Click(tab.XPath("a").WithTextContains("Open in New Tab"))
-		Eventually(tab).Should(tab.HaveSpawnedTab(tab.TabWithTitle("Downloads Testpage")))
-		spawnedTab2 := tab.AllSpawnedTabs().Find(tab.TabWithTitle("Downloads Testpage"))
+		Eventually(tab).Should(tab.HaveSpawnedTab().WithTitle("Downloads Testpage"))
+		spawnedTab2 := tab.AllSpawnedTabs().Find(tab.TabMatching().WithTitle("Downloads Testpage"))
 		Ω(spawnedTab2).ShouldNot(BeNil())
 		Eventually(spawnedTab2.Close).Should(Succeed())
 		Eventually(tab.AllSpawnedTabs).Should(HaveLen(0))

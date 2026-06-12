@@ -531,7 +531,7 @@ b.SetCookie(biloba.Cookie{
 })
 ```
 
-You can pass multiple cookies to a single `SetCookie` call.  `b.GetCookies()` returns a `[]biloba.Cookie` for all the cookies in the tab's browser context (the returned `Cookie`s have their `Session` field set to `true` for session cookies and a populated `Expires` for persistent ones).
+You can pass multiple cookies to a single `SetCookie` call.  `b.GetCookies()` returns a `biloba.Cookies` slice for all the cookies in the tab's browser context (the returned `Cookie`s have their `Session` field set to `true` for session cookies and a populated `Expires` for persistent ones).
 
 #### Asserting on Cookies
 
@@ -551,6 +551,13 @@ Expect(b).To(b.HaveCookie("session").WithDomain("localhost").WithSecure())
 ```
 
 The available refinements are `WithValue`, `WithPath`, `WithDomain`, `WithSameSite`, and the boolean flag refinements `WithSecure(...)` and `WithHTTPOnly(...)`.  The flag refinements take an optional bool: called with no argument they assert the flag is `true` (`WithSecure()` is shorthand for `WithSecure(true)`), and `WithSecure(false)` asserts the cookie is _not_ Secure.  All of the refinements must hold for a single cookie - if two cookies each satisfy some-but-not-all of the refinements the matcher does not pass.
+
+The same query plays double duty.  As an assertion you hand it to `Should`/`Eventually` and spell it `HaveCookie` (above); as a **predicate** you hand it to the `Find`/`Filter` helpers on the `Cookies` slice returned by `b.GetCookies()` and spell it `CookieMatching`.  `Find` returns the matching `Cookie` and a bool reporting whether one was found:
+
+```go
+cookie, ok := b.GetCookies().Find(b.CookieMatching("session").WithPath("/admin"))
+admins := b.GetCookies().Filter(b.CookieMatching(ContainSubstring("session")))
+```
 
 `b.HaveNumCookies(expected)` asserts on the number of cookies on the tab.  `expected` may be an int (exact match) or a Gomega matcher:
 
@@ -693,14 +700,16 @@ Since each created tab is in its own `BrowserContextID` we don't have to worry a
 
 If a browser action results in a _new_ tab being opened you'll need to get a Biloba instance that attaches to that tab in order to be able to use it.  There are three methods that support this:
 
-- `tab.AllSpanedTabs()` returns a list of tabs (wrapped in Biloba instances) that were spawned by a user action performed on `tab`.
-- `tab.HaveSpawnedTab(filter)` returns a matcher that asserts whether or not a spawned tab matches the passed-in Tab filter (see below)
+- `tab.AllSpawnedTabs()` returns a list of tabs (wrapped in Biloba instances) that were spawned by a user action performed on `tab`.
+- `tab.HaveSpawnedTab()` returns a matcher that asserts whether or not a spawned tab matches (see below)
 
-You can query `AllSpawnedTabs` and search through them for the tab you're looking for using `Find()` and `Filter()` - passing in a `TabFilter` (a function of type `func(*Biloba) bool`). Biloba provides three tab filters out of the box:
+`tab.HaveSpawnedTab()` returns a chainable `TabQuery`.  A tab has no single primary key, so you describe the tab you want with refinements - chain any of:
 
-- `TabWithDOMNode(selector)` matches if the spawned tab has a DOM element satisfying `selector`.
-- `TabWithURL(url)` matches if the spawned tab has a matching url
-- `TabWithTitle(title)` matches if the spawned tab has a matching title
+- `WithDOMElement(selector)` matches if the tab has a DOM element satisfying `selector`.
+- `WithURL(url)` matches if the tab has a matching url.
+- `WithTitle(title)` matches if the tab has a matching title.
+
+The same query plays double duty.  As an assertion you hand it to `Should`/`Eventually` and spell it `HaveSpawnedTab` (or `HaveTab`, below).  As a **predicate** you hand it to the `Find`/`Filter` helpers on the `Tabs` slice returned by `AllSpawnedTabs()`/`AllTabs()` and spell it `TabMatching`, which reads as a description of one tab.  The spellings are interchangeable - they build the same query.
 
 Here's an example that builds off our chat application example from above:
 
@@ -715,18 +724,18 @@ Context("when Sally sends Jane a link", func() {
 		lastEntryXPath := tab.XPath("#conversation").Descendant().WithClass("entry").Last()
 		Eventually(lastEntryXPath).Should(tab.HaveInnerText("Hey Jane, check this out: YouTube"))
 		tab.Click(lastEntryXPath.Child("a"))
-		Eventually(tab).Should(tab.HaveSpawnedTab(tab.TabWithURL("https://www.youtube.com/watch?v=dQw4w9WgXcQ")))
-		youtubeTab := tab.AllSpawnedTabs().Find(tab.TabWithURL("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+		Eventually(tab).Should(tab.HaveSpawnedTab().WithURL("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+		youtubeTab := tab.AllSpawnedTabs().Find(tab.TabMatching().WithURL("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
 		Eventually("body").Should(youtubeTab.HaveInnerText(ContainSubstring("Never Gonna Give You Up")))
 	})
 })
 ```
 
-As you can see, we poll `tab.HaveSpanwedTab` until the tab appears and then use `tab.AllSpawnedTabs().Find()` to get a reference to it. From here we can make assertions against the spawned tab and/or close it.
+As you can see, we poll `tab.HaveSpawnedTab()` until the tab appears and then use `tab.AllSpawnedTabs().Find(tab.TabMatching()...)` to get a reference to it. From here we can make assertions against the spawned tab and/or close it.
 
 Note that `b.HaveSpawnedTab` will have failed.  That's because Biloba associates spawned tabs with the `BrowserContextID` of the tab that opened them.  And both `b` and `tab` (which is an explicitly created tab) have _different_ `BrowserContextID`s.
 
-There are analogous `b.AllTabs()` and `b.HaveTab()` functions that let you search through _all_ tabs associated with this Biloba Chrome connection.  This won't include any tabs opened by other Ginkgo processes running in parallel - but any tabs that are associated with the current process (whether explicitly created Tabs or Spawned Tabs) will be returned by these methods.
+There are analogous `b.AllTabs()` and `b.HaveTab()` functions that let you search through _all_ tabs associated with this Biloba Chrome connection (`b.HaveTab()` returns the same kind of `TabQuery`, just searched against every tab rather than only spawned tabs).  This won't include any tabs opened by other Ginkgo processes running in parallel - but any tabs that are associated with the current process (whether explicitly created Tabs or Spawned Tabs) will be returned by these methods.
 
 ## Working with the DOM
 
