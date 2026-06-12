@@ -10,7 +10,7 @@ import (
 )
 
 /*
-CookieMatcher is a chainable Gomega matcher returned by [Biloba.HaveCookie].  It passes if the tab has a cookie whose name (and every refined field) matches.  Refinements are added with the WithX/Secure/HTTPOnly methods and all apply to the same cookie:
+CookieMatcher is a chainable Gomega matcher returned by [Biloba.HaveCookie].  It passes if the tab has a cookie whose name (and every refined field) matches.  Refinements are added with the WithX methods and all apply to the same cookie:
 
 	Expect(b).To(b.HaveCookie("session").WithValue("abc123").WithPath("/"))
 
@@ -35,9 +35,9 @@ HaveCookie() returns a [CookieMatcher] that passes if the tab passed to the asse
 	Eventually(b).Should(b.HaveCookie("session"))
 	Expect(b).To(b.HaveCookie(ContainSubstring("my_guid")))
 
-Chain WithValue/WithPath/WithDomain/WithSameSite/Secure/HTTPOnly to further constrain the same cookie:
+Chain WithValue/WithPath/WithDomain/WithSameSite/WithSecure/WithHTTPOnly to further constrain the same cookie:
 
-	Expect(b).To(b.HaveCookie("session").WithValue("abc123").WithPath("/").Secure())
+	Expect(b).To(b.HaveCookie("session").WithValue("abc123").WithPath("/").WithSecure())
 
 Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
 */
@@ -84,21 +84,29 @@ func (m *CookieMatcher) WithSameSite(sameSite any) *CookieMatcher {
 }
 
 /*
-Secure() refines the [CookieMatcher] to also require the cookie's Secure flag to be true.
+WithSecure() refines the [CookieMatcher] to also require the cookie's Secure flag.  With no argument it asserts the flag is true; pass a bool to assert a specific value (WithSecure(false) asserts the cookie is not Secure).
 
 Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
 */
-func (m *CookieMatcher) Secure() *CookieMatcher {
-	return m.withField("Secure", true, func(c Cookie) any { return c.Secure })
+func (m *CookieMatcher) WithSecure(expected ...bool) *CookieMatcher {
+	want := true
+	if len(expected) > 0 {
+		want = expected[0]
+	}
+	return m.withField("Secure", want, func(c Cookie) any { return c.Secure })
 }
 
 /*
-HTTPOnly() refines the [CookieMatcher] to also require the cookie's HTTPOnly flag to be true.
+WithHTTPOnly() refines the [CookieMatcher] to also require the cookie's HTTPOnly flag.  With no argument it asserts the flag is true; pass a bool to assert a specific value (WithHTTPOnly(false) asserts the cookie is not HTTPOnly).
 
 Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
 */
-func (m *CookieMatcher) HTTPOnly() *CookieMatcher {
-	return m.withField("HTTPOnly", true, func(c Cookie) any { return c.HTTPOnly })
+func (m *CookieMatcher) WithHTTPOnly(expected ...bool) *CookieMatcher {
+	want := true
+	if len(expected) > 0 {
+		want = expected[0]
+	}
+	return m.withField("HTTPOnly", want, func(c Cookie) any { return c.HTTPOnly })
 }
 
 func (m *CookieMatcher) withField(field string, expected any, value func(Cookie) any) *CookieMatcher {

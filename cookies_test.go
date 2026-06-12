@@ -97,12 +97,16 @@ var _ = Describe("Cookies", func() {
 			Ω(b).ShouldNot(b.HaveCookie("session").WithValue("nope"))
 		})
 
-		It("supports the Secure and HTTPOnly flag refinements", func() {
+		It("supports the WithSecure and WithHTTPOnly flag refinements", func() {
 			b.SetCookie(biloba.Cookie{Name: "session", Value: "abc123", Secure: true, HTTPOnly: true})
-			Ω(b).Should(b.HaveCookie("session").Secure().HTTPOnly())
+			Ω(b).Should(b.HaveCookie("session").WithSecure().WithHTTPOnly())
+			Ω(b).Should(b.HaveCookie("session").WithSecure(true).WithHTTPOnly(true))
 
 			b.SetCookie(biloba.Cookie{Name: "plain", Value: "v"})
-			Ω(b).ShouldNot(b.HaveCookie("plain").Secure())
+			Ω(b).ShouldNot(b.HaveCookie("plain").WithSecure())
+			// the variadic form can assert the negative explicitly
+			Ω(b).Should(b.HaveCookie("plain").WithSecure(false).WithHTTPOnly(false))
+			Ω(b).ShouldNot(b.HaveCookie("session").WithSecure(false))
 		})
 
 		It("supports WithDomain and WithSameSite", func() {

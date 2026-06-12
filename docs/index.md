@@ -505,10 +505,10 @@ You can chain refinements onto the matcher to further constrain the _same_ cooki
 ```go
 Expect(b).To(b.HaveCookie("session").WithValue("abc123").WithPath("/"))
 Expect(b).To(b.HaveCookie(ContainSubstring("my_guid")).WithValue(ContainSubstring("ABCD-1")))
-Expect(b).To(b.HaveCookie("session").WithDomain("localhost").Secure())
+Expect(b).To(b.HaveCookie("session").WithDomain("localhost").WithSecure())
 ```
 
-The available refinements are `WithValue`, `WithPath`, `WithDomain`, `WithSameSite`, and the no-argument flag refinements `Secure()` and `HTTPOnly()` (which assert the corresponding flag is `true`).  All of the refinements must hold for a single cookie - if two cookies each satisfy some-but-not-all of the refinements the matcher does not pass.
+The available refinements are `WithValue`, `WithPath`, `WithDomain`, `WithSameSite`, and the boolean flag refinements `WithSecure(...)` and `WithHTTPOnly(...)`.  The flag refinements take an optional bool: called with no argument they assert the flag is `true` (`WithSecure()` is shorthand for `WithSecure(true)`), and `WithSecure(false)` asserts the cookie is _not_ Secure.  All of the refinements must hold for a single cookie - if two cookies each satisfy some-but-not-all of the refinements the matcher does not pass.
 
 `b.HaveNumCookies(expected)` asserts on the number of cookies on the tab.  `expected` may be an int (exact match) or a Gomega matcher:
 
