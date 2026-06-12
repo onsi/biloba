@@ -1,6 +1,7 @@
 package biloba
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -19,7 +20,7 @@ func (r *bilobaJSResponse) Error() error {
 	if r.Err == "" {
 		return nil
 	}
-	return fmt.Errorf(r.Err)
+	return errors.New(r.Err)
 }
 func (r *bilobaJSResponse) MatcherResult() (bool, error) { return r.Success, r.Error() }
 func (r *bilobaJSResponse) ResultString() string         { return toString(r.Result) }

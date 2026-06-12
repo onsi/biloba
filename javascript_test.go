@@ -78,7 +78,7 @@ var _ = Describe("Javascript", func() {
 	Describe("invoking functions", func() {
 		It("provides a convenient mechanism for invoking functions that handles JSON encoding for you", func() {
 			b.Run(b.JSFunc("console.log").Invoke(1, []int{2, 3, 4}, "hello", true, nil))
-			Ω(string(gt.buffer.Contents())).Should(ContainSubstring(`1 - [2, 3, 4] - "hello" - true - <nil>`))
+			Ω(string(gt.buffer.Contents())).Should(ContainSubstring(`1 - [2, 3, 4] - "hello" - true - null`))
 
 			adder := b.JSFunc("(...nums) => nums.reduce((s, n) => s + n, 0)")
 			var result int

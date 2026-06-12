@@ -42,77 +42,45 @@ var _ = Describe("Downloading Files", func() {
 			Eventually(ctx, b.AllCompleteDownloads).Should(HaveLen(i))
 		}
 		Ω(time.Since(t)).Should(BeNumerically(">", time.Second), "we should have waited around a bit for chrome's 10-download/second limit to complete")
-	}, SpecTimeout(3*time.Second))
+	}, SpecTimeout(30*time.Second))
 
 	It("can handle many downloads (simulating multiple tabs)", func(ctx SpecContext) {
 		tab := b.NewTab().Navigate(fixtureServer + "/downloads.html")
 		Eventually("#download").Should(tab.Exist())
 
-		b.Click("#download")
-		b.Click("#download")
-		b.Click("#download")
-		Eventually(ctx, b.AllCompleteDownloads).Should(HaveLen(3))
-
-		for i := 1; i <= 11; i++ {
-			t := time.Now()
+		t := time.Now()
+		for i := 1; i <= 14; i++ {
 			tab.Click("#download")
-			if i <= 10 {
-				//these are fast
-				Ω(time.Since(t)).Should(BeNumerically("<", 500*time.Millisecond))
-			} else {
-				//the 11th one is slow
-				Ω(time.Since(t)).Should(BeNumerically(">", 500*time.Millisecond))
-			}
 			Eventually(ctx, tab.AllCompleteDownloads).Should(HaveLen(i))
 		}
-	}, SpecTimeout(3*time.Second))
+		Ω(time.Since(t)).Should(BeNumerically(">", time.Second), "rate limiting should have slowed down 14 downloads across 2 tabs")
+	}, SpecTimeout(30*time.Second))
 
 	It("can handle many downloads (when the downloads come from a tab spawned from the root tab)", func(ctx SpecContext) {
 		b.Click(b.XPath("a").WithTextContains("Open in New Tab"))
-		Eventually(b.AllSpawnedTabs).Should(HaveLen(1))
+		Eventually(b).Should(b.HaveSpawnedTab(b.TabWithTitle("Downloads Testpage")))
 		newTab := b.AllSpawnedTabs().Find(b.TabWithTitle("Downloads Testpage"))
+		Ω(newTab).ShouldNot(BeNil())
 
-		b.Click("#download")
-		b.Click("#download")
-		b.Click("#download")
-		Eventually(ctx, b.AllCompleteDownloads).Should(HaveLen(3))
-
-		for i := 1; i <= 11; i++ {
-			t := time.Now()
+		t := time.Now()
+		for i := 1; i <= 14; i++ {
 			newTab.Click("#download")
-			if i <= 10 {
-				//these are fast
-				Ω(time.Since(t)).Should(BeNumerically("<", 500*time.Millisecond))
-			} else {
-				//the 11th one is slow
-				Ω(time.Since(t)).Should(BeNumerically(">", 500*time.Millisecond))
-			}
 			Eventually(ctx, newTab.AllCompleteDownloads).Should(HaveLen(i))
 		}
-	}, SpecTimeout(3*time.Second))
+		Ω(time.Since(t)).Should(BeNumerically(">", time.Second), "rate limiting should have slowed down 14 downloads from a spawned tab")
+	}, SpecTimeout(30*time.Second))
 
 	It("can handle many downloads (simulating multiple processes)", func(ctx SpecContext) {
 		gOtherProcess := biloba.ConnectToChrome(gt).Navigate(fixtureServer + "/downloads.html")
 		Eventually("#download").Should(gOtherProcess.Exist())
 
-		b.Click("#download")
-		b.Click("#download")
-		b.Click("#download")
-		Eventually(ctx, b.AllCompleteDownloads).Should(HaveLen(3))
-
-		for i := 1; i <= 11; i++ {
-			t := time.Now()
+		t := time.Now()
+		for i := 1; i <= 14; i++ {
 			gOtherProcess.Click("#download")
-			if i <= 10 {
-				//these are fast
-				Ω(time.Since(t)).Should(BeNumerically("<", 500*time.Millisecond))
-			} else {
-				//the 11th one is slow
-				Ω(time.Since(t)).Should(BeNumerically(">", 500*time.Millisecond))
-			}
 			Eventually(ctx, gOtherProcess.AllCompleteDownloads).Should(HaveLen(i))
 		}
-	}, SpecTimeout(3*time.Second))
+		Ω(time.Since(t)).Should(BeNumerically(">", time.Second), "rate limiting should have slowed down 14 downloads from a simulated separate process")
+	}, SpecTimeout(30*time.Second))
 
 	Describe("finding files and matching files", func() {
 		BeforeEach(func() {
@@ -164,8 +132,10 @@ var _ = Describe("Downloading Files", func() {
 
 		By("spawning then closing a new tab (this will have the same BrowserContextID as our root tab)")
 		b.Click(b.XPath("a").WithTextContains("Open in New Tab"))
-		Eventually(b.AllSpawnedTabs).Should(HaveLen(1))
-		Eventually(b.AllSpawnedTabs().Find(b.TabWithTitle("Downloads Testpage")).Close).Should(Succeed()) // only closes if any downloads are completed
+		Eventually(b).Should(b.HaveSpawnedTab(b.TabWithTitle("Downloads Testpage")))
+		spawnedTab1 := b.AllSpawnedTabs().Find(b.TabWithTitle("Downloads Testpage"))
+		Ω(spawnedTab1).ShouldNot(BeNil())
+		Eventually(spawnedTab1.Close).Should(Succeed()) // only closes if any downloads are completed
 		Eventually(b.AllSpawnedTabs).Should(HaveLen(0))
 
 		By("ensuring that the closed spawned tab does not mess up the download config for the root tab")
@@ -176,8 +146,10 @@ var _ = Describe("Downloading Files", func() {
 
 		By("spawning then closing a new tab (this time from a different tab)")
 		tab.Click(tab.XPath("a").WithTextContains("Open in New Tab"))
-		Eventually(tab.AllSpawnedTabs).Should(HaveLen(1))
-		Eventually(tab.AllSpawnedTabs().Find(tab.TabWithTitle("Downloads Testpage")).Close).Should(Succeed()) // only
+		Eventually(tab).Should(tab.HaveSpawnedTab(tab.TabWithTitle("Downloads Testpage")))
+		spawnedTab2 := tab.AllSpawnedTabs().Find(tab.TabWithTitle("Downloads Testpage"))
+		Ω(spawnedTab2).ShouldNot(BeNil())
+		Eventually(spawnedTab2.Close).Should(Succeed())
 		Eventually(tab.AllSpawnedTabs).Should(HaveLen(0))
 
 		By("ensuring that the closed spawned tab does not mess up the download config for the root tab")

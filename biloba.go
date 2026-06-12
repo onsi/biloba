@@ -62,7 +62,9 @@ type GinkgoTInterface interface {
 ChromeConnection captures the details necessary for [ConnectToChrome] to connect to Chrome
 */
 type ChromeConnection struct {
-	WebSocketURL string
+	WebSocketURL  string
+	WindowWidth   int
+	WindowHeight  int
 }
 
 func (gc ChromeConnection) encode() []byte {
@@ -104,7 +106,13 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...chromedp.ExecAllocatorOpt
 	browserCtx, cancel := chromedp.NewContext(allocCtx)
 	ginkgoT.DeferCleanup(cancel)
 
-	err := chromedp.Run(browserCtx, chromedp.Evaluate("1", nil))
+	// Read the outer window dimensions — these reflect --window-size and give us the
+	// correct target viewport for all isolated tabs (window.innerHeight < outerHeight
+	// in Chrome 149+ headless mode due to virtual browser chrome).
+	var outerDims []int
+	err := chromedp.Run(browserCtx,
+		chromedp.Evaluate("[window.outerWidth, window.outerHeight]", &outerDims),
+	)
 	if err != nil {
 		ginkgoT.Fatalf("failed to spin up chrome: %w", err)
 		return ChromeConnection{}
@@ -119,6 +127,10 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...chromedp.ExecAllocatorOpt
 
 	cc := ChromeConnection{
 		WebSocketURL: fmt.Sprintf("ws://127.0.0.1:%s%s", components[0], components[1]),
+	}
+	if len(outerDims) == 2 {
+		cc.WindowWidth = outerDims[0]
+		cc.WindowHeight = outerDims[1]
 	}
 
 	os.WriteFile(gooseConfigPath(ginkgoT.ParallelProcess()), cc.encode(), 0744)
@@ -228,27 +240,59 @@ func ConnectToChrome(ginkgoT GinkgoTInterface, options ...BilobaConfigOption) *B
 	allocatorContext, cancel := chromedp.NewRemoteAllocator(context.Background(), b.ChromeConnection.WebSocketURL)
 	b.gt.DeferCleanup(cancel)
 
-	cOptions := []chromedp.ContextOption{chromedp.WithNewBrowserContext()}
+	// Chrome 149+ rejects Target.createTarget with a browserContextId unless newWindow:true is used,
+	// so we can't use chromedp.WithNewBrowserContext() directly. Instead we bootstrap a throwaway
+	// default-context tab to initialize the Browser connection, then manually create the isolated
+	// browser context and target, and attach via WithTargetID.
+	var bootstrapOpts []chromedp.ContextOption
 	if b.enableDebugLogging {
-		cOptions = append(cOptions, chromedp.WithDebugf(b.gt.Logf))
-		cOptions = append(cOptions, chromedp.WithLogf(b.gt.Logf))
-		cOptions = append(cOptions, chromedp.WithErrorf(b.gt.Logf))
+		bootstrapOpts = append(bootstrapOpts,
+			chromedp.WithDebugf(b.gt.Logf),
+			chromedp.WithLogf(b.gt.Logf),
+			chromedp.WithErrorf(b.gt.Logf),
+		)
+	}
+	bootstrapCtx, cancelBootstrap := chromedp.NewContext(allocatorContext, bootstrapOpts...)
+	b.gt.DeferCleanup(cancelBootstrap)
+
+	if err := chromedp.Run(bootstrapCtx, chromedp.Evaluate("1", nil)); err != nil {
+		ginkgoT.Fatalf("failed to connect to chrome: %w", err)
+		return nil
 	}
 
-	b.Context, cancel = chromedp.NewContext(allocatorContext, cOptions...)
+	browserContextID, isolatedTargetID, err := newIsolatedBrowserContextAndTarget(bootstrapCtx)
+	if err != nil {
+		ginkgoT.Fatalf("failed to create isolated chrome context: %w", err)
+		return nil
+	}
+
+	b.Context, cancel = chromedp.NewContext(bootstrapCtx, chromedp.WithTargetID(isolatedTargetID))
 	b.gt.DeferCleanup(cancel)
-	_, err := b.RunErr("1")
-
-	b.targetID = chromedp.FromContext(b.Context).Target.TargetID
-	b.browserContextID = chromedp.FromContext(b.Context).BrowserContextID
-
-	b.downloadDir = b.gt.TempDir()
-	b.setUpListeners()
+	_, err = b.RunErr("1")
 
 	if err != nil {
 		ginkgoT.Fatalf("failed to connect to chrome: %w", err)
 		return nil
 	}
+
+	b.targetID = chromedp.FromContext(b.Context).Target.TargetID
+	b.browserContextID = browserContextID
+
+	// Chrome 149+ headless mode reports window.innerHeight smaller than --window-size due to
+	// virtual browser chrome. Apply EmulateViewport using the outer window dimensions stored
+	// in ChromeConnection (set by SpinUpChrome) to give each isolated tab the correct viewport.
+	if b.ChromeConnection.WindowWidth > 0 && b.ChromeConnection.WindowHeight > 0 {
+		if err := chromedp.Run(b.Context, chromedp.EmulateViewport(
+			int64(b.ChromeConnection.WindowWidth),
+			int64(b.ChromeConnection.WindowHeight),
+		)); err != nil {
+			ginkgoT.Fatalf("failed to set initial window size: %w", err)
+			return nil
+		}
+	}
+
+	b.downloadDir = b.gt.TempDir()
+	b.setUpListeners()
 
 	b.lock.Lock()
 	b.tabs[chromedp.FromContext(b.Context).Target.TargetID] = b
@@ -356,6 +400,7 @@ func (b *Biloba) Prepare() {
 
 	b.lock.Lock()
 	b.downloads = map[string]*Download{}
+	b.downloadHistory = map[string]time.Time{}
 	b.dialogHandlers = []*DialogHandler{}
 	b.dialogs = Dialogs{}
 	b.lock.Unlock()
@@ -388,7 +433,12 @@ NewTab() creates a new browser tab and returns a Biloba instance pointing to it
 Read https://onsi.github.io/biloba/#managing-tabs to learn more about managing tabs
 */
 func (b *Biloba) NewTab() *Biloba {
-	return b.registerTabFor(chromedp.NewContext(b.root.Context, chromedp.WithNewBrowserContext()))
+	_, tabTargetID, err := newIsolatedBrowserContextAndTarget(b.root.Context)
+	if err != nil {
+		b.gt.Fatalf("failed to create new tab: %s", err.Error())
+		return nil
+	}
+	return b.registerTabFor(chromedp.NewContext(b.root.Context, chromedp.WithTargetID(tabTargetID)))
 }
 
 /*
@@ -412,6 +462,9 @@ func (b *Biloba) AllTabs() Tabs {
 			opener := b.root.tabs[target.OpenerID]
 			if opener != nil {
 				tab = b.root.registerTabFor(chromedp.NewContext(opener.Context, chromedp.WithTargetID(target.TargetID)))
+				if tab == nil {
+					continue
+				}
 			} else {
 				continue
 			}
@@ -485,6 +538,29 @@ func (b *Biloba) progressReporter() string {
 	return out
 }
 
+// newIsolatedBrowserContextAndTarget creates a new isolated browser context and a target
+// (tab) within it, returning both IDs. Chrome 149+ requires WithNewWindow(true) when
+// creating a target in a non-default browser context.
+func newIsolatedBrowserContextAndTarget(ctx context.Context) (cdp.BrowserContextID, target.ID, error) {
+	var browserContextID cdp.BrowserContextID
+	var targetID target.ID
+	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		c := chromedp.FromContext(ctx)
+		be := cdp.WithExecutor(ctx, c.Browser)
+		var err error
+		browserContextID, err = target.CreateBrowserContext().WithDisposeOnDetach(true).Do(be)
+		if err != nil {
+			return err
+		}
+		targetID, err = target.CreateTarget("about:blank").
+			WithBrowserContextID(browserContextID).
+			WithNewWindow(true).
+			Do(be)
+		return err
+	}))
+	return browserContextID, targetID, err
+}
+
 func (b *Biloba) registerTabFor(c context.Context, cancel context.CancelFunc) *Biloba {
 	b.gt.Helper()
 	newG := newBiloba(b.gt)
@@ -495,7 +571,14 @@ func (b *Biloba) registerTabFor(c context.Context, cancel context.CancelFunc) *B
 	newG.close = cancel
 
 	//spin up the tab
-	newG.Run("1")
+	if _, err := newG.RunErr("1"); err != nil {
+		cancel()
+		return nil
+	}
+	if ctx := chromedp.FromContext(newG.Context); ctx == nil || ctx.Target == nil {
+		cancel()
+		return nil
+	}
 	newG.targetID = chromedp.FromContext(newG.Context).Target.TargetID
 
 	var browserContextID cdp.BrowserContextID

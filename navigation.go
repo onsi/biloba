@@ -1,8 +1,11 @@
 package biloba
 
 import (
+	"context"
 	"net/http"
+	"strings"
 
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 )
 
@@ -22,14 +25,39 @@ Read https://onsi.github.io/biloba/#navigation to learn more about navigation
 */
 func (b *Biloba) NavigateWithStatus(url string, status int) *Biloba {
 	b.gt.Helper()
-	resp, err := chromedp.RunResponse(b.Context, chromedp.Navigate(url))
-	if err != nil {
+
+	// Chrome 149+ fires Network.loadingFailed (ERR_HTTP_RESPONSE_CODE_FAILURE) for 4xx/5xx
+	// responses, causing chromedp.Navigate to return an error instead of a success.
+	// We capture the actual HTTP status via a network listener and check it ourselves.
+	lctx, lcancel := context.WithCancel(b.Context)
+	defer lcancel()
+	var capturedStatus int64
+	chromedp.ListenTarget(lctx, func(ev interface{}) {
+		if e, ok := ev.(*network.EventResponseReceived); ok {
+			if e.Type == network.ResourceTypeDocument {
+				capturedStatus = e.Response.Status
+			}
+		}
+	})
+
+	err := chromedp.Run(b.Context, chromedp.Navigate(url))
+	isHTTPError := err != nil && strings.Contains(err.Error(), "ERR_HTTP_RESPONSE_CODE_FAILURE")
+
+	if err != nil && !isHTTPError {
 		b.gt.Fatalf("failed to navigate to %s: %s", url, err.Error())
 		return b
 	}
-	if resp != nil && status != int(resp.Status) {
-		b.gt.Fatalf("failed to navigate to %s: expected status code %d, got %d", url, status, resp.Status)
+
+	if capturedStatus != 0 {
+		if int(capturedStatus) != status {
+			b.gt.Fatalf("failed to navigate to %s: expected status code %d, got %d", url, status, capturedStatus)
+		}
 		return b
+	}
+
+	// No HTTP response received (e.g. about:blank). If we got an error, report it.
+	if err != nil {
+		b.gt.Fatalf("failed to navigate to %s: %s", url, err.Error())
 	}
 	return b
 }

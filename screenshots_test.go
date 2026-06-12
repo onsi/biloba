@@ -25,7 +25,7 @@ var _ = Describe("Screenshots", func() {
 
 			Ω(img.Bounds().Max.X).Should(Equal(50))
 			Ω(img.Bounds().Max.Y).Should(Equal(40))
-			Ω(img.At(10, 5)).Should(Equal(color.NRGBA{0, 0, 255, 255}))
+			Ω(img.At(10, 5)).Should(Equal(color.RGBA{0, 0, 255, 255}))
 		})
 	})
 })
