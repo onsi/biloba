@@ -109,4 +109,50 @@ var _ = Describe("Storage", func() {
 			Ω(tab.LocalStorage().Get("user")).Should(BeNil())
 		})
 	})
+
+	Describe("the HaveLocalStorageItem matcher", func() {
+		It("passes when the key exists (one-arg mode)", func() {
+			b.LocalStorage().Set("user", "Joe")
+			Eventually(b).Should(b.HaveLocalStorageItem("user"))
+			Ω(b).ShouldNot(b.HaveLocalStorageItem("nope"))
+		})
+
+		It("matches the stored value (literal and matcher args)", func() {
+			b.LocalStorage().Set("user", "Joe")
+			b.LocalStorage().Set("count", 3)
+			Ω(b).Should(b.HaveLocalStorageItem("user", "Joe"))
+			Ω(b).Should(b.HaveLocalStorageItem("user", ContainSubstring("Jo")))
+			Ω(b).Should(b.HaveLocalStorageItem("count", BeNumerically("==", 3)))
+			Ω(b).ShouldNot(b.HaveLocalStorageItem("user", "Jane"))
+			Ω(b).ShouldNot(b.HaveLocalStorageItem("nope", "Joe"))
+		})
+	})
+
+	Describe("the HaveSessionStorageItem matcher", func() {
+		It("passes when the key exists and matches values", func() {
+			b.SessionStorage().Set("user", "Joe")
+			Eventually(b).Should(b.HaveSessionStorageItem("user"))
+			Ω(b).Should(b.HaveSessionStorageItem("user", "Joe"))
+			Ω(b).ShouldNot(b.HaveSessionStorageItem("user", "Jane"))
+			Ω(b).ShouldNot(b.HaveSessionStorageItem("nope"))
+		})
+	})
+
+	Describe("the HaveNum*StorageItems matchers", func() {
+		It("matches the localStorage item count", func() {
+			Ω(b).Should(b.HaveNumLocalStorageItems(0))
+			b.LocalStorage().Set("a", 1)
+			b.LocalStorage().Set("b", 2)
+			Eventually(b).Should(b.HaveNumLocalStorageItems(2))
+			Ω(b).Should(b.HaveNumLocalStorageItems(BeNumerically(">", 0)))
+			Ω(b).ShouldNot(b.HaveNumLocalStorageItems(5))
+		})
+
+		It("matches the sessionStorage item count", func() {
+			Ω(b).Should(b.HaveNumSessionStorageItems(0))
+			b.SessionStorage().Set("a", 1)
+			Ω(b).Should(b.HaveNumSessionStorageItems(1))
+			Ω(b).ShouldNot(b.HaveNumSessionStorageItems(5))
+		})
+	})
 })

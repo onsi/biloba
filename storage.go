@@ -3,6 +3,9 @@ package biloba
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/onsi/gomega/gcustom"
+	"github.com/onsi/gomega/types"
 )
 
 /*
@@ -153,4 +156,81 @@ func (s *Storage) Length() int {
 	var length int
 	s.b.Run(fmt.Sprintf("window.%s.length", s.name), &length)
 	return length
+}
+
+func haveStorageItem(name string, get func(*Biloba) *Storage, key string, expected ...any) types.GomegaMatcher {
+	var data = map[string]any{}
+	data["Name"] = name
+	data["Key"] = key
+	if len(expected) == 0 {
+		return gcustom.MakeMatcher(func(actual *Biloba) (bool, error) {
+			_, found := get(actual).GetAll()[key]
+			return found, nil
+		}).WithTemplate("Expected {{.Data.Name}} {{.To}} have item with key \"{{.Data.Key}}\"", data)
+	}
+	var matcher = matcherOrEqual(expected[0])
+	data["Matcher"] = matcher
+	return gcustom.MakeMatcher(func(actual *Biloba) (bool, error) {
+		all := get(actual).GetAll()
+		value, found := all[key]
+		data["Found"] = found
+		data["Result"] = value
+		if !found {
+			return false, nil
+		}
+		return matcher.Match(value)
+	}).WithTemplate("{{.Data.Name}} item \"{{.Data.Key}}\":\n{{if not .Data.Found}}Expected {{.Data.Name}} to have an item with key \"{{.Data.Key}}\"{{else if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+}
+
+/*
+HaveLocalStorageItem() is a Gomega matcher that operates against the tab passed to the assertion.  With one argument it passes if key exists in localStorage; with a second argument it passes if the stored value matches.  expected may be a string (exact match) or a Gomega matcher:
+
+	Expect(b).To(b.HaveLocalStorageItem("user"))
+	Expect(b).To(b.HaveLocalStorageItem("user", "Joe"))
+	Eventually(b).Should(b.HaveLocalStorageItem("count", BeNumerically(">", 0)))
+
+Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
+*/
+func (b *Biloba) HaveLocalStorageItem(key string, expected ...any) types.GomegaMatcher {
+	return haveStorageItem("localStorage", func(tab *Biloba) *Storage { return tab.LocalStorage() }, key, expected...)
+}
+
+/*
+HaveSessionStorageItem() is a Gomega matcher that operates against the tab passed to the assertion.  With one argument it passes if key exists in sessionStorage; with a second argument it passes if the stored value matches.  expected may be a string (exact match) or a Gomega matcher:
+
+	Expect(b).To(b.HaveSessionStorageItem("user"))
+	Expect(b).To(b.HaveSessionStorageItem("user", "Joe"))
+
+Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
+*/
+func (b *Biloba) HaveSessionStorageItem(key string, expected ...any) types.GomegaMatcher {
+	return haveStorageItem("sessionStorage", func(tab *Biloba) *Storage { return tab.SessionStorage() }, key, expected...)
+}
+
+func haveNumStorageItems(name string, get func(*Biloba) *Storage, expected any) types.GomegaMatcher {
+	var data = map[string]any{}
+	var matcher = matcherOrEqual(expected)
+	data["Matcher"] = matcher
+	return gcustom.MakeMatcher(func(actual *Biloba) (bool, error) {
+		data["Result"] = get(actual).Length()
+		return matcher.Match(data["Result"])
+	}).WithTemplate("HaveNum"+name+"Items:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+}
+
+/*
+HaveNumLocalStorageItems() is a Gomega matcher that passes if the number of items in localStorage matches expected.  expected may be an int (exact match) or a Gomega matcher.
+
+Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
+*/
+func (b *Biloba) HaveNumLocalStorageItems(expected any) types.GomegaMatcher {
+	return haveNumStorageItems("LocalStorage", func(tab *Biloba) *Storage { return tab.LocalStorage() }, expected)
+}
+
+/*
+HaveNumSessionStorageItems() is a Gomega matcher that passes if the number of items in sessionStorage matches expected.  expected may be an int (exact match) or a Gomega matcher.
+
+Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
+*/
+func (b *Biloba) HaveNumSessionStorageItems(expected any) types.GomegaMatcher {
+	return haveNumStorageItems("SessionStorage", func(tab *Biloba) *Storage { return tab.SessionStorage() }, expected)
 }
