@@ -520,7 +520,7 @@ It("is logged in", func() {
 })
 ```
 
-A `biloba.Cookie` only requires a `Name` and `Value`.  If you don't provide a `Domain` and `Path`, Biloba associates the cookie with the tab's current URL.  You can also set `Domain`, `Path`, `Secure`, `HTTPOnly`, and `SameSite` (one of `"Strict"`, `"Lax"`, or `"None"`) explicitly.  Provide an `Expires` time to set a persistent cookie - leave it as the zero `time.Time` to set a session cookie:
+A `biloba.Cookie` only requires a `Name` and `Value`.  Whenever you don't provide a `Domain`, Biloba associates the cookie with the tab's current URL (an explicit `Path` still applies on top of that origin).  Because of this, **the tab must be on a real origin when you set such a cookie** - a cookie can't attach to `about:blank`, so `SetCookie` fails the spec with a clear message if you try (navigate first, or set the `Domain` explicitly).  You can also set `Domain`, `Path`, `Secure`, `HTTPOnly`, and `SameSite` (one of `"Strict"`, `"Lax"`, or `"None"`) explicitly.  Provide an `Expires` time to set a persistent cookie - leave it as the zero `time.Time` to set a session cookie:
 
 ```go
 b.SetCookie(biloba.Cookie{

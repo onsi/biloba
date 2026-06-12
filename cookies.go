@@ -2,6 +2,7 @@ package biloba
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
@@ -36,12 +37,15 @@ SetCookie() sets one or more cookies on this tab's BrowserContextID.  At minimum
 
 	b.SetCookie(biloba.Cookie{Name: "user", Value: "Joe"})
 
-Cookies are scoped to the tab's isolated BrowserContextID, so cookies set on one tab will not leak into other tabs.  Cookies require a navigated origin - you must b.Navigate() to a real URL before calling SetCookie (a cookie cannot be associated with about:blank).
+Cookies are scoped to the tab's isolated BrowserContextID, so cookies set on one tab will not leak into other tabs.
+
+Unless you set a Domain explicitly, the cookie is attached to the tab's current location (an explicit Path still applies).  A cookie therefore needs the tab to be on a real origin: if there is no Domain and the tab is on about:blank (or no page), SetCookie fails the spec with a clear message rather than letting Chrome silently drop the cookie - navigate to a real URL first, or set the Domain explicitly.
 
 Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
 */
 func (b *Biloba) SetCookie(cookies ...Cookie) {
 	b.gt.Helper()
+	location := b.Location()
 	params := make([]*network.CookieParam, len(cookies))
 	for i, cookie := range cookies {
 		param := &network.CookieParam{
@@ -53,8 +57,21 @@ func (b *Biloba) SetCookie(cookies ...Cookie) {
 			HTTPOnly: cookie.HTTPOnly,
 			SameSite: network.CookieSameSite(cookie.SameSite),
 		}
-		if cookie.Domain == "" && cookie.Path == "" {
-			param.URL = b.Location()
+		// A cookie must be tied to an origin via either an explicit Domain or a URL. When no
+		// Domain is given we fall back to the tab's current location as the URL (an explicit
+		// Path, if any, still overrides the path the URL would imply). We fail loudly when
+		// there's no Domain and no usable origin, rather than letting Chrome silently drop the
+		// cookie - a sharp edge that otherwise only surfaces later when the cookie isn't there.
+		if cookie.Domain == "" {
+			if !isUsableCookieOrigin(location) {
+				name := cookie.Name
+				if name == "" {
+					name = "<unnamed>"
+				}
+				b.gt.Fatalf("Failed to set cookie %q: a cookie needs an origin, but it has no Domain and the tab's current location (%q) is not one a cookie can attach to.\nNavigate the tab to a real URL before calling SetCookie, or set the cookie's Domain explicitly.", name, location)
+				return
+			}
+			param.URL = location
 		}
 		if !cookie.Expires.IsZero() {
 			expires := cdp.TimeSinceEpoch(cookie.Expires)
@@ -68,6 +85,13 @@ func (b *Biloba) SetCookie(cookies ...Cookie) {
 	if err != nil {
 		b.gt.Fatalf("Failed to set cookies:\n%s", err.Error())
 	}
+}
+
+// isUsableCookieOrigin reports whether location is a URL a cookie can attach to. about:blank
+// (and other opaque/empty origins) cannot hold cookies, which is the common reason a SetCookie
+// silently does nothing.
+func isUsableCookieOrigin(location string) bool {
+	return location != "" && !strings.HasPrefix(location, "about:")
 }
 
 /*

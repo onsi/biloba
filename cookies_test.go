@@ -62,12 +62,28 @@ var _ = Describe("Cookies", func() {
 		})
 	})
 
-	Describe("when setting a cookie fails", func() {
-		It("fails the spec", func() {
+	Describe("when a cookie has no usable origin", func() {
+		It("fails the spec with a clear, actionable message instead of silently dropping the cookie", func() {
 			//a cookie cannot be associated with about:blank's opaque origin
 			b.Navigate("about:blank")
 			b.SetCookie(biloba.Cookie{Name: "user", Value: "Joe"})
-			ExpectFailures(ContainSubstring("Failed to set cookies"))
+			ExpectFailures(SatisfyAll(
+				ContainSubstring(`Failed to set cookie "user"`),
+				ContainSubstring("a cookie needs an origin"),
+				ContainSubstring("about:blank"),
+				ContainSubstring("Navigate the tab to a real URL"),
+			))
+		})
+	})
+
+	Describe("setting a cookie that has a Path but no Domain", func() {
+		It("attaches it to the tab's current origin (rather than silently dropping it)", func() {
+			// regression: previously the origin URL was only auto-filled when BOTH Domain and Path
+			// were empty, so a Path-only cookie got no origin and Chrome quietly discarded it
+			b.SetCookie(biloba.Cookie{Name: "scoped", Value: "v", Path: "/admin"})
+			cookie, ok := b.GetCookies().Find(b.CookieMatching("scoped"))
+			Ω(ok).Should(BeTrue())
+			Ω(cookie.Path).Should(Equal("/admin"))
 		})
 	})
 
@@ -148,10 +164,12 @@ var _ = Describe("Cookies", func() {
 
 	Describe("searching cookies with Find/Filter", func() {
 		BeforeEach(func() {
+			// no Domain set: the cookie's origin comes from the tab's current location, and the
+			// explicit Path still applies
 			b.SetCookie(
-				biloba.Cookie{Name: "session", Value: "abc123", Domain: "localhost", Path: "/"},
-				biloba.Cookie{Name: "session", Value: "def456", Domain: "localhost", Path: "/admin"},
-				biloba.Cookie{Name: "theme", Value: "dark", Domain: "localhost", Path: "/"},
+				biloba.Cookie{Name: "session", Value: "abc123", Path: "/"},
+				biloba.Cookie{Name: "session", Value: "def456", Path: "/admin"},
+				biloba.Cookie{Name: "theme", Value: "dark", Path: "/"},
 			)
 		})
 
