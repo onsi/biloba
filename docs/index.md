@@ -1975,6 +1975,41 @@ var _ = Describe("rendering documents", func() {
 
 You said it, not me.
 
+### Running asynchronous Javascript
+
+`b.Run` evaluates a _synchronous_ expression.  Modern web applications, however, often expose `async` APIs (`fetch`, dynamic `import`, `await app.load()`).  To work with these use `b.RunAsync` (and its error-returning sibling `b.RunErrAsync`).
+
+`RunAsync` runs your script as the **body of an async function**.  That means you can `await` freely and `return` the value you care about:
+
+```go
+// await an application API
+b.RunAsync(`return await app.load()`)
+
+// fetch from the network and decode the response
+users := b.RunAsync(`
+	const response = await fetch("/api/users")
+	return await response.json()
+`)
+```
+
+Everything you've learned about `b.Run` applies: you can decode the result into a typed pointer...
+
+```go
+var users []User
+b.RunAsync(`return await app.load()`, &users)
+```
+
+...and a non-promise value works just fine too (`b.RunAsync("return 1 + 2")` returns `3`).
+
+The key difference from `b.Run` is the `return`.  Because your script is the body of a function (not a bare expression) you must `return` the value you want out of it - a script that forgets to `return` will resolve to `undefined`.
+
+If the script throws, or the promise you `await` (or `return`) rejects, the spec fails (use `RunErrAsync` if you'd like to handle the error yourself):
+
+```go
+// fails the spec with the rejection's message
+b.RunAsync(`return await Promise.reject(new Error("boom"))`)
+```
+
 One last thing before we leave the subject of running Javascript.  The Chrome DevTools basically run these JavaScript snippets via `eval`.  There is one small gotcha.  The following:
 
 ```go

@@ -43,16 +43,24 @@ You should generally use [Biloba.Run] instead of RunErr and let Biloba handle er
 Read https://onsi.github.io/biloba/#running-arbitrary-javascript to learn more about running JavaScript in Biloba
 */
 func (b *Biloba) RunErr(script string, args ...any) (any, error) {
+	return b.runErr(script, false, args...)
+}
+
+func (b *Biloba) runErr(script string, awaitPromise bool, args ...any) (any, error) {
 	b.blockIfNecessaryToEnsureSuccessfulDownloads()
 	var encodedResult []byte
-	withUserGesture := func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
-		return p.WithUserGesture(true)
+	options := func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+		p = p.WithUserGesture(true)
+		if awaitPromise {
+			p = p.WithAwaitPromise(true)
+		}
+		return p
 	}
-	err := chromedp.Run(b.Context, chromedp.EvaluateAsDevTools(script, &encodedResult, withUserGesture))
+	err := chromedp.Run(b.Context, chromedp.EvaluateAsDevTools(script, &encodedResult, options))
 	if err != nil {
 		if strings.Contains(err.Error(), "_biloba is not defined") {
 			b.reloadBiloba()
-			return b.RunErr(script, args...)
+			return b.runErr(script, awaitPromise, args...)
 		}
 		return nil, err
 	}
@@ -65,6 +73,21 @@ func (b *Biloba) RunErr(script string, args ...any) (any, error) {
 
 	err = json.Unmarshal(encodedResult, args[0])
 	return args[0], err
+}
+
+/*
+RunErrAsync() runs the passed in script as the body of an async function and awaits the result, returning the result as well as an error
+
+Use await freely and return the value you want out of the script:
+
+	b.RunErrAsync(`return await app.load()`)
+
+You should generally use [Biloba.RunAsync] instead of RunErrAsync and let Biloba handle errors for you
+
+Read https://onsi.github.io/biloba/#running-arbitrary-javascript to learn more about running JavaScript in Biloba
+*/
+func (b *Biloba) RunErrAsync(script string, args ...any) (any, error) {
+	return b.runErr("(async () => {"+script+"\n})()", true, args...)
 }
 
 /*
@@ -86,6 +109,34 @@ func (b *Biloba) Run(script string, args ...any) any {
 	res, err := b.RunErr(script, args...)
 	if err != nil {
 		b.gt.Fatalf("Failed to run script:\n%s\n\n%s", script, err.Error())
+	}
+	return res
+}
+
+/*
+RunAsync() runs the passed in script as the body of an async function, awaits the result, and returns it.
+
+Unlike [Biloba.Run] (which evaluates a synchronous expression) RunAsync lets you use await and return the value you care about:
+
+	users := b.RunAsync(`
+		const response = await fetch("/api/users")
+		return await response.json()
+	`)
+
+As with Run you can pass a single pointer argument to decode the result into a specific type:
+
+	var users []User
+	b.RunAsync(`return await app.load()`, &users)
+
+# If the script throws or the awaited promise rejects RunAsync will fail the spec
+
+Read https://onsi.github.io/biloba/#running-arbitrary-javascript to learn more about running JavaScript in Biloba
+*/
+func (b *Biloba) RunAsync(script string, args ...any) any {
+	b.gt.Helper()
+	res, err := b.RunErrAsync(script, args...)
+	if err != nil {
+		b.gt.Fatalf("Failed to run async script:\n%s\n\n%s", script, err.Error())
 	}
 	return res
 }

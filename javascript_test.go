@@ -51,6 +51,57 @@ var _ = Describe("Javascript", func() {
 		})
 	})
 
+	Describe("RunErrAsync", func() {
+		Context("when the script resolves", func() {
+			It("awaits the result and returns it as an unencoded Go object", func() {
+				Ω(b.RunErrAsync(`return await new Promise(resolve => setTimeout(() => resolve(42), 10))`)).Should(Equal(42.0))
+				Ω(b.RunErrAsync(`return await Promise.resolve(["a", "b", "c"])`)).Should(HaveExactElements("a", "b", "c"))
+			})
+
+			It("also handles plain (non-promise) values", func() {
+				Ω(b.RunErrAsync(`return 1 + 2`)).Should(Equal(3.0))
+			})
+
+			It("can use await freely in the body", func() {
+				b.Run(`window.app = {load: () => Promise.resolve({name: "Biloba"})}`)
+				Ω(b.RunErrAsync(`
+					const result = await app.load()
+					return result.name
+				`)).Should(Equal("Biloba"))
+			})
+		})
+
+		Context("with an argument", func() {
+			It("decodes the awaited result into the argument", func() {
+				var n int
+				Ω(b.RunErrAsync(`return await Promise.resolve(7)`, &n)).Error().ShouldNot(HaveOccurred())
+				Ω(n).Should(Equal(7))
+			})
+		})
+
+		Context("when the awaited promise rejects", func() {
+			It("returns an error", func() {
+				result, err := b.RunErrAsync(`return await Promise.reject(new Error("boom"))`)
+				Ω(result).Should(BeNil())
+				Ω(err).Should(MatchError(ContainSubstring("boom")))
+			})
+		})
+	})
+
+	Describe("RunAsync", func() {
+		It("runs just like RunErrAsync but fails if an error occurs", func() {
+			b.Run(`window.app = {load: () => Promise.resolve(17)}`)
+			Ω(b.RunAsync(`return await app.load()`)).Should(Equal(17.0))
+
+			result := b.RunAsync(`return await Promise.reject(new Error("boom"))`)
+			Ω(result).Should(BeNil())
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Failed to run async script:"),
+				ContainSubstring("boom"),
+			))
+		})
+	})
+
 	Describe("EvaluateTo", func() {
 		It("compares the result of the actual script with the passed in matcher", func() {
 			b.Run("var a = 0")
