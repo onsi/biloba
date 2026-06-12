@@ -7,6 +7,62 @@ import (
 	"github.com/onsi/biloba"
 )
 
+var _ = Describe("Text and TextContains selectors", func() {
+	BeforeEach(func() {
+		b.Navigate(fixtureServer + "/xpath.html")
+		Eventually(b.XPath().WithID("hometown-label")).Should(b.Exist())
+	})
+
+	Describe("b.Text", func() {
+		It("selects the element whose text matches exactly", func() {
+			Ω(b.Text("Hometown:")).Should(b.HaveProperty("id", "hometown-label"))
+		})
+
+		It("composes with matchers like BeVisible and Exist", func() {
+			Eventually(b.Text("Hometown:")).Should(b.Exist())
+			Ω(b.Text("Hometown:")).Should(b.BeVisible())
+		})
+
+		It("composes with actions like Click", func() {
+			// clicking a label is fine; we just assert no test failure occurs
+			b.Click(b.Text("Hometown:"))
+		})
+
+		It("returns the first match when multiple elements share the same text", func() {
+			// both age-label and age-label-2 have text "Age:" — first is returned
+			Ω(b.Text("Age:")).Should(b.HaveProperty("id", "age-label"))
+		})
+
+		It("does not match on a partial string", func() {
+			Ω(b.HasElement(b.Text("ometow"))).Should(BeFalse())
+		})
+
+		It("fails the spec when no element matches", func() {
+			b.Click(b.Text("no such text"))
+			ExpectFailures(ContainSubstring("no such text"))
+		})
+	})
+
+	Describe("b.TextContains", func() {
+		It("selects an element whose text contains the substring", func() {
+			Ω(b.TextContains("ometow")).Should(b.HaveProperty("id", "hometown-label"))
+		})
+
+		It("composes with matchers like Exist", func() {
+			Eventually(b.TextContains("ometow")).Should(b.Exist())
+		})
+
+		It("does not match when the substring is absent", func() {
+			Ω(b.HasElement(b.TextContains("zzzzzz"))).Should(BeFalse())
+		})
+
+		It("fails the spec when no element matches", func() {
+			b.Click(b.TextContains("no-such-substring"))
+			ExpectFailures(ContainSubstring("no-such-substring"))
+		})
+	})
+})
+
 var _ = DescribeTable("Xpath DSL",
 	func(path biloba.XPath, expectedId string) {
 		b.Navigate(fixtureServer + "/xpath.html")

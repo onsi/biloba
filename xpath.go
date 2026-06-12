@@ -45,6 +45,32 @@ func (b *Biloba) XPath(path ...string) XPath {
 }
 
 /*
+Text(text) returns an XPath that selects any element whose text content equals text exactly.
+It is sugar over b.XPath().WithText(text) and composes with all Biloba actions and matchers:
+
+	b.Click(b.Text("Submit"))
+	Eventually(b.Text("Save")).Should(b.BeVisible())
+
+Read https://onsi.github.io/biloba/#the-xpath-dsl to learn more about Biloba's XPath DSL
+*/
+func (b *Biloba) Text(text string) XPath {
+	return b.XPath().WithText(text)
+}
+
+/*
+TextContains(text) returns an XPath that selects any element whose text content contains text.
+It is sugar over b.XPath().WithTextContains(text) and composes with all Biloba actions and matchers:
+
+	b.Click(b.TextContains("Subm"))
+	Eventually(b.TextContains("Sav")).Should(b.BeVisible())
+
+Read https://onsi.github.io/biloba/#the-xpath-dsl to learn more about Biloba's XPath DSL
+*/
+func (b *Biloba) TextContains(text string) XPath {
+	return b.XPath().WithTextContains(text)
+}
+
+/*
 RelativeXPath() begins a relative XPath query - one that begins with "./"
 
 It is primarily used with [XPath.WithChildMatching]:
