@@ -56,6 +56,17 @@ if (!window["_biloba"]) {
     b.isEnabled = one(n => r(!n.disabled, "DOM element is not enabled"))
     b.click = one(b.isVisible, b.isEnabled, n => r(n.click()))
     b.focus = one(b.isVisible, b.isEnabled, n => r(n.focus()))
+    b.hover = one(b.isVisible, n => {
+        let opts = { bubbles: true, cancelable: true, view: window }
+        n.dispatchEvent(new PointerEvent('pointerover', opts))
+        n.dispatchEvent(new MouseEvent('mouseover', opts))
+        n.dispatchEvent(new PointerEvent('pointerenter', opts))
+        n.dispatchEvent(new MouseEvent('mouseenter', opts))
+        n.dispatchEvent(new MouseEvent('mousemove', opts))
+        return r()
+    })
+    b.scrollIntoView = one(n => r(n.scrollIntoView()))
+    b.node = (s) => sel(s)
     b.clickEach = each(ns => {
         ns.forEach(n => b.click(n))
         return r()

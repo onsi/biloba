@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Interactions Testpage</title>
+    <style>
+        #menu { display: none; }
+        #menu.open { display: block; }
+        #spacer { height: 3000px; }
+    </style>
+</head>
+<body>
+    <h1 id="hello">Interactions Testpage</h1>
+
+    <input id="focusable" type="text" />
+    <button id="disabled-button" disabled>Disabled</button>
+
+    <input id="file" type="file" onchange="showFiles(this, 'filenames')" />
+    <span id="filenames"></span>
+
+    <input id="files" type="file" multiple onchange="showFiles(this, 'multi-filenames')" />
+    <span id="multi-filenames"></span>
+
+    <div id="hover-target"
+         onmouseenter="document.getElementById('menu').classList.add('open')">Hover me</div>
+    <div id="menu">Menu Contents</div>
+
+    <div id="spacer"></div>
+    <div id="footer">Footer</div>
+
+    <script>
+        function showFiles(input, targetID) {
+            const names = [...input.files].map(f => f.name).join(", ")
+            document.getElementById(targetID).innerText = names
+        }
+    </script>
+</body>
+</html>

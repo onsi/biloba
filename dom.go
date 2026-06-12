@@ -29,25 +29,33 @@ func (r *bilobaJSResponse) ResultBool() bool             { return toBool(r.Resul
 func (r *bilobaJSResponse) ResultStringSlice() []string  { return toStringSlice(r.Result) }
 func (r *bilobaJSResponse) ResultAnySlice() []any        { return toAnySlice(r.Result) }
 
+// encodeSelector turns a CSS string, an XPath, or a "/..."-prefixed string into the
+// "s"/"x"-prefixed form that biloba.js's sel()/selEach() expect.
+func encodeSelector(selector any) (string, error) {
+	switch x := selector.(type) {
+	case XPath:
+		return "x" + string(x), nil
+	case string:
+		if x[0] == '/' {
+			return "x" + x, nil
+		}
+		return "s" + x, nil
+	default:
+		return "", fmt.Errorf("invalid selector type %T", x)
+	}
+}
+
 func (b *Biloba) runBilobaHandler(name string, selector any, args ...any) *bilobaJSResponse {
 	b.ensureBiloba()
 	result := &bilobaJSResponse{}
-	parameters := []any{}
-	switch x := selector.(type) {
-	case XPath:
-		parameters = append(parameters, "x"+string(x))
-	case string:
-		if x[0] == '/' {
-			parameters = append(parameters, "x"+x)
-		} else {
-			parameters = append(parameters, "s"+x)
-		}
-	default:
-		result.Err = fmt.Sprintf("invalid selector type %T", x)
+	encoded, err := encodeSelector(selector)
+	if err != nil {
+		result.Err = err.Error()
 		return result
 	}
+	parameters := []any{encoded}
 	parameters = append(parameters, args...)
-	_, err := b.RunErr(b.JSFunc("_biloba."+name).Invoke(parameters...), result)
+	_, err = b.RunErr(b.JSFunc("_biloba."+name).Invoke(parameters...), result)
 	if err != nil {
 		result.Err = err.Error()
 	}
@@ -698,6 +706,83 @@ func (b *Biloba) ClickEach(selector any) {
 	if r.Error() != nil {
 		b.gt.Fatalf("Failed to click each:\n%s", r.Error())
 	}
+}
+
+/*
+Focus() focuses the first element matching selector.
+
+When invoked with a selector, tab.Focus("input.search") acts immediately and fails the spec if no element is found, or if the element is hidden or disabled.
+
+When invoked with no arguments, tab.Focus() returns a Gomega matcher so you can poll until an element is focusable:
+
+	Eventually("input.search").Should(tab.Focus())
+
+Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
+*/
+func (b *Biloba) Focus(args ...any) types.GomegaMatcher {
+	b.gt.Helper()
+	if len(args) > 0 {
+		r := b.runBilobaHandler("focus", args[0])
+		if r.Error() != nil {
+			b.gt.Fatalf("Failed to focus:\n%s", r.Error())
+		}
+		return nil
+	}
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return b.runBilobaHandler("focus", selector).MatcherResult()
+	}).WithMessage("be focusable")
+}
+
+/*
+Hover() dispatches the pointer/mouse events associated with hovering (pointerover, mouseover, pointerenter, mouseenter, mousemove) at the first element matching selector.
+
+Like all of Biloba's interactions this is a pragmatic simulation, not a real pointer: it fires synthetic events synchronously and atomically in the browser.  That means it triggers JavaScript hover handlers (e.g. a menu that opens on mouseenter) but does not activate CSS :hover styling - for that you'll need to drop down to chromedp's input domain.
+
+When invoked with a selector, tab.Hover(".menu") acts immediately and fails the spec if no element is found, or if the element is hidden.
+
+When invoked with no arguments, tab.Hover() returns a Gomega matcher so you can poll until an element is hoverable:
+
+	Eventually(".menu").Should(tab.Hover())
+
+Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
+*/
+func (b *Biloba) Hover(args ...any) types.GomegaMatcher {
+	b.gt.Helper()
+	if len(args) > 0 {
+		r := b.runBilobaHandler("hover", args[0])
+		if r.Error() != nil {
+			b.gt.Fatalf("Failed to hover:\n%s", r.Error())
+		}
+		return nil
+	}
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return b.runBilobaHandler("hover", selector).MatcherResult()
+	}).WithMessage("be hoverable")
+}
+
+/*
+ScrollIntoView() scrolls the first element matching selector into view (via the element's scrollIntoView()).
+
+When invoked with a selector, tab.ScrollIntoView("#footer") acts immediately and fails the spec if no element is found.
+
+When invoked with no arguments, tab.ScrollIntoView() returns a Gomega matcher so you can poll until an element is present to scroll to:
+
+	Eventually("#footer").Should(tab.ScrollIntoView())
+
+Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
+*/
+func (b *Biloba) ScrollIntoView(args ...any) types.GomegaMatcher {
+	b.gt.Helper()
+	if len(args) > 0 {
+		r := b.runBilobaHandler("scrollIntoView", args[0])
+		if r.Error() != nil {
+			b.gt.Fatalf("Failed to scroll into view:\n%s", r.Error())
+		}
+		return nil
+	}
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return b.runBilobaHandler("scrollIntoView", selector).MatcherResult()
+	}).WithMessage("be scrollable into view")
 }
 
 /*

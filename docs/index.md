@@ -1359,6 +1359,44 @@ b.ClickEach(selector)
 
 unlike `Click`, `ClickEach` does not have a matcher variant.  It simply clicks on all the elements that match the selector that are also visible and enabled.  Elements that are not visible or enabled are silently skipped.
 
+### Hovering, Focusing, and Scrolling {#interacting-with-elements}
+
+Alongside `Click`, Biloba provides a few more first-class interactions, all following the same dual immediate/matcher convention:
+
+```go
+b.Focus("input.search")          // focuses the first matching element (must be visible and enabled)
+b.Hover(".menu")                 // fires hover events at the first matching element (must be visible)
+b.ScrollIntoView("#footer")      // scrolls the first matching element into view
+```
+
+Each also returns a matcher when called with no arguments, so you can poll:
+
+```go
+Eventually("input.search").Should(b.Focus())
+Eventually(".menu").Should(b.Hover())
+Eventually("#footer").Should(b.ScrollIntoView())
+```
+
+`Hover` is, like `Click`, a pragmatic simulation: it synchronously dispatches the pointer/mouse events associated with hovering (`pointerover`, `mouseover`, `pointerenter`, `mouseenter`, `mousemove`).  This triggers JavaScript hover handlers - for example a menu that opens on `mouseenter` - but it does **not** activate CSS `:hover` styling, which only responds to a real pointer.  If you need to exercise CSS `:hover`, drop down to chromedp's input domain.
+
+### Uploading Files {#uploading-files}
+
+To attach files to a file input (`<input type="file">`) use `b.SetUpload`:
+
+```go
+b.SetUpload("input[type=file]", "/absolute/path/to/avatar.png")
+b.SetUpload("#attachments", "./a.txt", "./b.txt") // the input needs the `multiple` attribute for more than one file
+```
+
+Setting a file input's files is one of the very few things that genuinely **cannot** be simulated in JavaScript - the browser forbids it for security reasons.  So, unlike most Biloba interactions, `SetUpload` reaches through the Chrome DevTools Protocol (`DOM.setFileInputFiles`) instead of running a snippet in the page.  It fires the input's `change` event just as a real selection would, so your `onchange` handlers run:
+
+```go
+b.SetUpload("#avatar", avatarPath)
+Eventually("#preview").Should(b.HaveAttribute("src", ContainSubstring("blob:")))
+```
+
+`SetUpload` fails the spec if no element matches the selector.  The paths are resolved by the Chrome process, so they must exist on the machine running Chrome.
+
 ### Keyboard Input {#keyboard-input}
 
 `b.SetValue` sets an input's value directly and dispatches `input`/`change` events.  That satisfies most applications, but some are wired up to **real keyboard events** - search-as-you-type fields, rich-text editors, and hotkey handlers all listen for `keydown`/`keypress`/`keyup`.  Biloba cannot synthesize those atomically in JavaScript (the browser forbids synthetic key events from actually typing into the page), so it drops down to `chromedp`'s input domain for you with `b.Type` and `b.SendKeys`.
