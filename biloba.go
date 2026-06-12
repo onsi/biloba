@@ -24,6 +24,7 @@ import (
 	_ "embed"
 
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
@@ -446,6 +447,9 @@ type Biloba struct {
 	dialogHandlers []*DialogHandler
 	dialogs        []*Dialog
 
+	requests         []*Request
+	inflightRequests map[network.RequestID]bool
+
 	enableDebugLogging               bool
 	disableFailureScreenshots        bool
 	disableProgressReportScreenshots bool
@@ -479,11 +483,12 @@ func (b *Biloba) GomegaString() string {
 
 func newBiloba(ginkgoT GinkgoTInterface) *Biloba {
 	b := &Biloba{
-		gt:              ginkgoT,
-		lock:            &sync.Mutex{},
-		downloads:       map[string]*Download{},
-		downloadHistory: map[string]time.Time{},
-		tabs:            map[target.ID]*Biloba{},
+		gt:               ginkgoT,
+		lock:             &sync.Mutex{},
+		downloads:        map[string]*Download{},
+		downloadHistory:  map[string]time.Time{},
+		tabs:             map[target.ID]*Biloba{},
+		inflightRequests: map[network.RequestID]bool{},
 	}
 	return b
 }
@@ -529,6 +534,8 @@ func (b *Biloba) Prepare() {
 	b.downloadHistory = map[string]time.Time{}
 	b.dialogHandlers = []*DialogHandler{}
 	b.dialogs = Dialogs{}
+	b.requests = nil
+	b.inflightRequests = map[network.RequestID]bool{}
 	b.lock.Unlock()
 
 	if !b.disableFailureScreenshots {

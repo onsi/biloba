@@ -2024,6 +2024,51 @@ var result map[string]int
 b.Run("({a:1, b:2})", &result)
 ```
 
+## Stubbing and Observing the Network {#stubbing-and-observing-the-network}
+
+Real browser tests usually talk to a backend.  That makes them slow (every spec waits on real network round-trips) and flaky (the backend has to be up, seeded, and deterministic).  Biloba lets you **observe** the requests a tab makes and **wait for the network to settle**, so your assertions are precise instead of guesses.
+
+### Observing requests
+
+Biloba records every request each tab makes.  Use the `HaveMadeRequest` matcher to assert (and poll for) a request:
+
+```go
+b.Navigate("/app")
+b.Click("#load-users")
+Eventually(b).Should(b.HaveMadeRequest(b.RequestWithURL(ContainSubstring("/api/users"))))
+```
+
+`HaveMadeRequest` takes any number of `RequestFilter`s and passes only if a single request matches **all** of them.  This lets you narrow in on a specific request:
+
+```go
+Eventually(b).Should(b.HaveMadeRequest(
+	b.RequestWithURL(ContainSubstring("/api/users")),
+	b.RequestWithMethod("POST"),
+))
+```
+
+`RequestWithURL` and `RequestWithMethod` each accept a string (exact match) or a Gomega matcher.
+
+You can also get at the raw records with `b.AllRequests()`, which returns a `Requests` slice (each `*Request` has `URL`, `Method`, `Headers`, and `ResourceType`).  `Requests` has `Find(filters...)` and `Filter(filters...)` helpers that use the same `RequestFilter`s:
+
+```go
+req := b.AllRequests().Find(b.RequestWithURL(ContainSubstring("/api/users")))
+Expect(req.Method).To(Equal("GET"))
+```
+
+The recorded requests are scoped to a single tab and are reset by `Prepare()`, so each spec starts with a clean slate.
+
+### Waiting for the network to settle
+
+`BeNetworkIdle` passes when a tab has no in-flight requests.  Pair it with `Eventually` to wait for a burst of activity to finish:
+
+```go
+b.Click("#refresh")
+Eventually(b).Should(b.BeNetworkIdle())
+```
+
+In keeping with Biloba's pragmatism, "idle" means the in-flight count has reached zero - Biloba does not wait for a quiet period (à la `networkidle0`).  If you need to wait for one specific request to complete, assert on its effect directly instead.
+
 ## Window Size, Screenshots, Configuration, and Debugging
 
 There are a few other odds and ends to cover, let's dive in

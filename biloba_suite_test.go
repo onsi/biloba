@@ -1,12 +1,15 @@
 package biloba_test
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/onsi/biloba"
 	. "github.com/onsi/ginkgo/v2"
@@ -149,7 +152,7 @@ func matcherOrEqual(expected interface{}) OmegaMatcher {
 
 func ServeFixtures() {
 	s := ghttp.NewServer()
-	s.RouteToHandler("GET", regexp.MustCompile(`/[a-z\.]*`), func(w http.ResponseWriter, r *http.Request) {
+	s.RouteToHandler("GET", regexp.MustCompile(`^/[\w.\-]*$`), func(w http.ResponseWriter, r *http.Request) {
 		fname := strings.Trim(r.URL.Path, "/")
 		fixture, err := os.ReadFile("./fixtures/" + fname)
 		if err != nil {
@@ -158,6 +161,21 @@ func ServeFixtures() {
 		}
 		w.Write(fixture)
 	})
+	// a tiny JSON API used by the network specs to exercise observation/idle/stubbing
+	apiHandler := func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "slow") {
+			time.Sleep(300 * time.Millisecond)
+		}
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"path":   r.URL.Path,
+			"method": r.Method,
+			"body":   string(body),
+		})
+	}
+	s.RouteToHandler("GET", regexp.MustCompile(`/api/.*`), apiHandler)
+	s.RouteToHandler("POST", regexp.MustCompile(`/api/.*`), apiHandler)
 	fixtureServer = s.URL()
 	DeferCleanup(s.Close)
 }

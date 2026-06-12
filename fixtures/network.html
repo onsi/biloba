@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Network Testpage</title>
+</head>
+<body>
+    <h1 id="hello">Network Testpage</h1>
+    <button id="fetch-users" onclick="fetchUsers()">Fetch Users</button>
+    <button id="post-user" onclick="postUser()">Post User</button>
+    <button id="fetch-slow" onclick="fetchSlow()">Fetch Slow</button>
+    <pre id="result"></pre>
+
+    <script>
+        async function fetchUsers() {
+            const response = await fetch("/api/users")
+            const data = await response.json()
+            document.getElementById("result").innerText = JSON.stringify(data)
+        }
+
+        async function postUser() {
+            const response = await fetch("/api/users", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({name: "Jane"})
+            })
+            const data = await response.json()
+            document.getElementById("result").innerText = JSON.stringify(data)
+        }
+
+        async function fetchSlow() {
+            const response = await fetch("/api/slow")
+            const data = await response.json()
+            document.getElementById("result").innerText = "slow done"
+        }
+    </script>
+</body>
+</html>
