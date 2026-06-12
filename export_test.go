@@ -21,6 +21,26 @@ func SanitizeForFilenameForTest(s string) string {
 	return sanitizeForFilename(s)
 }
 
+// LocateHeadlessShellForTest exposes locateHeadlessShell for headless_shell_test.go.
+func LocateHeadlessShellForTest(explicit string) string {
+	return locateHeadlessShell(explicit)
+}
+
+// HeadlessShellInstructionsForTest exposes headlessShellInstructions for headless_shell_test.go.
+func HeadlessShellInstructionsForTest() string {
+	return headlessShellInstructions()
+}
+
+// ChromeForTestingPlatformForTest exposes chromeForTestingPlatform for headless_shell_test.go.
+func ChromeForTestingPlatformForTest() (string, error) {
+	return chromeForTestingPlatform()
+}
+
+// InstallHeadlessShellForTest exposes installHeadlessShell for headless_shell_test.go.
+func InstallHeadlessShellForTest() (string, error) {
+	return installHeadlessShell()
+}
+
 // SafeAllTabScreenshotsForTest exposes safeAllTabScreenshots for integration tests.
 func (b *Biloba) SafeAllTabScreenshotsForTest(width, height int) []TabScreenshotForTest {
 	shots := b.safeAllTabScreenshots(width, height)

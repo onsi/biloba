@@ -31,7 +31,9 @@ var fixtureServer string
 var failures []string
 
 var _ = SynchronizedBeforeSuite(func() {
-	biloba.SpinUpChrome(gt)
+	// Biloba's own suite runs in the default (pragmatic) chrome-headless-shell mode and
+	// auto-installs the binary so a fresh checkout / CI runs zero-config.
+	biloba.SpinUpChrome(gt, biloba.AutoInstallHeadlessShell())
 }, func() {
 	b = biloba.ConnectToChrome(gt) //, biloba.BilobaConfigEnableDebugLogging())
 	ServeFixtures()

@@ -62,9 +62,13 @@ type GinkgoTInterface interface {
 ChromeConnection captures the details necessary for [ConnectToChrome] to connect to Chrome
 */
 type ChromeConnection struct {
-	WebSocketURL  string
-	WindowWidth   int
-	WindowHeight  int
+	WebSocketURL string
+	WindowWidth  int
+	WindowHeight int
+	// HighFidelity is true when Chrome was spun up in full ("new") headless mode.  SpinUpChrome
+	// sets it and ConnectToChrome reads it to decide whether the new-headless viewport workaround
+	// is needed.
+	HighFidelity bool
 }
 
 func (gc ChromeConnection) encode() []byte {
@@ -73,10 +77,66 @@ func (gc ChromeConnection) encode() []byte {
 }
 
 /*
-Pass StartingWindowSize into [SpinUpChrome] to set the default window size for all tabs
+SpinUpOption configures how [SpinUpChrome] launches Chrome.  See [HighFidelityHeadless], [AutoInstallHeadlessShell], [HeadlessShellPath], [StartingWindowSize], and [ChromeFlags].
 */
-func StartingWindowSize(x int, y int) chromedp.ExecAllocatorOption {
-	return chromedp.WindowSize(x, y)
+type SpinUpOption func(*spinUpConfig)
+
+type spinUpConfig struct {
+	execAllocatorOptions []chromedp.ExecAllocatorOption
+	highFidelity         bool
+	autoInstall          bool
+	headlessShellPath    string
+}
+
+/*
+HighFidelityHeadless opts out of Biloba's default lightweight chrome-headless-shell and runs the full ("new") headless Chrome - the real browser - instead.
+
+By default Biloba favors pragmatism over realism: it drives chrome-headless-shell, the lightweight //content-based headless build, which is dramatically faster and parallelizes across processes.  Pass HighFidelityHeadless to [SpinUpChrome] when you need the realism of the full browser (precise compositing/rendering, extensions, etc.) and are willing to pay for it in speed.
+
+Read https://onsi.github.io/biloba/#headless-fidelity to learn more
+*/
+func HighFidelityHeadless() SpinUpOption {
+	return func(c *spinUpConfig) { c.highFidelity = true }
+}
+
+/*
+AutoInstallHeadlessShell tells [SpinUpChrome] to download chrome-headless-shell (via Chrome for Testing) into Biloba's cache if it cannot be found locally, instead of failing with installation instructions.  Biloba never downloads anything by default; opt in to auto-install for zero-config setups such as ephemeral CI.  Has no effect under [HighFidelityHeadless].
+
+Read https://onsi.github.io/biloba/#headless-fidelity to learn more
+*/
+func AutoInstallHeadlessShell() SpinUpOption {
+	return func(c *spinUpConfig) { c.autoInstall = true }
+}
+
+/*
+HeadlessShellPath explicitly points Biloba at a chrome-headless-shell binary, bypassing the search.  You can also set the BILOBA_CHROME_HEADLESS_SHELL environment variable.
+
+Read https://onsi.github.io/biloba/#headless-fidelity to learn more
+*/
+func HeadlessShellPath(path string) SpinUpOption {
+	return func(c *spinUpConfig) { c.headlessShellPath = path }
+}
+
+/*
+StartingWindowSize sets the default window size for all tabs.  Pass it to [SpinUpChrome].
+*/
+func StartingWindowSize(width int, height int) SpinUpOption {
+	return func(c *spinUpConfig) {
+		c.execAllocatorOptions = append(c.execAllocatorOptions, chromedp.WindowSize(width, height))
+	}
+}
+
+/*
+ChromeFlags passes raw [chromedp.ExecAllocatorOption] flags through to the Chrome process launched by [SpinUpChrome]:
+
+	biloba.SpinUpChrome(GinkgoT(), biloba.ChromeFlags(chromedp.Flag("lang", "es")))
+
+Read https://onsi.github.io/biloba/#configuration to learn more
+*/
+func ChromeFlags(options ...chromedp.ExecAllocatorOption) SpinUpOption {
+	return func(c *spinUpConfig) {
+		c.execAllocatorOptions = append(c.execAllocatorOptions, options...)
+	}
 }
 
 func gooseConfigPath(process int) string {
@@ -88,16 +148,38 @@ Call SpinUpChrome(GinkgoT()) to spin up a Chrome browser
 
 Read https://onsi.github.io/biloba/#bootstrapping-biloba for details on how to set up your Ginkgo suite and use SpinUpChrome correctly
 */
-func SpinUpChrome(ginkgoT GinkgoTInterface, options ...chromedp.ExecAllocatorOption) ChromeConnection {
+func SpinUpChrome(ginkgoT GinkgoTInterface, options ...SpinUpOption) ChromeConnection {
 	ginkgoT.Helper()
+	cfg := &spinUpConfig{}
+	for _, option := range options {
+		option(cfg)
+	}
+
+	// BILOBA_INTERACTIVE runs a real, visible browser, which is inherently high fidelity
+	// (chrome-headless-shell cannot run headful).
+	interactive := os.Getenv("BILOBA_INTERACTIVE") != ""
+	if interactive {
+		cfg.highFidelity = true
+	}
+
 	tmp := ginkgoT.TempDir()
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		StartingWindowSize(1024, 768),
+		chromedp.WindowSize(1024, 768),
 		chromedp.UserDataDir(tmp),
 	)
-	opts = append(opts, options...)
-	if os.Getenv("BILOBA_INTERACTIVE") != "" {
+	opts = append(opts, cfg.execAllocatorOptions...)
+	if interactive {
 		opts = append(opts, chromedp.Flag("headless", false))
+	}
+
+	if !cfg.highFidelity {
+		// Default (pragmatic) mode: drive the lightweight chrome-headless-shell.
+		shellPath, err := resolveHeadlessShellPath(ginkgoT, cfg)
+		if err != nil {
+			ginkgoT.Fatalf("%s", err.Error())
+			return ChromeConnection{}
+		}
+		opts = append(opts, chromedp.ExecPath(shellPath))
 	}
 
 	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
@@ -106,32 +188,34 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...chromedp.ExecAllocatorOpt
 	browserCtx, cancel := chromedp.NewContext(allocCtx)
 	ginkgoT.DeferCleanup(cancel)
 
-	// Read the outer window dimensions — these reflect --window-size and give us the
-	// correct target viewport for all isolated tabs (window.innerHeight < outerHeight
-	// in Chrome 149+ headless mode due to virtual browser chrome).
-	var outerDims []int
-	err := chromedp.Run(browserCtx,
-		chromedp.Evaluate("[window.outerWidth, window.outerHeight]", &outerDims),
-	)
-	if err != nil {
+	cc := ChromeConnection{HighFidelity: cfg.highFidelity}
+
+	if cfg.highFidelity {
+		// Full ("new") headless reports window.innerHeight smaller than --window-size due to
+		// virtual browser chrome, so we capture the outer dimensions here and have ConnectToChrome
+		// EmulateViewport each tab to the correct size.  chrome-headless-shell has no such chrome,
+		// so this probe and the EmulateViewport workaround are skipped in the default mode.
+		var outerDims []int
+		if err := chromedp.Run(browserCtx, chromedp.Evaluate("[window.outerWidth, window.outerHeight]", &outerDims)); err != nil {
+			ginkgoT.Fatalf("failed to spin up chrome: %w", err)
+			return ChromeConnection{}
+		}
+		if len(outerDims) == 2 {
+			cc.WindowWidth = outerDims[0]
+			cc.WindowHeight = outerDims[1]
+		}
+	} else if err := chromedp.Run(browserCtx, chromedp.Evaluate("1", nil)); err != nil {
 		ginkgoT.Fatalf("failed to spin up chrome: %w", err)
 		return ChromeConnection{}
 	}
+
 	bs, err := os.ReadFile(filepath.Join(tmp, "DevToolsActivePort"))
 	if err != nil {
 		ginkgoT.Fatalf("failed to spin up chrome: %w", err)
 		return ChromeConnection{}
 	}
-
 	components := strings.Split(string(bs), "\n")
-
-	cc := ChromeConnection{
-		WebSocketURL: fmt.Sprintf("ws://127.0.0.1:%s%s", components[0], components[1]),
-	}
-	if len(outerDims) == 2 {
-		cc.WindowWidth = outerDims[0]
-		cc.WindowHeight = outerDims[1]
-	}
+	cc.WebSocketURL = fmt.Sprintf("ws://127.0.0.1:%s%s", components[0], components[1])
 
 	os.WriteFile(gooseConfigPath(ginkgoT.ParallelProcess()), cc.encode(), 0744)
 	ginkgoT.DeferCleanup(func() error {
@@ -305,10 +389,12 @@ func ConnectToChrome(ginkgoT GinkgoTInterface, options ...BilobaConfigOption) *B
 	b.targetID = chromedp.FromContext(b.Context).Target.TargetID
 	b.browserContextID = browserContextID
 
-	// Chrome 149+ headless mode reports window.innerHeight smaller than --window-size due to
-	// virtual browser chrome. Apply EmulateViewport using the outer window dimensions stored
-	// in ChromeConnection (set by SpinUpChrome) to give each isolated tab the correct viewport.
-	if b.ChromeConnection.WindowWidth > 0 && b.ChromeConnection.WindowHeight > 0 {
+	// Full ("new") headless reports window.innerHeight smaller than --window-size due to virtual
+	// browser chrome. Apply EmulateViewport using the outer window dimensions stored in
+	// ChromeConnection (set by SpinUpChrome) to give each isolated tab the correct viewport. This
+	// is only needed in high-fidelity mode; chrome-headless-shell has no virtual chrome (and leaves
+	// WindowWidth/Height at 0), so the default mode skips it.
+	if b.ChromeConnection.HighFidelity && b.ChromeConnection.WindowWidth > 0 && b.ChromeConnection.WindowHeight > 0 {
 		if err := chromedp.Run(b.Context, chromedp.EmulateViewport(
 			int64(b.ChromeConnection.WindowWidth),
 			int64(b.ChromeConnection.WindowHeight),
