@@ -1,6 +1,7 @@
 package biloba_test
 
 import (
+	"github.com/onsi/biloba"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -42,6 +43,42 @@ var _ = Describe("Observing the network", func() {
 			req := b.AllRequests().Find(b.RequestWithURL(ContainSubstring("/api/users")))
 			Expect(req).NotTo(BeNil())
 			Expect(req.Method).To(Equal("GET"))
+		})
+	})
+
+	Describe("StubRequest", func() {
+		It("fulfills matching requests with the stubbed response instead of hitting the network", func() {
+			b.StubRequest(ContainSubstring("/api/users"), biloba.StubResponse{
+				Body:    `{"stubbed": true}`,
+				Headers: map[string]string{"Content-Type": "application/json"},
+			})
+			b.Click("#fetch-users")
+			Eventually("#result").Should(b.HaveInnerText(ContainSubstring("stubbed")))
+			// the real /api/users handler echoes the path, so a passthrough would have shown it
+			Expect("#result").NotTo(b.HaveInnerText(ContainSubstring("/api/users")))
+		})
+
+		It("honors the configured status code", func() {
+			b.StubRequest(ContainSubstring("/api/users"), biloba.StubResponse{
+				Status: 503,
+				Body:   "service unavailable",
+			})
+			b.Run(`window.stubStatus = null`)
+			b.Run(`fetch("/api/users").then(r => window.stubStatus = r.status)`)
+			Eventually("window.stubStatus").Should(b.EvaluateTo(503.0))
+		})
+
+		It("passes through requests that match no stub", func() {
+			b.StubRequest(ContainSubstring("/api/widgets"), biloba.StubResponse{Body: "nope"})
+			b.Click("#fetch-users")
+			// /api/users matches no stub, so it reaches the real echoing backend
+			Eventually("#result").Should(b.HaveInnerText(ContainSubstring("/api/users")))
+		})
+
+		It("still records stubbed requests so they can be observed", func() {
+			b.StubRequest(ContainSubstring("/api/users"), biloba.StubResponse{Body: "{}"})
+			b.Click("#fetch-users")
+			Eventually(b).Should(b.HaveMadeRequest(b.RequestWithURL(ContainSubstring("/api/users"))))
 		})
 	})
 

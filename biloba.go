@@ -24,6 +24,7 @@ import (
 	_ "embed"
 
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/target"
@@ -449,6 +450,8 @@ type Biloba struct {
 
 	requests         []*Request
 	inflightRequests map[network.RequestID]bool
+	stubs            []*requestStub
+	fetchEnabled     bool
 
 	enableDebugLogging               bool
 	disableFailureScreenshots        bool
@@ -536,7 +539,16 @@ func (b *Biloba) Prepare() {
 	b.dialogs = Dialogs{}
 	b.requests = nil
 	b.inflightRequests = map[network.RequestID]bool{}
+	b.stubs = nil
+	wasFetchEnabled := b.fetchEnabled
+	b.fetchEnabled = false
 	b.lock.Unlock()
+
+	// disable request interception if a previous spec stubbed requests, so the catch-all
+	// pause doesn't carry into specs that don't stub
+	if wasFetchEnabled {
+		chromedp.Run(b.Context, fetch.Disable())
+	}
 
 	if !b.disableFailureScreenshots {
 		b.gt.DeferCleanup(b.attachScreenshotsIfFailed)

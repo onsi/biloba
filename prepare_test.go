@@ -90,4 +90,21 @@ var _ = Describe("Prepare resets per-spec state so it does not leak between spec
 		b.Prepare()
 		Expect(b.AllRequests()).To(BeEmpty())
 	})
+
+	It("clears request stubs and disables interception", func() {
+		b.Navigate(fixtureServer + "/network.html")
+		Eventually("#hello").Should(b.Exist())
+		b.StubRequest(ContainSubstring("/api/users"), biloba.StubResponse{Body: `{"stubbed": true}`})
+		b.Click("#fetch-users")
+		Eventually("#result").Should(b.HaveInnerText(ContainSubstring("stubbed")))
+
+		b.Prepare()
+		b.Navigate(fixtureServer + "/network.html")
+		Eventually("#hello").Should(b.Exist())
+
+		// with the stub cleared, the request now reaches the real echoing backend
+		b.Click("#fetch-users")
+		Eventually("#result").Should(b.HaveInnerText(ContainSubstring("/api/users")))
+		Expect("#result").NotTo(b.HaveInnerText(ContainSubstring("stubbed")))
+	})
 })

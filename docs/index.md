@@ -2026,7 +2026,35 @@ b.Run("({a:1, b:2})", &result)
 
 ## Stubbing and Observing the Network {#stubbing-and-observing-the-network}
 
-Real browser tests usually talk to a backend.  That makes them slow (every spec waits on real network round-trips) and flaky (the backend has to be up, seeded, and deterministic).  Biloba lets you **observe** the requests a tab makes and **wait for the network to settle**, so your assertions are precise instead of guesses.
+Real browser tests usually talk to a backend.  That makes them slow (every spec waits on real network round-trips) and flaky (the backend has to be up, seeded, and deterministic).  Biloba lets you **stub** responses, **observe** the requests a tab makes, and **wait for the network to settle** - so your specs can be fast, deterministic, and hermetic.
+
+### Stubbing requests
+
+`b.StubRequest` intercepts requests whose URL matches and fulfills them with a canned response instead of letting them hit the network:
+
+```go
+b.StubRequest(ContainSubstring("/api/users"), biloba.StubResponse{
+	Body:    `[{"name": "Jane"}, {"name": "Bob"}]`,
+	Headers: map[string]string{"Content-Type": "application/json"},
+})
+b.Navigate("/app")
+Eventually(".user").Should(b.HaveCount(2))
+```
+
+The first argument is a URL matcher: a string (exact match) or any Gomega matcher (`ContainSubstring`, `HaveSuffix`, `MatchRegexp`, …).  The `StubResponse` lets you set the `Status` (defaults to `200`), the `Body`, and any `Headers`.
+
+Requests that don't match any stub are passed through to the real network, so you can stub just the endpoint you care about and let everything else load normally:
+
+```go
+// only the users API is faked; the page's HTML, JS, and other XHRs load for real
+b.StubRequest(ContainSubstring("/api/users"), biloba.StubResponse{Status: 500})
+```
+
+A few things to keep in mind:
+
+- **Stubs are per-tab and reset by `Prepare()`.**  Each spec starts with no stubs.
+- **Registering the first stub turns on request interception for that tab.**  Under the hood Biloba pauses and resumes *every* request the tab makes so it can decide whether to fulfill or pass each one through.  That has a small per-request cost, so interception is only enabled once you register a stub (and is torn down at the next `Prepare()`).
+- **Stubbed requests are still observed.**  `HaveMadeRequest` and `AllRequests` (below) see stubbed requests just like real ones.
 
 ### Observing requests
 

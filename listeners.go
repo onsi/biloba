@@ -3,6 +3,7 @@ package biloba
 import (
 	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
@@ -45,6 +46,8 @@ func (b *Biloba) setUpListeners() {
 			b.handleEventLoadingFinished(ev)
 		case *network.EventLoadingFailed:
 			b.handleEventLoadingFailed(ev)
+		case *fetch.EventRequestPaused:
+			b.handleEventRequestPaused(ev)
 		}
 	})
 }
