@@ -1,0 +1,156 @@
+package biloba
+
+import (
+	"encoding/json"
+	"fmt"
+)
+
+/*
+Storage provides typed access to a tab's localStorage or sessionStorage.  You obtain a Storage handle via [Biloba.LocalStorage] or [Biloba.SessionStorage]:
+
+	b.LocalStorage().Set("user", "Joe")
+	var user string
+	b.LocalStorage().Get("user", &user)
+
+Storage is scoped to the tab it was created on (and, since each tab lives in its own BrowserContextID, to that isolated context).  Like cookies, web storage requires a navigated origin - you must b.Navigate() to a real URL before using storage (about:blank has an opaque origin and cannot hold storage).
+
+# Type handling
+
+Values are JSON-encoded on Set and JSON-decoded on Get.  This means you can round-trip any JSON-serializable Go value (strings, numbers, bools, slices, maps, structs).  Get accepts an optional pointer argument to decode into a specific type (a la json.Unmarshal); without it Get returns the decoded value as type any (so numbers come back as float64).  Values written to storage outside of Biloba (e.g. by the page itself via localStorage.setItem) that are not valid JSON are returned by Get as their raw string.
+
+Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
+*/
+type Storage struct {
+	b    *Biloba
+	name string //"localStorage" or "sessionStorage"
+}
+
+/*
+LocalStorage() returns a [Storage] handle for interacting with this tab's localStorage.
+
+Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
+*/
+func (b *Biloba) LocalStorage() *Storage {
+	return &Storage{b: b, name: "localStorage"}
+}
+
+/*
+SessionStorage() returns a [Storage] handle for interacting with this tab's sessionStorage.
+
+Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
+*/
+func (b *Biloba) SessionStorage() *Storage {
+	return &Storage{b: b, name: "sessionStorage"}
+}
+
+/*
+Set() JSON-encodes value and stores it under key.  The spec fails if the value cannot be encoded or if storage is unavailable (e.g. you have not navigated to a real origin):
+
+	b.LocalStorage().Set("count", 3)
+	b.LocalStorage().Set("user", map[string]any{"name": "Joe"})
+
+Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
+*/
+func (s *Storage) Set(key string, value any) {
+	s.b.gt.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		s.b.gt.Fatalf("Failed to encode value for %s key %q:\n%s", s.name, key, err.Error())
+		return
+	}
+	setter := s.b.JSFunc(fmt.Sprintf("(k, v) => window.%s.setItem(k, v)", s.name))
+	s.b.Run(setter.Invoke(key, string(encoded)))
+}
+
+/*
+Get() reads the value stored under key.  Values are JSON-decoded; pass an optional pointer to decode into a specific type:
+
+	var count int
+	b.LocalStorage().Get("count", &count)
+
+	user := b.LocalStorage().Get("user") //returns type any
+
+If key is not present Get returns nil (and leaves the pointer untouched).
+
+Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
+*/
+func (s *Storage) Get(key string, args ...any) any {
+	s.b.gt.Helper()
+	getter := s.b.JSFunc(fmt.Sprintf("(k) => window.%s.getItem(k)", s.name))
+	var raw any
+	s.b.Run(getter.Invoke(key), &raw)
+	if raw == nil {
+		return nil
+	}
+	rawString, ok := raw.(string)
+	if !ok {
+		s.b.gt.Fatalf("Unexpected non-string value returned from %s for key %q", s.name, key)
+		return nil
+	}
+	var decoded any
+	if err := json.Unmarshal([]byte(rawString), &decoded); err != nil {
+		//the stored value isn't valid JSON (e.g. it was written directly by the page) - return it raw
+		decoded = rawString
+	}
+	if len(args) > 0 {
+		if err := json.Unmarshal([]byte(rawString), args[0]); err != nil {
+			s.b.gt.Fatalf("Failed to decode %s value for key %q:\n%s", s.name, key, err.Error())
+			return nil
+		}
+		return args[0]
+	}
+	return decoded
+}
+
+/*
+GetAll() returns all key/value pairs in this storage as a map.  Each value is JSON-decoded (so numbers come back as float64); values that are not valid JSON are returned as their raw string.
+
+Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
+*/
+func (s *Storage) GetAll() map[string]any {
+	s.b.gt.Helper()
+	var rawMap map[string]string
+	s.b.Run(fmt.Sprintf("({...window.%s})", s.name), &rawMap)
+	out := map[string]any{}
+	for k, rawString := range rawMap {
+		var decoded any
+		if err := json.Unmarshal([]byte(rawString), &decoded); err != nil {
+			decoded = rawString
+		}
+		out[k] = decoded
+	}
+	return out
+}
+
+/*
+Remove() removes the value stored under key.
+
+Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
+*/
+func (s *Storage) Remove(key string) {
+	s.b.gt.Helper()
+	remover := s.b.JSFunc(fmt.Sprintf("(k) => window.%s.removeItem(k)", s.name))
+	s.b.Run(remover.Invoke(key))
+}
+
+/*
+Clear() removes all values from this storage.
+
+Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
+*/
+func (s *Storage) Clear() {
+	s.b.gt.Helper()
+	s.b.Run(fmt.Sprintf("window.%s.clear()", s.name))
+}
+
+/*
+Length() returns the number of keys in this storage.
+
+Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
+*/
+func (s *Storage) Length() int {
+	s.b.gt.Helper()
+	var length int
+	s.b.Run(fmt.Sprintf("window.%s.length", s.name), &length)
+	return length
+}

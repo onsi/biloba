@@ -392,27 +392,17 @@ These integrations will continue to evolve and deepen as Biloba matures.
 
 ### `chromedp`: Breaking the Fourth Wall
 
-Biloba is only possible because of all the hard work that's gone into the [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/) and the [chromedp](https://github.com/chromedp) [client](https://github.com/chromedp/chromedp) and [Go protocols](https://github.com/chromedp/cdproto).  Biloba wraps all this great stuff to give you a productive testing environment - but it doesn't hide any of it.  You can drop down to `chromedp` and `cdproto` and mix and match Biloba with `chromedp` trivially simply by passing in `b.Context ` to `chromedp`.  For example, Biloba doesn't yet have any cookie support.  You can use `chromedp` and `cdproto/network` to set and clear cookies, though:
+Biloba is only possible because of all the hard work that's gone into the [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/) and the [chromedp](https://github.com/chromedp) [client](https://github.com/chromedp/chromedp) and [Go protocols](https://github.com/chromedp/cdproto).  Biloba wraps all this great stuff to give you a productive testing environment - but it doesn't hide any of it.  You can drop down to `chromedp` and `cdproto` and mix and match Biloba with `chromedp` trivially simply by passing in `b.Context ` to `chromedp`.
+
+For example, Biloba doesn't yet have a first-class wrapper for emulating geolocation.  You can reach for `chromedp` and `cdproto` to do that yourself:
 
 ```go
-BeforeEach(func() {
-	// set the login cookie
-	chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
-		expr := cdp.TimeSinceEpoch(time.Now().Add(180 * 24 * time.Hour))
-		return storage.SetCookies([]*network.CookieParam{{Name:"user", Value:"Joe", Expires:&expr, Domain:"localhost"}}).WithBrowserContextID(b.BrowserContextID()).Do(ctx)
-	}))
-
-	// clear all cookies after each test
-	DeferCleanup(chromedp.Run, b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
-		return storage.ClearCookies().WithBrowserContextID(b.BrowserContextID()).Do(ctx)
-	}))
-})
-
-It("shold be logged int", func() {
-	b.Navigate("http://localhost:8080/home")
-	Expect("#user-name").To(b.HaveInnerText("Joe"))
-})
+chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
+	return emulation.SetGeolocationOverride().WithLatitude(48.8584).WithLongitude(2.2945).WithAccuracy(10).Do(ctx)
+}))
 ```
+
+When a capability is common enough Biloba grows native support for it (see, for example, [Cookies and Storage](#cookies-and-storage)).  Until then, `b.Context` is always there as an escape hatch.
 
 ### The rest of these docs...
 
@@ -449,6 +439,75 @@ this test will:
 - navigate to the table of contents url
 - keep trying until it successfully clicks on an element that has text that begins with "Introduction"
 - assert that the tab eventually ends up on a page whose title ends with "Introduction"
+
+## Cookies and Storage {#cookies-and-storage}
+
+A huge fraction of browser suites need to seed some browser state before exercising the app - most commonly an authentication cookie or a `localStorage` entry - so they can skip the login flow and get straight to the behavior under test.  Biloba provides first-class helpers for cookies, `localStorage`, and `sessionStorage`.
+
+Everything in this section is scoped to the tab's isolated `BrowserContextID`.  Since each Biloba tab lives in its own incognito-like browser context, cookies and storage set on one tab never leak into another - so parallel specs (and multi-tab specs) stay isolated for free.
+
+> **You must navigate to a real origin first.**  Cookies and web storage are associated with an origin, and `about:blank` has an _opaque_ origin that cannot hold either.  Always `b.Navigate(...)` to a real URL before setting cookies or storage.
+
+### Cookies
+
+Set, read, and clear cookies with `b.SetCookie`, `b.GetCookies`, and `b.ClearCookies`:
+
+```go
+BeforeEach(func() {
+	b.Navigate("http://localhost:8080/home")
+
+	// seed the login cookie so we skip the login flow
+	b.SetCookie(biloba.Cookie{Name: "user", Value: "Joe"})
+
+	// clear all cookies after each spec so state doesn't leak
+	DeferCleanup(b.ClearCookies)
+})
+
+It("is logged in", func() {
+	b.Navigate("http://localhost:8080/home")
+	Expect("#user-name").To(b.HaveInnerText("Joe"))
+})
+```
+
+A `biloba.Cookie` only requires a `Name` and `Value`.  If you don't provide a `Domain` and `Path`, Biloba associates the cookie with the tab's current URL.  You can also set `Domain`, `Path`, `Secure`, `HTTPOnly`, and `SameSite` (one of `"Strict"`, `"Lax"`, or `"None"`) explicitly.  Provide an `Expires` time to set a persistent cookie - leave it as the zero `time.Time` to set a session cookie:
+
+```go
+b.SetCookie(biloba.Cookie{
+	Name:    "user",
+	Value:   "Joe",
+	Domain:  "localhost",
+	Expires: time.Now().Add(180 * 24 * time.Hour),
+})
+```
+
+You can pass multiple cookies to a single `SetCookie` call.  `b.GetCookies()` returns a `[]biloba.Cookie` for all the cookies in the tab's browser context (the returned `Cookie`s have their `Session` field set to `true` for session cookies and a populated `Expires` for persistent ones).
+
+### Local and Session Storage
+
+`b.LocalStorage()` and `b.SessionStorage()` return typed handles for interacting with the corresponding web-storage area:
+
+```go
+b.LocalStorage().Set("count", 3)
+
+var count int
+b.LocalStorage().Get("count", &count) // count == 3
+```
+
+Both handles expose the same methods: `Set(key, value)`, `Get(key, ...pointer)`, `GetAll()`, `Remove(key)`, `Clear()`, and `Length()`.
+
+**Type handling:** values are JSON-encoded on `Set` and JSON-decoded on `Get`, so you can round-trip any JSON-serializable Go value:
+
+```go
+b.LocalStorage().Set("user", map[string]any{"name": "Joe", "admin": true})
+
+var user struct {
+	Name  string
+	Admin bool
+}
+b.LocalStorage().Get("user", &user)
+```
+
+`Get` takes an optional pointer argument to decode into a specific type (just like [`b.Run`](#running-arbitrary-javascript)).  Without it, `Get` returns the decoded value as type `any` (so numbers come back as `float64`).  `Get` returns `nil` for a missing key.  Values written to storage by the page itself that aren't valid JSON (e.g. a plain `localStorage.setItem("k", "v")`) are returned as their raw string.
 
 ## Managing Tabs
 

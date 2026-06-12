@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en-US">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Storage Testpage</title>
+</head>
+
+<body>
+    <h1 id="title">Storage Testpage</h1>
+    <pre id="cookie"></pre>
+    <pre id="local"></pre>
+    <pre id="session"></pre>
+    <script>
+        window.refresh = function () {
+            document.getElementById("cookie").innerText = document.cookie
+            document.getElementById("local").innerText = window.localStorage.getItem("seeded") || ""
+            document.getElementById("session").innerText = window.sessionStorage.getItem("seeded") || ""
+        }
+        window.refresh()
+    </script>
+</body>
+
+</html>
