@@ -1099,7 +1099,7 @@ When Biloba sets a value it does the following:
 - dispatch an `input` event
 - dispatch a `change` event
 
-That should get _most_ web applications to realize that a form input has been set.  Some applications, though, may be wired up to keyboard events.  Unfortunately it is not possible to simulate these atomically in JavaScript (for security reasons, the browser does not allow synthetic key events to actually type in the application); for these cases you'll need to use `chromedp`s [SendKeys](https://pkg.go.dev/github.com/chromedp/chromedp#SendKeys).
+That should get _most_ web applications to realize that a form input has been set.  Some applications, though, are wired up to real keyboard events (search-as-you-type fields, rich-text editors, hotkeys).  `SetValue` does **not** fire `keydown`/`keypress`/`keyup` - it sets the value directly.  For those cases reach for [Keyboard Input](#keyboard-input) (`b.Type` and `b.SendKeys`), which dispatch genuine key events.
 
 #### Working with Checkboxes
 
@@ -1219,6 +1219,50 @@ b.ClickEach(selector)
 ```
 
 unlike `Click`, `ClickEach` does not have a matcher variant.  It simply clicks on all the elements that match the selector that are also visible and enabled.  Elements that are not visible or enabled are silently skipped.
+
+### Keyboard Input {#keyboard-input}
+
+`b.SetValue` sets an input's value directly and dispatches `input`/`change` events.  That satisfies most applications, but some are wired up to **real keyboard events** - search-as-you-type fields, rich-text editors, and hotkey handlers all listen for `keydown`/`keypress`/`keyup`.  Biloba cannot synthesize those atomically in JavaScript (the browser forbids synthetic key events from actually typing into the page), so it drops down to `chromedp`'s input domain for you with `b.Type` and `b.SendKeys`.
+
+#### Typing Text
+
+`b.Type` focuses an element and then sends genuine keystrokes - one `keydown`/`keypress`/`keyup` sequence per character:
+
+```go
+b.Type("input.search", "gophers")
+```
+
+Biloba finds the **first** element matching `selector`, confirms that it exists, is visible, and is enabled, focuses it, and then types the text.  If any of those checks fail, `b.Type` fails the test.  Unlike `SetValue`, `Type` **appends** to whatever is already in the field (it types as a user would) and triggers any key-event listeners.
+
+Like `Click` and `SetValue`, `Type` also works as a matcher so you can poll until the element is ready:
+
+```go
+Eventually("input.search").Should(b.Type("gophers"))
+```
+
+#### Sending Named Keys
+
+To send named keys - `Enter`, `Tab`, `Escape`, the arrow keys, `Backspace`, etc. - use `b.SendKeys` together with the `biloba.Keys` namespace:
+
+```go
+b.Type("input.search", "gophers")
+b.SendKeys("input.search", biloba.Keys.Enter) // submit the form
+```
+
+When the first argument is a selector, `SendKeys` focuses that element first (failing the test if it is missing, hidden, or disabled).  You can mix text and named keys in a single call:
+
+```go
+b.SendKeys("textarea", "Hello", biloba.Keys.Enter, "World")
+```
+
+If you omit the selector entirely the keys are sent to whichever element currently has focus.  This is handy for global hotkeys, or for following up on an element you've already focused:
+
+```go
+Eventually("#editor").Should(b.Click()) // focuses the editor
+b.SendKeys(biloba.Keys.Escape)          // sent to the focused editor
+```
+
+The available keys are exposed on `biloba.Keys` (`Backspace`, `Tab`, `Enter`, `Escape`, `Delete`, `ArrowUp`, `ArrowDown`, `ArrowLeft`, `ArrowRight`, `Home`, `End`, `PageUp`, `PageDown`).  Each is a `biloba.Key` - if you need a key that isn't listed you can drop down to `chromedp` via `b.Context` and the [chromedp/kb](https://pkg.go.dev/github.com/chromedp/chromedp/kb) package.
 
 ### Invoking JavaScript on and with selected elements
 

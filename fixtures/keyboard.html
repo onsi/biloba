@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en-US">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Keyboard Testpage</title>
+
+    <style>
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="hello">Hello Keyboard!</div>
+
+    <!-- records the sequence of key events so we can distinguish real keystrokes from SetValue -->
+    <input id="typewriter" type="text" />
+    <ul id="key-log"></ul>
+
+    <input id="disabled-input" type="text" disabled />
+    <input id="hidden-input" type="text" class="hidden" />
+
+    <form id="search-form" action="javascript:void(0)">
+        <input id="search-input" type="text" />
+    </form>
+    <div id="submitted">not submitted</div>
+
+    <script>
+        const log = document.getElementById("key-log")
+        const typewriter = document.getElementById("typewriter")
+        typewriter.addEventListener("keydown", (e) => {
+            const li = document.createElement("li")
+            li.className = "key-event"
+            li.innerText = e.key
+            log.appendChild(li)
+        })
+
+        const form = document.getElementById("search-form")
+        form.addEventListener("submit", (e) => {
+            e.preventDefault()
+            document.getElementById("submitted").innerText = "submitted: " + document.getElementById("search-input").value
+        })
+    </script>
+</body>
+
+</html>
