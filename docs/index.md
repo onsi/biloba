@@ -283,6 +283,48 @@ Of course, Biloba's approach and Puppeteer/chromedp's approaches are not mutuall
 
 This philosophy applies to most of Biloba's DOM interactions: Biloba doesn't type individual characters into input fields.  It simply sets `value` on the associated DOM element and then triggers the relevant Javascript events.  It doesn't scroll to elements and inspect them to tell you they are visible and not occluded.  It simply measures their size to make sure they have a non-zero area.
 
+#### Headless Fidelity: `chrome-headless-shell` by default {#headless-fidelity}
+
+The same "pragmatic simulation over slow, flakey exactness" philosophy drives which _browser_ Biloba runs by default.
+
+Chrome ships two headless implementations:
+
+- **`chrome-headless-shell`** - the original, lightweight headless build (a thin wrapper around Chromium's `//content` module).  It's fast, has minimal dependencies, and - crucially - lets one Chrome process drive many isolated browser contexts _concurrently_.
+- **"new" headless** (the default meaning of `--headless` in modern Chrome) - the _full, real_ Chrome browser running without a visible window.  It's higher fidelity (pixel-accurate compositing, extensions, the works) but markedly slower per operation, and its real windowing model serializes work on the browser's UI thread - so parallel Ginkgo processes sharing one browser stop scaling.
+
+For automated _logic and behavior_ testing - Biloba's whole reason for being - the lightweight shell is the right tool: in Biloba's own suite it is roughly **an order of magnitude faster** and restores the across-process parallelism that makes a Biloba suite fly.  So, **by default, `SpinUpChrome` drives `chrome-headless-shell`.**  This is the browser-level expression of the same trade Biloba makes everywhere: favor fast, stable, good-enough simulation, and let you opt into realism when you actually need it.
+
+When you _do_ need full-browser realism (precise rendering, a specific Chrome feature, extension testing), opt in:
+
+```go
+biloba.SpinUpChrome(GinkgoT(), biloba.HighFidelityHeadless())
+```
+
+This runs the full "new" headless Chrome (and Biloba transparently applies the window/viewport workarounds it needs).  You can mix philosophies just like with DOM interactions: keep the bulk of your suite fast on the shell, and run a focused, higher-fidelity suite where it earns its keep.
+
+##### Getting the `chrome-headless-shell` binary
+
+`chrome-headless-shell` is distributed as a standalone binary (via [Chrome for Testing](https://developer.chrome.com/blog/chrome-for-testing)), separate from your regular Chrome install.  Biloba looks for it in this order:
+
+1. an explicit path you provide via `biloba.HeadlessShellPath("/path/to/chrome-headless-shell")`,
+2. the `BILOBA_CHROME_HEADLESS_SHELL` environment variable,
+3. your `PATH`,
+4. the standard download caches (`@puppeteer/browsers` and Biloba's own cache).
+
+If none of those turn it up, Biloba **fails fast with instructions** rather than silently downloading anything (handy for locked-down CI).  The quickest way to install it:
+
+```bash
+npx @puppeteer/browsers install chrome-headless-shell@stable
+```
+
+Prefer zero-config?  Have Biloba download and cache the binary itself the first time it's needed:
+
+```go
+biloba.SpinUpChrome(GinkgoT(), biloba.AutoInstallHeadlessShell())
+```
+
+`AutoInstallHeadlessShell` fetches the current Stable `chrome-headless-shell` from Chrome for Testing into Biloba's cache.  It's opt-in precisely because "a test run quietly reaching out to the network" should be a choice you make, not a surprise.
+
 #### Bootstrapping: Three Ways
 
 We'll close out this section on performance and stability with one last deep-dive into how Biloba suites are bootstrapped - and we'll discuss some options you have to trade-off between additional stability/isolation and performance:
@@ -2079,13 +2121,21 @@ b.Click("#submit")
 
 Both `SpinUpChrome` and `ConnectToChrome` support a variety of configuration options.
 
-`SpinUpChrome(GinkgoT(), ...)` will accept arbitrarily many [`chromedp.ExecAllocatorOption`s](https://pkg.go.dev/github.com/chromedp/chromedp#ExecAllocatorOption) after `GinkgoT()`.  You can use these to control [all manner of Chrome settings](https://github.com/chromedp/chromedp/blob/696afbda1c13788a234e9ebc0f4cd5e19e744f02/allocate.go#L56-L84).  To turn off `Headless` mode, for example you can run:
+`SpinUpChrome(GinkgoT(), ...)` accepts a set of `SpinUpOption`s:
+
+- `biloba.HighFidelityHeadless()` runs the full ("new") headless Chrome instead of the default `chrome-headless-shell` (see [Headless Fidelity](#headless-fidelity)).
+- `biloba.AutoInstallHeadlessShell()` downloads `chrome-headless-shell` via Chrome for Testing if it can't be found locally, instead of failing with instructions.
+- `biloba.HeadlessShellPath(path)` points Biloba at a specific `chrome-headless-shell` binary (the `BILOBA_CHROME_HEADLESS_SHELL` environment variable does the same).
+- `biloba.StartingWindowSize(width, height)` sets the default window size for all tabs.
+- `biloba.ChromeFlags(...)` passes raw [`chromedp.ExecAllocatorOption`s](https://pkg.go.dev/github.com/chromedp/chromedp#ExecAllocatorOption) through to the Chrome process, letting you control [all manner of Chrome settings](https://github.com/chromedp/chromedp/blob/696afbda1c13788a234e9ebc0f4cd5e19e744f02/allocate.go#L56-L84).
+
+For example, to watch the browser by running headful (which implies high fidelity):
 
 ```go
-SpinUpChrome(GinkgoT(), chromedp.Flag("headless", false))
+SpinUpChrome(GinkgoT(), biloba.ChromeFlags(chromedp.Flag("headless", false)))
 ```
 
-and sit back and watch those windows appear and disappear as you run your specs.
+and sit back and watch those windows appear and disappear as you run your specs.  (You can also just set `BILOBA_INTERACTIVE=true` - see [Debugging](#debugging).)
 
 `ConnectToChrome(GinkgoT(), ...)` supports a more limited set of options that are more specific to Biloba.  Here's a quick summary:
 
