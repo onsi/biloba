@@ -4,10 +4,12 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
+	"github.com/onsi/gomega/format"
 	"github.com/onsi/gomega/gcustom"
 	"github.com/onsi/gomega/types"
 )
@@ -45,13 +47,15 @@ Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn 
 type Requests []*Request
 
 /*
-Find returns the first request matching the passed-in RequestFilters (all filters must match), or nil if none match
+Find returns the first request matching the passed-in RequestQuery (see [Biloba.HaveMadeRequest]), or nil if none match:
+
+	req := b.AllRequests().Find(b.HaveMadeRequest(ContainSubstring("/api/users")).WithMethod("POST"))
 
 Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
 */
-func (r Requests) Find(filters ...RequestFilter) *Request {
+func (r Requests) Find(query *RequestQuery) *Request {
 	for _, req := range r {
-		if requestMatchesAll(req, filters) {
+		if query.matches(req) {
 			return req
 		}
 	}
@@ -59,60 +63,20 @@ func (r Requests) Find(filters ...RequestFilter) *Request {
 }
 
 /*
-Filter returns a Requests slice containing all requests matching the passed-in RequestFilters (all filters must match)
+Filter returns a Requests slice containing all requests matching the passed-in RequestQuery (see [Biloba.HaveMadeRequest]):
+
+	apiCalls := b.AllRequests().Filter(b.HaveMadeRequest(ContainSubstring("/api/")))
 
 Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
 */
-func (r Requests) Filter(filters ...RequestFilter) Requests {
+func (r Requests) Filter(query *RequestQuery) Requests {
 	out := Requests{}
 	for _, req := range r {
-		if requestMatchesAll(req, filters) {
+		if query.matches(req) {
 			out = append(out, req)
 		}
 	}
 	return out
-}
-
-/*
-RequestFilter is used to select requests
-
-Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
-*/
-type RequestFilter func(*Request) bool
-
-func requestMatchesAll(req *Request, filters []RequestFilter) bool {
-	for _, f := range filters {
-		if !f(req) {
-			return false
-		}
-	}
-	return true
-}
-
-/*
-RequestWithURL returns a RequestFilter that selects requests with a matching URL.  url may be a string (exact match) or a Gomega matcher (e.g. ContainSubstring("/api/users")).
-
-Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
-*/
-func (b *Biloba) RequestWithURL(url any) RequestFilter {
-	m := matcherOrEqual(url)
-	return func(req *Request) bool {
-		match, _ := m.Match(req.URL)
-		return match
-	}
-}
-
-/*
-RequestWithMethod returns a RequestFilter that selects requests with a matching HTTP method.  method may be a string (exact match) or a Gomega matcher.
-
-Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
-*/
-func (b *Biloba) RequestWithMethod(method any) RequestFilter {
-	m := matcherOrEqual(method)
-	return func(req *Request) bool {
-		match, _ := m.Match(req.Method)
-		return match
-	}
 }
 
 /*
@@ -129,17 +93,108 @@ func (b *Biloba) AllRequests() Requests {
 }
 
 /*
-HaveMadeRequest() is a matcher that passes if this tab has observed a request satisfying all the passed-in RequestFilters.  Apply it to the tab itself so you can poll for a request to be made:
+RequestQuery is a chainable query over observed requests, keyed on the request URL.  A single value plays two roles:
 
-	Eventually(b).Should(b.HaveMadeRequest(b.RequestWithURL(ContainSubstring("/api/users"))))
-	Eventually(b).Should(b.HaveMadeRequest(b.RequestWithURL(ContainSubstring("/api/users")), b.RequestWithMethod("POST")))
+  - a Gomega matcher you assert against a tab - read it as [Biloba.HaveMadeRequest] (does this tab have a matching request?), and
+  - a predicate you pass to [Requests.Find] / [Requests.Filter] - read it as [Biloba.RequestMatching] (does this one request match?).
+
+Constrain it further by chaining WithMethod (more dimensions can be added the same way).  Every refinement applies to the same request.
 
 Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
 */
-func (b *Biloba) HaveMadeRequest(filters ...RequestFilter) types.GomegaMatcher {
-	return gcustom.MakeMatcher(func(_ *Biloba) (bool, error) {
-		return b.AllRequests().Find(filters...) != nil, nil
-	}).WithTemplate("Did not find request satisfying requirements.")
+type RequestQuery struct {
+	urlMatcher    types.GomegaMatcher
+	methodMatcher types.GomegaMatcher
+	observed      Requests
+}
+
+/*
+RequestMatching() returns a [RequestQuery] keyed on the request URL.  url may be a string (exact match) or a Gomega matcher.  Use this spelling when the query reads as a predicate - i.e. when handing it to [Requests.Find] / [Requests.Filter]:
+
+	req := b.AllRequests().Find(b.RequestMatching(ContainSubstring("/api/users")).WithMethod("GET"))
+
+When you're asserting against a tab, the [Biloba.HaveMadeRequest] alias reads more naturally.  The two are interchangeable - they return the same query.
+
+Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
+*/
+func (b *Biloba) RequestMatching(url any) *RequestQuery {
+	return &RequestQuery{urlMatcher: matcherOrEqual(url)}
+}
+
+/*
+HaveMadeRequest() is an alias for [Biloba.RequestMatching] that reads as an assertion.  Apply the returned [RequestQuery] to the tab so you can poll until the request has been made:
+
+	Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")))
+	Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")).WithMethod("POST"))
+
+Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
+*/
+func (b *Biloba) HaveMadeRequest(url any) *RequestQuery {
+	return b.RequestMatching(url)
+}
+
+/*
+WithMethod() refines the [RequestQuery] to also require the request's HTTP method to match.  method may be a string (exact match) or a Gomega matcher.
+
+Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
+*/
+func (q *RequestQuery) WithMethod(method any) *RequestQuery {
+	return &RequestQuery{
+		urlMatcher:    q.urlMatcher,
+		methodMatcher: matcherOrEqual(method),
+	}
+}
+
+// matches is the predicate role: does this single request satisfy every constraint?
+func (q *RequestQuery) matches(req *Request) bool {
+	if match, _ := q.urlMatcher.Match(req.URL); !match {
+		return false
+	}
+	if q.methodMatcher != nil {
+		if match, _ := q.methodMatcher.Match(req.Method); !match {
+			return false
+		}
+	}
+	return true
+}
+
+// Match is the Gomega matcher role: does the tab have any request that matches?
+func (q *RequestQuery) Match(actual any) (bool, error) {
+	tab, ok := actual.(*Biloba)
+	if !ok {
+		return false, fmt.Errorf("HaveMadeRequest must be passed a Biloba tab.  Got:\n%s", format.Object(actual, 1))
+	}
+	q.observed = tab.AllRequests()
+	return q.observed.Find(q) != nil, nil
+}
+
+func (q *RequestQuery) description() string {
+	out := &strings.Builder{}
+	fmt.Fprintf(out, "have made a request with URL matching %s", q.urlMatcher.FailureMessage(""))
+	if q.methodMatcher != nil {
+		fmt.Fprintf(out, "\nand Method matching %s", q.methodMatcher.FailureMessage(""))
+	}
+	return normalizeWhitespace(out.String())
+}
+
+func (q *RequestQuery) presentRequests() string {
+	if len(q.observed) == 0 {
+		return "The tab has not made any requests."
+	}
+	out := &strings.Builder{}
+	out.WriteString("The requests the tab has made were:")
+	for _, req := range q.observed {
+		fmt.Fprintf(out, "\n%s %s", req.Method, req.URL)
+	}
+	return out.String()
+}
+
+func (q *RequestQuery) FailureMessage(actual any) string {
+	return fmt.Sprintf("Expected the tab to %s.\n%s", q.description(), q.presentRequests())
+}
+
+func (q *RequestQuery) NegatedFailureMessage(actual any) string {
+	return fmt.Sprintf("Expected the tab not to %s, but it did.", q.description())
 }
 
 /*

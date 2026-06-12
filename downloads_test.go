@@ -17,7 +17,7 @@ var _ = Describe("Downloading Files", func() {
 	It("can download files and make them available", func() {
 		b.Click("#download")
 		Eventually(b.AllCompleteDownloads).Should(HaveLen(1))
-		dl := b.AllCompleteDownloads().Find(b.DownloadWithFilename("filename.txt"))
+		dl := b.AllCompleteDownloads().Find(b.DownloadMatching("filename.txt"))
 		Ω(string(dl.Content())).Should(Equal("My Content"))
 	})
 
@@ -28,10 +28,10 @@ var _ = Describe("Downloading Files", func() {
 		b.Click("#download")
 		Eventually(b.AllCompleteDownloads).Should(HaveLen(2))
 
-		dl := b.AllCompleteDownloads().Find(b.DownloadWithFilename("filename.txt"))
+		dl := b.AllCompleteDownloads().Find(b.DownloadMatching("filename.txt"))
 		Ω(string(dl.Content())).Should(Equal("My Content"))
 
-		dl = b.AllCompleteDownloads().Find(b.DownloadWithFilename("new-file.txt"))
+		dl = b.AllCompleteDownloads().Find(b.DownloadMatching("new-file.txt"))
 		Ω(string(dl.Content())).Should(Equal("Some new content"))
 	})
 
@@ -94,11 +94,11 @@ var _ = Describe("Downloading Files", func() {
 		})
 
 		It("can find files by filename", func() {
-			Eventually(b).Should(b.HaveCompleteDownload(b.DownloadWithFilename("yet-file.txt")))
+			Eventually(b).Should(b.HaveDownloaded("yet-file.txt"))
 		})
 
 		It("can find files by content", func() {
-			Eventually(b).Should(b.HaveCompleteDownload(b.DownloadWithContent([]byte("Yet more content"))))
+			Eventually(b).Should(b.HaveDownloaded().WithContent([]byte("Yet more content")))
 		})
 	})
 
@@ -106,7 +106,7 @@ var _ = Describe("Downloading Files", func() {
 		By("ensuring we can download from the root tab")
 		b.Click("#download")
 		Eventually(b.AllCompleteDownloads).Should(HaveLen(1))
-		dl := b.AllCompleteDownloads().Find(b.DownloadWithFilename("filename.txt"))
+		dl := b.AllCompleteDownloads().Find(b.DownloadMatching("filename.txt"))
 		Ω(string(dl.Content())).Should(Equal("My Content"))
 
 		By("ensuring we can download from a new tab")
@@ -125,7 +125,7 @@ var _ = Describe("Downloading Files", func() {
 		b.SetValue("#filename", "new-file.txt")
 		b.Click("#download")
 		Eventually(b.AllCompleteDownloads).Should(HaveLen(2))
-		dl = b.AllCompleteDownloads().Find(b.DownloadWithFilename("new-file.txt"))
+		dl = b.AllCompleteDownloads().Find(b.DownloadMatching("new-file.txt"))
 		Ω(string(dl.Content())).Should(Equal("Some new content"))
 		tab.Click("#download")
 		Eventually(tab.AllCompleteDownloads).Should(HaveLen(2))

@@ -1828,23 +1828,26 @@ b.Click("#download")
 Eventually(b.AllCompleteDownloads).Should(HaveLen(1))
 ```
 
-Of course, asserting on length can be brittle and lead to unsatisfying failure messages.  Instead, you should use `b.HaveCompleteDownload` like so:
+Of course, asserting on length can be brittle and lead to unsatisfying failure messages.  Instead, you should use `b.HaveDownloaded` like so:
 
 ```go
 // we should get a download with the specified filename
-Eventually(b).Should(b.HaveCompleteDownload(b.DownloadWithFilename("hello.pdf")))
+Eventually(b).Should(b.HaveDownloaded("hello.pdf"))
 
-// we should get a download with the specified content
-Eventually(b).Should(b.HaveCompleteDownload(b.DownloadWithContent([]byte{"hello world"})))
+// ...optionally refined by URL and/or content
+Eventually(b).Should(b.HaveDownloaded("hello.pdf").WithContent([]byte("hello world")))
+
+// ...or matched on content alone (a download has no single primary key, so the filename is optional)
+Eventually(b).Should(b.HaveDownloaded().WithContent(ContainSubstring("hello world")))
 ```
 
-`b.HaveCompleteDownload()`  takes a download filter of type `func(d *Download) bool` and `b.DownloadWithFilename` and `b.DownloadWithContent` provide such filters.  Note that `b.DownloadWithFilename` is matching on the _suggested_ filename provided by the browser.  The actual filename on disk is opaque and not something you'll need to worry about.
+`b.HaveDownloaded()` returns a chainable `DownloadQuery`.  The optional filename argument and the `WithURL`/`WithContent` refinements each take a string/[]byte (exact match) or a Gomega matcher, and only **complete** downloads are considered.  Note that the filename is the _suggested_ filename provided by the browser; the actual filename on disk is opaque and not something you'll need to worry about.
 
-Once the download has completed you can get a reference to it  by accessing `b.AllCompleteDownloads()` directly or using its `Find()` method:
+Once the download has completed you can get a reference to it by accessing `b.AllCompleteDownloads()` directly or using its `Find()` method - which takes the same query, spelled `b.DownloadMatching` to read as a predicate:
 
 ```go
-dl := b.AllCompleteDownloads[0]
-dl := b.AllCompleteDownloads.Find(b.DownloadWithFilename("hello.pdf"))
+dl := b.AllCompleteDownloads()[0]
+dl := b.AllCompleteDownloads().Find(b.DownloadMatching("hello.pdf"))
 ```
 
 Once you've got a reference to the download you can do the following:
@@ -2115,30 +2118,27 @@ A few things to keep in mind:
 
 ### Observing requests
 
-Biloba records every request each tab makes.  Use the `HaveMadeRequest` matcher to assert (and poll for) a request:
+Biloba records every request each tab makes.  Use `b.HaveMadeRequest(url)` to assert (and poll for) a request - `url` is a string (exact match) or a Gomega matcher:
 
 ```go
 b.Navigate("/app")
 b.Click("#load-users")
-Eventually(b).Should(b.HaveMadeRequest(b.RequestWithURL(ContainSubstring("/api/users"))))
+Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")))
 ```
 
-`HaveMadeRequest` takes any number of `RequestFilter`s and passes only if a single request matches **all** of them.  This lets you narrow in on a specific request:
+`HaveMadeRequest` returns a chainable query.  Refine it to a more specific request by chaining `WithMethod` (every refinement applies to the same request):
 
 ```go
-Eventually(b).Should(b.HaveMadeRequest(
-	b.RequestWithURL(ContainSubstring("/api/users")),
-	b.RequestWithMethod("POST"),
-))
+Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")).WithMethod("POST"))
 ```
 
-`RequestWithURL` and `RequestWithMethod` each accept a string (exact match) or a Gomega matcher.
-
-You can also get at the raw records with `b.AllRequests()`, which returns a `Requests` slice (each `*Request` has `URL`, `Method`, `Headers`, and `ResourceType`).  `Requests` has `Find(filters...)` and `Filter(filters...)` helpers that use the same `RequestFilter`s:
+The same query plays double duty.  As an assertion you hand it to `Should`/`Eventually` (above) and spell it `HaveMadeRequest`, which reads as a claim about the tab.  As a **predicate** you hand it to the `Find`/`Filter` helpers on the `Requests` slice returned by `b.AllRequests()` (each `*Request` has `URL`, `Method`, `Headers`, and `ResourceType`) and spell it `RequestMatching`, which reads as a description of one request.  The two spellings are interchangeable - they build the same query:
 
 ```go
-req := b.AllRequests().Find(b.RequestWithURL(ContainSubstring("/api/users")))
+req := b.AllRequests().Find(b.RequestMatching(ContainSubstring("/api/users")).WithMethod("GET"))
 Expect(req.Method).To(Equal("GET"))
+
+apiCalls := b.AllRequests().Filter(b.RequestMatching(ContainSubstring("/api/")))
 ```
 
 The recorded requests are scoped to a single tab and are reset by `Prepare()`, so each spec starts with a clean slate.

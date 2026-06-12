@@ -85,7 +85,7 @@ var _ = Describe("Prepare resets per-spec state so it does not leak between spec
 		b.Navigate(fixtureServer + "/network.html")
 		Eventually("#hello").Should(b.Exist())
 		b.Click("#fetch-users")
-		Eventually(b).Should(b.HaveMadeRequest(b.RequestWithURL(ContainSubstring("/api/users"))))
+		Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")))
 
 		b.Prepare()
 		Expect(b.AllRequests()).To(BeEmpty())

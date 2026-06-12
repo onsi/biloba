@@ -4,11 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/browser"
-	"github.com/onsi/gomega/gcustom"
+	"github.com/onsi/gomega/format"
 	"github.com/onsi/gomega/types"
 )
 
@@ -134,13 +135,15 @@ Downloads represents a slice of *Download
 type Downloads []*Download
 
 /*
-Find returns the first download that matches DownloadFilter, or nil if none match
+Find returns the first download matching the passed-in DownloadQuery (see [Biloba.DownloadMatching]), or nil if none match:
+
+	dl := b.AllCompleteDownloads().Find(b.DownloadMatching("report.csv"))
 
 Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
 */
-func (d Downloads) Find(f DownloadFilter) *Download {
+func (d Downloads) Find(query *DownloadQuery) *Download {
 	for _, dl := range d {
-		if f(dl) {
+		if query.matches(dl) {
 			return dl
 		}
 	}
@@ -148,14 +151,14 @@ func (d Downloads) Find(f DownloadFilter) *Download {
 }
 
 /*
-Filter returns a Downloads slice containing all matching *Download objects
+Filter returns a Downloads slice containing all downloads matching the passed-in DownloadQuery (see [Biloba.DownloadMatching])
 
 Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
 */
-func (d Downloads) Filter(f DownloadFilter) Downloads {
+func (d Downloads) Filter(query *DownloadQuery) Downloads {
 	out := Downloads{}
 	for _, dl := range d {
-		if f(dl) {
+		if query.matches(dl) {
 			out = append(out, dl)
 		}
 	}
@@ -215,60 +218,140 @@ func (b *Biloba) activeDownloadsShouldBlockTabFromClosing(closingTab *Biloba) bo
 }
 
 /*
-DownloadFilter is used to filter downloads
+DownloadQuery is a chainable query over a tab's downloads.  A single value plays two roles:
+
+  - a Gomega matcher you assert against a tab - read it as [Biloba.HaveDownloaded] (does this tab have a matching complete download?), and
+  - a predicate you pass to [Downloads.Find] / [Downloads.Filter] - read it as [Biloba.DownloadMatching] (does this one download match?).
+
+Unlike requests and cookies, a download has no single primary key, so all of its dimensions are refinements: chain WithURL and WithContent (and pass an optional filename to the constructor).  Every refinement applies to the same download.
 
 Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
 */
-type DownloadFilter func(*Download) bool
-
-/*
-HaveCompleteDownload() is a matcher that passes if this tab has a complete download that satisfies the passed in DownloadFilter
-
-Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
-*/
-func (b *Biloba) HaveCompleteDownload(f DownloadFilter) types.GomegaMatcher {
-	return gcustom.MakeMatcher(func(_ *Biloba) (bool, error) {
-		return b.AllCompleteDownloads().Find(f) != nil, nil
-	}).WithTemplate("Did not find download satisfying requirements.")
+type DownloadQuery struct {
+	filenameMatcher types.GomegaMatcher
+	urlMatcher      types.GomegaMatcher
+	contentMatcher  types.GomegaMatcher
+	observed        Downloads
 }
 
 /*
-DownloadWithURL() returns a filter that selects Downloads with a matching url.  url may be a string (exact match) or Gomega matcher
+DownloadMatching() returns a [DownloadQuery].  Pass an optional filename (a string for an exact match, or a Gomega matcher) to key on the suggested download filename; omit it to start from "any download" and refine with WithURL/WithContent.  Use this spelling when the query reads as a predicate - i.e. when handing it to [Downloads.Find] / [Downloads.Filter]:
+
+	dl := b.AllCompleteDownloads().Find(b.DownloadMatching("report.csv"))
+	dl := b.AllCompleteDownloads().Find(b.DownloadMatching().WithContent([]byte("a,b,c")))
+
+When you're asserting against a tab, the [Biloba.HaveDownloaded] alias reads more naturally.  The two are interchangeable - they return the same query.
 
 Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
 */
-func (b *Biloba) DownloadWithURL(url any) DownloadFilter {
-	m := matcherOrEqual(url)
-	return func(dl *Download) bool {
-		match, _ := m.Match(dl.URL)
-		return match
+func (b *Biloba) DownloadMatching(filename ...any) *DownloadQuery {
+	q := &DownloadQuery{}
+	if len(filename) > 0 {
+		q.filenameMatcher = matcherOrEqual(filename[0])
 	}
+	return q
 }
 
 /*
-DownloadWithFilename() returns a filter that selects Downloads with a matching filename - this is the filename suggested to the browser when the download commences.  filename may be a string (exact match) or Gomega matcher
+HaveDownloaded() is an alias for [Biloba.DownloadMatching] that reads as an assertion.  Apply the returned [DownloadQuery] to the tab so you can poll until a matching complete download has arrived:
+
+	Eventually(b).Should(b.HaveDownloaded("report.csv"))
+	Eventually(b).Should(b.HaveDownloaded("report.csv").WithContent([]byte("a,b,c")))
+	Eventually(b).Should(b.HaveDownloaded().WithContent(ContainSubstring("totals")))
 
 Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
 */
-func (b *Biloba) DownloadWithFilename(filename any) DownloadFilter {
-	m := matcherOrEqual(filename)
-	return func(dl *Download) bool {
-		match, _ := m.Match(dl.Filename)
-		return match
-	}
+func (b *Biloba) HaveDownloaded(filename ...any) *DownloadQuery {
+	return b.DownloadMatching(filename...)
 }
 
 /*
-DownloadWithContent() returns a filter that selects Downloads with matching content (a []byte slice).  content may be a []byte slice (exact match) or Gomega matcher
+WithURL() refines the [DownloadQuery] to also require the download's URL to match.  url may be a string (exact match) or a Gomega matcher.
 
 Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
 */
-func (b *Biloba) DownloadWithContent(content any) DownloadFilter {
-	m := matcherOrEqual(content)
-	return func(dl *Download) bool {
-		match, _ := m.Match(dl.Content())
-		return match
+func (q *DownloadQuery) WithURL(url any) *DownloadQuery {
+	out := *q
+	out.urlMatcher = matcherOrEqual(url)
+	return &out
+}
+
+/*
+WithContent() refines the [DownloadQuery] to also require the download's content to match.  content may be a []byte slice (exact match) or a Gomega matcher.  Only complete downloads have content, so a download that is still in progress never matches a content refinement.
+
+Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
+*/
+func (q *DownloadQuery) WithContent(content any) *DownloadQuery {
+	out := *q
+	out.contentMatcher = matcherOrEqual(content)
+	return &out
+}
+
+// matches is the predicate role: does this single download satisfy every constraint?
+func (q *DownloadQuery) matches(dl *Download) bool {
+	if q.filenameMatcher != nil {
+		if match, _ := q.filenameMatcher.Match(dl.Filename); !match {
+			return false
+		}
 	}
+	if q.urlMatcher != nil {
+		if match, _ := q.urlMatcher.Match(dl.URL); !match {
+			return false
+		}
+	}
+	if q.contentMatcher != nil {
+		if match, _ := q.contentMatcher.Match(dl.Content()); !match {
+			return false
+		}
+	}
+	return true
+}
+
+// Match is the Gomega matcher role: does the tab have any complete download that matches?
+func (q *DownloadQuery) Match(actual any) (bool, error) {
+	tab, ok := actual.(*Biloba)
+	if !ok {
+		return false, fmt.Errorf("HaveDownloaded must be passed a Biloba tab.  Got:\n%s", format.Object(actual, 1))
+	}
+	q.observed = tab.AllCompleteDownloads()
+	return q.observed.Find(q) != nil, nil
+}
+
+func (q *DownloadQuery) description() string {
+	clauses := []string{}
+	if q.filenameMatcher != nil {
+		clauses = append(clauses, fmt.Sprintf("Filename matching %s", q.filenameMatcher.FailureMessage("")))
+	}
+	if q.urlMatcher != nil {
+		clauses = append(clauses, fmt.Sprintf("URL matching %s", q.urlMatcher.FailureMessage("")))
+	}
+	if q.contentMatcher != nil {
+		clauses = append(clauses, fmt.Sprintf("Content matching %s", q.contentMatcher.FailureMessage("")))
+	}
+	if len(clauses) == 0 {
+		return "have a complete download"
+	}
+	return normalizeWhitespace("have a complete download with " + strings.Join(clauses, "\nand "))
+}
+
+func (q *DownloadQuery) presentDownloads() string {
+	if len(q.observed) == 0 {
+		return "The tab has no complete downloads."
+	}
+	out := &strings.Builder{}
+	out.WriteString("The tab's complete downloads were:")
+	for _, dl := range q.observed {
+		fmt.Fprintf(out, "\n%s (%s)", dl.Filename, dl.URL)
+	}
+	return out.String()
+}
+
+func (q *DownloadQuery) FailureMessage(actual any) string {
+	return fmt.Sprintf("Expected the tab to %s.\n%s", q.description(), q.presentDownloads())
+}
+
+func (q *DownloadQuery) NegatedFailureMessage(actual any) string {
+	return fmt.Sprintf("Expected the tab not to %s, but it did.", q.description())
 }
 
 func (b *Biloba) handleEventDownloadWillBegin(ev *browser.EventDownloadWillBegin) {

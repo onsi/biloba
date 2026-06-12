@@ -15,34 +15,33 @@ var _ = Describe("Observing the network", func() {
 	Describe("HaveMadeRequest", func() {
 		It("records requests the page makes and lets you assert on them", func() {
 			b.Click("#fetch-users")
-			Eventually(b).Should(b.HaveMadeRequest(b.RequestWithURL(ContainSubstring("/api/users"))))
+			Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")))
 			Eventually("#result").Should(b.HaveInnerText(ContainSubstring("/api/users")))
 		})
 
-		It("can match on method as well as URL (all filters must match)", func() {
+		It("can refine on method as well as URL", func() {
 			b.Click("#post-user")
-			Eventually(b).Should(b.HaveMadeRequest(
-				b.RequestWithURL(ContainSubstring("/api/users")),
-				b.RequestWithMethod("POST"),
-			))
+			Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")).WithMethod("POST"))
 		})
 
 		It("does not match requests that were never made", func() {
 			b.Click("#fetch-users")
-			Eventually(b).Should(b.HaveMadeRequest(b.RequestWithURL(ContainSubstring("/api/users"))))
-			Expect(b).NotTo(b.HaveMadeRequest(b.RequestWithURL(ContainSubstring("/api/widgets"))))
-			Expect(b).NotTo(b.HaveMadeRequest(
-				b.RequestWithURL(ContainSubstring("/api/users")),
-				b.RequestWithMethod("DELETE"),
-			))
+			Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")))
+			Expect(b).NotTo(b.HaveMadeRequest(ContainSubstring("/api/widgets")))
+			Expect(b).NotTo(b.HaveMadeRequest(ContainSubstring("/api/users")).WithMethod("DELETE"))
 		})
 
-		It("exposes the raw request records via AllRequests", func() {
+		It("doubles as a predicate over AllRequests via Find/Filter", func() {
 			b.Click("#fetch-users")
-			Eventually(b).Should(b.HaveMadeRequest(b.RequestWithURL(ContainSubstring("/api/users"))))
-			req := b.AllRequests().Find(b.RequestWithURL(ContainSubstring("/api/users")))
+			Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")))
+
+			// the same query shape used as a matcher above reads as a predicate here (RequestMatching)
+			req := b.AllRequests().Find(b.RequestMatching(ContainSubstring("/api/users")).WithMethod("GET"))
 			Expect(req).NotTo(BeNil())
 			Expect(req.Method).To(Equal("GET"))
+
+			Expect(b.AllRequests().Filter(b.RequestMatching(ContainSubstring("/api/users")))).NotTo(BeEmpty())
+			Expect(b.AllRequests().Find(b.RequestMatching(ContainSubstring("/api/widgets")))).To(BeNil())
 		})
 	})
 
@@ -78,14 +77,14 @@ var _ = Describe("Observing the network", func() {
 		It("still records stubbed requests so they can be observed", func() {
 			b.StubRequest(ContainSubstring("/api/users"), biloba.StubResponse{Body: "{}"})
 			b.Click("#fetch-users")
-			Eventually(b).Should(b.HaveMadeRequest(b.RequestWithURL(ContainSubstring("/api/users"))))
+			Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")))
 		})
 	})
 
 	Describe("BeNetworkIdle", func() {
 		It("eventually becomes idle once in-flight requests complete", func() {
 			b.Click("#fetch-slow")
-			Eventually(b).Should(b.HaveMadeRequest(b.RequestWithURL(ContainSubstring("/api/slow"))))
+			Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/slow")))
 			// the slow endpoint sleeps ~300ms, so the request is briefly in-flight then settles
 			Eventually(b).Should(b.BeNetworkIdle())
 			Eventually("#result").Should(b.HaveInnerText("slow done"))
