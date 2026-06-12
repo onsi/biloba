@@ -3,13 +3,36 @@ if (!window["_biloba"]) {
     let r = (s, guard) => (s === undefined || s === null) ? { success: true } : { success: s, guard: guard }
     let rErr = (err) => { return { error: err } }
     let rRes = (res) => { return { success: true, result: res } }
+    // crossInto descends through one open shadow root or same-origin iframe boundary.
+    // Closed shadow roots and cross-origin iframes return null (the element won't be found).
+    let crossInto = (el) => {
+        if (!el) return null
+        if (el.shadowRoot) return el.shadowRoot
+        try { return el.contentDocument || null } catch (e) { return null }
+    }
+    // pierceRoot resolves all but the last ">>>" segment to the shadow/iframe root they live
+    // in, returning [root, lastSegment] (or [null, ...] if any boundary can't be crossed).
+    let pierceRoot = (css) => {
+        let segs = css.split(">>>")
+        let ctx = document
+        for (let i = 0; i < segs.length - 1; i++) {
+            let host = ctx.querySelector(segs[i].trim())
+            ctx = crossInto(host)
+            if (!ctx) return [null, null]
+        }
+        return [ctx, segs[segs.length - 1].trim()]
+    }
     let sel = (s) => {
         if (typeof s == "string") {
             if (s.charAt(0) == "x") {
                 return document.evaluate(s.slice(1), document, null, XPathResult.ANY_UNORDERED_NODE_TYPE, null).singleNodeValue
-            } else {
-                return document.querySelector(s.slice(1))
             }
+            let css = s.slice(1)
+            if (css.includes(">>>")) {
+                let [root, last] = pierceRoot(css)
+                return root ? root.querySelector(last) : null
+            }
+            return document.querySelector(css)
         }
         return s
     }
@@ -20,9 +43,13 @@ if (!window["_biloba"]) {
                 const nodes = [];
                 for (let node = xPathResult.iterateNext(); node != null; node = xPathResult.iterateNext()) nodes.push(node)
                 return nodes
-            } else {
-                return [...document.querySelectorAll(s.slice(1))]
             }
+            let css = s.slice(1)
+            if (css.includes(">>>")) {
+                let [root, last] = pierceRoot(css)
+                return root ? [...root.querySelectorAll(last)] : []
+            }
+            return [...document.querySelectorAll(css)]
         }
         return s
     }

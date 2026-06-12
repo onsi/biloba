@@ -782,6 +782,25 @@ This design decision helps reduce flakiness in your test suite.  It's possible t
 
 Finally - some Biloba methods use the **first** element returned by the `selector` while others use **every** element returned by the selector.  The difference is usually clear based on the name of the method.
 
+#### Piercing Shadow DOM and iframes {#piercing}
+
+A plain `querySelector` can't see inside a web component's shadow DOM or inside an `<iframe>` - the DOM is encapsulated.  Biloba's CSS selectors understand a `>>>` combinator that crosses one such boundary:
+
+```go
+// reach a button inside <my-widget>'s shadow root
+b.Click("my-widget >>> button.submit")
+
+// reach an element inside a same-origin iframe
+Eventually("#editor-frame >>> .toolbar .save").Should(b.Click())
+
+// chain it to descend through several boundaries
+b.HaveInnerText("app-shell >>> settings-panel >>> .title")
+```
+
+Each `>>>` steps across exactly one boundary: the element to its left is the host (a shadow host or an iframe) and the selector to its right is resolved inside that host's shadow root or document.  `>>>` works with every selector-based method (actions, matchers, and the `*Each`/count forms).
+
+This pierces **open shadow roots** and **same-origin iframes**.  It cannot reach into **closed** shadow roots or **cross-origin** iframes - the browser does not expose their contents to JavaScript, so a selector targeting them simply won't match (drop down to chromedp's frame handling for cross-origin frames).  `>>>` is a CSS-only feature; XPath selectors do not cross boundaries.
+
 Now that we know how to `select` DOM elements - let's dig into what we can do with them.
 
 ### Existence, Counting, Visibility, and Interactibility

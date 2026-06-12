@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Shadow Testpage</title>
+</head>
+<body>
+    <h1 id="hello">Shadow Testpage</h1>
+
+    <my-widget></my-widget>
+
+    <iframe id="inner" src="/iframe-content.html"></iframe>
+
+    <script>
+        class MyWidget extends HTMLElement {
+            constructor() {
+                super()
+                const root = this.attachShadow({ mode: "open" })
+                root.innerHTML = `
+                    <div class="label">Shadow Label</div>
+                    <button class="shadow-btn">Shadow Button</button>
+                    <span class="item">A</span>
+                    <span class="item">B</span>
+                `
+                root.querySelector(".shadow-btn").addEventListener("click", (e) => {
+                    e.target.textContent = "Clicked"
+                })
+            }
+        }
+        customElements.define("my-widget", MyWidget)
+    </script>
+</body>
+</html>
