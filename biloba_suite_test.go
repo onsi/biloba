@@ -32,8 +32,14 @@ var failures []string
 
 var _ = SynchronizedBeforeSuite(func() {
 	// Biloba's own suite runs in the default (pragmatic) chrome-headless-shell mode and
-	// auto-installs the binary so a fresh checkout / CI runs zero-config.
-	biloba.SpinUpChrome(gt, biloba.AutoInstallHeadlessShell())
+	// auto-installs the binary so a fresh checkout / CI runs zero-config. Setting
+	// BILOBA_TEST_HIGH_FIDELITY exercises the full ("new") headless Chrome path instead
+	// (used by the high-fidelity CI lane).
+	opts := []biloba.SpinUpOption{biloba.AutoInstallHeadlessShell()}
+	if os.Getenv("BILOBA_TEST_HIGH_FIDELITY") != "" {
+		opts = []biloba.SpinUpOption{biloba.HighFidelityHeadless()}
+	}
+	biloba.SpinUpChrome(gt, opts...)
 }, func() {
 	b = biloba.ConnectToChrome(gt) //, biloba.BilobaConfigEnableDebugLogging())
 	ServeFixtures()

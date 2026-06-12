@@ -7,21 +7,34 @@ jobs:
     runs-on: ubuntu-latest
     name: Check modules
     steps:
-    - uses: actions/setup-go@v3
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
       with:
-        go-version: '1.19'
-    - uses: actions/checkout@v3
+        go-version-file: 'go.mod'
     - run: go mod tidy && git diff --exit-code go.mod go.sum
+
   build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        version: [ '1.19', '1.20' ]
-    name: Go ${{ matrix.version }}
+    name: Test (default chrome-headless-shell)
     steps:
-    - uses: actions/setup-go@v3
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
       with:
-        go-version: ${{ matrix.version }}
-    - uses: actions/checkout@v3
+        go-version-file: 'go.mod'
     - run: go vet ./...
-    - run: go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all  --fail-on-pending --keep-going --race -procs=2
+    # default (pragmatic) mode: the suite auto-installs chrome-headless-shell via Chrome for Testing
+    - run: go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --fail-on-pending --keep-going --race -procs=2
+
+  high-fidelity:
+    runs-on: ubuntu-latest
+    name: Test (high-fidelity headless)
+    env:
+      # drive the suite through the full ("new") headless Chrome path (uses the runner's
+      # pre-installed google-chrome) so both fidelity modes stay green
+      BILOBA_TEST_HIGH_FIDELITY: "true"
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: 'go.mod'
+    - run: go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --fail-on-pending --keep-going --race -procs=2
