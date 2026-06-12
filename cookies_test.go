@@ -81,4 +81,77 @@ var _ = Describe("Cookies", func() {
 			Ω(tab.GetCookies()).Should(BeEmpty())
 		})
 	})
+
+	Describe("the HaveCookie matcher", func() {
+		It("passes when a cookie with the name exists (literal and matcher args)", func() {
+			b.SetCookie(biloba.Cookie{Name: "session", Value: "abc123"})
+			Eventually(b).Should(b.HaveCookie("session"))
+			Ω(b).Should(b.HaveCookie(ContainSubstring("sess")))
+			Ω(b).ShouldNot(b.HaveCookie("nope"))
+		})
+
+		It("refines on the cookie's fields with literal and matcher args", func() {
+			b.SetCookie(biloba.Cookie{Name: "session", Value: "abc123", Domain: "localhost", Path: "/"})
+			Ω(b).Should(b.HaveCookie("session").WithValue("abc123").WithPath("/"))
+			Ω(b).Should(b.HaveCookie("session").WithValue(ContainSubstring("abc")))
+			Ω(b).ShouldNot(b.HaveCookie("session").WithValue("nope"))
+		})
+
+		It("supports the Secure and HTTPOnly flag refinements", func() {
+			b.SetCookie(biloba.Cookie{Name: "session", Value: "abc123", Secure: true, HTTPOnly: true})
+			Ω(b).Should(b.HaveCookie("session").Secure().HTTPOnly())
+
+			b.SetCookie(biloba.Cookie{Name: "plain", Value: "v"})
+			Ω(b).ShouldNot(b.HaveCookie("plain").Secure())
+		})
+
+		It("supports WithDomain and WithSameSite", func() {
+			b.SetCookie(biloba.Cookie{Name: "session", Value: "abc123", Domain: "localhost", SameSite: "Lax"})
+			Ω(b).Should(b.HaveCookie("session").WithDomain("localhost").WithSameSite("Lax"))
+		})
+
+		It("requires all refinements to hold for the SAME cookie", func() {
+			//two cookies, each satisfies one refinement but neither satisfies both
+			b.SetCookie(
+				biloba.Cookie{Name: "session", Value: "abc123", Domain: "localhost", Path: "/foo"},
+				biloba.Cookie{Name: "session", Value: "different", Domain: "localhost", Path: "/bar"},
+			)
+			//each refinement is individually satisfiable...
+			Ω(b).Should(b.HaveCookie("session").WithValue("abc123"))
+			Ω(b).Should(b.HaveCookie("session").WithPath("/bar"))
+			//...but no single cookie satisfies both
+			Ω(b).ShouldNot(b.HaveCookie("session").WithValue("abc123").WithPath("/bar"))
+		})
+
+		It("produces a debuggable failure message", func() {
+			b.SetCookie(biloba.Cookie{Name: "session", Value: "abc123"})
+			matcher := b.HaveCookie("session").WithValue("nope")
+			match, err := matcher.Match(b)
+			Ω(match).Should(BeFalse())
+			Ω(err).ShouldNot(HaveOccurred())
+			msg := matcher.FailureMessage(b)
+			Ω(msg).Should(ContainSubstring("have a cookie with Name matching"))
+			Ω(msg).Should(ContainSubstring("did not satisfy the refinements"))
+			Ω(msg).Should(ContainSubstring("abc123"))
+		})
+
+		It("errors when not passed a tab", func() {
+			match, err := b.HaveCookie("session").Match("not-a-tab")
+			Ω(match).Should(BeFalse())
+			Ω(err).Should(MatchError(ContainSubstring("HaveCookie must be passed a Biloba tab")))
+		})
+	})
+
+	Describe("the HaveNumCookies matcher", func() {
+		It("matches the cookie count with literal and matcher args", func() {
+			Ω(b).Should(b.HaveNumCookies(0))
+			b.SetCookie(
+				biloba.Cookie{Name: "a", Value: "1"},
+				biloba.Cookie{Name: "b", Value: "2"},
+			)
+			Eventually(b).Should(b.HaveNumCookies(2))
+			Ω(b).Should(b.HaveNumCookies(BeNumerically(">", 0)))
+			Ω(b).ShouldNot(b.HaveNumCookies(5))
+		})
+	})
 })

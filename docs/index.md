@@ -491,6 +491,32 @@ b.SetCookie(biloba.Cookie{
 
 You can pass multiple cookies to a single `SetCookie` call.  `b.GetCookies()` returns a `[]biloba.Cookie` for all the cookies in the tab's browser context (the returned `Cookie`s have their `Session` field set to `true` for session cookies and a populated `Expires` for persistent ones).
 
+#### Asserting on Cookies
+
+`b.HaveCookie(name)` is a matcher you assert against the tab itself.  It passes if the tab has a cookie whose name matches - `name` may be a string (exact match) or a Gomega matcher:
+
+```go
+Eventually(b).Should(b.HaveCookie("session"))
+Expect(b).To(b.HaveCookie(ContainSubstring("my_guid")))
+```
+
+You can chain refinements onto the matcher to further constrain the _same_ cookie.  Each refinement takes a string (exact match) or a Gomega matcher:
+
+```go
+Expect(b).To(b.HaveCookie("session").WithValue("abc123").WithPath("/"))
+Expect(b).To(b.HaveCookie(ContainSubstring("my_guid")).WithValue(ContainSubstring("ABCD-1")))
+Expect(b).To(b.HaveCookie("session").WithDomain("localhost").Secure())
+```
+
+The available refinements are `WithValue`, `WithPath`, `WithDomain`, `WithSameSite`, and the no-argument flag refinements `Secure()` and `HTTPOnly()` (which assert the corresponding flag is `true`).  All of the refinements must hold for a single cookie - if two cookies each satisfy some-but-not-all of the refinements the matcher does not pass.
+
+`b.HaveNumCookies(expected)` asserts on the number of cookies on the tab.  `expected` may be an int (exact match) or a Gomega matcher:
+
+```go
+Expect(b).To(b.HaveNumCookies(2))
+Expect(b).To(b.HaveNumCookies(BeNumerically(">", 0)))
+```
+
 ### Local and Session Storage
 
 `b.LocalStorage()` and `b.SessionStorage()` return typed handles for interacting with the corresponding web-storage area:
@@ -517,6 +543,25 @@ b.LocalStorage().Get("user", &user)
 ```
 
 `Get` takes an optional pointer argument to decode into a specific type (just like [`b.Run`](#running-arbitrary-javascript)).  Without it, `Get` returns the decoded value as type `any` (so numbers come back as `float64`).  `Get` returns `nil` for a missing key.  Values written to storage by the page itself that aren't valid JSON (e.g. a plain `localStorage.setItem("k", "v")`) are returned as their raw string.
+
+#### Asserting on Storage
+
+`b.HaveLocalStorageItem` and `b.HaveSessionStorageItem` are matchers you assert against the tab.  With a single argument they pass if the key exists; with a second argument they pass if the stored value matches (a string for an exact match, or a Gomega matcher):
+
+```go
+Expect(b).To(b.HaveLocalStorageItem("user"))            // key exists
+Expect(b).To(b.HaveLocalStorageItem("user", "Joe"))     // exact value
+Eventually(b).Should(b.HaveLocalStorageItem("count", BeNumerically(">", 0)))
+
+Expect(b).To(b.HaveSessionStorageItem("token", ContainSubstring("ABCD")))
+```
+
+`b.HaveNumLocalStorageItems` and `b.HaveNumSessionStorageItems` assert on the number of items in the corresponding storage area.  `expected` may be an int (exact match) or a Gomega matcher:
+
+```go
+Expect(b).To(b.HaveNumLocalStorageItems(2))
+Expect(b).To(b.HaveNumSessionStorageItems(BeNumerically(">", 0)))
+```
 
 ## Managing Tabs
 
