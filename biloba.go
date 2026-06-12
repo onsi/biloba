@@ -204,6 +204,20 @@ func BilobaConfigProgressReportScreenshotSize(width, height int) func(*Biloba) {
 }
 
 /*
+Pass BilobaConfigScreenshotsToDir to [ConnectToChrome] to write failure screenshots to PNG files in the specified directory.
+When set, each tab's screenshot is written to <dir>/screenshot-<spec>-<tab>.png on failure, and the absolute path is printed to the test output.
+This is complementary to the inline imgcat path: both run when a dir is configured.
+The directory is created if it does not already exist.
+
+Read https://onsi.github.io/biloba/#capturing-screenshots for details.
+*/
+func BilobaConfigScreenshotsToDir(dir string) func(*Biloba) {
+	return func(b *Biloba) {
+		b.screenshotsDir = dir
+	}
+}
+
+/*
 Call ConnectToChrome(GinkgoT()) to connect to a Chrome browser
 
 Returns a *Biloba struct that you use to interact with the browser
@@ -340,6 +354,7 @@ type Biloba struct {
 	failureScreenshotHeight          int
 	progressReportScreenshotWidth    int
 	progressReportScreenshotHeight   int
+	screenshotsDir                   string
 }
 
 func (b *Biloba) GomegaString() string {
@@ -526,7 +541,12 @@ func (b *Biloba) attachScreenshotsIfFailed() {
 			if screenshot.failure != "" {
 				b.gt.AddReportEntryVisibilityFailureOrVerbose(screenshot.failure)
 			} else {
-				b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("Screenshot for: '%s'", screenshot.title), screenshot.imgcatScreenshot)
+				if screenshot.filePath != "" {
+					b.gt.Printf("Screenshot for '%s' written to: %s\n", screenshot.title, screenshot.filePath)
+					b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("Screenshot for: '%s'", screenshot.title), fmt.Sprintf("File: %s\n\n%s", screenshot.filePath, screenshot.imgcatScreenshot))
+				} else {
+					b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("Screenshot for: '%s'", screenshot.title), screenshot.imgcatScreenshot)
+				}
 			}
 		}
 	}

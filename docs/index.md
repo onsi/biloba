@@ -1748,7 +1748,7 @@ this also accepts any [`chromedp.EmulateViewportOption`](https://pkg.go.dev/gith
 
 One quick hack to speed up a test suite is to use the _smallest_ viable window size to run the tests.  You can then pass `BilobaConfigFailureScreenshotsSize(width, height)` to `ConnectToChrome(...)` to configure the size of Biloba's automatically generated screenshots.  Biloba will scale the window up on failure, take a screenshot, then scale it back down to proceed with other tests.  As an anecdotal data-point a 30% speed-up was observed for a Biloba test suite against a complex web-app running in parallel when the screen-size was minimized in this way.
 
-### Capturing Screenshots
+### Capturing Screenshots {#capturing-screenshots}
 
 As discussed above, Biloba automatically emits screenshots when a spec fails or a progress report is requested.
 
@@ -1775,6 +1775,26 @@ You can use the `ReportEntryVisibilityFailureOrVerbose` decorator to only emit t
 ```go
 AddReportEntry("some description", b.CaptureImgcatScreenshot(), ReportEntryVisibilityFailureOrVerbose)
 ```
+
+#### Saving screenshots to files
+
+If you want to save a screenshot to a file (for example, to open it in an image viewer or to share it), use:
+
+```go
+path := b.CaptureScreenshotToFile("/path/to/screenshot.png")
+```
+
+This writes the PNG to the given path (creating any missing parent directories), prints the absolute path to the test output, and returns the absolute path.  This is particularly useful in environments that can render image files directly — for example, [Claude Code](https://claude.ai/claude-code) will render PNG files it reads from disk.
+
+#### Writing failure screenshots to a directory automatically
+
+Pass `BilobaConfigScreenshotsToDir(dir)` to `ConnectToChrome` to have Biloba automatically write each tab's failure screenshot to a PNG file in the given directory:
+
+```go
+b = biloba.ConnectToChrome(GinkgoT(), biloba.BilobaConfigScreenshotsToDir("/tmp/screenshots"))
+```
+
+When a spec fails, Biloba writes `screenshot-<spec>-<tab>.png` to the configured directory and prints the absolute path alongside the usual inline imgcat output.  The directory is created if it does not already exist, and the files survive the spec (unlike Ginkgo's `TempDir()`) so they can be opened after the run.
 
 ### Outline {#outline}
 
@@ -1826,10 +1846,10 @@ and sit back and watch those windows appear and disappear as you run your specs.
 - `BilobaConfigEnableDebugLogging()` will send all Chrome DevTools protocol traffic to the `GinkgoWriter`.  This can be useful when debugging specs and/or implementing your own more advanced `chromedp` behavior.  Fair warning, though: these logs are verbose!
 - `BilobaConfigWithChromeConnection(cc ChromeConnection)` allows you to specify your own Chrome connection settings (typically a `WebSocketURL`)
 - `BilobaConfigDisableFailureScreenshots()` disables Biloba's screenshots on failure
-- `BilobaConfigDisableFailureScreenshots()` disables Biloba's screenshots on failure
 - `BilobaConfigDisableProgressReportScreenshots()` disables Biloba's screenshots when progress reports are requested
 - `BilobaConfigFailureScreenshotsSize(width, height)` specifies the window size to use when generating a screenshot on failure
 - `BilobaConfigProgressReportScreenshotSize(width, height)` specifies the window size to use when generating a screenshot when progress reports are requested
+- `BilobaConfigScreenshotsToDir(dir)` writes each tab's failure screenshot to a PNG file in the given directory and prints the absolute path to test output (see [Saving screenshots to files](#capturing-screenshots))
 
 ### Debugging
 
