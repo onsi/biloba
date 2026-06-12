@@ -464,6 +464,10 @@ func (b *Biloba) Prepare() {
 		})
 	}
 
+	// the root tab is reused between specs, so clear cookies and web storage (which otherwise
+	// persist in the browser context / on the origin) to keep specs independent
+	b.resetBrowsingState()
+
 	b.Navigate("about:blank")
 }
 
