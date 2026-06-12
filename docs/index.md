@@ -2263,6 +2263,24 @@ AddReportEntry("DOM before click", b.Outline(), ReportEntryVisibilityFailureOrVe
 b.Click("#submit")
 ```
 
+### Accessibility Outline {#accessibility-outline}
+
+`b.A11yOutline()` is a companion to `b.Outline()`.  Instead of the raw DOM, it returns the page's **accessibility tree** as indented text - one line per node, showing each node's ARIA role and accessible name:
+
+```go
+fmt.Println(b.A11yOutline())
+```
+
+```
+RootWebArea "My App"
+  heading "Welcome"
+    StaticText "Welcome"
+  textbox "Search"
+  button "Submit"
+```
+
+This is the same role/name view a screen reader works from (and that reasoning models increasingly rely on), so it's often *more* useful than raw HTML for understanding a page: nodes that are ignored for accessibility (and presentational `InlineTextBox` noise) are elided, while semantics like roles, names, and values are surfaced.  Use it when you want to reason about what the page *means* rather than how it's marked up.  Like `Outline()`, the output is capped at ~32 KB.  Unlike `Outline()`, it is not auto-attached on failure (the DOM outline already is) - call it explicitly when you want it.
+
 ### Configuration
 
 Both `SpinUpChrome` and `ConnectToChrome` support a variety of configuration options.
