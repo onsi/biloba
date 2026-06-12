@@ -515,6 +515,13 @@ func (b *Biloba) Close() error {
 
 func (b *Biloba) attachScreenshotsIfFailed() {
 	if b.gt.Failed() {
+		for _, outline := range b.safeAllTabOutlines() {
+			if outline.failure != "" {
+				b.gt.AddReportEntryVisibilityFailureOrVerbose(outline.failure)
+			} else {
+				b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("DOM Outline for: '%s'", outline.title), outline.text)
+			}
+		}
 		for _, screenshot := range b.safeAllTabScreenshots(b.failureScreenshotWidth, b.failureScreenshotHeight) {
 			if screenshot.failure != "" {
 				b.gt.AddReportEntryVisibilityFailureOrVerbose(screenshot.failure)

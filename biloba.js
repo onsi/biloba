@@ -162,5 +162,33 @@ if (!window["_biloba"]) {
     b.invokeWith = one((n, script, ...args) => rRes(eval(script)(n, ...args)))
     b.invokeWithEach = each((ns, script, ...args) => rRes(ns.map(n => b.invokeWith(n, script, ...args).result)))
 
+    b.outline = () => {
+        const PRUNE_TAGS = new Set(["script", "style", "svg"])
+        const SELF_CLOSING = new Set(["area","base","br","col","embed","hr","img","input","link","meta","param","source","track","wbr"])
+        const serializeAttrs = (el) => {
+            let out = ""
+            for (const a of el.attributes) out += ` ${a.name}="${a.value.replace(/"/g, "&quot;")}"`
+            return out
+        }
+        const walk = (node, depth) => {
+            const indent = "  ".repeat(depth)
+            if (node.nodeType === Node.TEXT_NODE) {
+                const t = node.textContent.replace(/\s+/g, " ").trim()
+                return t ? indent + t + "\n" : ""
+            }
+            if (node.nodeType !== Node.ELEMENT_NODE) return ""
+            const tag = node.tagName.toLowerCase()
+            const open = indent + "<" + tag + serializeAttrs(node) + ">"
+            if (SELF_CLOSING.has(tag)) return open + "\n"
+            if (PRUNE_TAGS.has(tag)) return open + "…</" + tag + ">\n"
+            let children = ""
+            for (const child of node.childNodes) children += walk(child, depth + 1)
+            return open + "\n" + children + indent + "</" + tag + ">\n"
+        }
+        let out = ""
+        for (const child of document.body.childNodes) out += walk(child, 0)
+        return rRes(out)
+    }
+
     window["_biloba"] = b
 }

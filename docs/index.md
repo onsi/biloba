@@ -1776,6 +1776,39 @@ You can use the `ReportEntryVisibilityFailureOrVerbose` decorator to only emit t
 AddReportEntry("some description", b.CaptureImgcatScreenshot(), ReportEntryVisibilityFailureOrVerbose)
 ```
 
+### Outline {#outline}
+
+`b.Outline()` returns the current page DOM as indented, human-readable text — a compact structural view of what's on the page.  This is the primary tool for understanding _why_ a selector didn't match when a spec fails:
+
+```go
+fmt.Println(b.Outline())
+```
+
+might produce something like:
+
+```
+<div id="app">
+  <h1>
+    Welcome
+  </h1>
+  <button id="submit" disabled="">
+    Save
+  </button>
+</div>
+<script>…</script>
+```
+
+`Outline()` automatically prunes the content of `<script>`, `<style>`, and `<svg>` elements (keeping the tags, replacing bodies with `…`) to keep the output compact even on complex SPAs. Runs of whitespace inside text nodes are collapsed to a single space. Output is capped at ~32 KB; if truncated, a `... [truncated]` marker is appended.
+
+**Automatic attachment on failure.** Biloba registers a hook that attaches a DOM Outline for every open tab when a spec fails — in addition to the screenshot.  This means you get a readable, text-based view of the page state alongside the visual one, which is especially useful in environments that cannot render images.  The entry appears under "DOM Outline for: '<title>'" in the Ginkgo report.  Passing `BilobaConfigDisableFailureScreenshots()` to `ConnectToChrome` suppresses both the screenshot and the DOM outline.
+
+You can also call `b.Outline()` directly in a spec to capture a snapshot at any point:
+
+```go
+AddReportEntry("DOM before click", b.Outline(), ReportEntryVisibilityFailureOrVerbose)
+b.Click("#submit")
+```
+
 ### Configuration
 
 Both `SpinUpChrome` and `ConnectToChrome` support a variety of configuration options.
