@@ -174,7 +174,6 @@ Here's a partial list:
 - ...or whenever a [Ginkgo Progress Report](https://onsi.github.io/ginkgo/#getting-visibility-into-long-running-specs) is generated
 - Run your specs in parallel with `ginkgo -p`
 
-
 > "But you're obviously missing X, Y, and Z!"
 
 Biloba is young, and just getting started.  Send in a PR!  Or, if you prefer, just use [`chromedp`](https://github.com/chromedp/chromedp) directly to accomplish what you need.  Or drop down all the way to [`cdproto`](https://pkg.go.dev/github.com/chromedp/cdproto) to use the [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/) directly.   Every Biloba tab exposes its `chromedp` context via `b.Context` - so you can mix and match as needed.
@@ -182,6 +181,10 @@ Biloba is young, and just getting started.  Send in a PR!  Or, if you prefer, ju
 > "You just said 'young' and 'getting started.'  Why should I use this thing when far more mature tools like [puppeteer](https://pptr.dev), [selenium](https://www.selenium.dev), and [capybara](https://github.com/teamcapybara/capybara) exist?"
 
 Lol!  You probably shouldn't!  But... if you're building something out in Go, happen to know and like Ginkgo, and want to experiment with a shiny new toy that's aiming to deliver performant non-flakey automated browser tests... Give Biloba a try - and start opening issues and sending in PRs!
+
+> "Who even writes code these days?  Don't the LLMs do it all for you?"
+
+Sure.  And LLMs do best when they have a solid deterministic non-flaky *fast* feedback loop.  Biloba is blazing fast and its DSL is designed to work well with AI toolchains like Claude Code.  It's under active development and use as I build out a new feature-rich single-page app with Claude (he said on June 12th, 2026).
 
 ### Performance and Stability
 
