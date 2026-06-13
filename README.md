@@ -13,6 +13,8 @@ Biloba builds on top of [chromedp](https://github.com/chromedp/chromedp) to brin
   - Stability via pragmatism
   - Conciseness via Ginkgo and Gomega
 
+It's blazing fast and designed to work well with AI toolchains like Claude Code.  It's under active development and use as I build out a new feature-rich single-page app with Claude.
+
 Take a look at the [documentation](https://onsi.github.io/biloba) to learn more and get started!
 
 Here's a quick taste of what Biloba specs look like:
