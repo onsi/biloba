@@ -49,6 +49,8 @@ Then **`Read` the screenshot file** (the path is printed as `SCREENSHOT: ...`) s
 - **`b.Outline()`** is the raw DOM: use it to find the actual selectors (ids, classes, tags, `data-*`) you'll target.
 - **`b.A11yOutline()`** is the role/name view: use it to pick stable, human-meaningful anchors (a heading's text, a button's accessible name) and to drive `b.Text("…")` / XPath-by-text selectors.
 
+> **You also get this for free on failure.** Biloba detects when it's running under an AI agent (or CI) and, on a failing spec, automatically attaches a DOM outline of every tab and writes screenshots to disk (`./biloba-screenshots`, or `BILOBA_SCREENSHOTS_DIR`). So once you're iterating in Step 2, a failing readiness anchor or assertion already hands you the outline — `Read` it (and the screenshot file) straight from the failure report instead of re-running the scratch spec to re-orient.
+
 ## Step 2 — author the real spec
 
 Now write the actual spec against what you observed. A good starter follows the standard Biloba shape (see `biloba-testing`):

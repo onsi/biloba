@@ -51,6 +51,25 @@ func (b *Biloba) SafeAllTabScreenshotsForTest(width, height int) []TabScreenshot
 	return out
 }
 
+// FailureArtifactConfigForTest exposes the resolved on-failure artifact configuration
+// (after options and environment-driven policy are applied) for screenshots_test.go.
+func (b *Biloba) FailureArtifactConfigForTest() (failureOutlines, failureScreenshots, inlineScreenshots bool, screenshotsDir string) {
+	return b.failureOutlines, b.failureScreenshots, b.inlineScreenshots, b.screenshotsDir
+}
+
+// DefaultAutomationScreenshotsDirForTest exposes the automation default directory constant.
+func DefaultAutomationScreenshotsDirForTest() string {
+	return defaultAutomationScreenshotsDir
+}
+
+// SetAutomationDetectedForTest overrides the CI/agent detector so tests can pin a deterministic
+// mode regardless of the environment they happen to run in.  It returns a restore func.
+func SetAutomationDetectedForTest(fn func() bool) func() {
+	prev := automationDetected
+	automationDetected = fn
+	return func() { automationDetected = prev }
+}
+
 // TabScreenshotForTest is a test-accessible view of tabScreenshot.
 type TabScreenshotForTest struct {
 	Title            string

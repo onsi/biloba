@@ -17,6 +17,14 @@ It's blazing fast and designed to work well with AI toolchains like Claude Code.
 
 Take a look at the [documentation](https://onsi.github.io/biloba) to learn more and get started!
 
+### Running under CI or an AI agent
+
+Biloba auto-detects CI and AI agents and flips failure output to text-friendly artifacts — DOM outlines plus screenshot files on disk, no inline blob — so an agent or CI run needs zero configuration (see [Failure artifacts](https://onsi.github.io/biloba/#failure-artifacts)):
+
+```bash
+ginkgo -r -p   # under CI/agent: outlines + screenshot files on disk, automatically
+```
+
 Here's a quick taste of what Biloba specs look like:
 
 ```go

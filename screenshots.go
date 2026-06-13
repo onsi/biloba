@@ -33,29 +33,26 @@ const (
 // detectInlineImageProtocol decides which (if any) terminal inline-image protocol
 // to use.  The decision order is:
 //
-//  1. BILOBA_NO_IMGCAT=true → force off (inlineImageNone).
-//  2. BILOBA_IMGCAT=iterm|kitty|sixel|true → force that protocol ("true" means iterm).
-//  3. Environment-variable terminal detection (iTerm2, VSCode, WezTerm, Ghostty, kitty, Konsole, …).
-//  4. BILOBA_PROBE_TERMINAL=true → query the terminal directly (Primary DA) for Sixel support.
-//  5. Otherwise → off.
+//  1. BILOBA_INLINE_SCREENSHOTS=iterm|kitty|sixel → force that protocol; =none → force off.
+//  2. Environment-variable terminal detection (iTerm2, VSCode, WezTerm, Ghostty, kitty, Konsole, …).
+//  3. BILOBA_PROBE_TERMINAL=true → query the terminal directly (Primary DA) for Sixel support.
+//  4. Otherwise → off.
 //
 // Kitty's graphics protocol is preferred where available (best quality), then the
 // broadly-supported iTerm2 OSC 1337 protocol (works in iTerm2, VSCode, WezTerm, …),
 // then Sixel as a last-resort fallback for older terminals.
 func detectInlineImageProtocol() inlineImageProtocol {
-	if os.Getenv("BILOBA_NO_IMGCAT") == "true" {
-		return inlineImageNone
-	}
-	switch strings.ToLower(os.Getenv("BILOBA_IMGCAT")) {
-	case "true", "iterm", "iterm2":
+	switch strings.ToLower(os.Getenv("BILOBA_INLINE_SCREENSHOTS")) {
+	case "iterm", "iterm2":
 		return inlineImageITerm
 	case "kitty":
 		return inlineImageKitty
 	case "sixel":
 		return inlineImageSixel
-	case "false", "none":
+	case "none", "off", "false":
 		return inlineImageNone
 	}
+	// unset, "auto", or an unrecognized value falls through to terminal auto-detection.
 
 	if p := inlineImageProtocolFromEnv(); p != inlineImageNone {
 		return p

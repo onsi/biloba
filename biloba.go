@@ -23,6 +23,8 @@ import (
 
 	_ "embed"
 
+	"github.com/jehiah/agentdetection"
+
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
@@ -233,12 +235,37 @@ BilobaConfigOptions are passed in to [ConnectToChrome] to configure a given conn
 */
 type BilobaConfigOption func(*Biloba)
 
+// defaultAutomationScreenshotsDir is where failure screenshots are written, by default, when
+// Biloba detects it's running under automation (CI or an AI agent) and neither the suite nor
+// BILOBA_SCREENSHOTS_DIR specified a directory.  It is workspace-relative so CI can collect it
+// (e.g. via actions/upload-artifact).
+const defaultAutomationScreenshotsDir = "./biloba-screenshots"
+
+// automationDetected reports whether Biloba is running in a non-interactive context - CI or under
+// an AI coding agent - in which case the failure-artifact defaults flip to text-friendly output.
+// It is a package var so the suite can pin it for deterministic tests (see export_test.go).
+var automationDetected = func() bool {
+	return os.Getenv("CI") != "" || agentdetection.IsAgent()
+}
+
+// boolArg resolves the variadic argument the boolean BilobaConfig options take: passing no
+// argument means true (BilobaConfigFailureOutlines() enables outlines), while an explicit value
+// is honored as-is (BilobaConfigFailureOutlines(false) disables them).
+func boolArg(args []bool) bool {
+	if len(args) > 0 {
+		return args[0]
+	}
+	return true
+}
+
 /*
-Pass BilobaConfigEnableDebugLogging to [ConnectToChrome] to send all Chrome debug logging to the GinkgoWriter
+Pass BilobaConfigDebugLogging to [ConnectToChrome] to send all Chrome debug logging to the GinkgoWriter.
+
+Like all the boolean BilobaConfig options it takes an optional bool: BilobaConfigDebugLogging() turns it on, BilobaConfigDebugLogging(false) turns it off.
 */
-func BilobaConfigEnableDebugLogging() func(*Biloba) {
+func BilobaConfigDebugLogging(enabled ...bool) func(*Biloba) {
 	return func(b *Biloba) {
-		b.enableDebugLogging = true
+		b.debugLogging = boolArg(enabled)
 	}
 }
 
@@ -252,11 +279,27 @@ func BilobaConfigWithChromeConnection(cc ChromeConnection) func(*Biloba) {
 }
 
 /*
-Pass BilobaConfigWithChromeConnection to [ConnectToChrome] to disable screenshots on failure
+Pass BilobaConfigFailureScreenshots to [ConnectToChrome] to control whether Biloba captures a screenshot of every tab on failure.
+
+It is on by default; BilobaConfigFailureScreenshots(false) turns it off.
 */
-func BilobaConfigDisableFailureScreenshots() func(*Biloba) {
+func BilobaConfigFailureScreenshots(enabled ...bool) func(*Biloba) {
 	return func(b *Biloba) {
-		b.disableFailureScreenshots = true
+		b.failureScreenshots = boolArg(enabled)
+	}
+}
+
+/*
+Pass BilobaConfigFailureOutlines to [ConnectToChrome] to control whether Biloba attaches a DOM outline of every tab on failure.
+
+When a human is driving, outlines are off by default (the screenshot is the more useful artifact); under automation (CI or an AI agent) Biloba turns them on automatically.  Set this explicitly to override that default in either direction: BilobaConfigFailureOutlines() forces them on for an interactive run, BilobaConfigFailureOutlines(false) forces them off under automation.
+
+See https://onsi.github.io/biloba/#failure-artifacts for how the human/automation defaults are resolved.
+*/
+func BilobaConfigFailureOutlines(enabled ...bool) func(*Biloba) {
+	return func(b *Biloba) {
+		b.failureOutlines = boolArg(enabled)
+		b.failureOutlinesSet = true
 	}
 }
 
@@ -271,11 +314,13 @@ func BilobaConfigFailureScreenshotsSize(width, height int) func(*Biloba) {
 }
 
 /*
-Pass BilobaConfigDisableProgressReportScreenshots to [ConnectToChrome] to disable screenshots when Progress Reports are emitted
+Pass BilobaConfigProgressReportScreenshots to [ConnectToChrome] to control whether Biloba emits screenshots when Progress Reports are requested.
+
+It is on by default; BilobaConfigProgressReportScreenshots(false) turns it off.
 */
-func BilobaConfigDisableProgressReportScreenshots() func(*Biloba) {
+func BilobaConfigProgressReportScreenshots(enabled ...bool) func(*Biloba) {
 	return func(b *Biloba) {
-		b.disableProgressReportScreenshots = true
+		b.progressReportScreenshots = boolArg(enabled)
 	}
 }
 
@@ -290,15 +335,18 @@ func BilobaConfigProgressReportScreenshotSize(width, height int) func(*Biloba) {
 }
 
 /*
-Pass BilobaConfigDisableInlineScreenshots to [ConnectToChrome] to suppress inline-image escape sequences from failure and progress-report output.  When inline images are disabled, Biloba still captures screenshots and writes them to the configured directory (if any); the file path is printed to test output.
+Pass BilobaConfigInlineScreenshots to [ConnectToChrome] to control whether Biloba emits inline-image escape sequences in failure and progress-report output.
 
-This is equivalent to setting the BILOBA_NO_IMGCAT=true environment variable and is useful when running in terminals that do not support any inline-image protocol, where the base64 blob would otherwise pollute the output stream.
+It is on by default (subject to terminal support) when a human is driving, and off under automation (CI or an AI agent).  BilobaConfigInlineScreenshots(false) suppresses the inline blob explicitly; BilobaConfigInlineScreenshots() forces it on even under automation.  When inline images are off, Biloba still captures screenshots and writes them to the configured directory (if any); the file path is printed to test output.
+
+The BILOBA_INLINE_SCREENSHOTS=iterm|kitty|sixel|none environment variable selects (or disables, with "none") the inline-image protocol at runtime.
 
 Read https://onsi.github.io/biloba/#capturing-screenshots for details.
 */
-func BilobaConfigDisableInlineScreenshots() func(*Biloba) {
+func BilobaConfigInlineScreenshots(enabled ...bool) func(*Biloba) {
 	return func(b *Biloba) {
-		b.disableInlineScreenshots = true
+		b.inlineScreenshots = boolArg(enabled)
+		b.inlineScreenshotsSet = true
 	}
 }
 
@@ -307,6 +355,8 @@ Pass BilobaConfigScreenshotsToDir to [ConnectToChrome] to write failure screensh
 When set, each tab's screenshot is written to <dir>/screenshot-<spec>-<tab>.png on failure, and the absolute path is printed to the test output.
 This is complementary to the inline imgcat path: both run when a dir is configured.
 The directory is created if it does not already exist.
+
+The BILOBA_SCREENSHOTS_DIR environment variable does the same thing at runtime (this option wins if both are set), and is also the way to point automation's default screenshots directory somewhere specific.
 
 Read https://onsi.github.io/biloba/#capturing-screenshots for details.
 */
@@ -330,6 +380,28 @@ func ConnectToChrome(ginkgoT GinkgoTInterface, options ...BilobaConfigOption) *B
 
 	for _, option := range options {
 		option(b)
+	}
+
+	// Resolve the on-failure artifact policy from the environment, filling in only what the suite
+	// left unconfigured (explicit options always win - each artifact knob is one-directional, so a
+	// non-zero value means the user set it).  Interactive humans keep the defaults: inline
+	// screenshots, no DOM outline.  Under automation (CI or an AI agent) the artifacts flip to
+	// text-friendly output: outlines on, inline image blobs off (they're noise in a log), and
+	// screenshots written to disk so they can be inspected/uploaded after the run.
+	if automationDetected() {
+		if !b.failureOutlinesSet {
+			b.failureOutlines = true
+		}
+		if !b.inlineScreenshotsSet {
+			b.inlineScreenshots = false
+		}
+	}
+	if b.screenshotsDir == "" {
+		if dir := os.Getenv("BILOBA_SCREENSHOTS_DIR"); dir != "" {
+			b.screenshotsDir = dir
+		} else if automationDetected() {
+			b.screenshotsDir = defaultAutomationScreenshotsDir
+		}
 	}
 
 	if b.ChromeConnection.WebSocketURL == "" {
@@ -358,7 +430,7 @@ func ConnectToChrome(ginkgoT GinkgoTInterface, options ...BilobaConfigOption) *B
 	// default-context tab to initialize the Browser connection, then manually create the isolated
 	// browser context and target, and attach via WithTargetID.
 	var bootstrapOpts []chromedp.ContextOption
-	if b.enableDebugLogging {
+	if b.debugLogging {
 		bootstrapOpts = append(bootstrapOpts,
 			chromedp.WithDebugf(b.gt.Logf),
 			chromedp.WithLogf(b.gt.Logf),
@@ -453,23 +525,28 @@ type Biloba struct {
 	stubs            []*requestStub
 	fetchEnabled     bool
 
-	enableDebugLogging               bool
-	disableFailureScreenshots        bool
-	disableProgressReportScreenshots bool
-	disableInlineScreenshots         bool
-	failureScreenshotWidth           int
-	failureScreenshotHeight          int
-	progressReportScreenshotWidth    int
-	progressReportScreenshotHeight   int
-	screenshotsDir                   string
+	// The boolean failure-artifact knobs are stored positive-sense and default to their human
+	// (interactive) values, set in newBiloba; ConnectToChrome adjusts them for automation.
+	debugLogging                   bool // default false
+	failureScreenshots             bool // default true
+	failureOutlines                bool // default false
+	failureOutlinesSet             bool // whether the suite set failureOutlines explicitly
+	progressReportScreenshots      bool // default true
+	inlineScreenshots              bool // default true (subject to terminal support)
+	inlineScreenshotsSet           bool // whether the suite set inlineScreenshots explicitly
+	failureScreenshotWidth         int
+	failureScreenshotHeight        int
+	progressReportScreenshotWidth  int
+	progressReportScreenshotHeight int
+	screenshotsDir                 string
 }
 
-// inlineScreenshotsEnabled returns true when iTerm2 imgcat output should be
-// emitted.  It respects the per-instance disableInlineScreenshots flag (set by
-// BilobaConfigDisableInlineScreenshots) and the package-level inlineImagesSupported
-// helper (which checks BILOBA_NO_IMGCAT / BILOBA_IMGCAT / TERM_PROGRAM).
+// inlineScreenshotsEnabled returns true when inline-image output should be
+// emitted.  It respects the per-instance inlineScreenshots flag (cleared by
+// BilobaConfigInlineScreenshots(false) or automation) and the package-level
+// inlineImagesSupported helper (which checks BILOBA_INLINE_SCREENSHOTS / TERM_PROGRAM).
 func (b *Biloba) inlineScreenshotsEnabled() bool {
-	if b.root.disableInlineScreenshots {
+	if !b.root.inlineScreenshots {
 		return false
 	}
 	return inlineImagesSupported()
@@ -492,6 +569,10 @@ func newBiloba(ginkgoT GinkgoTInterface) *Biloba {
 		downloadHistory:  map[string]time.Time{},
 		tabs:             map[target.ID]*Biloba{},
 		inflightRequests: map[network.RequestID]bool{},
+
+		failureScreenshots:        true,
+		progressReportScreenshots: true,
+		inlineScreenshots:         true,
 	}
 	return b
 }
@@ -550,10 +631,10 @@ func (b *Biloba) Prepare() {
 		chromedp.Run(b.Context, fetch.Disable())
 	}
 
-	if !b.disableFailureScreenshots {
-		b.gt.DeferCleanup(b.attachScreenshotsIfFailed)
+	if b.failureScreenshots || b.failureOutlines {
+		b.gt.DeferCleanup(b.attachFailureArtifactsIfFailed)
 	}
-	if !b.disableProgressReportScreenshots {
+	if b.progressReportScreenshots {
 		b.gt.DeferCleanup(b.gt.AttachProgressReporter(b.progressReporter))
 	}
 	if os.Getenv("BILOBA_INTERACTIVE") != "" {
@@ -662,14 +743,19 @@ func (b *Biloba) Close() error {
 	return nil
 }
 
-func (b *Biloba) attachScreenshotsIfFailed() {
+func (b *Biloba) attachFailureArtifactsIfFailed() {
 	if b.gt.Failed() {
-		for _, outline := range b.safeAllTabOutlines() {
-			if outline.failure != "" {
-				b.gt.AddReportEntryVisibilityFailureOrVerbose(outline.failure)
-			} else {
-				b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("DOM Outline for: '%s'", outline.title), outline.text)
+		if b.failureOutlines {
+			for _, outline := range b.safeAllTabOutlines() {
+				if outline.failure != "" {
+					b.gt.AddReportEntryVisibilityFailureOrVerbose(outline.failure)
+				} else {
+					b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("DOM Outline for: '%s'", outline.title), outline.text)
+				}
 			}
+		}
+		if !b.failureScreenshots {
+			return
 		}
 		for _, screenshot := range b.safeAllTabScreenshots(b.failureScreenshotWidth, b.failureScreenshotHeight) {
 			if screenshot.failure != "" {

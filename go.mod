@@ -6,6 +6,7 @@ require (
 	github.com/BourgeoisBear/rasterm v1.1.2
 	github.com/chromedp/cdproto v0.0.0-20260427013145-5737772c319b
 	github.com/chromedp/chromedp v0.15.1
+	github.com/jehiah/agentdetection v0.0.0-20260504180809-d55902bec14c
 	github.com/onsi/ginkgo/v2 v2.30.0
 	github.com/onsi/gomega v1.41.0
 	golang.org/x/net v0.56.0

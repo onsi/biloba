@@ -80,7 +80,7 @@ var _ = Describe("Screenshots", func() {
 		// full set so each spec controls exactly the inputs it sets.
 		detectionEnvKeys := []string{
 			"TERM", "TERM_PROGRAM", "KITTY_WINDOW_ID", "LC_TERMINAL", "KONSOLE_VERSION",
-			"BILOBA_NO_IMGCAT", "BILOBA_IMGCAT", "BILOBA_PROBE_TERMINAL",
+			"BILOBA_INLINE_SCREENSHOTS", "BILOBA_PROBE_TERMINAL",
 		}
 		var origEnv map[string]string
 
@@ -141,56 +141,56 @@ var _ = Describe("Screenshots", func() {
 			Ω(biloba.InlineImagesSupportedForTest()).Should(BeFalse())
 		})
 
-		It("returns false when BILOBA_NO_IMGCAT=true regardless of TERM_PROGRAM", func() {
+		It("returns false when BILOBA_INLINE_SCREENSHOTS=none regardless of TERM_PROGRAM", func() {
 			os.Setenv("TERM_PROGRAM", "iTerm.app")
-			os.Setenv("BILOBA_NO_IMGCAT", "true")
+			os.Setenv("BILOBA_INLINE_SCREENSHOTS", "none")
 			Ω(biloba.InlineImagesSupportedForTest()).Should(BeFalse())
 		})
 
-		It("returns true when BILOBA_IMGCAT=true regardless of TERM_PROGRAM", func() {
-			os.Setenv("BILOBA_IMGCAT", "true")
+		It("returns true when BILOBA_INLINE_SCREENSHOTS=iterm regardless of TERM_PROGRAM", func() {
+			os.Setenv("BILOBA_INLINE_SCREENSHOTS", "iterm")
 			Ω(biloba.InlineImagesSupportedForTest()).Should(BeTrue())
 		})
 
-		It("returns true when BILOBA_IMGCAT=sixel", func() {
-			os.Setenv("BILOBA_IMGCAT", "sixel")
+		It("returns true when BILOBA_INLINE_SCREENSHOTS=sixel", func() {
+			os.Setenv("BILOBA_INLINE_SCREENSHOTS", "sixel")
 			Ω(biloba.InlineImagesSupportedForTest()).Should(BeTrue())
 		})
 
-		It("BILOBA_NO_IMGCAT=true wins over BILOBA_IMGCAT=true", func() {
-			os.Setenv("BILOBA_NO_IMGCAT", "true")
-			os.Setenv("BILOBA_IMGCAT", "true")
-			Ω(biloba.InlineImagesSupportedForTest()).Should(BeFalse())
+		It("falls back to terminal auto-detection for an unrecognized BILOBA_INLINE_SCREENSHOTS value", func() {
+			os.Setenv("TERM_PROGRAM", "iTerm.app")
+			os.Setenv("BILOBA_INLINE_SCREENSHOTS", "bogus")
+			Ω(biloba.InlineImagesSupportedForTest()).Should(BeTrue())
 		})
 	})
 
-	Describe("BilobaConfigDisableInlineScreenshots", Label("no-browser"), func() {
-		var origTermProgram, origNoImgcat, origImgcat string
+	Describe("BilobaConfigInlineScreenshots", Label("no-browser"), func() {
+		var origTermProgram, origInline string
+		var restoreDetector func()
 
 		BeforeEach(func() {
 			origTermProgram = os.Getenv("TERM_PROGRAM")
-			origNoImgcat = os.Getenv("BILOBA_NO_IMGCAT")
-			origImgcat = os.Getenv("BILOBA_IMGCAT")
+			origInline = os.Getenv("BILOBA_INLINE_SCREENSHOTS")
+			// keep these specs in interactive mode so automation doesn't pre-disable inline
+			restoreDetector = biloba.SetAutomationDetectedForTest(func() bool { return false })
 		})
 
 		AfterEach(func() {
 			os.Setenv("TERM_PROGRAM", origTermProgram)
-			os.Setenv("BILOBA_NO_IMGCAT", origNoImgcat)
-			os.Setenv("BILOBA_IMGCAT", origImgcat)
+			os.Setenv("BILOBA_INLINE_SCREENSHOTS", origInline)
+			restoreDetector()
 		})
 
 		It("disables inline screenshots even when iTerm2 is detected", func() {
 			os.Setenv("TERM_PROGRAM", "iTerm.app")
-			os.Unsetenv("BILOBA_NO_IMGCAT")
-			os.Unsetenv("BILOBA_IMGCAT")
-			bDisabled := biloba.ConnectToChrome(gt, biloba.BilobaConfigDisableInlineScreenshots())
+			os.Unsetenv("BILOBA_INLINE_SCREENSHOTS")
+			bDisabled := biloba.ConnectToChrome(gt, biloba.BilobaConfigInlineScreenshots(false))
 			Ω(bDisabled.InlineScreenshotsEnabledForTest()).Should(BeFalse())
 		})
 
 		It("still uses inline screenshots when not configured and iTerm2 is detected", func() {
 			os.Setenv("TERM_PROGRAM", "iTerm.app")
-			os.Unsetenv("BILOBA_NO_IMGCAT")
-			os.Unsetenv("BILOBA_IMGCAT")
+			os.Unsetenv("BILOBA_INLINE_SCREENSHOTS")
 			bEnabled := biloba.ConnectToChrome(gt)
 			Ω(bEnabled.InlineScreenshotsEnabledForTest()).Should(BeTrue())
 		})
@@ -202,50 +202,31 @@ var _ = Describe("Screenshots", func() {
 			Eventually(`body`).Should(b.Exist())
 		})
 
-		Context("when BILOBA_NO_IMGCAT=true", func() {
-			var origNoImgcat, origImgcat, origTermProgram string
+		var origInline, origTermProgram string
+		BeforeEach(func() {
+			origTermProgram = os.Getenv("TERM_PROGRAM")
+			origInline = os.Getenv("BILOBA_INLINE_SCREENSHOTS")
+			os.Unsetenv("TERM_PROGRAM")
+		})
+		AfterEach(func() {
+			os.Setenv("TERM_PROGRAM", origTermProgram)
+			os.Setenv("BILOBA_INLINE_SCREENSHOTS", origInline)
+		})
 
-			BeforeEach(func() {
-				origTermProgram = os.Getenv("TERM_PROGRAM")
-				origNoImgcat = os.Getenv("BILOBA_NO_IMGCAT")
-				origImgcat = os.Getenv("BILOBA_IMGCAT")
-				os.Setenv("BILOBA_NO_IMGCAT", "true")
-				os.Unsetenv("BILOBA_IMGCAT")
-				os.Unsetenv("TERM_PROGRAM")
-			})
+		Context("when BILOBA_INLINE_SCREENSHOTS=none", func() {
+			BeforeEach(func() { os.Setenv("BILOBA_INLINE_SCREENSHOTS", "none") })
 
-			AfterEach(func() {
-				os.Setenv("TERM_PROGRAM", origTermProgram)
-				os.Setenv("BILOBA_NO_IMGCAT", origNoImgcat)
-				os.Setenv("BILOBA_IMGCAT", origImgcat)
-			})
-
-			It("does not include an imgcat blob in the screenshot", func() {
+			It("does not include an inline blob in the screenshot", func() {
 				shots := b.SafeAllTabScreenshotsForTest(0, 0)
 				Ω(shots).ShouldNot(BeEmpty())
 				Ω(shots[0].ImgcatScreenshot).Should(BeEmpty())
 			})
 		})
 
-		Context("when BILOBA_IMGCAT=true", func() {
-			var origNoImgcat, origImgcat, origTermProgram string
+		Context("when BILOBA_INLINE_SCREENSHOTS=iterm", func() {
+			BeforeEach(func() { os.Setenv("BILOBA_INLINE_SCREENSHOTS", "iterm") })
 
-			BeforeEach(func() {
-				origTermProgram = os.Getenv("TERM_PROGRAM")
-				origNoImgcat = os.Getenv("BILOBA_NO_IMGCAT")
-				origImgcat = os.Getenv("BILOBA_IMGCAT")
-				os.Setenv("BILOBA_IMGCAT", "true")
-				os.Unsetenv("BILOBA_NO_IMGCAT")
-				os.Unsetenv("TERM_PROGRAM")
-			})
-
-			AfterEach(func() {
-				os.Setenv("TERM_PROGRAM", origTermProgram)
-				os.Setenv("BILOBA_NO_IMGCAT", origNoImgcat)
-				os.Setenv("BILOBA_IMGCAT", origImgcat)
-			})
-
-			It("includes an imgcat blob in the screenshot", func() {
+			It("includes an iTerm2 blob in the screenshot", func() {
 				shots := b.SafeAllTabScreenshotsForTest(0, 0)
 				Ω(shots).ShouldNot(BeEmpty())
 				Ω(shots[0].ImgcatScreenshot).ShouldNot(BeEmpty())
@@ -253,17 +234,8 @@ var _ = Describe("Screenshots", func() {
 			})
 		})
 
-		Context("when BILOBA_IMGCAT=kitty", func() {
-			var origImgcat string
-
-			BeforeEach(func() {
-				origImgcat = os.Getenv("BILOBA_IMGCAT")
-				os.Setenv("BILOBA_IMGCAT", "kitty")
-			})
-
-			AfterEach(func() {
-				os.Setenv("BILOBA_IMGCAT", origImgcat)
-			})
+		Context("when BILOBA_INLINE_SCREENSHOTS=kitty", func() {
+			BeforeEach(func() { os.Setenv("BILOBA_INLINE_SCREENSHOTS", "kitty") })
 
 			It("emits a kitty graphics sequence", func() {
 				shots := b.SafeAllTabScreenshotsForTest(0, 0)
@@ -272,17 +244,8 @@ var _ = Describe("Screenshots", func() {
 			})
 		})
 
-		Context("when BILOBA_IMGCAT=sixel", func() {
-			var origImgcat string
-
-			BeforeEach(func() {
-				origImgcat = os.Getenv("BILOBA_IMGCAT")
-				os.Setenv("BILOBA_IMGCAT", "sixel")
-			})
-
-			AfterEach(func() {
-				os.Setenv("BILOBA_IMGCAT", origImgcat)
-			})
+		Context("when BILOBA_INLINE_SCREENSHOTS=sixel", func() {
+			BeforeEach(func() { os.Setenv("BILOBA_INLINE_SCREENSHOTS", "sixel") })
 
 			It("emits a sixel sequence", func() {
 				shots := b.SafeAllTabScreenshotsForTest(0, 0)
@@ -342,6 +305,108 @@ var _ = Describe("Screenshots", func() {
 			// The filename must start with "screenshot-" and end with ".png".
 			Ω(filepath.Base(shots[0].FilePath)).Should(HavePrefix("screenshot-"))
 			Ω(filepath.Base(shots[0].FilePath)).Should(HaveSuffix(".png"))
+		})
+	})
+
+	Describe("on-failure artifact configuration", func() {
+		// Pin the detector per-spec so these assertions don't depend on whether the suite itself
+		// happens to be running under CI or an AI agent.  Default each spec to interactive ("human")
+		// mode; automation specs flip it on locally.
+		var restoreDetector func()
+		var origScreenshotsDir string
+		var hadScreenshotsDir bool
+		BeforeEach(func() {
+			restoreDetector = biloba.SetAutomationDetectedForTest(func() bool { return false })
+			origScreenshotsDir, hadScreenshotsDir = os.LookupEnv("BILOBA_SCREENSHOTS_DIR")
+			os.Unsetenv("BILOBA_SCREENSHOTS_DIR")
+		})
+		AfterEach(func() {
+			restoreDetector()
+			if hadScreenshotsDir {
+				os.Setenv("BILOBA_SCREENSHOTS_DIR", origScreenshotsDir)
+			} else {
+				os.Unsetenv("BILOBA_SCREENSHOTS_DIR")
+			}
+		})
+
+		Context("the interactive (human) default", func() {
+			It("keeps inline screenshots on, outlines off, and writes nothing to disk", func() {
+				bWith := biloba.ConnectToChrome(gt)
+				outlines, screenshots, inline, dir := bWith.FailureArtifactConfigForTest()
+				Ω(outlines).Should(BeFalse())
+				Ω(screenshots).Should(BeTrue())
+				Ω(inline).Should(BeTrue())
+				Ω(dir).Should(BeEmpty())
+			})
+
+			It("still writes screenshots to disk when BILOBA_SCREENSHOTS_DIR is set", func() {
+				dir := GinkgoT().TempDir()
+				os.Setenv("BILOBA_SCREENSHOTS_DIR", dir)
+				bWith := biloba.ConnectToChrome(gt)
+				outlines, _, inline, gotDir := bWith.FailureArtifactConfigForTest()
+				Ω(gotDir).Should(Equal(dir))
+				Ω(outlines).Should(BeFalse()) // env dir alone does not flip the rest of the policy
+				Ω(inline).Should(BeTrue())
+			})
+		})
+
+		Context("the automation (CI / AI agent) default", func() {
+			BeforeEach(func() {
+				restoreDetector()
+				restoreDetector = biloba.SetAutomationDetectedForTest(func() bool { return true })
+			})
+
+			It("turns outlines on, inline blobs off, and writes screenshots to the default dir", func() {
+				bWith := biloba.ConnectToChrome(gt)
+				outlines, screenshots, inline, dir := bWith.FailureArtifactConfigForTest()
+				Ω(outlines).Should(BeTrue())
+				Ω(inline).Should(BeFalse())
+				Ω(screenshots).Should(BeTrue()) // screenshots stay on, just written to files
+				Ω(dir).Should(Equal(biloba.DefaultAutomationScreenshotsDirForTest()))
+			})
+
+			It("honors BILOBA_SCREENSHOTS_DIR for the screenshots location", func() {
+				dir := GinkgoT().TempDir()
+				os.Setenv("BILOBA_SCREENSHOTS_DIR", dir)
+				bWith := biloba.ConnectToChrome(gt)
+				_, _, _, gotDir := bWith.FailureArtifactConfigForTest()
+				Ω(gotDir).Should(Equal(dir))
+			})
+		})
+
+		Context("explicit suite configuration always wins (per knob)", func() {
+			It("keeps an explicit screenshots dir even under automation", func() {
+				restoreDetector()
+				restoreDetector = biloba.SetAutomationDetectedForTest(func() bool { return true })
+
+				suiteDir := GinkgoT().TempDir()
+				bWith := biloba.ConnectToChrome(gt, biloba.BilobaConfigScreenshotsToDir(suiteDir))
+				outlines, _, inline, gotDir := bWith.FailureArtifactConfigForTest()
+				Ω(gotDir).Should(Equal(suiteDir)) // explicit dir wins over the automation default...
+				Ω(outlines).Should(BeTrue())      // ...but the other automation knobs still apply
+				Ω(inline).Should(BeFalse())
+			})
+
+			It("lets a human suite force outlines on without affecting screenshots", func() {
+				bWith := biloba.ConnectToChrome(gt, biloba.BilobaConfigFailureOutlines())
+				outlines, _, inline, dir := bWith.FailureArtifactConfigForTest()
+				Ω(outlines).Should(BeTrue())
+				Ω(inline).Should(BeTrue()) // inline still on - only outlines were opted into
+				Ω(dir).Should(BeEmpty())
+			})
+
+			It("lets a suite force outlines OFF and inline ON under automation", func() {
+				restoreDetector()
+				restoreDetector = biloba.SetAutomationDetectedForTest(func() bool { return true })
+
+				bWith := biloba.ConnectToChrome(gt,
+					biloba.BilobaConfigFailureOutlines(false),
+					biloba.BilobaConfigInlineScreenshots(true),
+				)
+				outlines, _, inline, _ := bWith.FailureArtifactConfigForTest()
+				Ω(outlines).Should(BeFalse()) // explicit false beats automation's auto-on
+				Ω(inline).Should(BeTrue())    // explicit true beats automation's auto-off
+			})
 		})
 	})
 })

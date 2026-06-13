@@ -409,13 +409,13 @@ Here are some of the ways Biloba integrates with Ginkgo and Gomega so you can fo
 
 	This happens in `b.Prepare()`.
 	
-	Biloba registers a Ginkgo hook that runs after each spec.  If the spec has failed, a DOM text outline and a screenshot of every tab associated with that spec are captured.  Screenshots are emitted to the terminal as inline images (Kitty, iTerm2, or Sixel) **only when the terminal supports it** (see [Inline image gating](#inline-image-gating) below).
+	Biloba registers a Ginkgo hook that runs after each spec.  If the spec has failed, a screenshot of every tab associated with that spec is captured.  Screenshots are emitted to the terminal as inline images (Kitty, iTerm2, or Sixel) **only when the terminal supports it** (see [Inline image gating](#inline-image-gating) below).  Biloba can also attach a text DOM outline of every tab on failure; this is off by default for an interactive human but on automatically under CI or an AI agent (see [Failure artifacts](#failure-artifacts)).
 
 	In addition, Biloba registers a Ginkgo ProgressReporter that will emit screenshots whenever a [progress report](https://onsi.github.io/ginkgo/#getting-visibility-into-long-running-specs) is requested.  This can happen when a spec times out, or when a spec decorated with `PollProgressAfter(X duration)` has taken longer than `X` to complete.  On MacOS you can get a progress report instantly by sending a `SIGINFO` signal with `^T`.  On Linux you can send a `SIGUSR2` signal.
 
 	Both of these mechanisms make it just a bit easier to debug a failing test by getting visual feedback.
 
-	(Note that you can disable both of these by passing in `BilobaConfigDisableFailureScreenshots()` and `BilobaConfigDisableProgressReportScreenshots()` to `ConnectToChrome()`)
+	(Note that the boolean `BilobaConfig` options take an optional bool — `BilobaConfigFailureScreenshots(false)` and `BilobaConfigProgressReportScreenshots(false)` turn those off, and `BilobaConfigFailureOutlines()` turns outlines on.  See [Failure artifacts](#failure-artifacts).)
 
 3. All `console.log/info/warn/etc.` output gets immediately streamed to Ginkgo's GinkgoWriter.
 
@@ -2196,7 +2196,7 @@ One quick hack to speed up a test suite is to use the _smallest_ viable window s
 
 ### Capturing Screenshots {#capturing-screenshots}
 
-As discussed above, Biloba automatically emits screenshots when a spec fails or a progress report is requested.
+As discussed above, Biloba automatically emits screenshots when a spec fails or a progress report is requested.  (It can also attach a text [DOM outline](#outline) on failure — off for an interactive human, on automatically under CI or an AI agent.  See [Failure artifacts](#failure-artifacts) for how the defaults are resolved.)
 
 You can also manually capture a screenshot of a tab:
 
@@ -2250,16 +2250,40 @@ Detection uses environment variables that terminals set for themselves — `TERM
 
 You can also control the behavior explicitly:
 
-- `BILOBA_NO_IMGCAT=true` — disable inline images regardless of terminal (useful in CI or terminals such as Claude Code where the base64 blob is pure noise).  This takes precedence over everything below.
-- `BILOBA_IMGCAT=iterm|kitty|sixel` — force a specific protocol regardless of the detected terminal.  `BILOBA_IMGCAT=true` is an alias for `iterm` (back-compatible).
+- `BILOBA_INLINE_SCREENSHOTS=iterm|kitty|sixel` — force a specific protocol regardless of the detected terminal.  `BILOBA_INLINE_SCREENSHOTS=none` disables inline images entirely (useful in CI or terminals such as Claude Code where the base64 blob is pure noise).
 - `BILOBA_PROBE_TERMINAL=true` — when env-var detection finds nothing, actively query the terminal (Primary Device Attributes) for Sixel support.  This is opt-in because it briefly puts the controlling TTY into raw mode; it lets Sixel-capable terminals that don't advertise themselves via environment variables (xterm, foot, mlterm, …) light up.
-- Pass `BilobaConfigDisableInlineScreenshots()` to `ConnectToChrome` to disable inline images programmatically for a specific connection.
+- Pass `BilobaConfigInlineScreenshots(false)` to `ConnectToChrome` to disable inline images programmatically for a specific connection.
 
 When inline images are disabled:
 
 - The inline-image escape sequence is **never emitted**, eliminating ~70 KB of unreadable output per tab per failure.
 - If `BilobaConfigScreenshotsToDir` is configured, the file path is still printed and included in the failure report so that tools that can render PNG files (e.g. Claude Code's `Read` tool) can show the screenshot.
-- The DOM text outline (see [Outline](#outline)) is always attached on failure regardless of this setting.
+- The DOM text outline (see [Outline](#outline)), if you've enabled it, is attached on failure regardless of this setting.
+
+#### Failure artifacts: humans, CI, and agents {#failure-artifacts}
+
+When a spec fails, the *kind* of artifact that's useful depends on who's looking.  A human at a terminal wants a screenshot rendered inline; a CI log or an AI agent wants text it can read and image *files* it can open — not a base64 blob smeared across the output.  So Biloba picks a sensible default based on where it's running, and lets you override any piece of it.
+
+**Biloba detects the environment automatically.**  Out of the box, with no configuration:
+
+| | Interactive (human) | Automation (CI or an AI agent) |
+|---|---|---|
+| Screenshot on failure | yes, inline | yes, written to a directory |
+| DOM outline on failure | no | yes |
+| Inline image blob | yes (if terminal supports) | no |
+
+"Automation" is detected when `CI` is set, or when an AI coding agent is detected (Claude Code, Cursor, Gemini CLI, Codex, … via [agentdetection](https://github.com/jehiah/agentdetection), which reads signals like `CLAUDECODE` and `AI_AGENT`).  Under automation, screenshots are written to `./biloba-screenshots` by default; point that elsewhere with `BILOBA_SCREENSHOTS_DIR` (handy on CI, where you'd then upload that directory as a build artifact).
+
+So a typical agent or CI run needs **zero configuration** — just run the suite, and failures come back as a DOM outline plus screenshot files on disk.
+
+**Explicit configuration always wins, per knob.**  Anything you set in the suite overrides just that piece of the environment-derived default; everything you leave alone still follows it.  Each toggle takes an optional bool (no argument means `true`):
+
+- `BilobaConfigFailureOutlines()` / `BilobaConfigFailureOutlines(false)` — force outlines on (e.g. for an interactive debugging run) or off (e.g. suppress them under CI).
+- `BilobaConfigInlineScreenshots()` / `BilobaConfigInlineScreenshots(false)` — force the inline image blob on or off.
+- `BilobaConfigScreenshotsToDir(dir)` — write screenshots to `dir` (this also makes inline and on-disk complementary).
+- `BilobaConfigFailureScreenshots(false)` — turn failure screenshots off entirely.
+
+For example, a CI user who only wants screenshots in a specific folder sets `BilobaConfigScreenshotsToDir("./artifacts")` (or `BILOBA_SCREENSHOTS_DIR`) and *still* gets the automation default of outlines-on — they only overrode the directory.
 
 ### Outline {#outline}
 
@@ -2285,7 +2309,7 @@ might produce something like:
 
 `Outline()` automatically prunes the content of `<script>`, `<style>`, and `<svg>` elements (keeping the tags, replacing bodies with `…`) to keep the output compact even on complex SPAs. Runs of whitespace inside text nodes are collapsed to a single space. Output is capped at ~32 KB; if truncated, a `... [truncated]` marker is appended.
 
-**Automatic attachment on failure.** Biloba registers a hook that attaches a DOM Outline for every open tab when a spec fails — in addition to the screenshot.  This means you get a readable, text-based view of the page state alongside the visual one, which is especially useful in environments that cannot render images.  The entry appears under "DOM Outline for: '<title>'" in the Ginkgo report.  Passing `BilobaConfigDisableFailureScreenshots()` to `ConnectToChrome` suppresses both the screenshot and the DOM outline.
+**Attachment on failure.** Biloba can attach a DOM Outline for every open tab when a spec fails.  This gives you a readable, text-based view of the page state, which is especially useful in environments that cannot render images.  It is **off for an interactive human** (the screenshot is the more useful artifact) but **on automatically under CI or an AI agent**; force it either way with `BilobaConfigFailureOutlines()` / `BilobaConfigFailureOutlines(false)` (see [Failure artifacts](#failure-artifacts)).  When enabled, the entry appears under "DOM Outline for: '<title>'" in the Ginkgo report.
 
 You can also call `b.Outline()` directly in a spec to capture a snapshot at any point:
 
@@ -2310,7 +2334,7 @@ RootWebArea "My App"
   button "Submit"
 ```
 
-This is the same role/name view a screen reader works from (and that reasoning models increasingly rely on), so it's often *more* useful than raw HTML for understanding a page: nodes that are ignored for accessibility (and presentational `InlineTextBox` noise) are elided, while semantics like roles, names, and values are surfaced.  Use it when you want to reason about what the page *means* rather than how it's marked up.  Like `Outline()`, the output is capped at ~32 KB.  Unlike `Outline()`, it is not auto-attached on failure (the DOM outline already is) - call it explicitly when you want it.
+This is the same role/name view a screen reader works from (and that reasoning models increasingly rely on), so it's often *more* useful than raw HTML for understanding a page: nodes that are ignored for accessibility (and presentational `InlineTextBox` noise) are elided, while semantics like roles, names, and values are surfaced.  Use it when you want to reason about what the page *means* rather than how it's marked up.  Like `Outline()`, the output is capped at ~32 KB.  It is not auto-attached on failure - call it explicitly when you want it.
 
 ### Configuration
 
@@ -2334,14 +2358,17 @@ and sit back and watch those windows appear and disappear as you run your specs.
 
 `ConnectToChrome(GinkgoT(), ...)` supports a more limited set of options that are more specific to Biloba.  Here's a quick summary:
 
-- `BilobaConfigEnableDebugLogging()` will send all Chrome DevTools protocol traffic to the `GinkgoWriter`.  This can be useful when debugging specs and/or implementing your own more advanced `chromedp` behavior.  Fair warning, though: these logs are verbose!
+The boolean options take an optional bool — calling them with no argument means `true`, and you pass `false` to turn the feature off (e.g. `BilobaConfigFailureScreenshots(false)`).
+
+- `BilobaConfigDebugLogging(...bool)` will send all Chrome DevTools protocol traffic to the `GinkgoWriter`.  This can be useful when debugging specs and/or implementing your own more advanced `chromedp` behavior.  Fair warning, though: these logs are verbose!
 - `BilobaConfigWithChromeConnection(cc ChromeConnection)` allows you to specify your own Chrome connection settings (typically a `WebSocketURL`)
-- `BilobaConfigDisableFailureScreenshots()` disables Biloba's screenshots on failure
-- `BilobaConfigDisableProgressReportScreenshots()` disables Biloba's screenshots when progress reports are requested
+- `BilobaConfigFailureScreenshots(...bool)` controls Biloba's screenshots on failure (on by default)
+- `BilobaConfigFailureOutlines(...bool)` controls the DOM outline attached on failure (off for an interactive human, on under automation - see [Failure artifacts](#failure-artifacts))
+- `BilobaConfigProgressReportScreenshots(...bool)` controls Biloba's screenshots when progress reports are requested (on by default)
+- `BilobaConfigInlineScreenshots(...bool)` controls the inline-image blob in failure and progress-report output (on for a supported interactive terminal, off under automation - see [Inline image gating](#inline-image-gating))
 - `BilobaConfigFailureScreenshotsSize(width, height)` specifies the window size to use when generating a screenshot on failure
 - `BilobaConfigProgressReportScreenshotSize(width, height)` specifies the window size to use when generating a screenshot when progress reports are requested
 - `BilobaConfigScreenshotsToDir(dir)` writes each tab's failure screenshot to a PNG file in the given directory and prints the absolute path to test output (see [Saving screenshots to files](#capturing-screenshots))
-- `BilobaConfigDisableInlineScreenshots()` suppresses the iTerm2 imgcat inline-image blob from failure and progress-report output (see [Inline image gating](#inline-image-gating))
 
 ### Debugging
 

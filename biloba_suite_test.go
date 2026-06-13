@@ -61,7 +61,14 @@ var _ = SynchronizedBeforeSuite(func() {
 	if os.Getenv("CI") != "" && os.Getenv("BILOBA_TEST_HIGH_FIDELITY") != "" {
 		time.Sleep(time.Duration(GinkgoParallelProcess()) * time.Second)
 	}
-	b = biloba.ConnectToChrome(gt) //, biloba.BilobaConfigEnableDebugLogging())
+	// Pin the shared b to interactive ("human") mode so its failure-artifact defaults are
+	// deterministic regardless of where the suite runs. Biloba auto-flips to text-friendly
+	// artifacts (outlines on, inline off, screenshots to disk) under CI or an AI agent - and this
+	// very suite is often run under both - which would otherwise change the baseline the
+	// inline-imgcat specs assert against. Specs that exercise automation mode opt in locally via
+	// biloba.SetAutomationDetectedForTest.
+	biloba.SetAutomationDetectedForTest(func() bool { return false })
+	b = biloba.ConnectToChrome(gt) //, biloba.BilobaConfigDebugLogging())
 	Ω(gt.failures).Should(BeEmpty(), "ConnectToChrome failed during suite setup")
 	Ω(b).ShouldNot(BeNil())
 	ServeFixtures()
