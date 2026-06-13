@@ -170,7 +170,7 @@ Here's a partial list:
 - Fill out forms
 - Handle downloads and dialog boxes
 - Forward all `console.log`s to the `GinkgoWriter`
-- Automatically emit [ImgCat screenshots to supported terminals](https://iterm2.com/documentation-images.html) when a test fails (gated to iTerm2-capable terminals; see [Inline image gating](#inline-image-gating))...
+- Automatically emit inline screenshots to the terminal when a test fails — using the Kitty, iTerm2, or Sixel protocol depending on what the terminal supports (see [Inline image gating](#inline-image-gating))...
 - ...or whenever a [Ginkgo Progress Report](https://onsi.github.io/ginkgo/#getting-visibility-into-long-running-specs) is generated
 - Run your specs in parallel with `ginkgo -p`
 
@@ -406,7 +406,7 @@ Here are some of the ways Biloba integrates with Ginkgo and Gomega so you can fo
 
 	This happens in `b.Prepare()`.
 	
-	Biloba registers a Ginkgo hook that runs after each spec.  If the spec has failed, a DOM text outline and a screenshot of every tab associated with that spec are captured.  Screenshots are emitted to the terminal via iTerm2's [image protocol](https://iterm2.com/documentation-images.html) **only when the terminal supports it** (see [Inline image gating](#inline-image-gating) below).
+	Biloba registers a Ginkgo hook that runs after each spec.  If the spec has failed, a DOM text outline and a screenshot of every tab associated with that spec are captured.  Screenshots are emitted to the terminal as inline images (Kitty, iTerm2, or Sixel) **only when the terminal supports it** (see [Inline image gating](#inline-image-gating) below).
 
 	In addition, Biloba registers a Ginkgo ProgressReporter that will emit screenshots whenever a [progress report](https://onsi.github.io/ginkgo/#getting-visibility-into-long-running-specs) is requested.  This can happen when a spec times out, or when a spec decorated with `PollProgressAfter(X duration)` has taken longer than `X` to complete.  On MacOS you can get a progress report instantly by sending a `SIGINFO` signal with `^T`.  On Linux you can send a `SIGUSR2` signal.
 
@@ -2241,20 +2241,20 @@ When a spec fails, Biloba writes `screenshot-<spec>-<tab>.png` to the configured
 
 #### Inline image gating {#inline-image-gating}
 
-Biloba emits iTerm2 inline image escape sequences (`\033]1337;File=...`) **only when the terminal supports them**.  Inline images are enabled when:
+Biloba emits inline image escape sequences **only when the terminal supports them**.  It auto-detects the terminal and picks the best protocol it can: the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) where available (best quality; kitty, Ghostty), the [iTerm2 `OSC 1337` protocol](https://iterm2.com/documentation-images.html) (iTerm2, WezTerm, Konsole, …), or [Sixel](https://en.wikipedia.org/wiki/Sixel) (VS Code's integrated terminal, plus older terminals).
 
-- `TERM_PROGRAM=iTerm.app` is set in the environment (the default iTerm2 value), **and**
-- `BILOBA_NO_IMGCAT=true` is **not** set.
+Detection uses environment variables that terminals set for themselves — `TERM_PROGRAM` (`iTerm.app`, `vscode`, `WezTerm`, `ghostty`, `rio`), `KITTY_WINDOW_ID`, `TERM=xterm-kitty`, `LC_TERMINAL=iTerm2`, and `KONSOLE_VERSION`.  Note that VS Code maps to Sixel — its integrated terminal renders Sixel but not the iTerm2 protocol.  When none of these match, inline images are off unless you opt into probing or force a protocol.
 
-You can also force the behavior explicitly:
+You can also control the behavior explicitly:
 
-- `BILOBA_NO_IMGCAT=true` — disable inline images regardless of terminal (useful in CI or non-iTerm terminals such as Claude Code where the base64 blob is pure noise).
-- `BILOBA_IMGCAT=true` — force-enable inline images regardless of `TERM_PROGRAM` (takes lower precedence than `BILOBA_NO_IMGCAT`).
+- `BILOBA_NO_IMGCAT=true` — disable inline images regardless of terminal (useful in CI or terminals such as Claude Code where the base64 blob is pure noise).  This takes precedence over everything below.
+- `BILOBA_IMGCAT=iterm|kitty|sixel` — force a specific protocol regardless of the detected terminal.  `BILOBA_IMGCAT=true` is an alias for `iterm` (back-compatible).
+- `BILOBA_PROBE_TERMINAL=true` — when env-var detection finds nothing, actively query the terminal (Primary Device Attributes) for Sixel support.  This is opt-in because it briefly puts the controlling TTY into raw mode; it lets Sixel-capable terminals that don't advertise themselves via environment variables (xterm, foot, mlterm, …) light up.
 - Pass `BilobaConfigDisableInlineScreenshots()` to `ConnectToChrome` to disable inline images programmatically for a specific connection.
 
 When inline images are disabled:
 
-- The iTerm2 base64 blob is **never emitted**, eliminating ~70 KB of unreadable output per tab per failure.
+- The inline-image escape sequence is **never emitted**, eliminating ~70 KB of unreadable output per tab per failure.
 - If `BilobaConfigScreenshotsToDir` is configured, the file path is still printed and included in the failure report so that tools that can render PNG files (e.g. Claude Code's `Read` tool) can show the screenshot.
 - The DOM text outline (see [Outline](#outline)) is always attached on failure regardless of this setting.
 

@@ -3,6 +3,7 @@ module github.com/onsi/biloba
 go 1.26
 
 require (
+	github.com/BourgeoisBear/rasterm v1.1.2
 	github.com/chromedp/cdproto v0.0.0-20260427013145-5737772c319b
 	github.com/chromedp/chromedp v0.15.1
 	github.com/onsi/ginkgo/v2 v2.30.0
@@ -25,6 +26,7 @@ require (
 	golang.org/x/mod v0.36.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
+	golang.org/x/term v0.44.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
 	golang.org/x/tools v0.45.0 // indirect
 	google.golang.org/protobuf v1.36.7 // indirect

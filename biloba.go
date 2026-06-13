@@ -290,9 +290,9 @@ func BilobaConfigProgressReportScreenshotSize(width, height int) func(*Biloba) {
 }
 
 /*
-Pass BilobaConfigDisableInlineScreenshots to [ConnectToChrome] to suppress the iTerm2 imgcat inline-image escape sequences from failure and progress-report output.  When inline images are disabled, Biloba still captures screenshots and writes them to the configured directory (if any); the file path is printed to test output.
+Pass BilobaConfigDisableInlineScreenshots to [ConnectToChrome] to suppress inline-image escape sequences from failure and progress-report output.  When inline images are disabled, Biloba still captures screenshots and writes them to the configured directory (if any); the file path is printed to test output.
 
-This is equivalent to setting the BILOBA_NO_IMGCAT=true environment variable and is useful when running in terminals that do not support the iTerm2 image protocol, where the base64 blob would otherwise pollute the output stream.
+This is equivalent to setting the BILOBA_NO_IMGCAT=true environment variable and is useful when running in terminals that do not support any inline-image protocol, where the base64 blob would otherwise pollute the output stream.
 
 Read https://onsi.github.io/biloba/#capturing-screenshots for details.
 */

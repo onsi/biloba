@@ -4,31 +4,114 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
+	"image"
+	"image/color/palette"
+	"image/draw"
+	"image/png"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/BourgeoisBear/rasterm"
 	"github.com/chromedp/chromedp"
 	"golang.org/x/net/context"
 )
 
-// inlineImagesSupported reports whether the current terminal can render iTerm2
-// inline image sequences.  The decision order is:
+// inlineImageProtocol identifies which terminal inline-image escape sequence a
+// screenshot should be encoded with.
+type inlineImageProtocol int
+
+const (
+	inlineImageNone inlineImageProtocol = iota
+	inlineImageITerm
+	inlineImageKitty
+	inlineImageSixel
+)
+
+// detectInlineImageProtocol decides which (if any) terminal inline-image protocol
+// to use.  The decision order is:
 //
-//  1. BILOBA_NO_IMGCAT=true → force off (returns false).
-//  2. BILOBA_IMGCAT=true    → force on  (returns true).
-//  3. TERM_PROGRAM=iTerm.app → on (iTerm2 detected).
-//  4. Otherwise             → off.
-func inlineImagesSupported() bool {
+//  1. BILOBA_NO_IMGCAT=true → force off (inlineImageNone).
+//  2. BILOBA_IMGCAT=iterm|kitty|sixel|true → force that protocol ("true" means iterm).
+//  3. Environment-variable terminal detection (iTerm2, VSCode, WezTerm, Ghostty, kitty, Konsole, …).
+//  4. BILOBA_PROBE_TERMINAL=true → query the terminal directly (Primary DA) for Sixel support.
+//  5. Otherwise → off.
+//
+// Kitty's graphics protocol is preferred where available (best quality), then the
+// broadly-supported iTerm2 OSC 1337 protocol (works in iTerm2, VSCode, WezTerm, …),
+// then Sixel as a last-resort fallback for older terminals.
+func detectInlineImageProtocol() inlineImageProtocol {
 	if os.Getenv("BILOBA_NO_IMGCAT") == "true" {
-		return false
+		return inlineImageNone
 	}
-	if os.Getenv("BILOBA_IMGCAT") == "true" {
-		return true
+	switch strings.ToLower(os.Getenv("BILOBA_IMGCAT")) {
+	case "true", "iterm", "iterm2":
+		return inlineImageITerm
+	case "kitty":
+		return inlineImageKitty
+	case "sixel":
+		return inlineImageSixel
+	case "false", "none":
+		return inlineImageNone
 	}
-	return os.Getenv("TERM_PROGRAM") == "iTerm.app"
+
+	if p := inlineImageProtocolFromEnv(); p != inlineImageNone {
+		return p
+	}
+
+	// Some Sixel-capable terminals (xterm, foot, mlterm, …) don't announce themselves
+	// through environment variables.  Probing requires putting the controlling TTY into
+	// raw mode, so it is opt-in to avoid interfering with the test runner's terminal.
+	if os.Getenv("BILOBA_PROBE_TERMINAL") == "true" {
+		if ok, err := rasterm.IsSixelCapable(); err == nil && ok {
+			return inlineImageSixel
+		}
+	}
+
+	return inlineImageNone
+}
+
+// inlineImageProtocolFromEnv maps well-known terminal environment variables to the
+// best inline-image protocol that terminal supports.
+func inlineImageProtocolFromEnv() inlineImageProtocol {
+	termProgram := os.Getenv("TERM_PROGRAM")
+	term := os.Getenv("TERM")
+
+	// Kitty graphics protocol — best quality where supported.
+	if os.Getenv("KITTY_WINDOW_ID") != "" || term == "xterm-kitty" || termProgram == "ghostty" {
+		return inlineImageKitty
+	}
+
+	// VSCode's integrated terminal renders Sixel but NOT the iTerm2 OSC 1337
+	// protocol, so prefer Sixel there.
+	if termProgram == "vscode" {
+		return inlineImageSixel
+	}
+
+	// iTerm2 OSC 1337 inline-image protocol — broad reach (iTerm2, WezTerm, …).
+	switch termProgram {
+	case "iTerm.app", "WezTerm", "rio":
+		return inlineImageITerm
+	}
+	if os.Getenv("LC_TERMINAL") == "iTerm2" { // iTerm2 forwarded over ssh
+		return inlineImageITerm
+	}
+	if os.Getenv("KONSOLE_VERSION") != "" { // Konsole speaks OSC 1337
+		return inlineImageITerm
+	}
+	if term == "mintty" {
+		return inlineImageITerm
+	}
+
+	return inlineImageNone
+}
+
+// inlineImagesSupported reports whether the current terminal can render any inline
+// image protocol.  See detectInlineImageProtocol for the decision order.
+func inlineImagesSupported() bool {
+	return detectInlineImageProtocol() != inlineImageNone
 }
 
 /*
@@ -89,6 +172,44 @@ func (b *Biloba) asImgCat(img []byte) string {
 	buf.WriteString("\033\\")
 
 	return string(buf.Bytes())
+}
+
+// asInlineImage encodes a PNG screenshot into the escape sequence for the given
+// terminal inline-image protocol.  Returns "" for inlineImageNone.
+func (b *Biloba) asInlineImage(img []byte, proto inlineImageProtocol) string {
+	buf := &bytes.Buffer{}
+	switch proto {
+	case inlineImageITerm:
+		return b.asImgCat(img)
+	case inlineImageKitty:
+		if err := rasterm.KittyCopyPNGInline(buf, bytes.NewReader(img), rasterm.KittyImgOpts{}); err != nil {
+			b.gt.Fatalf("Failed to encode kitty screenshot:\n%s", err.Error())
+		}
+	case inlineImageSixel:
+		paletted, err := pngToPaletted(img)
+		if err != nil {
+			b.gt.Fatalf("Failed to encode sixel screenshot:\n%s", err.Error())
+		}
+		if err := rasterm.SixelWriteImage(buf, paletted); err != nil {
+			b.gt.Fatalf("Failed to encode sixel screenshot:\n%s", err.Error())
+		}
+	default:
+		return ""
+	}
+	return buf.String()
+}
+
+// pngToPaletted decodes a PNG and dithers it down to a 256-color paletted image,
+// as required by the Sixel encoder (which is an inherently paletted format).
+func pngToPaletted(img []byte) (*image.Paletted, error) {
+	src, err := png.Decode(bytes.NewReader(img))
+	if err != nil {
+		return nil, err
+	}
+	bounds := src.Bounds()
+	out := image.NewPaletted(bounds, palette.Plan9)
+	draw.FloydSteinberg.Draw(out, bounds, src, bounds.Min)
+	return out, nil
 }
 
 type tabScreenshot struct {
@@ -152,7 +273,7 @@ func (b *Biloba) safeAllTabScreenshots(width int, height int) []tabScreenshot {
 			title: title,
 		}
 		if b.root.inlineScreenshotsEnabled() {
-			ts.imgcatScreenshot = b.asImgCat(img)
+			ts.imgcatScreenshot = b.asInlineImage(img, detectInlineImageProtocol())
 		}
 		if b.root.screenshotsDir != "" {
 			specName := sanitizeForFilename(b.gt.Name())

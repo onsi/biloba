@@ -76,52 +76,84 @@ var _ = Describe("Screenshots", func() {
 	})
 
 	Describe("inlineImagesSupported", Label("no-browser"), func() {
-		var origTermProgram, origNoImgcat, origImgcat string
+		// detection reads several terminal environment variables; save and clear the
+		// full set so each spec controls exactly the inputs it sets.
+		detectionEnvKeys := []string{
+			"TERM", "TERM_PROGRAM", "KITTY_WINDOW_ID", "LC_TERMINAL", "KONSOLE_VERSION",
+			"BILOBA_NO_IMGCAT", "BILOBA_IMGCAT", "BILOBA_PROBE_TERMINAL",
+		}
+		var origEnv map[string]string
 
 		BeforeEach(func() {
-			origTermProgram = os.Getenv("TERM_PROGRAM")
-			origNoImgcat = os.Getenv("BILOBA_NO_IMGCAT")
-			origImgcat = os.Getenv("BILOBA_IMGCAT")
+			origEnv = map[string]string{}
+			for _, k := range detectionEnvKeys {
+				origEnv[k] = os.Getenv(k)
+				os.Unsetenv(k)
+			}
 		})
 
 		AfterEach(func() {
-			os.Setenv("TERM_PROGRAM", origTermProgram)
-			os.Setenv("BILOBA_NO_IMGCAT", origNoImgcat)
-			os.Setenv("BILOBA_IMGCAT", origImgcat)
+			for _, k := range detectionEnvKeys {
+				if origEnv[k] == "" {
+					os.Unsetenv(k)
+				} else {
+					os.Setenv(k, origEnv[k])
+				}
+			}
 		})
 
 		It("returns true when TERM_PROGRAM=iTerm.app", func() {
 			os.Setenv("TERM_PROGRAM", "iTerm.app")
-			os.Unsetenv("BILOBA_NO_IMGCAT")
-			os.Unsetenv("BILOBA_IMGCAT")
+			Ω(biloba.InlineImagesSupportedForTest()).Should(BeTrue())
+		})
+
+		It("returns true when TERM_PROGRAM=vscode", func() {
+			os.Setenv("TERM_PROGRAM", "vscode")
+			Ω(biloba.InlineImagesSupportedForTest()).Should(BeTrue())
+		})
+
+		It("returns true when TERM_PROGRAM=WezTerm", func() {
+			os.Setenv("TERM_PROGRAM", "WezTerm")
+			Ω(biloba.InlineImagesSupportedForTest()).Should(BeTrue())
+		})
+
+		It("returns true when TERM_PROGRAM=ghostty (kitty protocol)", func() {
+			os.Setenv("TERM_PROGRAM", "ghostty")
+			Ω(biloba.InlineImagesSupportedForTest()).Should(BeTrue())
+		})
+
+		It("returns true when KITTY_WINDOW_ID is set", func() {
+			os.Setenv("KITTY_WINDOW_ID", "1")
+			Ω(biloba.InlineImagesSupportedForTest()).Should(BeTrue())
+		})
+
+		It("returns true when LC_TERMINAL=iTerm2 (e.g. forwarded over ssh)", func() {
+			os.Setenv("LC_TERMINAL", "iTerm2")
 			Ω(biloba.InlineImagesSupportedForTest()).Should(BeTrue())
 		})
 
 		It("returns false for an unknown TERM_PROGRAM", func() {
 			os.Setenv("TERM_PROGRAM", "xterm")
-			os.Unsetenv("BILOBA_NO_IMGCAT")
-			os.Unsetenv("BILOBA_IMGCAT")
 			Ω(biloba.InlineImagesSupportedForTest()).Should(BeFalse())
 		})
 
-		It("returns false when TERM_PROGRAM is unset", func() {
-			os.Unsetenv("TERM_PROGRAM")
-			os.Unsetenv("BILOBA_NO_IMGCAT")
-			os.Unsetenv("BILOBA_IMGCAT")
+		It("returns false when no terminal env vars are set", func() {
 			Ω(biloba.InlineImagesSupportedForTest()).Should(BeFalse())
 		})
 
 		It("returns false when BILOBA_NO_IMGCAT=true regardless of TERM_PROGRAM", func() {
 			os.Setenv("TERM_PROGRAM", "iTerm.app")
 			os.Setenv("BILOBA_NO_IMGCAT", "true")
-			os.Unsetenv("BILOBA_IMGCAT")
 			Ω(biloba.InlineImagesSupportedForTest()).Should(BeFalse())
 		})
 
 		It("returns true when BILOBA_IMGCAT=true regardless of TERM_PROGRAM", func() {
-			os.Unsetenv("TERM_PROGRAM")
-			os.Unsetenv("BILOBA_NO_IMGCAT")
 			os.Setenv("BILOBA_IMGCAT", "true")
+			Ω(biloba.InlineImagesSupportedForTest()).Should(BeTrue())
+		})
+
+		It("returns true when BILOBA_IMGCAT=sixel", func() {
+			os.Setenv("BILOBA_IMGCAT", "sixel")
 			Ω(biloba.InlineImagesSupportedForTest()).Should(BeTrue())
 		})
 
@@ -218,6 +250,44 @@ var _ = Describe("Screenshots", func() {
 				Ω(shots).ShouldNot(BeEmpty())
 				Ω(shots[0].ImgcatScreenshot).ShouldNot(BeEmpty())
 				Ω(shots[0].ImgcatScreenshot).Should(HavePrefix("\033]1337"))
+			})
+		})
+
+		Context("when BILOBA_IMGCAT=kitty", func() {
+			var origImgcat string
+
+			BeforeEach(func() {
+				origImgcat = os.Getenv("BILOBA_IMGCAT")
+				os.Setenv("BILOBA_IMGCAT", "kitty")
+			})
+
+			AfterEach(func() {
+				os.Setenv("BILOBA_IMGCAT", origImgcat)
+			})
+
+			It("emits a kitty graphics sequence", func() {
+				shots := b.SafeAllTabScreenshotsForTest(0, 0)
+				Ω(shots).ShouldNot(BeEmpty())
+				Ω(shots[0].ImgcatScreenshot).Should(HavePrefix("\033_G"))
+			})
+		})
+
+		Context("when BILOBA_IMGCAT=sixel", func() {
+			var origImgcat string
+
+			BeforeEach(func() {
+				origImgcat = os.Getenv("BILOBA_IMGCAT")
+				os.Setenv("BILOBA_IMGCAT", "sixel")
+			})
+
+			AfterEach(func() {
+				os.Setenv("BILOBA_IMGCAT", origImgcat)
+			})
+
+			It("emits a sixel sequence", func() {
+				shots := b.SafeAllTabScreenshotsForTest(0, 0)
+				Ω(shots).ShouldNot(BeEmpty())
+				Ω(shots[0].ImgcatScreenshot).Should(HavePrefix("\033P"))
 			})
 		})
 	})

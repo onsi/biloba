@@ -66,5 +66,6 @@ Repo-specific testing conventions (see `biloba_suite_test.go`):
 
 ## Conventions
 
-- Keep docs in sync: user-facing behavior changes belong in `docs/index.md` (narrative) and godoc comments (sparse reference that links to the docs). Bump `BILOBA_VERSION` in `biloba.go` and update `CHANGELOG.md` on release.
+- Keep docs in sync: user-facing behavior changes belong in `docs/index.md` (narrative) and godoc comments (sparse reference that links to the docs). Stage user-facing changes in `CHANGELOG-TMP.md` as you go (keep entries brief).
+- **Never release.** Onsi releases, using a `shipit` binary you must never run. Do not bump `BILOBA_VERSION`, do not edit `CHANGELOG.md` (the released log), and do not tag/publish. Your job ends at staging notes in `CHANGELOG-TMP.md`; `shipit` folds those into `CHANGELOG.md` and bumps the version at release time.
 - Match the surrounding style: terse godoc on exported symbols ending with a link to the docs section; JS in `biloba.js` is dense and functional (`one(...)`/`each(...)` combinators) — follow it.
