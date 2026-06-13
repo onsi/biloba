@@ -53,6 +53,14 @@ var _ = SynchronizedBeforeSuite(func() {
 	// swallowed - leaving every spec to nil-deref on a nil b. Surface it loudly.
 	Ω(gt.failures).Should(BeEmpty(), "SpinUpChrome failed during suite setup")
 }, func() {
+	// On CI, full google-chrome (high-fidelity) is flaky when every parallel process attaches a
+	// remote allocator to the one browser at the same instant - it intermittently wedged or never
+	// exposed its DevTools websocket. Stagger the connections by parallel-process index so they
+	// arrive one second apart. Scoped to CI + high-fidelity so it never slows local runs or the
+	// (stable) chrome-headless-shell lane.
+	if os.Getenv("CI") != "" && os.Getenv("BILOBA_TEST_HIGH_FIDELITY") != "" {
+		time.Sleep(time.Duration(GinkgoParallelProcess()) * time.Second)
+	}
 	b = biloba.ConnectToChrome(gt) //, biloba.BilobaConfigEnableDebugLogging())
 	Ω(gt.failures).Should(BeEmpty(), "ConnectToChrome failed during suite setup")
 	Ω(b).ShouldNot(BeNil())
