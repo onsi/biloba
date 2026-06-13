@@ -7,8 +7,8 @@ jobs:
     runs-on: ubuntu-latest
     name: Check modules
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-go@v5
+    - uses: actions/checkout@v5
+    - uses: actions/setup-go@v6
       with:
         go-version-file: 'go.mod'
     - run: go mod tidy && git diff --exit-code go.mod go.sum
@@ -17,8 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     name: Test (default chrome-headless-shell)
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-go@v5
+    - uses: actions/checkout@v5
+    - uses: actions/setup-go@v6
       with:
         go-version-file: 'go.mod'
     - run: go vet ./...
@@ -40,8 +40,8 @@ jobs:
       # pre-installed google-chrome) so both fidelity modes stay green
       BILOBA_TEST_HIGH_FIDELITY: "true"
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-go@v5
+    - uses: actions/checkout@v5
+    - uses: actions/setup-go@v6
       with:
         go-version-file: 'go.mod'
     # Ubuntu 23.10+ (the ubuntu-latest runner) restricts unprivileged user namespaces via
