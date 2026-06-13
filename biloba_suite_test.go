@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/chromedp"
 	"github.com/onsi/biloba"
 	. "github.com/onsi/ginkgo/v2"
 	"github.com/onsi/ginkgo/v2/formatter"
@@ -40,11 +41,21 @@ var _ = SynchronizedBeforeSuite(func() {
 	// (used by the high-fidelity CI lane).
 	opts := []biloba.SpinUpOption{biloba.AutoInstallHeadlessShell()}
 	if os.Getenv("BILOBA_TEST_HIGH_FIDELITY") != "" {
-		opts = []biloba.SpinUpOption{biloba.HighFidelityHeadless()}
+		// The high-fidelity lane drives the runner's installed google-chrome, whose
+		// per-binary AppArmor profile blocks Chrome's sandbox on Ubuntu 23.10+ even
+		// after relaxing apparmor_restrict_unprivileged_userns. High-fidelity is about
+		// rendering realism, not sandbox realism, so --no-sandbox here is harmless.
+		opts = []biloba.SpinUpOption{biloba.HighFidelityHeadless(), biloba.ChromeFlags(chromedp.NoSandbox)}
 	}
 	biloba.SpinUpChrome(gt, opts...)
+	// gt captures Fatal/Fatalf instead of aborting (so specs can assert on Biloba
+	// failures), which means a genuine spin-up failure here would otherwise be
+	// swallowed - leaving every spec to nil-deref on a nil b. Surface it loudly.
+	Ω(gt.failures).Should(BeEmpty(), "SpinUpChrome failed during suite setup")
 }, func() {
 	b = biloba.ConnectToChrome(gt) //, biloba.BilobaConfigEnableDebugLogging())
+	Ω(gt.failures).Should(BeEmpty(), "ConnectToChrome failed during suite setup")
+	Ω(b).ShouldNot(BeNil())
 	ServeFixtures()
 })
 
