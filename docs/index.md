@@ -168,48 +168,24 @@ Here's a partial list:
 - Create and manage multiple tabs
 - Run and assert on arbitrary javascript
 - Fill out forms
-- Handle downloads and dialog boxes
+- Handle uploads, downloads and dialog boxes
+- Set and get cookies and local storage
 - Forward all `console.log`s to the `GinkgoWriter`
-- Automatically emit inline screenshots to the terminal when a test fails — using the Kitty, iTerm2, or Sixel protocol depending on what the terminal supports (see [Inline image gating](#inline-image-gating))...
+- Automatically emit inline screenshots (or DOM outlines when an agent is running the tests) to the terminal when a test fails...
 - ...or whenever a [Ginkgo Progress Report](https://onsi.github.io/ginkgo/#getting-visibility-into-long-running-specs) is generated
 - Run your specs in parallel with `ginkgo -p`
 
 > "But you're obviously missing X, Y, and Z!"
 
-Biloba is young, and just getting started.  Send in a PR!  Or, if you prefer, just use [`chromedp`](https://github.com/chromedp/chromedp) directly to accomplish what you need.  Or drop down all the way to [`cdproto`](https://pkg.go.dev/github.com/chromedp/cdproto) to use the [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/) directly.   Every Biloba tab exposes its `chromedp` context via `b.Context` - so you can mix and match as needed.
+Biloba is maturing fast.  Send in a PR!  Or, if you prefer, just use [`chromedp`](https://github.com/chromedp/chromedp) directly to accomplish what you need.  Or drop down all the way to [`cdproto`](https://pkg.go.dev/github.com/chromedp/cdproto) to use the [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/) directly.   Every Biloba tab exposes its `chromedp` context via `b.Context` - so you can mix and match as needed.
 
-> "You just said 'young' and 'getting started.'  Why should I use this thing when far more mature tools like [puppeteer](https://pptr.dev), [selenium](https://www.selenium.dev), and [capybara](https://github.com/teamcapybara/capybara) exist?"
+> Why should I use this thing when far more mature tools like [puppeteer](https://pptr.dev), [selenium](https://www.selenium.dev), and [capybara](https://github.com/teamcapybara/capybara) exist?"
 
-Lol!  You probably shouldn't!  But... if you're building something out in Go, happen to know and like Ginkgo, and want to experiment with a shiny new toy that's aiming to deliver performant non-flakey automated browser tests... Give Biloba a try - and start opening issues and sending in PRs!
+If you're building something out in Go, using an LLM agent, happen to know and like Ginkgo, and/or want to experiment with a shiny new toy that's aiming to deliver performant non-flakey automated browser tests... Give Biloba a try - and start opening issues and sending in PRs!
 
 > "Who even writes code these days?  Don't the LLMs do it all for you?"
 
-Sure.  And LLMs do best when they have a solid deterministic non-flaky *fast* feedback loop.  Biloba is blazing fast and its DSL is designed to work well with AI toolchains like Claude Code.  It's under active development and use as I build out a new feature-rich single-page app with Claude (he said on June 12th, 2026).
-
-### Claude Code Skills {#claude-code-skills}
-
-Biloba ships a set of [Claude Code](https://claude.com/claude-code) skills as a **plugin**, so an agent writing tests against *your* app has Biloba's idioms on hand.  The Biloba repo doubles as the plugin marketplace, so installation is two commands.  From inside Claude Code:
-
-```
-/plugin marketplace add onsi/biloba
-/plugin install biloba@biloba
-```
-
-(The same can be done non-interactively with `claude plugin marketplace add onsi/biloba` and `claude plugin install biloba@biloba`.)
-
-This installs a family of `biloba:*` skills that activate automatically while you write tests, and can also be invoked explicitly (e.g. `/biloba:explore-unfamiliar-page http://localhost:8080`):
-
-| Skill | What it's for |
-|---|---|
-| `biloba:overview` | The mental model — the three principles and how they shape your specs. |
-| `biloba:setup` | Wiring Biloba into your suite: bootstrap, `chrome-headless-shell`, the bootstrap variations. |
-| `biloba:write-tests` | Authoring specs: the dual immediate/matcher API, selecting elements, hermetic tests, multiple tabs. |
-| `biloba:xpath` | Building selectors with the `b.XPath()` DSL. |
-| `biloba:api` | A one-line reference for every method and matcher. |
-| `biloba:explore-unfamiliar-page` | Orienting to a page you haven't seen, then drafting a starter spec. |
-| `biloba:debug-failures` | DOM outlines, screenshots, and the env/config knobs that surface them. |
-
-The skills track the library — pin to the same Biloba version you've `go get`'d (the API may shift pre-1.0), and these docs remain the source of truth.
+Sure.  And LLMs do best when they have a solid deterministic non-flaky *fast* feedback loop.  Biloba is blazing fast and its DSL is designed to work well with AI toolchains like Claude Code.  It's under active development and use and is being oriented towards enabling both human and agent workflows.
 
 ### Performance and Stability
 
@@ -458,7 +434,28 @@ Here are some of the ways Biloba integrates with Ginkgo and Gomega so you can fo
 
 	When called with an argument, `b.Click` is invoked immediately and will fail the test if it fails.  When invoked without an argument, `b.Click` returns a Gomega matcher that can be polled.
 
-These integrations will continue to evolve and deepen as Biloba matures.
+### Claude Code Skills
+
+Biloba ships a set of [Claude Code](https://claude.com/claude-code) skills as a **plugin**, so an agent writing tests against *your* app has Biloba's idioms on hand.  The Biloba repo doubles as the plugin marketplace, so installation is two commands.  From inside Claude Code:
+
+```
+/plugin marketplace add onsi/biloba
+/plugin install biloba@biloba
+```
+
+(The same can be done non-interactively with `claude plugin marketplace add onsi/biloba` and `claude plugin install biloba@biloba`.)
+
+This installs a family of `biloba:*` skills that activate automatically while you write tests, and can also be invoked explicitly (e.g. `/biloba:explore-unfamiliar-page http://localhost:8080`):
+
+| Skill | What it's for |
+|---|---|
+| `biloba:overview` | The mental model — the three principles and how they shape your specs. |
+| `biloba:setup` | Wiring Biloba into your suite: bootstrap, `chrome-headless-shell`, the bootstrap variations. |
+| `biloba:write-tests` | Authoring specs: the dual immediate/matcher API, selecting elements, hermetic tests, multiple tabs. |
+| `biloba:xpath` | Building selectors with the `b.XPath()` DSL. |
+| `biloba:api` | A one-line reference for every method and matcher. |
+| `biloba:explore-unfamiliar-page` | Orienting to a page you haven't seen, then drafting a starter spec. |
+| `biloba:debug-failures` | DOM outlines, screenshots, and the env/config knobs that surface them. |
 
 ### `chromedp`: Breaking the Fourth Wall
 
@@ -518,127 +515,6 @@ Eventually(b).Should(b.HaveTitle(HaveSuffix("Introduction")))
 ```
 
 Both accept either a string (for an exact match) or a Gomega matcher.
-
-## Cookies and Storage {#cookies-and-storage}
-
-A huge fraction of browser suites need to seed some browser state before exercising the app - most commonly an authentication cookie or a `localStorage` entry - so they can skip the login flow and get straight to the behavior under test.  Biloba provides first-class helpers for cookies, `localStorage`, and `sessionStorage`.
-
-Everything in this section is scoped to the tab's isolated `BrowserContextID`.  Since each Biloba tab lives in its own incognito-like browser context, cookies and storage set on one tab never leak into another - so parallel specs (and multi-tab specs) stay isolated for free.
-
-> **You must navigate to a real origin first.**  Cookies and web storage are associated with an origin, and `about:blank` has an _opaque_ origin that cannot hold either.  Always `b.Navigate(...)` to a real URL before setting cookies or storage.
-
-### Cookies
-
-Set, read, and clear cookies with `b.SetCookie`, `b.GetCookies`, and `b.ClearCookies`:
-
-```go
-BeforeEach(func() {
-	b.Navigate("http://localhost:8080/home")
-
-	// seed the login cookie so we skip the login flow
-	b.SetCookie(biloba.Cookie{Name: "user", Value: "Joe"})
-
-	// clear all cookies after each spec so state doesn't leak
-	DeferCleanup(b.ClearCookies)
-})
-
-It("is logged in", func() {
-	b.Navigate("http://localhost:8080/home")
-	Expect("#user-name").To(b.HaveInnerText("Joe"))
-})
-```
-
-A `biloba.Cookie` only requires a `Name` and `Value`.  Whenever you don't provide a `Domain`, Biloba associates the cookie with the tab's current URL (an explicit `Path` still applies on top of that origin).  Because of this, **the tab must be on a real origin when you set such a cookie** - a cookie can't attach to `about:blank`, so `SetCookie` fails the spec with a clear message if you try (navigate first, or set the `Domain` explicitly).  You can also set `Domain`, `Path`, `Secure`, `HTTPOnly`, and `SameSite` (one of `"Strict"`, `"Lax"`, or `"None"`) explicitly.  Provide an `Expires` time to set a persistent cookie - leave it as the zero `time.Time` to set a session cookie:
-
-```go
-b.SetCookie(biloba.Cookie{
-	Name:    "user",
-	Value:   "Joe",
-	Domain:  "localhost",
-	Expires: time.Now().Add(180 * 24 * time.Hour),
-})
-```
-
-You can pass multiple cookies to a single `SetCookie` call.  `b.GetCookies()` returns a `biloba.Cookies` slice for all the cookies in the tab's browser context (the returned `Cookie`s have their `Session` field set to `true` for session cookies and a populated `Expires` for persistent ones).
-
-#### Asserting on Cookies
-
-`b.HaveCookie(name)` is a matcher you assert against the tab itself.  It passes if the tab has a cookie whose name matches - `name` may be a string (exact match) or a Gomega matcher:
-
-```go
-Eventually(b).Should(b.HaveCookie("session"))
-Expect(b).To(b.HaveCookie(ContainSubstring("my_guid")))
-```
-
-You can chain refinements onto the matcher to further constrain the _same_ cookie.  Each refinement takes a string (exact match) or a Gomega matcher:
-
-```go
-Expect(b).To(b.HaveCookie("session").WithValue("abc123").WithPath("/"))
-Expect(b).To(b.HaveCookie(ContainSubstring("my_guid")).WithValue(ContainSubstring("ABCD-1")))
-Expect(b).To(b.HaveCookie("session").WithDomain("localhost").WithSecure())
-```
-
-The available refinements are `WithValue`, `WithPath`, `WithDomain`, `WithSameSite`, and the boolean flag refinements `WithSecure(...)` and `WithHTTPOnly(...)`.  The flag refinements take an optional bool: called with no argument they assert the flag is `true` (`WithSecure()` is shorthand for `WithSecure(true)`), and `WithSecure(false)` asserts the cookie is _not_ Secure.  All of the refinements must hold for a single cookie - if two cookies each satisfy some-but-not-all of the refinements the matcher does not pass.
-
-The same query plays double duty.  As an assertion you hand it to `Should`/`Eventually` and spell it `HaveCookie` (above); as a **predicate** you hand it to the `Find`/`Filter` helpers on the `Cookies` slice returned by `b.GetCookies()` and spell it `CookieMatching`.  `Find` returns the matching `Cookie` and a bool reporting whether one was found:
-
-```go
-cookie, ok := b.GetCookies().Find(b.CookieMatching("session").WithPath("/admin"))
-admins := b.GetCookies().Filter(b.CookieMatching(ContainSubstring("session")))
-```
-
-`b.HaveNumCookies(expected)` asserts on the number of cookies on the tab.  `expected` may be an int (exact match) or a Gomega matcher:
-
-```go
-Expect(b).To(b.HaveNumCookies(2))
-Expect(b).To(b.HaveNumCookies(BeNumerically(">", 0)))
-```
-
-### Local and Session Storage
-
-`b.LocalStorage()` and `b.SessionStorage()` return typed handles for interacting with the corresponding web-storage area:
-
-```go
-b.LocalStorage().Set("count", 3)
-
-var count int
-b.LocalStorage().Get("count", &count) // count == 3
-```
-
-Both handles expose the same methods: `Set(key, value)`, `Get(key, ...pointer)`, `GetAll()`, `Remove(key)`, `Clear()`, and `Length()`.
-
-**Type handling:** values are JSON-encoded on `Set` and JSON-decoded on `Get`, so you can round-trip any JSON-serializable Go value:
-
-```go
-b.LocalStorage().Set("user", map[string]any{"name": "Joe", "admin": true})
-
-var user struct {
-	Name  string
-	Admin bool
-}
-b.LocalStorage().Get("user", &user)
-```
-
-`Get` takes an optional pointer argument to decode into a specific type (just like [`b.Run`](#running-arbitrary-javascript)).  Without it, `Get` returns the decoded value as type `any` (so numbers come back as `float64`).  `Get` returns `nil` for a missing key.  Values written to storage by the page itself that aren't valid JSON (e.g. a plain `localStorage.setItem("k", "v")`) are returned as their raw string.
-
-#### Asserting on Storage
-
-`b.HaveLocalStorageItem` and `b.HaveSessionStorageItem` are matchers you assert against the tab.  With a single argument they pass if the key exists; with a second argument they pass if the stored value matches (a string for an exact match, or a Gomega matcher):
-
-```go
-Expect(b).To(b.HaveLocalStorageItem("user"))            // key exists
-Expect(b).To(b.HaveLocalStorageItem("user", "Joe"))     // exact value
-Eventually(b).Should(b.HaveLocalStorageItem("count", BeNumerically(">", 0)))
-
-Expect(b).To(b.HaveSessionStorageItem("token", ContainSubstring("ABCD")))
-```
-
-`b.HaveNumLocalStorageItems` and `b.HaveNumSessionStorageItems` assert on the number of items in the corresponding storage area.  `expected` may be an int (exact match) or a Gomega matcher:
-
-```go
-Expect(b).To(b.HaveNumLocalStorageItems(2))
-Expect(b).To(b.HaveNumSessionStorageItems(BeNumerically(">", 0)))
-```
 
 ## Managing Tabs
 
@@ -1435,7 +1311,7 @@ Eventually("#footer").Should(b.ScrollIntoView())
 
 `Hover` is, like `Click`, a pragmatic simulation: it synchronously dispatches the pointer/mouse events associated with hovering (`pointerover`, `mouseover`, `pointerenter`, `mouseenter`, `mousemove`).  This triggers JavaScript hover handlers - for example a menu that opens on `mouseenter` - but it does **not** activate CSS `:hover` styling, which only responds to a real pointer.  If you need to exercise CSS `:hover`, drop down to chromedp's input domain.
 
-### Uploading Files {#uploading-files}
+### Uploading Files
 
 To attach files to a file input (`<input type="file">`) use `b.SetUpload`:
 
@@ -1453,7 +1329,7 @@ Eventually("#preview").Should(b.HaveAttribute("src", ContainSubstring("blob:")))
 
 `SetUpload` fails the spec if no element matches the selector.  The paths are resolved by the Chrome process, so they must exist on the machine running Chrome.
 
-### Keyboard Input {#keyboard-input}
+### Keyboard Input
 
 `b.SetValue` sets an input's value directly and dispatches `input`/`change` events.  That satisfies most applications, but some are wired up to **real keyboard events** - search-as-you-type fields, rich-text editors, and hotkey handlers all listen for `keydown`/`keypress`/`keyup`.  Biloba cannot synthesize those atomically in JavaScript (the browser forbids synthetic key events from actually typing into the page), so it drops down to `chromedp`'s input domain for you with `b.Type` and `b.SendKeys`.
 
@@ -1701,6 +1577,128 @@ userXPath := b.XPath("div").WithID("user-list").Descendant()
 //we can now select specific users by adding onto userXPath:
 Eventually(userXPath.WithText("Sally")).Should(b.HaveClass("online"))
 Eventually(userXPath.WithText("Jane")).Should(b.HaveClass("online"))
+```
+
+
+## Cookies and Storage
+
+A huge fraction of browser suites need to seed some browser state before exercising the app - most commonly an authentication cookie or a `localStorage` entry - so they can skip the login flow and get straight to the behavior under test.  Biloba provides first-class helpers for cookies, `localStorage`, and `sessionStorage`.
+
+Everything in this section is scoped to the tab's isolated `BrowserContextID`.  Since each Biloba tab lives in its own incognito-like browser context, cookies and storage set on one tab never leak into another - so parallel specs (and multi-tab specs) stay isolated for free.
+
+> **You must navigate to a real origin first.**  Cookies and web storage are associated with an origin, and `about:blank` has an _opaque_ origin that cannot hold either.  Always `b.Navigate(...)` to a real URL before setting cookies or storage.
+
+### Cookies
+
+Set, read, and clear cookies with `b.SetCookie`, `b.GetCookies`, and `b.ClearCookies`:
+
+```go
+BeforeEach(func() {
+	b.Navigate("http://localhost:8080/home")
+
+	// seed the login cookie so we skip the login flow
+	b.SetCookie(biloba.Cookie{Name: "user", Value: "Joe"})
+
+	// clear all cookies after each spec so state doesn't leak
+	DeferCleanup(b.ClearCookies)
+})
+
+It("is logged in", func() {
+	b.Navigate("http://localhost:8080/home")
+	Eventually("#user-name").Should(b.HaveInnerText("Joe"))
+})
+```
+
+A `biloba.Cookie` only requires a `Name` and `Value`.  Whenever you don't provide a `Domain`, Biloba associates the cookie with the tab's current URL (an explicit `Path` still applies on top of that origin).  Because of this, **the tab must be on a real origin when you set such a cookie** - a cookie can't attach to `about:blank`, so `SetCookie` fails the spec with a clear message if you try (navigate first, or set the `Domain` explicitly).  You can also set `Domain`, `Path`, `Secure`, `HTTPOnly`, and `SameSite` (one of `"Strict"`, `"Lax"`, or `"None"`) explicitly.  Provide an `Expires` time to set a persistent cookie - leave it as the zero `time.Time` to set a session cookie:
+
+```go
+b.SetCookie(biloba.Cookie{
+	Name:    "user",
+	Value:   "Joe",
+	Domain:  "localhost",
+	Expires: time.Now().Add(180 * 24 * time.Hour),
+})
+```
+
+You can pass multiple cookies to a single `SetCookie` call.  `b.GetCookies()` returns a `biloba.Cookies` slice for all the cookies in the tab's browser context (the returned `Cookie`s have their `Session` field set to `true` for session cookies and a populated `Expires` for persistent ones).
+
+#### Asserting on Cookies
+
+`b.HaveCookie(name)` is a matcher you assert against the tab itself.  It passes if the tab has a cookie whose name matches - `name` may be a string (exact match) or a Gomega matcher:
+
+```go
+Eventually(b).Should(b.HaveCookie("session"))
+Expect(b).To(b.HaveCookie(ContainSubstring("my_guid")))
+```
+
+You can chain refinements onto the matcher to further constrain the _same_ cookie.  Each refinement takes a string (exact match) or a Gomega matcher:
+
+```go
+Expect(b).To(b.HaveCookie("session").WithValue("abc123").WithPath("/"))
+Expect(b).To(b.HaveCookie(ContainSubstring("my_guid")).WithValue(ContainSubstring("ABCD-1")))
+Expect(b).To(b.HaveCookie("session").WithDomain("localhost").WithSecure())
+```
+
+The available refinements are `WithValue`, `WithPath`, `WithDomain`, `WithSameSite`, and the boolean flag refinements `WithSecure(...)` and `WithHTTPOnly(...)`.  The flag refinements take an optional bool: called with no argument they assert the flag is `true` (`WithSecure()` is shorthand for `WithSecure(true)`), and `WithSecure(false)` asserts the cookie is _not_ Secure.  All of the refinements must hold for a single cookie - if two cookies each satisfy some-but-not-all of the refinements the matcher does not pass.
+
+The same query plays double duty.  As an assertion you hand it to `Should`/`Eventually` and spell it `HaveCookie` (above); as a **predicate** you hand it to the `Find`/`Filter` helpers on the `Cookies` slice returned by `b.GetCookies()` and spell it `CookieMatching`.  `Find` returns the matching `Cookie` and a bool reporting whether one was found:
+
+```go
+cookie, ok := b.GetCookies().Find(b.CookieMatching("session").WithPath("/admin"))
+admins := b.GetCookies().Filter(b.CookieMatching(ContainSubstring("session")))
+```
+
+`b.HaveNumCookies(expected)` asserts on the number of cookies on the tab.  `expected` may be an int (exact match) or a Gomega matcher:
+
+```go
+Expect(b).To(b.HaveNumCookies(2))
+Expect(b).To(b.HaveNumCookies(BeNumerically(">", 0)))
+```
+
+### Local and Session Storage
+
+`b.LocalStorage()` and `b.SessionStorage()` return typed handles for interacting with the corresponding web-storage area:
+
+```go
+b.LocalStorage().Set("count", 3)
+
+var count int
+b.LocalStorage().Get("count", &count) // count == 3
+```
+
+Both handles expose the same methods: `Set(key, value)`, `Get(key, ...pointer)`, `GetAll()`, `Remove(key)`, `Clear()`, and `Length()`.
+
+**Type handling:** values are JSON-encoded on `Set` and JSON-decoded on `Get`, so you can round-trip any JSON-serializable Go value:
+
+```go
+b.LocalStorage().Set("user", map[string]any{"name": "Joe", "admin": true})
+
+var user struct {
+	Name  string
+	Admin bool
+}
+b.LocalStorage().Get("user", &user)
+```
+
+`Get` takes an optional pointer argument to decode into a specific type (just like [`b.Run`](#running-arbitrary-javascript)).  Without it, `Get` returns the decoded value as type `any` (so numbers come back as `float64`).  `Get` returns `nil` for a missing key.  Values written to storage by the page itself that aren't valid JSON (e.g. a plain `localStorage.setItem("k", "v")`) are returned as their raw string.
+
+#### Asserting on Storage
+
+`b.HaveLocalStorageItem` and `b.HaveSessionStorageItem` are matchers you assert against the tab.  With a single argument they pass if the key exists; with a second argument they pass if the stored value matches (a string for an exact match, or a Gomega matcher):
+
+```go
+Expect(b).To(b.HaveLocalStorageItem("user"))            // key exists
+Expect(b).To(b.HaveLocalStorageItem("user", "Joe"))     // exact value
+Eventually(b).Should(b.HaveLocalStorageItem("count", BeNumerically(">", 0)))
+
+Expect(b).To(b.HaveSessionStorageItem("token", ContainSubstring("ABCD")))
+```
+
+`b.HaveNumLocalStorageItems` and `b.HaveNumSessionStorageItems` assert on the number of items in the corresponding storage area.  `expected` may be an int (exact match) or a Gomega matcher:
+
+```go
+Expect(b).To(b.HaveNumLocalStorageItems(2))
+Expect(b).To(b.HaveNumSessionStorageItems(BeNumerically(">", 0)))
 ```
 
 ## Dialogs and Downloads
@@ -2121,9 +2119,9 @@ var result map[string]int
 b.Run("({a:1, b:2})", &result)
 ```
 
-## Stubbing and Observing the Network {#stubbing-and-observing-the-network}
+## Stubbing and Observing the Network
 
-Real browser tests usually talk to a backend.  That can make them slow (every spec waits on real network round-trips) and flaky (the backend has to be up, seeded, and deterministic).  In general you should stick with a real backend and invest effort making it more performant and stable.
+Real browser tests usually talk to a backend.  This is a good thing as you _really_ want rich and expressive tests that are running against the _actual_ backend.  Such an approach _can_ lead to slow (every spec waits on real network round-trips) and flaky (the backend has to be up, seeded, and deterministic) tests if you aren't disciplined.  In general you should lean into discipline and stick with a real backend; investing effort to make it more performant and stable.
 
 If all else fails, or if setting up an edge condition is too tricky from the outside-in, Biloba lets you **stub** responses, **observe** the requests a tab makes, and **wait for the network to settle** - so your specs can be fast, deterministic, and hermetic.
 
@@ -2269,7 +2267,7 @@ b = biloba.ConnectToChrome(GinkgoT(), biloba.BilobaConfigScreenshotsToDir("/tmp/
 
 When a spec fails, Biloba writes `screenshot-<spec>-<tab>.png` to the configured directory and prints the absolute path alongside any inline imgcat output.  The directory is created if it does not already exist, and the files survive the spec (unlike Ginkgo's `TempDir()`) so they can be opened after the run.
 
-#### Inline image gating {#inline-image-gating}
+#### Inline image gating
 
 Biloba emits inline image escape sequences **only when the terminal supports them**.  It auto-detects the terminal and picks the best protocol it can: the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) where available (best quality; kitty, Ghostty), the [iTerm2 `OSC 1337` protocol](https://iterm2.com/documentation-images.html) (iTerm2, WezTerm, Konsole, …), or [Sixel](https://en.wikipedia.org/wiki/Sixel) (VS Code's integrated terminal, plus older terminals).
 
@@ -2287,7 +2285,7 @@ When inline images are disabled:
 - If `BilobaConfigScreenshotsToDir` is configured, the file path is still printed and included in the failure report so that tools that can render PNG files (e.g. Claude Code's `Read` tool) can show the screenshot.
 - The DOM text outline (see [Outline](#outline)), if you've enabled it, is attached on failure regardless of this setting.
 
-#### Failure artifacts: humans, CI, and agents {#failure-artifacts}
+#### Failure artifacts: humans, CI, and agents
 
 When a spec fails, the *kind* of artifact that's useful depends on who's looking.  A human at a terminal wants a screenshot rendered inline; a CI log or an AI agent wants text it can read and image *files* it can open — not a base64 blob smeared across the output.  So Biloba picks a sensible default based on where it's running, and lets you override any piece of it.
 
@@ -2312,7 +2310,7 @@ So a typical agent or CI run needs **zero configuration** — just run the suite
 
 For example, a CI user who only wants screenshots in a specific folder sets `BilobaConfigScreenshotsToDir("./artifacts")` (or `BILOBA_SCREENSHOTS_DIR`) and *still* gets the automation default of outlines-on — they only overrode the directory.
 
-### Outline {#outline}
+### Outline
 
 `b.Outline()` returns the current page DOM as indented, human-readable text — a compact structural view of what's on the page.  This is the primary tool for understanding _why_ a selector didn't match when a spec fails:
 
@@ -2345,7 +2343,7 @@ AddReportEntry("DOM before click", b.Outline(), ReportEntryVisibilityFailureOrVe
 b.Click("#submit")
 ```
 
-### Accessibility Outline {#accessibility-outline}
+### Accessibility Outline
 
 `b.A11yOutline()` is a companion to `b.Outline()`.  Instead of the raw DOM, it returns the page's **accessibility tree** as indented text - one line per node, showing each node's ARIA role and accessible name:
 
