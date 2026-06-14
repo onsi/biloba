@@ -9,13 +9,19 @@ All tests in this repo are **Ginkgo specs** (Gomega for assertions). There is no
 
 ## Running the suite
 
-Always run with parallelism and full randomization:
+The `Makefile` wraps the canonical invocations — prefer these:
 
-```
-ginkgo -r -p -randomize-all
-```
+| Command | What it runs | When |
+|---|---|---|
+| `make test` | headless (chrome-headless-shell), parallel + randomized | your default, every change |
+| `make test-all` | `make test`, then the same suite in full ("new") headless google-chrome (`BILOBA_TEST_HIGH_FIDELITY=true`) | before changes touching tab/Chrome lifecycle — both lanes are what CI runs |
+| `make stress-test` | 6 procs under moderate CPU/IO load (`stress`), 41 repeats, generous total budget | **only periodically, or when you suspect a change might be flaky** — it's slow and needs `stress` (`brew install stress`) |
 
-`-p` (parallel) is the realistic mode — Biloba is built for it (one shared Chrome, one isolated root tab per process). `-randomize-all` enforces spec independence. To focus while debugging, run in serial and optionally non-headless/interactive:
+Under the hood `make test` is just `ginkgo -r -p --randomize-all`. `-p` (parallel) is the realistic mode — Biloba is built for it (one shared Chrome, one isolated root tab per process); `--randomize-all` enforces spec independence.
+
+`make stress-test` exists because Biloba's flakes are timing/concurrency races in the Chrome DevTools target lifecycle that a single clean run won't surface. It runs `ginkgo -procs=6 --repeat 40 --timeout=1500s --poll-progress-after=45s` under background `stress` load: the load perturbs scheduling so races show up, `--poll-progress-after` dumps the wedged goroutine stack within 45s of any hang, and the generous `--timeout` is a *total* budget across all repeats (so size it above repeats × per-run, or a healthy run looks like a timeout). Don't run it on every change — reach for it after touching tab create/close, `AllTabs`, `ConnectToChrome`, or anything in the chromedp bridge.
+
+To focus while debugging, run in serial and optionally non-headless/interactive:
 
 ```
 ginkgo --focus="..."                 # serial, easier to read

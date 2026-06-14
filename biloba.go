@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -224,7 +225,12 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...SpinUpOption) ChromeConne
 	os.WriteFile(gooseConfigPath(ginkgoT.ParallelProcess()), cc.encode(), 0744)
 	ginkgoT.DeferCleanup(func() error {
 		chromedp.Cancel(browserCtx)
-		return os.Remove(gooseConfigPath(ginkgoT.ParallelProcess()))
+		// The config file is a throwaway; if something already removed it, that's success, not a
+		// teardown failure (a missing file here has shown up intermittently under `ginkgo --repeat`).
+		if err := os.Remove(gooseConfigPath(ginkgoT.ParallelProcess())); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
 	})
 
 	return cc
@@ -437,31 +443,10 @@ func ConnectToChrome(ginkgoT GinkgoTInterface, options ...BilobaConfigOption) *B
 			chromedp.WithErrorf(b.gt.Logf),
 		)
 	}
-	bootstrapCtx, cancelBootstrap := chromedp.NewContext(allocatorContext, bootstrapOpts...)
-	b.gt.DeferCleanup(cancelBootstrap)
-
-	if err := chromedp.Run(bootstrapCtx, chromedp.Evaluate("1", nil)); err != nil {
+	if err := b.bootstrapIsolatedTab(allocatorContext, bootstrapOpts); err != nil {
 		ginkgoT.Fatalf("failed to connect to chrome: %w", err)
 		return nil
 	}
-
-	browserContextID, isolatedTargetID, err := newIsolatedBrowserContextAndTarget(bootstrapCtx)
-	if err != nil {
-		ginkgoT.Fatalf("failed to create isolated chrome context: %w", err)
-		return nil
-	}
-
-	b.Context, cancel = chromedp.NewContext(bootstrapCtx, chromedp.WithTargetID(isolatedTargetID))
-	b.gt.DeferCleanup(cancel)
-	_, err = b.RunErr("1")
-
-	if err != nil {
-		ginkgoT.Fatalf("failed to connect to chrome: %w", err)
-		return nil
-	}
-
-	b.targetID = chromedp.FromContext(b.Context).Target.TargetID
-	b.browserContextID = browserContextID
 
 	// Full ("new") headless reports window.innerHeight smaller than --window-size due to virtual
 	// browser chrome. Apply EmulateViewport using the outer window dimensions stored in
@@ -486,6 +471,65 @@ func ConnectToChrome(ginkgoT GinkgoTInterface, options ...BilobaConfigOption) *B
 	b.lock.Unlock()
 
 	return b
+}
+
+// connectAttempts is the total number of times bootstrapIsolatedTab tries to bring up the root tab
+// before giving up (an initial attempt plus retries).  connectBackoffBase is the first retry's
+// backoff ceiling; it doubles on each subsequent retry.
+const (
+	connectAttempts    = 4
+	connectBackoffBase = 50 * time.Millisecond
+)
+
+// bootstrapIsolatedTab connects to Chrome and brings up this root tab's isolated browser context +
+// target.  Each step is a CDP round-trip against the single shared Chrome and can fail transiently
+// when many parallel processes connect at once, so we retry with exponential backoff + full jitter -
+// the jitter de-correlates the retries of processes that collided together, so they stop colliding
+// instead of retrying in lockstep.  On a failed attempt we cancel whatever we created (cancelling the
+// bootstrap connection disposes the isolated browser context via WithDisposeOnDetach) so retries
+// don't leak contexts or targets.  On success b is wired up and the surviving contexts are kept alive
+// for the life of the spec; on exhaustion the last error is returned.
+func (b *Biloba) bootstrapIsolatedTab(allocatorContext context.Context, bootstrapOpts []chromedp.ContextOption) error {
+	var lastErr error
+	for attempt := 0; attempt < connectAttempts; attempt++ {
+		if attempt > 0 {
+			// full jitter: a random wait in [0, base*2^(attempt-1))
+			ceiling := connectBackoffBase << (attempt - 1)
+			time.Sleep(time.Duration(rand.Int64N(int64(ceiling))))
+		}
+
+		bootstrapCtx, cancelBootstrap := chromedp.NewContext(allocatorContext, bootstrapOpts...)
+		if err := chromedp.Run(bootstrapCtx, chromedp.Evaluate("1", nil)); err != nil {
+			cancelBootstrap()
+			lastErr = err
+			continue
+		}
+
+		browserContextID, isolatedTargetID, err := newIsolatedBrowserContextAndTarget(bootstrapCtx)
+		if err != nil {
+			cancelBootstrap()
+			lastErr = err
+			continue
+		}
+
+		tabCtx, cancelTab := chromedp.NewContext(bootstrapCtx, chromedp.WithTargetID(isolatedTargetID))
+		b.Context = tabCtx
+		if _, err := b.RunErr("1"); err != nil {
+			cancelTab()
+			cancelBootstrap()
+			lastErr = err
+			continue
+		}
+
+		// success - keep the bootstrap connection and isolated tab alive for the life of the spec
+		// (LIFO cleanup: tab detaches first, then the bootstrap connection tears down)
+		b.gt.DeferCleanup(cancelBootstrap)
+		b.gt.DeferCleanup(cancelTab)
+		b.targetID = chromedp.FromContext(b.Context).Target.TargetID
+		b.browserContextID = browserContextID
+		return nil
+	}
+	return lastErr
 }
 
 /*
@@ -598,18 +642,22 @@ func (b *Biloba) Prepare() {
 		return
 	}
 	//close all tabs
-	closedTabs := false
+	closedTargetIDs := []target.ID{}
 	for _, tab := range b.AllTabs() {
 		if !tab.isRootTab() {
+			tid := chromedp.FromContext(tab.Context).Target.TargetID
 			b.root.lock.Lock()
-			delete(b.root.tabs, chromedp.FromContext(tab.Context).Target.TargetID)
+			delete(b.root.tabs, tid)
 			b.root.lock.Unlock()
 			tab.close()
-			closedTabs = true
+			closedTargetIDs = append(closedTargetIDs, tid)
 		}
 	}
-	//closing all those tabs means we may have nuked our download config, so we reset it
-	if closedTabs {
+	if len(closedTargetIDs) > 0 {
+		// Closing is async (see Close): wait until Chrome has truly destroyed these targets so a
+		// fast-following spec's AllTabs() can't re-discover a dying tab and wedge attaching to it.
+		b.waitUntilTargetsGone(closedTargetIDs)
+		//closing all those tabs means we may have nuked our download config, so we reset it
 		b.configureDownloadBehavior()
 	}
 
@@ -732,15 +780,67 @@ func (b *Biloba) Close() error {
 	if b.root.activeDownloadsShouldBlockTabFromClosing(b) {
 		return fmt.Errorf("cannot close tab because another tab is actively downloading a file and closing this tab would cause that download to fail, please try again later")
 	}
+	targetID := chromedp.FromContext(b.Context).Target.TargetID
 	b.root.lock.Lock()
-	delete(b.root.tabs, chromedp.FromContext(b.Context).Target.TargetID)
+	delete(b.root.tabs, targetID)
 	b.root.lock.Unlock()
 	b.close()
+	/*
+		Closing a tab is asynchronous: b.close() blocks only until Chrome acks Target.closeTarget
+		(sub-millisecond), but Chrome keeps the target visible in Target.getTargets for a few tens of
+		milliseconds while it tears down.  During that window AllTabs() would re-discover the dying
+		target as a brand-new tab and try to attach to it - an attach that can wedge indefinitely.  So
+		we block here until the target is truly gone, keeping Close() honest: once it returns, the tab
+		will not resurface.
+	*/
+	b.root.waitUntilTargetGone(targetID)
 	/*
 		#2 we must reconfigure the download behavior for all tabs with this tab's browserContextID once this tab is closed
 	*/
 	b.root.configureDownloadBehaviorForAllTabsWithBrowserContextID(b.browserContextID)
 	return nil
+}
+
+// targetOpTimeout bounds the two places Biloba can otherwise wedge on a target that is mid-teardown:
+// waiting for a closing tab to disappear, and attaching to a target during registration.  It is
+// generous - these operations normally complete in tens of milliseconds - and only ever elapses for
+// a target that is, in fact, going away.
+const targetOpTimeout = 5 * time.Second
+
+// waitUntilTargetGone polls Chrome until targetID is no longer reported by Target.getTargets,
+// bounded by a generous deadline.  See Close() for why the post-close teardown window matters.
+func (b *Biloba) waitUntilTargetGone(targetID target.ID) {
+	b.waitUntilTargetsGone([]target.ID{targetID})
+}
+
+// waitUntilTargetsGone polls Chrome until none of targetIDs are reported by Target.getTargets.
+// Callers close all the targets first and then wait once, so concurrent teardowns overlap and the
+// wait costs ~one destruction window total rather than one per tab.
+func (b *Biloba) waitUntilTargetsGone(targetIDs []target.ID) {
+	remaining := map[target.ID]bool{}
+	for _, id := range targetIDs {
+		remaining[id] = true
+	}
+	deadline := time.Now().Add(targetOpTimeout)
+	for len(remaining) > 0 {
+		targets, err := chromedp.Targets(b.root.Context)
+		if err != nil {
+			return // root context is going away (e.g. suite teardown) - nothing left to wait for
+		}
+		present := map[target.ID]bool{}
+		for _, t := range targets {
+			present[t.TargetID] = true
+		}
+		for id := range remaining {
+			if !present[id] {
+				delete(remaining, id)
+			}
+		}
+		if len(remaining) == 0 || time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func (b *Biloba) attachFailureArtifactsIfFailed() {
@@ -831,8 +931,22 @@ func (b *Biloba) registerTabFor(c context.Context, cancel context.CancelFunc) *B
 	newG.root = b.root
 	newG.close = cancel
 
-	//spin up the tab
-	if _, err := newG.RunErr("1"); err != nil {
+	//spin up the tab.  This first call is what attaches chromedp to the target, and attaching to a
+	//target that is mid-teardown - e.g. a tab the browser is still closing that Target.getTargets
+	//momentarily still reports - can wedge forever on Runtime.Enable.  We can't bound it with a
+	//context timeout: chromedp binds the target's listener to the first Run's context, so a timeout
+	//there would tear the tab (and per chromedp's own docs, potentially the browser) down.  Instead we
+	//watchdog it on the tab's real context and, on timeout, cancel() the tab - which unblocks the
+	//wedged Run and discards the dying target.  AllTabs() already skips a nil tab.
+	probeDone := make(chan error, 1)
+	go func() { _, err := newG.RunErr("1"); probeDone <- err }()
+	select {
+	case err := <-probeDone:
+		if err != nil {
+			cancel()
+			return nil
+		}
+	case <-time.After(targetOpTimeout):
 		cancel()
 		return nil
 	}

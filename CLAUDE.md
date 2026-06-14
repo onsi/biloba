@@ -34,10 +34,10 @@ Also common: a `Foo`/`HaveFoo`/`EachHaveFoo` family — `Foo` acts on the **firs
 
 ## Testing
 
-**All tests are Ginkgo specs. Run them with:**
+**All tests are Ginkgo specs.** The `Makefile` wraps the canonical invocations: `make test` (standard headless parallel run — `ginkgo -r -p -randomize-all`), `make test-all` (also runs the high-fidelity google-chrome lane CI uses), and `make stress-test` (6 procs under `stress` load, 41 repeats — for flushing out timing/concurrency races). Run `make stress-test` only periodically or when you suspect a change might be flaky; see the `biloba-testing` skill for details.
 
 ```
-ginkgo -r -p -randomize-all
+make test     # or: ginkgo -r -p -randomize-all
 ```
 
 Repo-specific testing conventions (see `biloba_suite_test.go`):
