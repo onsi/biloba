@@ -1,0 +1,18 @@
+{
+  "name": "biloba",
+  "owner": {
+    "name": "Onsi Fakhouri",
+    "url": "https://github.com/onsi"
+  },
+  "metadata": {
+    "description": "Skills for writing browser tests with Biloba — a Ginkgo/Gomega-native browser-testing framework for Go.",
+    "homepage": "https://onsi.github.io/biloba/"
+  },
+  "plugins": [
+    {
+      "name": "biloba",
+      "source": "./plugins/biloba",
+      "description": "Write fast, stable browser tests with Biloba in your own Ginkgo suite: setup, the dual immediate/matcher API, the XPath DSL, a full API reference, page scaffolding, and failure debugging."
+    }
+  ]
+}

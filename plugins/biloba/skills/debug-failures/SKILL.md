@@ -1,0 +1,81 @@
+---
+name: debug-failures
+description: See why a Biloba spec failed — the on-failure artifacts (DOM outline + screenshots), how Biloba auto-adapts to humans vs CI vs AI agents, the env vars and config knobs that surface them (BILOBA_SCREENSHOTS_DIR, BILOBA_INLINE_SCREENSHOTS, BILOBA_INTERACTIVE, BilobaConfig*), and using b.Outline()/b.A11yOutline() to understand why a selector didn't match. Use when a browser spec is failing and you need visibility, or to configure failure output for CI/agents.
+---
+
+# Debugging Biloba failures
+
+Biloba adapts failure output to *who's looking* and lets you override any piece. Docs: <https://onsi.github.io/biloba/#failure-artifacts>.
+
+## What you get on failure, by environment
+
+Biloba detects the environment automatically (in `ConnectToChrome`). With **zero config**:
+
+| | Interactive human | CI **or** AI agent |
+|---|---|---|
+| Screenshot on failure | yes, inline | yes, written to a directory |
+| DOM outline on failure | no | yes |
+| Inline image blob | yes (if terminal supports) | no |
+
+"Automation" = `CI` is set **or** an AI coding agent is detected (Claude Code, Cursor, Gemini CLI, Codex, … via signals like `CLAUDECODE`/`AI_AGENT`). Under automation, screenshots go to **`./biloba-screenshots`** by default — so a typical agent or CI run needs nothing: just run the suite and read the outline + screenshot files.
+
+```bash
+ginkgo -r -p   # under CI/agent: DOM outlines + screenshot files on disk, automatically
+```
+
+Point the directory elsewhere (e.g. a CI artifact path) with `BILOBA_SCREENSHOTS_DIR=./artifacts`.
+
+## Reading the artifacts as an agent
+
+- **Screenshot files** — `Read` the printed PNG path to see the rendered page at failure.
+- **DOM outline** — attached under "DOM Outline for: '<title>'" in the Ginkgo report. This is the primary tool for *why a selector didn't match*: it's the indented DOM (`<script>/<style>/<svg>` bodies pruned, whitespace collapsed, capped ~32 KB).
+
+Call them yourself at any point, not just on failure:
+
+```go
+fmt.Println(b.Outline())     // indented DOM
+fmt.Println(b.A11yOutline()) // accessibility tree: role + accessible name per node
+AddReportEntry("DOM before click", b.Outline(), ReportEntryVisibilityFailureOrVerbose)
+```
+
+`b.A11yOutline()` (the role/name view a screen reader works from) is often *more* useful than raw HTML for reasoning about what a page *means*; it's not auto-attached — call it explicitly.
+
+## Inline images (interactive terminals)
+
+Biloba emits inline images only when the terminal supports them — Kitty, iTerm2, or Sixel (VS Code's terminal), auto-detected. Control it with `BILOBA_INLINE_SCREENSHOTS=iterm|kitty|sixel|none`:
+
+- `none` — disable the inline blob entirely (use in CI or in Claude Code, where the base64 is pure noise; the screenshot *file* path is still printed).
+- a protocol name — force it regardless of detected terminal.
+- `BILOBA_PROBE_TERMINAL=true` — actively query the TTY for Sixel support when env detection finds nothing.
+
+## Config knobs (`ConnectToChrome`)  — explicit settings win, per knob
+
+Each boolean takes an optional bool (no arg = `true`); automation only fills knobs you left untouched.
+
+- `BilobaConfigScreenshotsToDir(dir)` — write each tab's failure screenshot to `dir` (prints the absolute path).
+- `BilobaConfigFailureOutlines(...bool)` — force the DOM outline on/off.
+- `BilobaConfigInlineScreenshots(...bool)` — force the inline blob on/off.
+- `BilobaConfigFailureScreenshots(...bool)` — failure screenshots on/off (default on).
+- `BilobaConfigProgressReportScreenshots(...bool)` — screenshots on Ginkgo progress reports (default on).
+- `BilobaConfigFailureScreenshotsSize(w,h)` / `BilobaConfigProgressReportScreenshotSize(w,h)`.
+- `BilobaConfigDebugLogging(...bool)` — stream all CDP traffic to the `GinkgoWriter` (verbose).
+
+Example — CI that only redirects the directory still keeps the automation default of outlines-on:
+
+```go
+b = biloba.ConnectToChrome(GinkgoT(), biloba.BilobaConfigScreenshotsToDir("./artifacts"))
+```
+
+## Interactive debugging
+
+Watch a focused failing spec in a real browser and pause on failure:
+
+```bash
+BILOBA_INTERACTIVE=true ginkgo --focus="..."
+```
+
+Runs headful (high fidelity), prints the failure, and waits until you `^C`. Use a small handful of focused specs, in serial. (`SpinUpChrome(GinkgoT(), biloba.ChromeFlags(chromedp.Flag("headless", false)))` does the same in code.)
+
+## Progress reports (a hang, not a failure)
+
+Biloba emits a screenshot on Ginkgo [progress reports](https://onsi.github.io/ginkgo/#getting-visibility-into-long-running-specs) — on a spec timeout, a `PollProgressAfter` spec, or on demand: `^T` (SIGINFO) on macOS, `SIGUSR2` on Linux. Handy when a spec is stuck rather than failing.

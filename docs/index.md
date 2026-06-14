@@ -186,6 +186,31 @@ Lol!  You probably shouldn't!  But... if you're building something out in Go, ha
 
 Sure.  And LLMs do best when they have a solid deterministic non-flaky *fast* feedback loop.  Biloba is blazing fast and its DSL is designed to work well with AI toolchains like Claude Code.  It's under active development and use as I build out a new feature-rich single-page app with Claude (he said on June 12th, 2026).
 
+### Claude Code Skills {#claude-code-skills}
+
+Biloba ships a set of [Claude Code](https://claude.com/claude-code) skills as a **plugin**, so an agent writing tests against *your* app has Biloba's idioms on hand.  The Biloba repo doubles as the plugin marketplace, so installation is two commands.  From inside Claude Code:
+
+```
+/plugin marketplace add onsi/biloba
+/plugin install biloba@biloba
+```
+
+(The same can be done non-interactively with `claude plugin marketplace add onsi/biloba` and `claude plugin install biloba@biloba`.)
+
+This installs a family of `biloba:*` skills that activate automatically while you write tests, and can also be invoked explicitly (e.g. `/biloba:explore-unfamiliar-page http://localhost:8080`):
+
+| Skill | What it's for |
+|---|---|
+| `biloba:overview` | The mental model — the three principles and how they shape your specs. |
+| `biloba:setup` | Wiring Biloba into your suite: bootstrap, `chrome-headless-shell`, the bootstrap variations. |
+| `biloba:write-tests` | Authoring specs: the dual immediate/matcher API, selecting elements, hermetic tests, multiple tabs. |
+| `biloba:xpath` | Building selectors with the `b.XPath()` DSL. |
+| `biloba:api` | A one-line reference for every method and matcher. |
+| `biloba:explore-unfamiliar-page` | Orienting to a page you haven't seen, then drafting a starter spec. |
+| `biloba:debug-failures` | DOM outlines, screenshots, and the env/config knobs that surface them. |
+
+The skills track the library — pin to the same Biloba version you've `go get`'d (the API may shift pre-1.0), and these docs remain the source of truth.
+
 ### Performance and Stability
 
 Biloba has a few tricks up its sleeve to make it easy to write browser-based tests that are performant and stable.
@@ -2098,7 +2123,9 @@ b.Run("({a:1, b:2})", &result)
 
 ## Stubbing and Observing the Network {#stubbing-and-observing-the-network}
 
-Real browser tests usually talk to a backend.  That makes them slow (every spec waits on real network round-trips) and flaky (the backend has to be up, seeded, and deterministic).  Biloba lets you **stub** responses, **observe** the requests a tab makes, and **wait for the network to settle** - so your specs can be fast, deterministic, and hermetic.
+Real browser tests usually talk to a backend.  That can make them slow (every spec waits on real network round-trips) and flaky (the backend has to be up, seeded, and deterministic).  In general you should stick with a real backend and invest effort making it more performant and stable.
+
+If all else fails, or if setting up an edge condition is too tricky from the outside-in, Biloba lets you **stub** responses, **observe** the requests a tab makes, and **wait for the network to settle** - so your specs can be fast, deterministic, and hermetic.
 
 ### Stubbing requests
 

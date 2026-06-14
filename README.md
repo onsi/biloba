@@ -17,14 +17,6 @@ It's blazing fast and designed to work well with AI toolchains like Claude Code.
 
 Take a look at the [documentation](https://onsi.github.io/biloba) to learn more and get started!
 
-### Running under CI or an AI agent
-
-Biloba auto-detects CI and AI agents and flips failure output to text-friendly artifacts — DOM outlines plus screenshot files on disk, no inline blob — so an agent or CI run needs zero configuration (see [Failure artifacts](https://onsi.github.io/biloba/#failure-artifacts)):
-
-```bash
-ginkgo -r -p   # under CI/agent: outlines + screenshot files on disk, automatically
-```
-
 Here's a quick taste of what Biloba specs look like:
 
 ```go
@@ -91,9 +83,26 @@ Describe("a simple chat app", func() {
 })
 ```
 
-Run these in series with `ginkgo`.  And in parallel with `ginkgo -p` for fast, stable, browser tests.
+Run these in series with `ginkgo`.  And in parallel with `ginkgo -p` for fast, stable, isolated browser tests.
 
 Biloba is quite feature complete and in active development.  However, a 1.0 release milestone has not been reached yet, so the public API contract may shift as the project evolves.
+
+### Failure Output
+
+Biloba automatically captures and emits screenshots and any JavaScript console output when tests fail.  It even hooks into Ginkgo's progress emitter infrastructure so `^T`/`SIGNIFO` on a mac (`SIGUSR2` on linux) will spit out a screenshot.
+
+Screenshots are great for humans but won't show up in most CI systems and don't help AI agents.  Biloba autodetects when it's being run in CI or by an agent and spits out DOM outlines and puts screenshot files on disk instead automatically.
+
+### Using Biloba with Claude Code
+
+Biloba ships a set of [Claude Code](https://claude.com/claude-code) skills as a plugin, with this repo doubling as the marketplace. From inside Claude Code:
+
+```
+/plugin marketplace add onsi/biloba
+/plugin install biloba@biloba
+```
+
+(or non-interactively: `claude plugin marketplace add onsi/biloba` then `claude plugin install biloba@biloba`)
 
 ---
 
