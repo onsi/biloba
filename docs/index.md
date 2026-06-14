@@ -287,7 +287,7 @@ Of course, Biloba's approach and Puppeteer/chromedp's approaches are not mutuall
 
 This philosophy applies to most of Biloba's DOM interactions: Biloba doesn't type individual characters into input fields.  It simply sets `value` on the associated DOM element and then triggers the relevant Javascript events.  It doesn't scroll to elements and inspect them to tell you they are visible and not occluded.  It simply measures their size to make sure they have a non-zero area.
 
-#### Headless Fidelity: `chrome-headless-shell` by default {#headless-fidelity}
+#### Headless Fidelity: `chrome-headless-shell` by default
 
 The same "pragmatic simulation over slow, flakey exactness" philosophy drives which _browser_ Biloba runs by default.
 
@@ -695,7 +695,7 @@ This design decision helps reduce flakiness in your test suite.  It's possible t
 
 Finally - some Biloba methods use the **first** element returned by the `selector` while others use **every** element returned by the selector.  The difference is usually clear based on the name of the method.
 
-#### Piercing Shadow DOM and iframes {#piercing}
+#### Piercing Shadow DOM and iframes
 
 A plain `querySelector` can't see inside a web component's shadow DOM or inside an `<iframe>` - the DOM is encapsulated.  Biloba's CSS selectors understand a `>>>` combinator that crosses one such boundary:
 
@@ -1291,7 +1291,7 @@ b.ClickEach(selector)
 
 unlike `Click`, `ClickEach` does not have a matcher variant.  It simply clicks on all the elements that match the selector that are also visible and enabled.  Elements that are not visible or enabled are silently skipped.
 
-### Hovering, Focusing, and Scrolling {#interacting-with-elements}
+### Hovering, Focusing, and Scrolling
 
 Alongside `Click`, Biloba provides a few more first-class interactions, all following the same dual immediate/matcher convention:
 
@@ -2219,7 +2219,7 @@ this also accepts any [`chromedp.EmulateViewportOption`](https://pkg.go.dev/gith
 
 One quick hack to speed up a test suite is to use the _smallest_ viable window size to run the tests.  You can then pass `BilobaConfigFailureScreenshotsSize(width, height)` to `ConnectToChrome(...)` to configure the size of Biloba's automatically generated screenshots.  Biloba will scale the window up on failure, take a screenshot, then scale it back down to proceed with other tests.  As an anecdotal data-point a 30% speed-up was observed for a Biloba test suite against a complex web-app running in parallel when the screen-size was minimized in this way.
 
-### Capturing Screenshots {#capturing-screenshots}
+### Capturing Screenshots
 
 As discussed above, Biloba automatically emits screenshots when a spec fails or a progress report is requested.  (It can also attach a text [DOM outline](#outline) on failure — off for an interactive human, on automatically under CI or an AI agent.  See [Failure artifacts](#failure-artifacts) for how the defaults are resolved.)
 
