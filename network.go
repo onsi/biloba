@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 
@@ -475,18 +476,14 @@ func (m *ResponseModification) resolve(original InterceptedResponse) StubRespons
 		return out
 	}
 	out := StubResponse{Status: original.Status, Body: original.Body, Headers: map[string]string{}}
-	for k, v := range original.Headers {
-		out.Headers[k] = v
-	}
+	maps.Copy(out.Headers, original.Headers)
 	if m.status != nil {
 		out.Status = *m.status
 	}
 	if m.body != nil {
 		out.Body = *m.body
 	}
-	for k, v := range m.headers {
-		out.Headers[k] = v
-	}
+	maps.Copy(out.Headers, m.headers)
 	return out
 }
 

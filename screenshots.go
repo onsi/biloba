@@ -2,6 +2,7 @@ package biloba
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"fmt"
 	"image"
@@ -17,7 +18,6 @@ import (
 	"github.com/BourgeoisBear/rasterm"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
-	"golang.org/x/net/context"
 )
 
 // inlineImageProtocol identifies which terminal inline-image escape sequence a
@@ -241,7 +241,7 @@ func (b *Biloba) asImgCat(img []byte) string {
 	encoder.Close()
 	buf.WriteString("\033\\")
 
-	return string(buf.Bytes())
+	return buf.String()
 }
 
 // asInlineImage encodes a PNG screenshot into the escape sequence for the given

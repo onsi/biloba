@@ -114,7 +114,9 @@ func (x XPath) quote(in string) string {
 	b := &strings.Builder{}
 	b.WriteString("concat(")
 	for i, c := range components {
-		b.WriteString(`"` + c + `"`)
+		b.WriteByte('"')
+		b.WriteString(c)
+		b.WriteByte('"')
 		if i < len(components)-1 {
 			b.WriteString(`,'"',`)
 		}

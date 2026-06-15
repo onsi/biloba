@@ -28,7 +28,7 @@ func (b *Biloba) configureDownloadBehavior() {
 func (b *Biloba) setUpListeners() {
 	b.configureDownloadBehavior()
 
-	chromedp.ListenTarget(b.Context, func(ev interface{}) {
+	chromedp.ListenTarget(b.Context, func(ev any) {
 		switch ev := ev.(type) {
 		case *page.EventJavascriptDialogOpening:
 			b.handleEventJavascriptDialogOpening(ev)

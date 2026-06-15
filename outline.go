@@ -1,11 +1,10 @@
 package biloba
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
-
-	"golang.org/x/net/context"
 
 	"github.com/chromedp/chromedp"
 )

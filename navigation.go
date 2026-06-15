@@ -34,7 +34,7 @@ func (b *Biloba) NavigateWithStatus(url string, status int) *Biloba {
 	lctx, lcancel := context.WithCancel(b.Context)
 	defer lcancel()
 	var capturedStatus int64
-	chromedp.ListenTarget(lctx, func(ev interface{}) {
+	chromedp.ListenTarget(lctx, func(ev any) {
 		if e, ok := ev.(*network.EventResponseReceived); ok {
 			if e.Type == network.ResourceTypeDocument {
 				capturedStatus = e.Response.Status

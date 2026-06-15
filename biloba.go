@@ -42,8 +42,8 @@ GinkgoTInterface is the interface by which Biloba receives GinkgoT()
 type GinkgoTInterface interface {
 	Name() string
 	Helper()
-	Fatal(args ...interface{})
-	Fatalf(format string, args ...interface{})
+	Fatal(args ...any)
+	Fatalf(format string, args ...any)
 	TempDir() string
 	Logf(format string, args ...any)
 	Failed() bool
@@ -52,7 +52,7 @@ type GinkgoTInterface interface {
 	DeferCleanup(args ...any)
 	Print(args ...any)
 	Printf(format string, args ...any)
-	Println(a ...interface{})
+	Println(a ...any)
 	F(format string, args ...any) string
 	Fi(indentation uint, format string, args ...any) string
 	Fiw(indentation uint, maxWidth uint, format string, args ...any) string
@@ -491,7 +491,7 @@ const (
 // for the life of the spec; on exhaustion the last error is returned.
 func (b *Biloba) bootstrapIsolatedTab(allocatorContext context.Context, bootstrapOpts []chromedp.ContextOption) error {
 	var lastErr error
-	for attempt := 0; attempt < connectAttempts; attempt++ {
+	for attempt := range connectAttempts {
 		if attempt > 0 {
 			// full jitter: a random wait in [0, base*2^(attempt-1))
 			ceiling := connectBackoffBase << (attempt - 1)
@@ -886,23 +886,25 @@ func (b *Biloba) attachFailureArtifactsIfFailed() {
 }
 
 func (b *Biloba) progressReporter() string {
-	out := ""
+	out := &strings.Builder{}
 	inlineEnabled := b.inlineScreenshotsEnabled()
 	for _, screenshot := range b.safeAllTabScreenshots(b.progressReportScreenshotWidth, b.progressReportScreenshotHeight) {
 		if screenshot.failure != "" {
-			out += b.gt.F("{{red}}" + screenshot.failure + "{{/}}\n")
+			out.WriteString(b.gt.F("{{red}}" + screenshot.failure + "{{/}}\n"))
 		} else {
-			out += b.gt.F("{{bold}}Screenshot for: '%s'{{/}}\n", screenshot.title)
+			out.WriteString(b.gt.F("{{bold}}Screenshot for: '%s'{{/}}\n", screenshot.title))
 			if inlineEnabled {
-				out += screenshot.imgcatScreenshot + "\n"
+				out.WriteString(screenshot.imgcatScreenshot)
+				out.WriteByte('\n')
 			} else if screenshot.filePath != "" {
-				out += screenshot.filePath + "\n"
+				out.WriteString(screenshot.filePath)
+				out.WriteByte('\n')
 			} else {
-				out += "(inline screenshots disabled; configure BilobaConfigScreenshotsToDir to save screenshot files)\n"
+				out.WriteString("(inline screenshots disabled; configure BilobaConfigScreenshotsToDir to save screenshot files)\n")
 			}
 		}
 	}
-	return out
+	return out.String()
 }
 
 // newIsolatedBrowserContextAndTarget creates a new isolated browser context and a target
@@ -987,7 +989,7 @@ func (b *Biloba) registerTabFor(c context.Context, cancel context.CancelFunc) *B
 //go:embed biloba.js
 var bilobaJS string
 
-func (b *Biloba) handleEventFrameNavigated(ev *page.EventFrameNavigated) {
+func (b *Biloba) handleEventFrameNavigated(_ *page.EventFrameNavigated) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	b.bilobaIsInstalled = false
