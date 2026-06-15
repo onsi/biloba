@@ -287,6 +287,12 @@ Of course, Biloba's approach and Puppeteer/chromedp's approaches are not mutuall
 
 This philosophy applies to most of Biloba's DOM interactions: Biloba doesn't type individual characters into input fields.  It simply sets `value` on the associated DOM element and then triggers the relevant Javascript events.  It doesn't scroll to elements and inspect them to tell you they are visible and not occluded.  It simply measures their size to make sure they have a non-zero area.
 
+> OK, cool.  But what if I really need more realistic interactions?  Is Biloba out?
+
+Not at all - you actually get to **choose**.  Biloba defaults to the fast, pragmatic, atomic path described above (and that's what you want for the overwhelming bulk of your specs).  But at any point you can generate a *realistic view* into your tab with `b.Realistic()`: a lightweight handle whose interactions run through **real Chrome DevTools Protocol input** instead of the synchronous Javascript simulations.  In that mode a click scrolls the element into view, waits for it to stop moving, refuses to click through an occluding overlay, moves the real pointer (so hover-gated clicks fire and CSS `:hover` activates), and dispatches a genuine mouse event - the very realism the fast path trades away.
+
+It's opt-in *per spec*, so the realism (and the cost and timing-sensitivity that come with it) stays quarantined to the handful of smoke tests where it matters, while the rest of your suite keeps Biloba's fast, stable default.  You don't have to pick a side once and for all - you pick per interaction.  See [Realistic Interactions](#realistic-interactions) for the full story.
+
 #### Headless Fidelity: `chrome-headless-shell` by default
 
 The same "pragmatic simulation over slow, flakey exactness" philosophy drives which _browser_ Biloba runs by default.
@@ -470,6 +476,51 @@ chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
 ```
 
 When a capability is common enough Biloba grows native support for it (see, for example, [Cookies and Storage](#cookies-and-storage)).  Until then, `b.Context` is always there as an escape hatch.
+
+#### Emulation and device conveniences (drop to chromedp)
+
+Device and environment **emulation** - viewport/device metrics, geolocation, permissions, offline, locale/timezone, color-scheme, and reduced-motion/media - is, by design, *not* wrapped by Biloba: it's session-level state that rarely changes mid-spec, the CDP calls are already ergonomic, and wrapping them would add surface without removing real friction.  Reach through `b.Context` with `cdproto`'s `emulation` and `network` domains.  Here are the common recipes:
+
+```go
+import (
+	"github.com/chromedp/cdproto/emulation"
+	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/chromedp"
+)
+
+// Viewport / device metrics (mobile)
+chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
+	return emulation.SetDeviceMetricsOverride(390, 844, 3, true).Do(ctx) // iPhone-ish: w, h, scale, mobile
+}))
+
+// Geolocation
+chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
+	return emulation.SetGeolocationOverride().WithLatitude(48.8584).WithLongitude(2.2945).WithAccuracy(10).Do(ctx)
+}))
+
+// Locale + timezone
+chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
+	if err := emulation.SetLocaleOverride().WithLocale("fr-FR").Do(ctx); err != nil { return err }
+	return emulation.SetTimezoneOverride("Europe/Paris").Do(ctx)
+}))
+
+// Color scheme / reduced motion (and other media features)
+chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
+	return emulation.SetEmulatedMedia().WithFeatures([]*emulation.MediaFeature{
+		{Name: "prefers-color-scheme", Value: "dark"},
+		{Name: "prefers-reduced-motion", Value: "reduce"},
+	}).Do(ctx)
+}))
+
+// Offline / throttled network
+chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
+	return network.OverrideNetworkState(true, 0, -1, -1).Do(ctx) // offline=true, latency, down, up
+}))
+```
+
+(`SetWindowSize` is the one piece of this Biloba *does* wrap natively - see [Window Size](#window-size-screenshots-configuration-and-debugging).)
+
+**Cross-origin iframes** are likewise out of scope: Biloba's `>>>` piercing handles same-origin iframes and open shadow roots, but a cross-origin frame is a separate CDP target.  Until Biloba grows per-target frame support, drive the frame's target directly through chromedp.  Multi-browser (Firefox/WebKit) is a deliberate non-goal - Biloba is Chrome-only by design.
 
 ### The rest of these docs...
 
@@ -1479,7 +1530,58 @@ In realistic mode:
 - **`SetValue`** drives form controls with real input: a text input is focused with a real click, cleared, and typed with real key events (then blurred to fire `change`); a checkbox is toggled with a real click (and left alone if it's already in the desired state).  Native pickers - radio groups, `<select>`, and multi-selects - fall back to the fast JS path, because they can't be driven by a real pointer (Playwright's `selectOption` sets them programmatically too).
 - **`Type`** / **`SendKeys`** already use real CDP key events; in realistic mode they additionally scroll the element into view before typing.
 
-All keep Biloba's dual immediate/matcher API (`rb.Click("#go")` vs `Eventually("#go").Should(rb.Click())`).  `Focus` stays a plain JS focus (matching how real engines focus an element without a side-effecting click).  For anything else you can still [drop down to chromedp](#chromedp-breaking-the-fourth-wall) via `b.Context`.
+All keep Biloba's dual immediate/matcher API (`rb.Click("#go")` vs `Eventually("#go").Should(rb.Click())`).  `Focus` stays a plain JS focus (matching how real engines focus an element without a side-effecting click).  `ScrollIntoView` is already a real scroll on both tracks, so it composes unchanged.  For anything else you can still [drop down to chromedp](#chromedp-breaking-the-fourth-wall) via `b.Context`.
+
+#### Using realistic mode across a spec or a suite
+
+`b.Realistic()` is the single mechanism for opting into realism; it composes at whatever scope you need:
+
+- **One interaction** - call it inline; the handle is cheap to make: `b.Realistic().Click("#submit")`.
+- **A whole spec** - grab a handle once and use it throughout: `rb := b.Realistic()`.
+- **A group of specs** - swap the shared tab in a `BeforeEach`, gated on a Ginkgo [label](https://onsi.github.io/ginkgo/#spec-labels) so you can run or skip the realistic smoke tests as a set:
+
+```go
+var _ = Describe("checkout (realistic smoke)", Label("realistic"), func() {
+    var rb *biloba.Biloba
+    BeforeEach(func() { rb = b.Realistic() })
+
+    It("rejects a click through the cookie banner", func() {
+        rb.Click("#purchase")
+        // ...
+    })
+})
+```
+
+Then `ginkgo --label-filter='realistic'` runs only the realistic lane and `--label-filter='!realistic'` skips it (handy for keeping the slow/flake-prone realism checks out of the fast inner loop).
+
+There is deliberately **no per-call decorator** (e.g. `b.Click(sel, biloba.Realistic)`).  Biloba's dual immediate/matcher API keys on *argument count*, and threading a realism flag through it would muddy that contract.  The `b.Realistic()` handle is the one honest seam - and because it's just a `*Biloba` view sharing the tab's state, it flows through your helpers and `Eventually` exactly like `b` does.
+
+#### The interaction capability matrix
+
+Biloba's interactions run on two tracks: the fast default (`b`) is an atomic Javascript simulation optimized for speed and stability; the realistic track (`b.Realistic()`) drives real Chrome DevTools Protocol input.  This table is the honest contract - what each track actually does, and where the fast track deliberately is *not* realistic.  (Selection - `b.ByRole`/`ByText`/`ByLabel`, CSS, XPath, `>>>` - is track-agnostic: it works identically through either handle.)
+
+| Interaction | Fast track (default `b`) | Realistic track (`b.Realistic()`) |
+|---|---|---|
+| `Click` | visible + enabled, then `el.click()` - **clicks through overlays and off-screen elements** | scroll into view → stability wait → topmost-at-point (occlusion) check → real pointer move + `mousePressed`/`mouseReleased` |
+| `ClickAt(x,y)` | synthetic `click` at the offset's `clientX/clientY` | real CDP click at the offset point (iframe-translated), occlusion/viewport-checked |
+| `ClickEach` | `el.click()` on every visible+enabled match | real click on each, re-measured; skips hidden/disabled/off-screen/obscured |
+| `DblClick` | two `el.click()`s + a `dblclick` event | real double-click (incrementing click-count) with full actionability |
+| `RightClick` / `MiddleClick` | synthetic `mousedown`/`mouseup` + `contextmenu` / `auxclick` | real right/middle-button click (native `contextmenu` / `auxclick`) |
+| `ClickWith(mods…)` | synthetic click carrying the modifier flags | real click with the modifier bitmask held in CDP |
+| `DragTo(src,tgt)` | synthetic pointer drag sequence | real CDP pointer drag (press → interpolated moves → release). Neither drives native HTML5 `draggable` |
+| `ScrollWheel(dx,dy)` | `wheel` event, then manually scrolls the nearest scrollable ancestor | real trusted CDP wheel event |
+| `Tap` | synthetic touch + pointer events + `click` | real CDP touch (`touchStart`/`touchEnd`) |
+| `Hover` | synthetic pointer/mouse events - **does not** trigger CSS `:hover` | real pointer move - activates genuine CSS `:hover` |
+| `SetValue` | sets `value`/`checked` + fires `input`/`change` | text: real click-focus + typed keys + blur; checkbox: real click; radio/`<select>`: JS (native pickers can't be driven by a real pointer) |
+| `Type` / `SendKeys` | real CDP key events (both tracks) | same, plus scroll-into-view first |
+| `Focus` | `el.focus()` (both tracks - real engines focus without a side-effecting click) | `el.focus()` |
+| `ScrollIntoView` | real `scrollIntoView()` (both tracks) | real `scrollIntoView()` |
+| `SetUpload` | CDP `DOM.setFileInputFiles` (both tracks - cannot be simulated in JS) | same |
+
+A couple of deliberate gaps are worth calling out, both reachable via [chromedp](#chromedp-breaking-the-fourth-wall) on `b.Context`:
+
+- **Occlusion on the fast track.** Plain `Click` intentionally clicks through overlays (the atomic, no-scroll default).  When you want to *assert* an element is genuinely clickable without paying for full realistic mode, use the deterministic [`b.BeClickable()`](#existence-counting-visibility-and-interactibility) matcher (visible + enabled + topmost-at-its-center); it stays opt-in rather than changing `Click`'s default, so existing click-through behavior is never silently broken.
+- **Native HTML5 drag-and-drop, native `<select>` realism, cross-origin iframes, and device/mobile emulation** are not driven by either track by design - drop to chromedp for those (see the [emulation recipes](#emulation-and-device-conveniences-drop-to-chromedp)).
 
 ### Uploading Files
 
