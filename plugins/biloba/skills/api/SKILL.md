@@ -78,11 +78,10 @@ Three pathways, all flow through every method/matcher. **CSS is the default** (t
 ## Clicking & interactions  (pragmatic simulations)
 - `b.Click(selector)` (dual) — visible+enabled, then `el.click()`.
 - `b.DblClick(selector)` (dual) — two clicks + `dblclick`. `b.RightClick(selector)` (dual) — `mousedown`/`mouseup`/`contextmenu`. `b.MiddleClick(selector)` (dual) — `mousedown`/`mouseup`/`auxclick`.
-- `b.Tap(selector)` (dual) — synthetic touch/pointer events + `click` (realistic: real CDP `touchStart`/`touchEnd`).
-- `b.ClickWith(selector, mods...)` — click with modifiers held (`biloba.ModShift`/`ModControl`/`ModAlt`/`ModMeta`; `ModMeta`=⌘/Win); realistic carries a CDP modifier bitmask (no matcher).
-- `b.DragTo(source, target)` — pointer-based drag (`pointerdown`/`move`/`up`); drives @dnd-kit-style DnD, not native HTML5 `draggable` (no matcher).
+- `b.Tap(selector)` (dual) — synthetic touch/pointer events + `click` (realistic: real CDP `touchStart`/`touchEnd`); accepts `b.At(...)`, ignores modifiers.
+- **Pointer options** — `b.At(x,y)` (offset from top-left, à la canvas/map/slider), `b.Shift()`/`b.Ctrl()`/`b.Alt()`/`b.Meta()` (⌘/Win) — accepted by `Click`/`DblClick`/`RightClick`/`MiddleClick`/`Tap`, after the selector or in place of it (matcher form). They compose: `b.Click(sel, b.At(30,40), b.Shift())`. In fast mode any option switches a click off native `el.click()` to a synthetic event carrying coords+flags; realistic uses real CDP input natively.
+- `b.DragTo(source, target)` (dual) — pointer-based drag (`pointerdown`/`move`/`up`); drives @dnd-kit-style DnD, not native HTML5 `draggable`. Matcher subject is the source: `Eventually(src).Should(b.DragTo(tgt))`.
 - `b.ScrollWheel(selector, deltaX, deltaY)` — `wheel` event then scrolls nearest scrollable ancestor (realistic: real CDP wheel); +deltaY=down, +deltaX=right (no matcher).
-- `b.ClickAt(selector, offsetX, offsetY)` — synthetic click carrying real `clientX`/`clientY` at offset from the element's top-left corner (realistic: real CDP click at translated point); for canvas/map/slider apps (no matcher).
 - `b.ClickEach(selector)` — click all visible+enabled matches (no matcher).
 - `b.Focus(selector)` (dual) / `b.Hover(selector)` (dual; fires pointer/mouse events, not CSS `:hover`) / `b.ScrollIntoView(selector)` (dual).
 

@@ -45,13 +45,12 @@ Selection is track-agnostic (`b.ByRole`/`ByText`/`ByLabel`, CSS, `>>>`, XPath wo
 | `Hover` | JS pointer/mouse events; **no** CSS `:hover` | moves the **real pointer** → CSS `:hover` activates |
 | `SetValue` | sets value, fires `input`/`change` (no typing) | text inputs: real click → clear → real keystrokes → blur; checkboxes: real click. Native pickers (radio/`<select>`/multi) fall back to fast JS |
 | `Type`/`SendKeys` | real CDP key events already | additionally scrolls into view first |
-| `ClickAt` | synthetic click with real `clientX/Y` at offset | real CDP click at the translated point (fails if off-screen/obscured) |
+| pointer options `b.At(x,y)`/`b.Shift()`… | any option switches a click off native `el.click()` to a synthetic event carrying coords+modifier flags | real CDP input honoring the offset (translated, bounds-checked) + modifier bitmask |
 | `DragTo` | `pointerdown`/`move`/`up` events | real CDP mouse drag (scrolls + checks both ends) |
 | `ScrollWheel` | synthetic `wheel` + manual ancestor scroll | real CDP wheel — genuine trusted input, scrolls the page |
 | `Tap` | synthetic touch/pointer + `click` | real CDP `touchStart`/`touchEnd` |
-| `ClickWith` (modifiers) | events carry modifier flags | real click with the CDP modifier bitmask held |
 
-The whole vocabulary (`DblClick`, `RightClick`, `MiddleClick`, `ClickWith`, `ClickAt`, `DragTo`, `ScrollWheel`, `Tap`, `Type`/`SendKeys`) is in `biloba:write-tests` and `biloba:api`.
+The whole vocabulary (`DblClick`, `RightClick`, `MiddleClick`, pointer options `b.At`/`b.Shift`/`b.Ctrl`/`b.Alt`/`b.Meta`, `DragTo`, `ScrollWheel`, `Tap`, `Type`/`SendKeys`) is in `biloba:write-tests` and `biloba:api`.
 
 ## The three composition patterns
 

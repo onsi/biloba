@@ -4,7 +4,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/onsi/biloba"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -1075,6 +1074,11 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω("#drop-result").Should(b.HaveInnerText("dropped"))
 		})
 
+		It("drags when polled as a matcher (the subject is the source)", func() {
+			Eventually("#drag-src").Should(b.DragTo("#drop-zone"))
+			Ω("#drop-result").Should(b.HaveInnerText("dropped"))
+		})
+
 		It("auto-fails if the source element does not exist", func() {
 			b.DragTo("#non-existing", "#drop-zone")
 			ExpectFailures("Failed to drag:\ncould not find DOM element matching selector: #non-existing")
@@ -1086,14 +1090,19 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 	})
 
-	Describe("ClickAt", func() {
+	Describe("Click with b.At(offset)", func() {
 		It("clicks the element at the requested offset from its top-left corner", func() {
-			b.ClickAt("#click-pad", 30, 40)
+			b.Click("#click-pad", b.At(30, 40))
+			Ω("#click-pad-result").Should(b.HaveInnerText("30,40"))
+		})
+
+		It("honors the offset in the matcher form too", func() {
+			Eventually("#click-pad").Should(b.Click(b.At(30, 40)))
 			Ω("#click-pad-result").Should(b.HaveInnerText("30,40"))
 		})
 
 		It("auto-fails if the element does not exist", func() {
-			b.ClickAt("#non-existing", 30, 40)
+			b.Click("#non-existing", b.At(30, 40))
 			ExpectFailures("Failed to click:\ncould not find DOM element matching selector: #non-existing")
 		})
 	})
@@ -1139,25 +1148,40 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 	})
 
-	Describe("ClickWith", func() {
+	Describe("Click with modifier options", func() {
 		It("clicks with a single modifier", func() {
-			b.ClickWith("#mod-btn", biloba.ModShift)
+			b.Click("#mod-btn", b.Shift())
 			Ω("#mod-result").Should(b.HaveInnerText("shift"))
 		})
 
 		It("clicks with multiple modifiers", func() {
-			b.ClickWith("#mod-btn", biloba.ModShift, biloba.ModMeta)
+			b.Click("#mod-btn", b.Shift(), b.Meta())
 			Ω("#mod-result").Should(b.HaveInnerText("shift+meta"))
 		})
 
-		It("clicks with no modifiers", func() {
-			b.ClickWith("#mod-btn")
+		It("clicks with no modifiers (the native fast path)", func() {
+			b.Click("#mod-btn")
 			Ω("#mod-result").Should(b.HaveInnerText("none"))
 		})
 
+		It("carries modifiers through the matcher form", func() {
+			Eventually("#mod-btn").Should(b.Click(b.Ctrl(), b.Alt()))
+			Ω("#mod-result").Should(b.HaveInnerText("control+alt"))
+		})
+
+		It("combines an offset and modifiers on the same click", func() {
+			b.Click("#mod-btn", b.At(2, 2), b.Shift())
+			Ω("#mod-result").Should(b.HaveInnerText("shift"))
+		})
+
 		It("auto-fails if the element does not exist", func() {
-			b.ClickWith("#non-existing", biloba.ModShift)
+			b.Click("#non-existing", b.Shift())
 			ExpectFailures("Failed to click:\ncould not find DOM element matching selector: #non-existing")
+		})
+
+		It("auto-fails when handed a non-option in the option position", func() {
+			b.Click("#mod-btn", "oops")
+			ExpectFailures(ContainSubstring("expected a selector or a biloba pointer option"))
 		})
 	})
 

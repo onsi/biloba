@@ -96,15 +96,15 @@ Never fetch-then-act — always pass the selector *into* the action so find-and-
 
 ```go
 b.DblClick(sel); b.RightClick(sel); b.MiddleClick(sel)       // dual
-b.ClickWith(sel, biloba.ModShift, biloba.ModMeta)            // modifiers held (immediate-only)
-b.ClickAt(sel, offsetX, offsetY)                             // click at top-left-origin offset; canvas/map/slider (immediate-only)
-b.DragTo(source, target)                                     // pointer-based drag; drives @dnd-kit-style DnD, not native HTML5 draggable (immediate-only)
+b.Click(sel, b.At(x, y))                                     // click at top-left-origin offset; canvas/map/slider
+b.Click(sel, b.Shift(), b.Meta())                            // modifiers held; composes with b.At(...)
+b.DragTo(source, target)                                     // pointer-based drag; dual — Eventually(src).Should(b.DragTo(tgt))
 b.ScrollWheel(sel, deltaX, deltaY)                           // wheel/scroll, +Y down +X right (immediate-only)
-b.Tap(sel)                                                   // touch tap (dual)
+b.Tap(sel)                                                   // touch tap (dual); takes b.At(...), ignores modifiers
 b.Type(sel, "abc"); b.SendKeys(biloba.Keys.Enter)            // real keystrokes (SetValue does NOT type)
 ```
 
-`ModShift/ModControl/ModAlt/ModMeta` are the modifier constants (`ModMeta` = ⌘/Win). Methods taking two selectors (`DragTo`) or extra args (`ClickAt`, `ScrollWheel`, `ClickWith`) are immediate-only — they don't return matchers.
+`b.At(x,y)` / `b.Shift()` / `b.Ctrl()` / `b.Alt()` / `b.Meta()` (⌘/Win) are **pointer options** accepted by `Click`/`DblClick`/`RightClick`/`MiddleClick`/`Tap` — after the selector (immediate) or in place of it (matcher: `Eventually(sel).Should(b.Click(b.At(x,y), b.Shift()))`). In fast mode any option switches a click off native `el.click()` to a synthetic event carrying the coords/flags. `ScrollWheel` is immediate-only.
 
 ## Realistic mode — for a handful of smoke tests
 

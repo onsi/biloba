@@ -726,66 +726,22 @@ When invoked with a selector:
 
 it immediately clicks the first element matching selector.  It fails if no element is found, or if the element is hidden or disabled.
 
-When invoked with no arguments, tab.Click() returns a Gomega matcher.  This allows you to poll until an element is clickable (exists, is visible, and is enabled):
+When invoked with no selector, tab.Click() returns a Gomega matcher.  This allows you to poll until an element is clickable (exists, is visible, and is enabled):
 
 	Eventually("#submit").Should(tab.Click())
+
+Both forms accept [PointerOption]s after the selector (or in place of it, for the matcher) to target an offset and/or hold keyboard modifiers:
+
+	tab.Click("#canvas", b.At(30, 40), b.Shift())
+	Eventually("#canvas").Should(tab.Click(b.At(30, 40), b.Shift()))
+
+A plain tab.Click(selector) dispatches the maximally-faithful native element.click().  Passing any option instead dispatches synthetic mousedown/mouseup/click MouseEvents carrying the coordinates and modifier flags (realistic mode always uses real CDP input) - a deliberate fidelity-for-control tradeoff.
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
 func (b *Biloba) Click(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
-	if len(args) > 0 {
-		if b.realistic {
-			ok, err := b.realisticClick(args[0])
-			if err != nil {
-				b.gt.Fatalf("Failed to click:\n%s", err.Error())
-			} else if !ok {
-				b.gt.Fatalf("Failed to click: element is not clickable (it is disabled, off-screen, or obscured by another element)")
-			}
-			return nil
-		}
-		r := b.runBilobaHandler("click", args[0])
-		if r.Error() != nil {
-			b.gt.Fatalf("Failed to click:\n%s", r.Error())
-		}
-		return nil
-	}
-	if b.realistic {
-		return gcustom.MakeMatcher(func(selector any) (bool, error) {
-			return b.realisticClick(selector)
-		}).WithMessage("be clickable (realistically)")
-	}
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
-		return b.runBilobaHandler("click", selector).MatcherResult()
-	}).WithMessage("be clickable")
-}
-
-/*
-ClickAt() clicks the first element matching selector at a point offset from its top-left corner:
-
-	tab.ClickAt("#canvas", 30, 40)   // clicks 30px right and 40px down from the element's top-left corner
-
-offsetX and offsetY are CSS pixels measured from the element's top-left corner (matching Playwright's position option).  The click carries the real coordinates, so apps reading e.clientX/e.offsetX see the point you targeted.  It fails if the element is not found, hidden, or disabled (realistic mode also fails if the offset point is off-screen or obscured).
-
-Unlike Click, ClickAt has no matcher variant.
-
-Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
-*/
-func (b *Biloba) ClickAt(selector any, offsetX, offsetY float64) {
-	b.gt.Helper()
-	if b.realistic {
-		ok, err := b.realisticClickAt(selector, offsetX, offsetY)
-		if err != nil {
-			b.gt.Fatalf("Failed to click:\n%s", err.Error())
-		} else if !ok {
-			b.gt.Fatalf("Failed to click: element is not clickable at that offset (off-screen or obscured)")
-		}
-		return
-	}
-	r := b.runBilobaHandler("clickAt", selector, offsetX, offsetY)
-	if r.Error() != nil {
-		b.gt.Fatalf("Failed to click:\n%s", r.Error())
-	}
+	return b.pointerInteraction("click", "element is not clickable (it is disabled, off-screen, or obscured by another element)", "be clickable", args, b.performClick)
 }
 
 /*
@@ -816,38 +772,17 @@ DblClick() double-clicks the first element matching selector.
 
 it immediately double-clicks (fast mode fires two click events plus a dblclick event; realistic mode dispatches a real double mouse click).  It fails if no element is found, or if the element is hidden or disabled.
 
-When invoked with no arguments, tab.DblClick() returns a Gomega matcher:
+When invoked with no selector, tab.DblClick() returns a Gomega matcher:
 
 	Eventually("#row").Should(tab.DblClick())
+
+Like Click, it accepts [PointerOption]s (b.At/b.Shift/...) after the selector or in place of it.
 
 Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
 */
 func (b *Biloba) DblClick(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
-	if len(args) > 0 {
-		if b.realistic {
-			ok, err := b.realisticDblClick(args[0])
-			if err != nil {
-				b.gt.Fatalf("Failed to double-click:\n%s", err.Error())
-			} else if !ok {
-				b.gt.Fatalf("Failed to double-click: element is not clickable (it is disabled, off-screen, or obscured by another element)")
-			}
-			return nil
-		}
-		r := b.runBilobaHandler("dblClick", args[0])
-		if r.Error() != nil {
-			b.gt.Fatalf("Failed to double-click:\n%s", r.Error())
-		}
-		return nil
-	}
-	if b.realistic {
-		return gcustom.MakeMatcher(func(selector any) (bool, error) {
-			return b.realisticDblClick(selector)
-		}).WithMessage("be double-clickable (realistically)")
-	}
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
-		return b.runBilobaHandler("dblClick", selector).MatcherResult()
-	}).WithMessage("be double-clickable")
+	return b.pointerInteraction("double-click", "element is not clickable (it is disabled, off-screen, or obscured by another element)", "be double-clickable", args, b.performDblClick)
 }
 
 /*
@@ -857,38 +792,17 @@ RightClick() right-clicks (context-clicks) the first element matching selector.
 
 it immediately right-clicks (fast mode dispatches mousedown/mouseup/contextmenu events; realistic mode dispatches a real right-button mouse click).  It fails if no element is found, or if the element is hidden or disabled.
 
-When invoked with no arguments, tab.RightClick() returns a Gomega matcher:
+When invoked with no selector, tab.RightClick() returns a Gomega matcher:
 
 	Eventually("#row").Should(tab.RightClick())
+
+Like Click, it accepts [PointerOption]s (b.At/b.Shift/...) after the selector or in place of it.
 
 Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
 */
 func (b *Biloba) RightClick(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
-	if len(args) > 0 {
-		if b.realistic {
-			ok, err := b.realisticRightClick(args[0])
-			if err != nil {
-				b.gt.Fatalf("Failed to right-click:\n%s", err.Error())
-			} else if !ok {
-				b.gt.Fatalf("Failed to right-click: element is not clickable (it is disabled, off-screen, or obscured by another element)")
-			}
-			return nil
-		}
-		r := b.runBilobaHandler("rightClick", args[0])
-		if r.Error() != nil {
-			b.gt.Fatalf("Failed to right-click:\n%s", r.Error())
-		}
-		return nil
-	}
-	if b.realistic {
-		return gcustom.MakeMatcher(func(selector any) (bool, error) {
-			return b.realisticRightClick(selector)
-		}).WithMessage("be right-clickable (realistically)")
-	}
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
-		return b.runBilobaHandler("rightClick", selector).MatcherResult()
-	}).WithMessage("be right-clickable")
+	return b.pointerInteraction("right-click", "element is not clickable (it is disabled, off-screen, or obscured by another element)", "be right-clickable", args, b.performRightClick)
 }
 
 /*
@@ -898,38 +812,17 @@ MiddleClick() middle-clicks (auxiliary-clicks) the first element matching select
 
 it immediately middle-clicks (fast mode dispatches mousedown/mouseup/auxclick events; realistic mode dispatches a real middle-button mouse click).  It fails if no element is found, or if the element is hidden or disabled.
 
-When invoked with no arguments, tab.MiddleClick() returns a Gomega matcher:
+When invoked with no selector, tab.MiddleClick() returns a Gomega matcher:
 
 	Eventually("#row").Should(tab.MiddleClick())
+
+Like Click, it accepts [PointerOption]s (b.At/b.Shift/...) after the selector or in place of it.
 
 Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
 */
 func (b *Biloba) MiddleClick(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
-	if len(args) > 0 {
-		if b.realistic {
-			ok, err := b.realisticMiddleClick(args[0])
-			if err != nil {
-				b.gt.Fatalf("Failed to middle-click:\n%s", err.Error())
-			} else if !ok {
-				b.gt.Fatalf("Failed to middle-click: element is not clickable (it is disabled, off-screen, or obscured by another element)")
-			}
-			return nil
-		}
-		r := b.runBilobaHandler("middleClick", args[0])
-		if r.Error() != nil {
-			b.gt.Fatalf("Failed to middle-click:\n%s", r.Error())
-		}
-		return nil
-	}
-	if b.realistic {
-		return gcustom.MakeMatcher(func(selector any) (bool, error) {
-			return b.realisticMiddleClick(selector)
-		}).WithMessage("be middle-clickable (realistically)")
-	}
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
-		return b.runBilobaHandler("middleClick", selector).MatcherResult()
-	}).WithMessage("be middle-clickable")
+	return b.pointerInteraction("middle-click", "element is not clickable (it is disabled, off-screen, or obscured by another element)", "be middle-clickable", args, b.performMiddleClick)
 }
 
 /*
@@ -939,68 +832,61 @@ Tap() taps (touches) the first element matching selector.
 
 it immediately taps (fast mode dispatches synthetic touch and pointer events plus a click; realistic mode dispatches a real CDP touch).  It fails if no element is found, or if the element is hidden or disabled.
 
-When invoked with no arguments, tab.Tap() returns a Gomega matcher:
+When invoked with no selector, tab.Tap() returns a Gomega matcher:
 
 	Eventually("#row").Should(tab.Tap())
+
+It accepts a b.At(x, y) [PointerOption] to tap at an offset; keyboard modifiers don't apply to touch and are ignored.
 
 Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
 */
 func (b *Biloba) Tap(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
-	if len(args) > 0 {
-		if b.realistic {
-			ok, err := b.realisticTap(args[0])
-			if err != nil {
-				b.gt.Fatalf("Failed to tap:\n%s", err.Error())
-			} else if !ok {
-				b.gt.Fatalf("Failed to tap: element is not tappable (it is disabled, off-screen, or obscured by another element)")
-			}
-			return nil
-		}
-		r := b.runBilobaHandler("tap", args[0])
-		if r.Error() != nil {
-			b.gt.Fatalf("Failed to tap:\n%s", r.Error())
-		}
-		return nil
-	}
-	if b.realistic {
-		return gcustom.MakeMatcher(func(selector any) (bool, error) {
-			return b.realisticTap(selector)
-		}).WithMessage("be tappable (realistically)")
-	}
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
-		return b.runBilobaHandler("tap", selector).MatcherResult()
-	}).WithMessage("be tappable")
+	return b.pointerInteraction("tap", "element is not tappable (it is disabled, off-screen, or obscured by another element)", "be tappable", args, b.performTap)
 }
 
 /*
-DragTo() drags the first element matching source onto the first element matching target.
+DragTo() has two modes of operation:
+
+When invoked with a source and a target selector:
 
 	tab.DragTo("#card", "#column")
 
-it immediately drags source's center to target's center with a pointer-based drag sequence (pointerdown/pointermove/pointerup plus the matching mouse events; realistic mode dispatches the drag with real CDP mouse input).  It is meant for pointer-based drag-and-drop libraries (@dnd-kit and the like); it does NOT drive native HTML5 draggable - for that, drop to chromedp via tab.Context.  It fails if either element is not found, or if source is hidden.
+it immediately drags source's center onto target's center with a pointer-based drag sequence (pointerdown/pointermove/pointerup plus the matching mouse events; realistic mode dispatches the drag with real CDP mouse input).  It is meant for pointer-based drag-and-drop libraries (@dnd-kit and the like); it does NOT drive native HTML5 draggable - for that, drop to chromedp via tab.Context.  It fails if either element is not found, or if source is hidden.
 
-Unlike Click, DragTo has no matcher variant.
+When invoked with just a target, tab.DragTo() returns a Gomega matcher whose subject is the source.  This lets you poll until both source and target are present and the drag can be performed - folding the wait into the action so you don't have to assert both endpoints exist first:
+
+	Eventually("#card").Should(tab.DragTo("#column"))
 
 Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
 */
-func (b *Biloba) DragTo(source any, target any) {
+func (b *Biloba) DragTo(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
-	if b.realistic {
-		if err := b.realisticDragTo(source, target); err != nil {
+	if len(args) >= 2 {
+		ok, err := b.performDrag(args[0], args[1])
+		if err != nil {
 			b.gt.Fatalf("Failed to drag:\n%s", err.Error())
+		} else if !ok {
+			b.gt.Fatalf("Failed to drag: source or target is not actionable (it is disabled, off-screen, or obscured by another element)")
 		}
-		return
+		return nil
+	}
+	target := args[0]
+	return gcustom.MakeMatcher(func(source any) (bool, error) {
+		return b.performDrag(source, target)
+	}).WithMessage("be draggable to the target")
+}
+
+// performDrag is the fast/realistic fork shared by DragTo's immediate and matcher forms.
+func (b *Biloba) performDrag(source, target any) (bool, error) {
+	if b.realistic {
+		return b.realisticDragTo(source, target)
 	}
 	encodedTarget, err := encodeSelector(target)
 	if err != nil {
-		b.gt.Fatalf("Failed to drag:\n%s", err.Error())
-		return
+		return false, err
 	}
-	r := b.runBilobaHandler("dragTo", source, encodedTarget)
-	if r.Error() != nil {
-		b.gt.Fatalf("Failed to drag:\n%s", r.Error())
-	}
+	return b.runBilobaHandler("dragTo", source, encodedTarget).MatcherResult()
 }
 
 /*
@@ -1068,30 +954,7 @@ Read https://onsi.github.io/biloba/#interacting-with-elements to learn more abou
 */
 func (b *Biloba) Hover(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
-	if len(args) > 0 {
-		if b.realistic {
-			ok, err := b.realisticHover(args[0])
-			if err != nil {
-				b.gt.Fatalf("Failed to hover:\n%s", err.Error())
-			} else if !ok {
-				b.gt.Fatalf("Failed to hover: element is off-screen")
-			}
-			return nil
-		}
-		r := b.runBilobaHandler("hover", args[0])
-		if r.Error() != nil {
-			b.gt.Fatalf("Failed to hover:\n%s", r.Error())
-		}
-		return nil
-	}
-	if b.realistic {
-		return gcustom.MakeMatcher(func(selector any) (bool, error) {
-			return b.realisticHover(selector)
-		}).WithMessage("be hoverable (realistically)")
-	}
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
-		return b.runBilobaHandler("hover", selector).MatcherResult()
-	}).WithMessage("be hoverable")
+	return b.pointerInteraction("hover", "element is off-screen", "be hoverable", args, b.performHover)
 }
 
 /*

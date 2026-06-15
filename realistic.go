@@ -102,175 +102,123 @@ func (b *Biloba) realisticClickEach(selector any) error {
 	return nil
 }
 
-// realisticClick implements Click for realistic mode.  It returns (true, nil) on a real click,
-// (false, nil) when the element is present but not yet clickable (disabled, off-screen, or
-// obscured - so matcher callers poll), and (false, err) on a hard error (missing/hidden element).
-func (b *Biloba) realisticClick(selector any) (bool, error) {
-	pt, err := b.scrollToStablePoint(selector)
-	if err != nil {
-		return false, err
+// modifierMask folds the requested keyboard modifiers into the CDP modifier bitmask.
+func modifierMask(modifiers []clickModifier) input.Modifier {
+	mask := input.ModifierNone
+	for _, m := range modifiers {
+		switch m {
+		case modShift:
+			mask |= input.ModifierShift
+		case modControl:
+			mask |= input.ModifierCtrl
+		case modAlt:
+			mask |= input.ModifierAlt
+		case modMeta:
+			mask |= input.ModifierMeta
+		}
 	}
-	if !pt.enabled || !pt.inViewport || !pt.hittable {
-		return false, nil
-	}
-	// Move the real pointer to the element before pressing - so pointerover/pointermove/mousemove
-	// fire and hover state is set - then click.  This matches how a real user arrives at and clicks
-	// an element (Playwright does move->down->up) and makes hover-gated clicks behave correctly.
-	if err := chromedp.Run(b.Context,
-		chromedp.MouseEvent(input.MouseMoved, pt.x, pt.y),
-		chromedp.MouseClickXY(pt.x, pt.y),
-	); err != nil {
-		return false, err
-	}
-	return true, nil
+	return mask
 }
 
-// realisticClickAt implements ClickAt for realistic mode.  It scrolls the element to a stable point
-// (reusing scrollToStablePoint's scroll + stability wait), then measures the element's top-left
-// corner translated to top-level viewport coordinates and targets (left+offsetX, top+offsetY).  If
-// that point falls outside the viewport it returns (false, nil) like realisticClick.  Otherwise it
-// moves the real pointer there and dispatches a real CDP left click at that exact point.
-func (b *Biloba) realisticClickAt(selector any, offsetX, offsetY float64) (bool, error) {
-	// scroll into view + wait for stability (we don't need the returned centroid, just the side
-	// effects); then re-measure the corner, which is what we actually click relative to.
-	if _, err := b.scrollToStablePoint(selector); err != nil {
-		return false, err
+// resolvePointerTarget scrolls the element matching selector to a stable point and returns the
+// top-level viewport coordinates a realistic pointer interaction should target.  Without an At
+// offset that is the actionable centroid (and we verify the element is enabled, in view, and the
+// topmost thing there).  With an offset it is the top-left corner translated to the viewport plus
+// the offset (matching the fast path's geometry), bounds-checked against the viewport.  ok=false
+// with a nil err means the element is present but not actionable yet (matcher callers poll); a
+// non-nil err is a hard failure (missing/hidden element).
+func (b *Biloba) resolvePointerTarget(selector any, cfg pointerConfig) (float64, float64, bool, error) {
+	pt, err := b.scrollToStablePoint(selector)
+	if err != nil {
+		return 0, 0, false, err
 	}
+	if !cfg.hasOffset {
+		if !pt.enabled || !pt.inViewport || !pt.hittable {
+			return 0, 0, false, nil
+		}
+		return pt.x, pt.y, true, nil
+	}
+	// An offset is measured from the element's top-left corner; re-measure it (scrollToStablePoint
+	// above already did the scroll + stability wait we need).
 	r := b.runBilobaHandlerAsync("scrollToStableCorner", selector)
 	if r.Error() != nil {
-		return false, r.Error()
+		return 0, 0, false, r.Error()
 	}
 	m, ok := r.Result.(map[string]any)
 	if !ok {
-		return false, fmt.Errorf("unexpected scrollToStableCorner result: %v", r.Result)
+		return 0, 0, false, fmt.Errorf("unexpected scrollToStableCorner result: %v", r.Result)
 	}
 	if m["translatable"] != true {
-		return false, nil
+		return 0, 0, false, nil
 	}
-	x, y := toFloat64(m["left"])+offsetX, toFloat64(m["top"])+offsetY
+	x, y := toFloat64(m["left"])+cfg.offsetX, toFloat64(m["top"])+cfg.offsetY
 	if x < 0 || y < 0 || x > toFloat64(m["innerWidth"]) || y > toFloat64(m["innerHeight"]) {
-		return false, nil
+		return 0, 0, false, nil
 	}
-	if err := chromedp.Run(b.Context,
-		chromedp.MouseEvent(input.MouseMoved, x, y),
-		chromedp.MouseClickXY(x, y),
-	); err != nil {
+	return x, y, true, nil
+}
+
+// realisticMouseClick is the shared realistic implementation behind Click, DblClick, RightClick, and
+// MiddleClick.  It resolves the actionable point (honoring any At offset), moves the real pointer
+// there - so pointerover/pointermove/mousemove fire and hover state is set, matching how a real user
+// arrives at an element - then dispatches real CDP mouse input with the requested button, click
+// count (2 => two press/release pairs with an incrementing clickCount, which is what the renderer
+// keys a genuine dblclick off of), and held modifiers.  It returns (true, nil) on a real click,
+// (false, nil) when the element is present but not yet actionable (matcher callers poll), and
+// (false, err) on a hard error.
+func (b *Biloba) realisticMouseClick(selector any, cfg pointerConfig, button input.MouseButton, clickCount int) (bool, error) {
+	x, y, ok, err := b.resolvePointerTarget(selector, cfg)
+	if err != nil || !ok {
+		return ok, err
+	}
+	mods := modifierMask(cfg.modifiers)
+	actions := []chromedp.Action{chromedp.MouseEvent(input.MouseMoved, x, y)}
+	counts := []int64{1}
+	if clickCount >= 2 {
+		counts = []int64{1, 2}
+	}
+	for _, c := range counts {
+		actions = append(actions,
+			input.DispatchMouseEvent(input.MousePressed, x, y).WithButton(button).WithClickCount(c).WithModifiers(mods),
+			input.DispatchMouseEvent(input.MouseReleased, x, y).WithButton(button).WithClickCount(c).WithModifiers(mods),
+		)
+	}
+	if err := chromedp.Run(b.Context, actions...); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-// realisticDblClick implements DblClick for realistic mode.  Like realisticClick it scrolls the
-// element to a stable point and checks actionability, then dispatches two real click sequences with
-// an incrementing clickCount so Chrome fires a genuine dblclick (a single clickCount:2 release is
-// what the renderer keys the dblclick off of).
-func (b *Biloba) realisticDblClick(selector any) (bool, error) {
-	pt, err := b.scrollToStablePoint(selector)
-	if err != nil {
-		return false, err
-	}
-	if !pt.enabled || !pt.inViewport || !pt.hittable {
-		return false, nil
-	}
-	if err := chromedp.Run(b.Context,
-		chromedp.MouseEvent(input.MouseMoved, pt.x, pt.y),
-		chromedp.MouseClickXY(pt.x, pt.y, chromedp.ClickCount(1)),
-		chromedp.MouseClickXY(pt.x, pt.y, chromedp.ClickCount(2)),
-	); err != nil {
-		return false, err
-	}
-	return true, nil
+func (b *Biloba) realisticClick(selector any, cfg pointerConfig) (bool, error) {
+	return b.realisticMouseClick(selector, cfg, input.Left, 1)
 }
 
-// realisticRightClick implements RightClick for realistic mode: a real right-button mouse click at
-// the element's stable centroid, which makes Chrome fire a genuine contextmenu event.
-func (b *Biloba) realisticRightClick(selector any) (bool, error) {
-	pt, err := b.scrollToStablePoint(selector)
-	if err != nil {
-		return false, err
-	}
-	if !pt.enabled || !pt.inViewport || !pt.hittable {
-		return false, nil
-	}
-	if err := chromedp.Run(b.Context,
-		chromedp.MouseEvent(input.MouseMoved, pt.x, pt.y),
-		chromedp.MouseClickXY(pt.x, pt.y, chromedp.ButtonType(input.Right)),
-	); err != nil {
-		return false, err
-	}
-	return true, nil
+func (b *Biloba) realisticDblClick(selector any, cfg pointerConfig) (bool, error) {
+	return b.realisticMouseClick(selector, cfg, input.Left, 2)
 }
 
-// realisticMiddleClick implements MiddleClick for realistic mode: a real middle-button mouse click
-// at the element's stable centroid, which makes Chrome fire a genuine auxclick event.
-func (b *Biloba) realisticMiddleClick(selector any) (bool, error) {
-	pt, err := b.scrollToStablePoint(selector)
-	if err != nil {
-		return false, err
-	}
-	if !pt.enabled || !pt.inViewport || !pt.hittable {
-		return false, nil
-	}
-	if err := chromedp.Run(b.Context,
-		chromedp.MouseEvent(input.MouseMoved, pt.x, pt.y),
-		chromedp.MouseClickXY(pt.x, pt.y, chromedp.ButtonType(input.Middle)),
-	); err != nil {
-		return false, err
-	}
-	return true, nil
+func (b *Biloba) realisticRightClick(selector any, cfg pointerConfig) (bool, error) {
+	return b.realisticMouseClick(selector, cfg, input.Right, 1)
 }
 
-// realisticTap implements Tap for realistic mode.  Like realisticClick it scrolls the element to a
-// stable point and checks actionability, then dispatches a real CDP touch (touchStart/touchEnd) at
-// the element's centroid.  Chrome rejects DispatchTouchEvent unless touch input is enabled for the
-// target, so we enable touch emulation inline immediately before dispatching - keeping it local to
-// this call rather than leaving global state that could leak into other specs sharing the root tab.
-func (b *Biloba) realisticTap(selector any) (bool, error) {
-	pt, err := b.scrollToStablePoint(selector)
-	if err != nil {
-		return false, err
-	}
-	if !pt.enabled || !pt.inViewport || !pt.hittable {
-		return false, nil
+func (b *Biloba) realisticMiddleClick(selector any, cfg pointerConfig) (bool, error) {
+	return b.realisticMouseClick(selector, cfg, input.Middle, 1)
+}
+
+// realisticTap implements Tap for realistic mode.  It resolves the actionable point (honoring any At
+// offset; keyboard modifiers don't apply to touch), then dispatches a real CDP touch
+// (touchStart/touchEnd) there.  Chrome rejects DispatchTouchEvent unless touch input is enabled for
+// the target, so we enable touch emulation inline immediately before dispatching - keeping it local
+// to this call rather than leaving global state that could leak into other specs sharing the root tab.
+func (b *Biloba) realisticTap(selector any, cfg pointerConfig) (bool, error) {
+	x, y, ok, err := b.resolvePointerTarget(selector, cfg)
+	if err != nil || !ok {
+		return ok, err
 	}
 	if err := chromedp.Run(b.Context,
 		emulation.SetTouchEmulationEnabled(true),
-		input.DispatchTouchEvent(input.TouchStart, []*input.TouchPoint{{X: pt.x, Y: pt.y}}),
+		input.DispatchTouchEvent(input.TouchStart, []*input.TouchPoint{{X: x, Y: y}}),
 		input.DispatchTouchEvent(input.TouchEnd, []*input.TouchPoint{}),
-	); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-// realisticClickWith implements ClickWith for realistic mode: a real left-button mouse click at the
-// element's stable centroid with the requested keyboard modifiers held down.  MouseClickXY does not
-// expose modifiers, so we drive the raw mousePressed/mouseReleased pair with a modifier bitmask.
-func (b *Biloba) realisticClickWith(selector any, modifiers []ClickModifier) (bool, error) {
-	pt, err := b.scrollToStablePoint(selector)
-	if err != nil {
-		return false, err
-	}
-	if !pt.enabled || !pt.inViewport || !pt.hittable {
-		return false, nil
-	}
-	mods := input.ModifierNone
-	for _, m := range modifiers {
-		switch m {
-		case ModShift:
-			mods |= input.ModifierShift
-		case ModControl:
-			mods |= input.ModifierCtrl
-		case ModAlt:
-			mods |= input.ModifierAlt
-		case ModMeta:
-			mods |= input.ModifierMeta
-		}
-	}
-	if err := chromedp.Run(b.Context,
-		chromedp.MouseEvent(input.MouseMoved, pt.x, pt.y),
-		input.DispatchMouseEvent(input.MousePressed, pt.x, pt.y).WithButton(input.Left).WithClickCount(1).WithModifiers(mods),
-		input.DispatchMouseEvent(input.MouseReleased, pt.x, pt.y).WithButton(input.Left).WithClickCount(1).WithModifiers(mods),
 	); err != nil {
 		return false, err
 	}
@@ -283,20 +231,20 @@ func (b *Biloba) realisticClickWith(selector any, modifiers []ClickModifier) (bo
 // and a release at the target.  This drives pointer-based drag-and-drop libraries; it does not drive
 // native HTML5 draggable (use chromedp via b.Context for that).  Returns an error if either element
 // is missing/hidden or is not actionable (off-screen, disabled, or obscured).
-func (b *Biloba) realisticDragTo(source any, target any) error {
+func (b *Biloba) realisticDragTo(source any, target any) (bool, error) {
 	src, err := b.scrollToStablePoint(source)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !src.enabled || !src.inViewport || !src.hittable {
-		return fmt.Errorf("source element is not actionable (it is disabled, off-screen, or obscured by another element)")
+		return false, nil
 	}
 	tgt, err := b.scrollToStablePoint(target)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !tgt.enabled || !tgt.inViewport || !tgt.hittable {
-		return fmt.Errorf("target element is not actionable (it is disabled, off-screen, or obscured by another element)")
+		return false, nil
 	}
 	actions := []chromedp.Action{
 		chromedp.MouseEvent(input.MouseMoved, src.x, src.y),
@@ -312,7 +260,10 @@ func (b *Biloba) realisticDragTo(source any, target any) error {
 		chromedp.MouseEvent(input.MouseMoved, tgt.x, tgt.y, chromedp.ButtonType(input.Left)),
 		chromedp.MouseEvent(input.MouseReleased, tgt.x, tgt.y, chromedp.ButtonType(input.Left), chromedp.ClickCount(1)),
 	)
-	return chromedp.Run(b.Context, actions...)
+	if err := chromedp.Run(b.Context, actions...); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // realisticScrollWheel implements ScrollWheel for realistic mode.  It measures a stable, actionable
@@ -355,9 +306,9 @@ func (b *Biloba) realisticSetValue(selector any, value any) (bool, error) {
 		if cur.ResultBool() == desired {
 			return true, nil // already in the desired state - nothing to click
 		}
-		return b.realisticClick(selector)
+		return b.realisticClick(selector, pointerConfig{})
 	case "text":
-		ok, err := b.realisticClick(selector) // real click to focus
+		ok, err := b.realisticClick(selector, pointerConfig{}) // real click to focus
 		if err != nil || !ok {
 			return ok, err
 		}

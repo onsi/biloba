@@ -4,7 +4,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/onsi/biloba"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -148,9 +147,9 @@ var _ = Describe("BeClickable and realistic interactions", func() {
 		})
 	})
 
-	Describe("realistic ClickAt", func() {
+	Describe("realistic Click with b.At(offset)", func() {
 		It("clicks at the requested offset from the element's top-left corner with real input", func() {
-			b.Realistic().ClickAt("#click-pad", 30, 40)
+			b.Realistic().Click("#click-pad", b.At(30, 40))
 			var x, y int
 			Eventually(func() string {
 				return b.GetProperty("#click-pad-result", "innerText").(string)
@@ -181,9 +180,9 @@ var _ = Describe("BeClickable and realistic interactions", func() {
 		})
 	})
 
-	Describe("realistic ClickWith", func() {
+	Describe("realistic Click with modifiers", func() {
 		It("dispatches a real click carrying the modifier", func() {
-			b.Realistic().ClickWith("#mod-btn", biloba.ModShift)
+			b.Realistic().Click("#mod-btn", b.Shift())
 			Eventually("#mod-result").Should(b.HaveInnerText("shift"))
 		})
 	})

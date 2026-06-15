@@ -1461,21 +1461,30 @@ b.ClickEach(selector)
 
 unlike `Click`, `ClickEach` does not have a matcher variant.  It simply clicks on all the elements that match the selector that are also visible and enabled.  Elements that are not visible or enabled are silently skipped.
 
-#### Clicking at a Position Offset
+#### Pointer Options: Offsets and Modifiers
 
-`b.ClickAt` clicks an element at a point offset from its **top-left corner** (matching Playwright's `position` option):
+`Click`, `DblClick`, `RightClick`, `MiddleClick`, and `Tap` all accept **pointer options** after the selector.  Two kinds are available, and they compose:
 
 ```go
-b.ClickAt("#canvas", 30, 40)   // clicks 30px right and 40px down from the element's top-left corner
+b.Click("#canvas", b.At(30, 40))            // click at a point offset from the top-left corner
+b.Click("#row", b.Shift())                  // shift-click
+b.Click("#row", b.Ctrl(), b.Meta())         // ctrl+meta-click
+b.Click("#canvas", b.At(30, 40), b.Shift()) // both at once
 ```
 
-`offsetX` and `offsetY` are CSS pixels measured from the element's top-left corner.  Unlike `Click` - which calls `element.click()` and therefore can't carry coordinates - `ClickAt` dispatches a synthetic `mousedown`/`mouseup`/`click` sequence with the real `clientX`/`clientY`, so an app that reads `e.clientX`/`e.offsetX` (a `<canvas>` painter, a map, a custom slider) sees the point you targeted.  It runs the same visible+enabled checks as `Click`.  In [realistic mode](#realistic-interactions) it scrolls the element into view, translates the corner to top-level viewport coordinates, and dispatches a real CDP click at that exact point (failing if the offset point is off-screen or obscured).
+`b.At(offsetX, offsetY)` targets a point measured in CSS pixels from the element's **top-left corner** (matching Playwright's `position` option), instead of the center.  `b.Shift()`, `b.Ctrl()`, `b.Alt()`, and `b.Meta()` hold a keyboard modifier down during the click (`Meta` is Command on macOS and the Windows key elsewhere).
 
-Like `ClickEach`, `ClickAt` always acts immediately and has **no matcher variant**; it fails the spec if the element can't be found, is hidden, or is disabled.
+Because options are a distinct type from selectors, they work in the **matcher form** too - just drop the selector, and `Eventually`/`Expect` supplies it:
+
+```go
+Eventually("#canvas").Should(b.Click(b.At(30, 40), b.Shift()))
+```
+
+**A fidelity note.**  A plain `b.Click(sel)` calls `element.click()` - the most faithful path, because it fires the browser's native default actions (form submit, `<label>` association, and the like).  But `element.click()` carries no coordinates and no modifier state, so the moment you add *any* option the fast path switches to dispatching a synthetic `mousedown`/`mouseup`/`click` sequence carrying the real `clientX`/`clientY` and the modifier flags - so an app reading `e.clientX`/`e.shiftKey` (a `<canvas>` painter, a map, a custom slider) sees exactly what you targeted.  That's a deliberate fidelity-for-control trade: if you need a maximally-faithful click, pass no options (or use [realistic mode](#realistic-interactions), which always uses real CDP input and honors the options natively).  `Tap` ignores keyboard modifiers - they don't apply to touch - but honors `b.At`.
 
 #### Double-Clicking and Right-Clicking
 
-Alongside `Click`, Biloba provides `b.DblClick` and `b.RightClick`, following the same dual immediate/matcher convention and the same visible+enabled checks:
+Alongside `Click`, Biloba provides `b.DblClick` and `b.RightClick`, following the same dual immediate/matcher convention, the same visible+enabled checks, and the same [pointer options](#pointer-options-offsets-and-modifiers):
 
 ```go
 b.DblClick("#row")                       // fires two click events plus a dblclick
@@ -1497,7 +1506,11 @@ b.DragTo("#card", "#column")             // drags #card's center onto #column's 
 
 `DragTo` is **pointer-based**: it drives a drag with `pointerdown`/`pointermove`/`pointerup` (plus the matching `mouse` events) from the source's center to the target's center.  This is what modern drag-and-drop libraries - [@dnd-kit](https://dndkit.com), Sortable, and friends - listen for, so `DragTo` exercises them.  In [realistic mode](#realistic-interactions) it scrolls both elements into view, checks their actionability, and drives the same drag with real CDP mouse input.
 
-Like `ClickEach`, `DragTo` takes two selectors and so has **no matcher variant** - it always acts immediately and fails the spec if either element can't be found (or, in realistic mode, isn't actionable).
+`DragTo` also has a **matcher form** whose subject is the *source*: pass only the target, and poll the source with `Eventually`.  This waits until both elements are present and the drag can be performed - folding the readiness wait into the action, instead of asserting both endpoints exist first:
+
+```go
+Eventually("#card").Should(b.DragTo("#column"))
+```
 
 `DragTo` does **not** drive native HTML5 drag-and-drop (the `draggable` attribute and the `dragstart`/`dragover`/`drop` event family).  Synthesizing the native protocol convincingly requires the real OS-level drag machinery, which is outside Biloba's atomic model.  If you need to test a native HTML5 `draggable` interaction, drop down to chromedp via `b.Context`.
 
@@ -1514,9 +1527,9 @@ Positive `deltaY` scrolls down and positive `deltaX` scrolls right (the standard
 
 Like `DragTo`, `ScrollWheel` always acts immediately and has **no matcher variant**; it fails the spec if the element can't be found (or, in realistic mode, isn't actionable).
 
-#### Middle-Clicking and Modifier-Clicking
+#### Middle-Clicking
 
-`b.MiddleClick` middle-clicks (auxiliary-clicks) an element, following the same dual immediate/matcher convention and visible+enabled checks as `Click`:
+`b.MiddleClick` middle-clicks (auxiliary-clicks) an element, following the same dual immediate/matcher convention, visible+enabled checks, and [pointer options](#pointer-options-offsets-and-modifiers) as `Click`:
 
 ```go
 b.MiddleClick("#row")                       // fires mousedown/mouseup/auxclick
@@ -1526,16 +1539,7 @@ Eventually("#row").Should(b.MiddleClick())  // matcher form polls until clickabl
 
 The fast version dispatches `mousedown`/`mouseup`/`auxclick` events with the middle button (a middle click fires `auxclick`, not `click`).  In [realistic mode](#realistic-interactions) it scrolls into view, waits for stability, checks for occlusion, and dispatches a real middle-button click.
 
-`b.ClickWith` clicks an element with one or more keyboard modifiers held down (e.g. shift-click, ctrl-click):
-
-```go
-b.ClickWith("#row", biloba.ModShift)                   // shift-click
-b.ClickWith("#row", biloba.ModControl, biloba.ModMeta) // ctrl+meta-click
-```
-
-The modifiers come from the `biloba.ModShift`, `biloba.ModControl`, `biloba.ModAlt`, and `biloba.ModMeta` constants (`ModMeta` is Command on macOS and the Windows key elsewhere).  The fast version dispatches `mousedown`/`mouseup`/`click` events carrying the modifier flags; in [realistic mode](#realistic-interactions) it dispatches a real click with the modifier bitmask held down.
-
-Because the dual immediate/matcher API keys on argument count - which the modifier varargs would conflict with - `ClickWith` (like `DragTo` and `ScrollWheel`) always acts immediately and has **no matcher variant**.  If you need to wait for readiness first, poll `Eventually(sel).Should(b.Click())` and then `b.ClickWith`.
+To shift-click, ctrl-click, and so on, hold modifiers with `b.Shift()`/`b.Ctrl()`/`b.Alt()`/`b.Meta()` - see [Pointer Options](#pointer-options-offsets-and-modifiers).
 
 #### Tapping (Touch)
 
@@ -1583,15 +1587,12 @@ Eventually(".menu").Should(rb.Hover()) // moves the real mouse, activating CSS :
 
 In realistic mode:
 
-- **`Click`** scrolls the element to the center of the viewport, **waits for its box to stop moving**, verifies it is enabled and is the topmost element at its center point (so an occluding overlay or an off-screen element does **not** click through - the matcher form keeps polling, the immediate form fails the spec), moves the real pointer to it (so hover-gated clicks register), then dispatches a real `mousePressed`/`mouseReleased`.  This is the inverse of plain `Click`, which clicks the element directly regardless of what's on top of it.  Clicks through `>>>` same-origin iframe boundaries are translated to top-level viewport coordinates so the real mouse lands in the right place.
-- **`ClickAt`** scrolls the element into view, waits for its box to stop moving, translates its top-left corner to top-level viewport coordinates (so `>>>` same-origin iframe targets work), adds the requested offset, and dispatches a real CDP click at that exact point - failing if the point is off-screen or obscured.
+- **`Click`** scrolls the element to the center of the viewport, **waits for its box to stop moving**, verifies it is enabled and is the topmost element at its center point (so an occluding overlay or an off-screen element does **not** click through - the matcher form keeps polling, the immediate form fails the spec), moves the real pointer to it (so hover-gated clicks register), then dispatches a real `mousePressed`/`mouseReleased`.  This is the inverse of plain `Click`, which clicks the element directly regardless of what's on top of it.  Clicks through `>>>` same-origin iframe boundaries are translated to top-level viewport coordinates so the real mouse lands in the right place.  [Pointer options](#pointer-options-offsets-and-modifiers) are honored natively: `b.At(x,y)` retargets to the offset point (translated to the viewport and bounds-checked), and `b.Shift()`/etc. hold a real CDP modifier bitmask down.
 - **`ClickEach`** clicks every matching element with real input, scrolling and re-measuring each in turn, and skipping any that are hidden, disabled, off-screen, or obscured.
-- **`DblClick`** / **`RightClick`** apply the same scroll/stability/occlusion machinery as `Click`, then dispatch a real double-click (two click sequences with an incrementing click-count, so Chrome fires a genuine `dblclick`) or a real right-button click (firing the browser's native `contextmenu`).
+- **`DblClick`** / **`RightClick`** / **`MiddleClick`** apply the same scroll/stability/occlusion machinery as `Click`, then dispatch a real double-click (two click sequences with an incrementing click-count, so Chrome fires a genuine `dblclick`), right-button click (firing the browser's native `contextmenu`), or middle-button click (firing `auxclick`) - all honoring pointer options.
 - **`DragTo`** scrolls and measures stable, actionable points for *both* the source and target, then drives a real CDP pointer drag - press at the source, several interpolated moves toward the target, release at the target - so pointer-based drag-and-drop libraries see genuine pointer input (it still does not drive native HTML5 `draggable`).
 - **`ScrollWheel`** scrolls the element into view, measures a stable, actionable point, then dispatches a real CDP wheel event there - genuine trusted input that actually scrolls the page (unlike the synthetic fast `ScrollWheel`, which dispatches a `wheel` event and then manually scrolls the nearest scrollable ancestor).
-- **`MiddleClick`** applies the same scroll/stability/occlusion machinery as `Click`, then dispatches a real middle-button click (firing the browser's native `auxclick`).
-- **`ClickWith`** applies the same scroll/stability/occlusion machinery as `Click`, then dispatches a real left-button click with the requested modifier keys (`ModShift`/`ModControl`/`ModAlt`/`ModMeta`) held down via a CDP modifier bitmask.
-- **`Tap`** applies the same scroll/stability/occlusion machinery as `Click`, then dispatches a real CDP touch (`touchStart`/`touchEnd`) at the element's center - genuine trusted touch input (unlike the synthetic fast `Tap`, which dispatches touch/pointer events plus a `click`).
+- **`Tap`** applies the same scroll/stability/occlusion machinery as `Click`, then dispatches a real CDP touch (`touchStart`/`touchEnd`) at the element's center (or `b.At` offset) - genuine trusted touch input (unlike the synthetic fast `Tap`, which dispatches touch/pointer events plus a `click`).
 - **`Hover`** scrolls into view and moves the real mouse to the element's center, which - unlike the synthetic `Hover` - activates genuine CSS `:hover` (e.g. a menu that only appears via a `:hover` rule).
 - **`SetValue`** drives form controls with real input: a text input is focused with a real click, cleared, and typed with real key events (then blurred to fire `change`); a checkbox is toggled with a real click (and left alone if it's already in the desired state).  Native pickers - radio groups, `<select>`, and multi-selects - fall back to the fast JS path, because they can't be driven by a real pointer (Playwright's `selectOption` sets them programmatically too).
 - **`Type`** / **`SendKeys`** already use real CDP key events; in realistic mode they additionally scroll the element into view before typing.
@@ -1629,11 +1630,11 @@ Biloba's interactions run on two tracks: the fast default (`b`) is an atomic Jav
 | Interaction | Fast track (default `b`) | Realistic track (`b.Realistic()`) |
 |---|---|---|
 | `Click` | visible + enabled, then `el.click()` - **clicks through overlays and off-screen elements** | scroll into view → stability wait → topmost-at-point (occlusion) check → real pointer move + `mousePressed`/`mouseReleased` |
-| `ClickAt(x,y)` | synthetic `click` at the offset's `clientX/clientY` | real CDP click at the offset point (iframe-translated), occlusion/viewport-checked |
+| `Click(…, b.At(x,y))` | synthetic `click` at the offset's `clientX/clientY` (any option switches off `el.click()`) | real CDP click at the offset point (iframe-translated), occlusion/viewport-checked |
+| `Click(…, b.Shift()…)` | synthetic click carrying the modifier flags | real click with the modifier bitmask held in CDP |
 | `ClickEach` | `el.click()` on every visible+enabled match | real click on each, re-measured; skips hidden/disabled/off-screen/obscured |
 | `DblClick` | two `el.click()`s + a `dblclick` event | real double-click (incrementing click-count) with full actionability |
 | `RightClick` / `MiddleClick` | synthetic `mousedown`/`mouseup` + `contextmenu` / `auxclick` | real right/middle-button click (native `contextmenu` / `auxclick`) |
-| `ClickWith(mods…)` | synthetic click carrying the modifier flags | real click with the modifier bitmask held in CDP |
 | `DragTo(src,tgt)` | synthetic pointer drag sequence | real CDP pointer drag (press → interpolated moves → release). Neither drives native HTML5 `draggable` |
 | `ScrollWheel(dx,dy)` | `wheel` event, then manually scrolls the nearest scrollable ancestor | real trusted CDP wheel event |
 | `Tap` | synthetic touch + pointer events + `click` | real CDP touch (`touchStart`/`touchEnd`) |

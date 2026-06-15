@@ -243,55 +243,60 @@ if (!window["_biloba"]) {
     b.count = each(ns => rRes(ns.length))
     b.isVisible = one(n => r(n.offsetWidth > 0 || n.offsetHeight > 0 || n.offsetParent != null, "DOM element is not visible"))
     b.isEnabled = one(n => r(!n.disabled, "DOM element is not enabled"))
-    b.click = one(b.isVisible, b.isEnabled, n => r(n.click()))
-    b.clickAt = one(b.isVisible, b.isEnabled, (n, ox, oy) => {
-        let rect = n.getBoundingClientRect(), cx = rect.left + ox, cy = rect.top + oy
-        let opts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 }
-        n.dispatchEvent(new MouseEvent('mousedown', opts))
-        n.dispatchEvent(new MouseEvent('mouseup', opts))
-        n.dispatchEvent(new MouseEvent('click', opts))
+    // pointerOpts builds a MouseEvent init from a pointer options object {ox,oy,hasOffset,shift,...}:
+    // the coordinates are the element's center, or its top-left corner plus the offset when one is
+    // given, and the modifier flags carry through to shift/ctrl/alt/meta-aware handlers.
+    let pointerOpts = (n, o) => {
+        let rect = n.getBoundingClientRect()
+        let cx = o.hasOffset ? rect.left + o.ox : rect.left + rect.width / 2
+        let cy = o.hasOffset ? rect.top + o.oy : rect.top + rect.height / 2
+        return {
+            bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy,
+            shiftKey: !!o.shift, ctrlKey: !!o.control, altKey: !!o.alt, metaKey: !!o.meta,
+        }
+    }
+    // plainPointer is true when no offset or modifier was requested - the case where a plain click
+    // can take the maximally-faithful native element.click() path instead of dispatching synthetics.
+    let plainPointer = (o) => !o.hasOffset && !o.shift && !o.control && !o.alt && !o.meta
+    let dispatchMouse = (n, types, opts) => types.forEach(t => n.dispatchEvent(new MouseEvent(t, opts)))
+    b.click = one(b.isVisible, b.isEnabled, (n, o) => {
+        o = o || {}
+        if (plainPointer(o)) { n.click(); return r() }
+        dispatchMouse(n, ['mousedown', 'mouseup', 'click'], { ...pointerOpts(n, o), button: 0, buttons: 1 })
         return r()
     })
-    b.dblClick = one(b.isVisible, b.isEnabled, n => {
-        n.click()
-        n.click()
-        n.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window, detail: 2 }))
+    b.dblClick = one(b.isVisible, b.isEnabled, (n, o) => {
+        o = o || {}
+        if (plainPointer(o)) {
+            n.click()
+            n.click()
+            n.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window, detail: 2 }))
+            return r()
+        }
+        let opts = { ...pointerOpts(n, o), button: 0, buttons: 1 }
+        dispatchMouse(n, ['mousedown', 'mouseup', 'click', 'mousedown', 'mouseup', 'click'], opts)
+        n.dispatchEvent(new MouseEvent('dblclick', { ...opts, detail: 2 }))
         return r()
     })
-    b.rightClick = one(b.isVisible, b.isEnabled, n => {
-        let opts = { bubbles: true, cancelable: true, view: window, button: 2, buttons: 2 }
-        n.dispatchEvent(new MouseEvent('mousedown', opts))
-        n.dispatchEvent(new MouseEvent('mouseup', opts))
-        n.dispatchEvent(new MouseEvent('contextmenu', opts))
+    b.rightClick = one(b.isVisible, b.isEnabled, (n, o) => {
+        o = o || {}
+        dispatchMouse(n, ['mousedown', 'mouseup', 'contextmenu'], { ...pointerOpts(n, o), button: 2, buttons: 2 })
         return r()
     })
-    b.middleClick = one(b.isVisible, b.isEnabled, n => {
-        let opts = { bubbles: true, cancelable: true, view: window, button: 1, buttons: 4 }
-        n.dispatchEvent(new MouseEvent('mousedown', opts))
-        n.dispatchEvent(new MouseEvent('mouseup', opts))
-        n.dispatchEvent(new MouseEvent('auxclick', opts))
+    b.middleClick = one(b.isVisible, b.isEnabled, (n, o) => {
+        o = o || {}
+        dispatchMouse(n, ['mousedown', 'mouseup', 'auxclick'], { ...pointerOpts(n, o), button: 1, buttons: 4 })
         return r()
     })
-    b.tap = one(b.isVisible, b.isEnabled, n => {
-        let box = n.getBoundingClientRect()
-        let clientX = box.left + box.width / 2, clientY = box.top + box.height / 2
+    b.tap = one(b.isVisible, b.isEnabled, (n, o) => {
+        o = o || {}
+        let opts = pointerOpts(n, o), clientX = opts.clientX, clientY = opts.clientY
         let t = new Touch({ identifier: 0, target: n, clientX, clientY })
         n.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, view: window, pointerType: 'touch', clientX, clientY }))
         n.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true, view: window, touches: [t], targetTouches: [t], changedTouches: [t] }))
         n.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, view: window, pointerType: 'touch', clientX, clientY }))
         n.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true, view: window, touches: [], targetTouches: [], changedTouches: [t] }))
         n.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window, clientX, clientY }))
-        return r()
-    })
-    b.clickWith = one(b.isVisible, b.isEnabled, (n, mods) => {
-        let opts = {
-            bubbles: true, cancelable: true, view: window,
-            shiftKey: mods.includes('shift'), ctrlKey: mods.includes('control'),
-            altKey: mods.includes('alt'), metaKey: mods.includes('meta'),
-        }
-        n.dispatchEvent(new MouseEvent('mousedown', opts))
-        n.dispatchEvent(new MouseEvent('mouseup', opts))
-        n.dispatchEvent(new MouseEvent('click', opts))
         return r()
     })
     b.dragTo = one(b.isVisible, (src, targetSel) => {
