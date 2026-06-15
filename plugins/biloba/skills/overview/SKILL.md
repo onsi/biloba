@@ -15,16 +15,18 @@ Read the canonical narrative docs at <https://onsi.github.io/biloba/> for the fu
 - Run your suite with `ginkgo -p`. Specs must be independent (Ginkgo's model) — Biloba's per-tab isolation makes that cheap.
 - `b` is special: never closed, reused spec-to-spec. New tabs (`b.NewTab()`) and spawned tabs are closed by `Prepare()`. → `biloba:setup`.
 
-**2. Stability via pragmatism.** Biloba favors a good-enough *simulation* run atomically in the browser over a realistic emulation across async round-trips. A click is `element.click()` after synchronous visibility/enabled checks — no scroll-into-view, no centroid, no occlusion test. The consequences you must internalize:
-- **Visibility = non-zero `offsetWidth`/`offsetHeight`.** Biloba won't catch an element hidden *behind* another or off-screen. Use `HaveComputedStyle` for explicit style assertions.
+**2. Stability via pragmatism.** Biloba favors a good-enough *simulation* run atomically in the browser over a realistic emulation across async round-trips. A click is `element.click()` after synchronous visibility/enabled checks — no scroll-into-view, no centroid, no occlusion test. This **fast track** is the default `b`. The consequences you must internalize:
+- **Visibility = non-zero `offsetWidth`/`offsetHeight`.** The fast track won't catch an element hidden *behind* another or off-screen. Use `HaveComputedStyle` for explicit style assertions, or `BeClickable()` to assert topmost-at-its-center.
 - **`SetValue` sets the value and fires `input`/`change` — it does *not* type.** Apps wired to real key events (search-as-you-type, rich text, hotkeys) need `b.Type`/`b.SendKeys`. → `biloba:write-tests`.
 - **`Hover` fires pointer/mouse events but does not activate CSS `:hover`.**
-- When you genuinely need realism (real clicks through occlusion, CSS `:hover`, cross-origin frames), **drop down to chromedp** — see the escape hatch below.
+- **There are two interaction tracks.** When a handful of specs genuinely need realism (real clicks through occlusion, scroll-into-view, CSS `:hover`, drags), opt into the **realistic track** with `b.Realistic()` — a view of the *same tab* that routes interactions through real Chrome DevTools Protocol input. It's per-spec opt-in (it costs round-trips and can reintroduce timing flake), so the bulk of your suite stays on the fast track. → `biloba:write-tests`. For cross-origin frames / geolocation / any other CDP feature, drop to chromedp (escape hatch below).
 
 **3. Conciseness via Ginkgo and Gomega.**
 - **Most methods don't return errors** — errors become Ginkgo test failures for you.
 - **Biloba never polls.** Methods either act immediately *or* return a Gomega matcher that *you* wrap in `Eventually`/`Consistently`. This dual immediate/matcher API is the single most important pattern — learn it in `biloba:write-tests`.
 - `console.log` streams to the `GinkgoWriter`; a failing `console.assert` fails the spec.
+
+**Selectors are first-class.** Any action/matcher takes a CSS string, an `XPath`, or — the modern default — a **semantic `Locator`** that describes an element as a user perceives it: `b.ByRole("button").WithName("Save")`, `b.ByText(...)`, `b.ByLabel(...)`. Locators compose (`.Within`/`.Nth`/`.First`/`.Last`) and pierce open shadow roots. Reach for them and CSS first; XPath is a structural power tool. → `biloba:write-tests`, `biloba:xpath`.
 
 ## The escape hatch
 
@@ -36,12 +38,13 @@ chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
 }))
 ```
 
-Reach for it for geolocation, cross-origin frames, real `:hover`, or any CDP feature without a native wrapper.
+Reach for it for geolocation, cross-origin frames, or any CDP feature without a native wrapper. (For real `:hover`/occlusion/scroll, prefer `b.Realistic()` — see principle 2.)
 
 ## Where to go next
 
 - **Wiring Biloba into a project** (bootstrap, `chrome-headless-shell`, bootstrap variations) → `biloba:setup`
-- **Authoring specs** (the dual API, selecting elements, hermetic tests, multi-tab) → `biloba:write-tests`
+- **Authoring specs** (the dual API, semantic locators, the interaction vocabulary, hermetic tests, multi-tab) → `biloba:write-tests`
+- **Realistic interactions** (occlusion, CSS `:hover`, drag, scroll, touch — the `b.Realistic()` track) → `biloba:realistic-mode`
 - **Building XPath selectors** with the DSL → `biloba:xpath`
 - **Looking up a method or matcher** → `biloba:api`
 - **Testing a page/app you haven't seen** → `biloba:explore-unfamiliar-page`

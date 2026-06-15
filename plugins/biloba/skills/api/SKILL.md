@@ -1,6 +1,6 @@
 ---
 name: api
-description: One-line reference for every Biloba method and matcher, grouped by area — lifecycle, navigation, cookies/storage, tabs, DOM existence/visibility/contents/properties/forms, clicking and interactions, keyboard, uploads, element JS, dialogs, downloads, arbitrary JS, network stubbing/observing, and screenshots/outline/window. Use to look up the exact method or matcher name and shape. Methods marked (dual) act immediately when fully applied and return a pollable matcher when under-applied.
+description: One-line reference for every Biloba method and matcher, grouped by area — selectors/locators, lifecycle, navigation, cookies/storage, tabs, DOM existence/visibility/contents/properties/forms, clicking and interactions (incl. drag/scroll/tap/modifiers), realistic mode, keyboard, uploads, element JS, dialogs, downloads, arbitrary JS, network stubbing/aborting/modifying/observing, and screenshots/outline/window. Use to look up the exact method or matcher name and shape. Methods marked (dual) act immediately when fully applied and return a pollable matcher when under-applied.
 ---
 
 # Biloba API reference
@@ -50,6 +50,7 @@ Terse lookup. **(dual)** = acts immediately when fully applied, returns a Gomega
 - `b.Count(selector)` → int / `b.HaveCount(int|matcher)` (matcher).
 - `b.BeVisible()` (matcher) — non-zero `offsetWidth`/`offsetHeight`.
 - `b.BeEnabled()` (matcher) — `!el.disabled`.
+- `b.BeClickable()` (matcher) — visible + enabled + topmost at its center (deterministic occlusion guard; opt-in, `Click` does **not** run it).
 
 ## Contents, classes, attributes, state
 - `b.InnerText(selector)` → string (first) / `b.HaveInnerText(string|matcher)` (matcher, exact).
@@ -82,6 +83,10 @@ Terse lookup. **(dual)** = acts immediately when fully applied, returns a Gomega
 - `b.ClickAt(selector, offsetX, offsetY)` — synthetic click carrying real `clientX`/`clientY` at offset from the element's top-left corner (realistic: real CDP click at translated point); for canvas/map/slider apps (no matcher).
 - `b.ClickEach(selector)` — click all visible+enabled matches (no matcher).
 - `b.Focus(selector)` (dual) / `b.Hover(selector)` (dual; fires pointer/mouse events, not CSS `:hover`) / `b.ScrollIntoView(selector)` (dual).
+
+## Realistic mode  (opt-in; real CDP input instead of fast JS simulation)
+- `b.Realistic()` → `*Biloba` — a view of the **same tab** whose interactions run through real Chrome DevTools Protocol input: scrolls into view, waits for stability, refuses to click through an occluding overlay, moves the real pointer (CSS `:hover` activates), dispatches genuine mouse/touch/key input. Per-spec opt-in (real round-trips, can reintroduce flake); the whole interaction vocabulary above works on it. No per-call decorator.
+- Compose inline (`b.Realistic().Click(sel)`), per-spec (`rb := b.Realistic()`), or per-suite (`Label("realistic")` + `BeforeEach{ rb = b.Realistic() }`, then `ginkgo --label-filter='realistic'`/`'!realistic'`). Fast-vs-realistic capability matrix: <https://onsi.github.io/biloba/#realistic-interactions>.
 
 ## Keyboard  (real key events, via chromedp)
 - `b.Type(selector, text)` (dual) — focus, then genuine keystrokes; **appends**.

@@ -1,6 +1,6 @@
 ---
 name: write-tests
-description: Author good Biloba specs in your own Ginkgo/Gomega suite — the dual immediate/matcher API (act now vs. return a matcher you poll with Eventually), first-vs-all naming, the navigate-then-readiness-anchor shape, selecting elements (CSS, the >>> piercing combinator, text/XPath), hermetic tests via request stubbing, multi-tab flows, and seeding state. Use when writing or reviewing Biloba browser tests.
+description: Author good Biloba specs in your own Ginkgo/Gomega suite — the dual immediate/matcher API (act now vs. return a matcher you poll with Eventually), first-vs-all naming, the navigate-then-readiness-anchor shape, selecting elements (semantic role/text/label locators as the default, CSS, the >>> piercing combinator, XPath), the interaction vocabulary (click variants, drag, scroll, tap), realistic mode for occlusion/hover smoke tests, hermetic tests via request stubbing/aborting/modifying, multi-tab flows, and seeding state. Use when writing or reviewing Biloba browser tests.
 ---
 
 # Writing Biloba specs
@@ -41,7 +41,7 @@ var _ = Describe("the search page", func() {
 
 	It("finds matches", func() {
 		b.SetValue("#q", "biloba")
-		Eventually(b.WithText("Search")).Should(b.Click())
+		Eventually(b.ByRole("button").WithName("Search")).Should(b.Click())
 		Eventually(".result").Should(b.HaveCount(BeNumerically(">", 0)))
 	})
 })
@@ -51,28 +51,74 @@ var _ = Describe("the search page", func() {
 - Pick a **stable, meaningful** anchor (a heading, a key container) — `b.Exist()` or `b.BeVisible()`.
 - **Assert on observable outcomes**, not implementation: visible text (`HaveInnerText`/`HaveText`), counts (`HaveCount`), URL/title (`HaveURL`/`HaveTitle`), or network effects (`HaveMadeRequest`).
 
-## Selecting elements
+## Selecting elements — reach for semantic locators first
 
-A `selector` is a **CSS string**, a **semantic `Locator`** (by role/text/label), or an **`XPath`** value:
+The most robust selector describes an element the way a *user* perceives it — by its accessible **role + name**, its visible **text**, or its form **label**. These are the modern default; CSS is the workhorse for the rest; XPath is now a rarely-needed power tool for ordinal/axis structural queries.
+
+A `selector` is a **semantic `Locator`**, a **CSS string**, or an **`XPath`** value:
 
 ```go
+b.Click(b.ByRole("button").WithName("Save"))      // accessible role + name — preferred for controls
+b.Click(b.ByText("Submit"))                       // exact visible text (b.ByTextContains for substring)
+b.SetValue(b.ByLabel("Email"), "jane@acme.com")   // a form control by its label (b.ByLabelContains too)
 b.Click("button.submit")                          // CSS — first matching element
-b.Click(b.ByRole("button").WithName("Save"))      // by accessible role + name — preferred for controls
-b.Click(b.ByText("Submit"))                       // by exact visible text (b.ByTextContains for substring)
-b.SetValue(b.ByLabel("Email"), "jane@acme.com")   // a form control by its label
-b.Click(b.XPath("button").WithText("OK"))         // XPath via the DSL → biloba:xpath (structural power tool)
+b.Click(b.XPath("button").WithText("OK"))         // XPath DSL → biloba:xpath (structural fallback only)
 ```
 
-Prefer role/text/label locators and CSS; reach for XPath only for ordinal/axis structural queries. `b.WithText`/`b.WithTextContains` are back-compat aliases for `b.ByText`/`b.ByTextContains`.
+Locators **compose**, and **pierce open shadow roots automatically** (no `>>>` needed):
 
-Prefer text/role selectors for things a user names by label; fall back to ids/`data-*` for the rest. Never fetch-then-act — always pass the selector *into* the action so find-and-act is one atomic JS snippet.
+```go
+b.ByRole("button").WithName("Delete").Within("#dialog")  // .Within(scope) — any selector
+b.ByText("Item").Nth(2)                                  // .Nth(i)/.First()/.Last() — ordinal
+```
 
-**Piercing shadow DOM / iframes** with the CSS-only `>>>` combinator (one boundary per `>>>`, open shadow roots and same-origin iframes only):
+`b.WithText`/`b.WithTextContains` are back-compat aliases for `b.ByText`/`b.ByTextContains` (they return a `Locator`, not an XPath). Never fetch-then-act — always pass the selector *into* the action so find-and-act is one atomic JS snippet.
+
+**CSS** handles most structural cases — including `:has()` (`button:has(.spinner)`). **Pierce shadow DOM / same-origin iframes** with the CSS-only `>>>` combinator (one boundary per `>>>`, open shadow roots only — locators pierce automatically, CSS needs `>>>`):
 
 ```go
 b.Click("my-widget >>> button.submit")
 Eventually("#editor-frame >>> .toolbar .save").Should(b.Click())
 ```
+
+Reach for XPath (`biloba:xpath`) only when you need axis/ordinal queries no locator or CSS expresses.
+
+## The interaction vocabulary
+
+`b.Click` is the everyday verb (dual: `b.Click(sel)` acts; `Eventually(sel).Should(b.Click())` polls). The fuller set — all dual unless noted, all working on both the fast and realistic tracks:
+
+```go
+b.DblClick(sel); b.RightClick(sel); b.MiddleClick(sel)       // dual
+b.ClickWith(sel, biloba.ModShift, biloba.ModMeta)            // modifiers held (immediate-only)
+b.ClickAt(sel, offsetX, offsetY)                             // click at top-left-origin offset; canvas/map/slider (immediate-only)
+b.DragTo(source, target)                                     // pointer-based drag; drives @dnd-kit-style DnD, not native HTML5 draggable (immediate-only)
+b.ScrollWheel(sel, deltaX, deltaY)                           // wheel/scroll, +Y down +X right (immediate-only)
+b.Tap(sel)                                                   // touch tap (dual)
+b.Type(sel, "abc"); b.SendKeys(biloba.Keys.Enter)            // real keystrokes (SetValue does NOT type)
+```
+
+`ModShift/ModControl/ModAlt/ModMeta` are the modifier constants (`ModMeta` = ⌘/Win). Methods taking two selectors (`DragTo`) or extra args (`ClickAt`, `ScrollWheel`, `ClickWith`) are immediate-only — they don't return matchers.
+
+## Realistic mode — for a handful of smoke tests
+
+By default every interaction is a fast, atomic **simulation** (`element.click()` after synchronous visibility/enabled checks — no scroll, no occlusion test, no real `:hover`; see `biloba:overview` principle 2). That's what you want for the overwhelming bulk of specs.
+
+`b.Realistic()` returns a `*Biloba` view of the **same tab** whose interactions run through **real Chrome DevTools Protocol input** instead. A realistic click scrolls the element into view, waits for it to stop moving, **refuses to click through an occluding overlay**, moves the **real pointer** (so hover-gated clicks fire and CSS `:hover` activates), and dispatches a genuine mouse/touch/key event. The whole interaction vocabulary above works on both tracks.
+
+It's **opt-in** because it costs real round-trips and can reintroduce timing flake — quarantine it to a handful of smoke tests that guard the realism the fast path trades away (a drag, an overlay, a `:hover` menu). There is deliberately **no per-call decorator**; the handle is the one seam. It composes at three scopes:
+
+```go
+b.Realistic().Click("#submit")                    // inline — the handle is cheap to make
+rb := b.Realistic(); rb.Hover(".menu"); rb.Click(".menu .item")  // per-spec
+
+var _ = Describe("checkout (realistic)", Label("realistic"), func() {  // per-suite
+    var rb *biloba.Biloba
+    BeforeEach(func() { rb = b.Realistic() })
+    // ...use rb throughout...
+})
+```
+
+With a `Label("realistic")`, `ginkgo --label-filter='realistic'` runs only the realistic lane and `--label-filter='!realistic'` keeps it out of the fast inner loop. For the full fast-vs-realistic **capability matrix** (what each track actually does, per interaction) and the deep dive, see `biloba:realistic-mode` and <https://onsi.github.io/biloba/#realistic-interactions>. To merely *assert* an element isn't occluded without paying for realistic mode, use the deterministic `b.BeClickable()` matcher (visible + enabled + topmost-at-its-center).
 
 ## Run with real backends.  But stub the network if all else fails.
 
@@ -87,7 +133,7 @@ b.Navigate("/app")
 Eventually(".user").Should(b.HaveCount(2))
 ```
 
-Stubs are per-tab and reset by `Prepare()`. Observe requests with `Eventually(b).Should(b.HaveMadeRequest(...))` and wait for quiet with `Eventually(b).Should(b.BeNetworkIdle())`.
+Stubs are per-tab and reset by `Prepare()`. Beyond `StubRequest` you can `b.AbortRequest(url)` (fail it), `b.ModifyRequest(url).WithURL/.WithMethod/.WithHeader/.WithBody(...)` (continue with overrides), and `b.ModifyResponse(url).WithStatus/.WithHeader/.WithBody/.Using(func(biloba.InterceptedResponse) biloba.StubResponse)` (rewrite a real response) — all share one first-match-wins handler list with `StubRequest`. Observe requests with `Eventually(b).Should(b.HaveMadeRequest(...))` and wait for quiet with `Eventually(b).Should(b.BeNetworkIdle())`.
 
 ## Seed state to skip slow flows
 
@@ -128,6 +174,6 @@ A DOM method always operates on the tab it's invoked on (`tab.Click`, not `b.Cli
 
 ## When Biloba can't express it
 
-Drop to chromedp via `b.Context` (real `:hover`, cross-origin frames, geolocation, anything CDP). See the escape hatch in `biloba:overview`. For real keystrokes use `b.Type`/`b.SendKeys` rather than `SetValue`.
+For realism (occlusion, scroll-into-view, real CSS `:hover`) reach for `b.Realistic()` (above) before chromedp. For everything else — cross-origin frames, geolocation, any CDP feature without a wrapper — drop to chromedp via `b.Context` (the escape hatch in `biloba:overview`). For real keystrokes use `b.Type`/`b.SendKeys` rather than `SetValue`.
 
 Propose opening an issue if a common pattern is missing.

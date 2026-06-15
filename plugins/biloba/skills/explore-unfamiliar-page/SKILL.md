@@ -45,8 +45,8 @@ ginkgo --no-color --focus="scratch"
 
 Then **`Read` the screenshot file** (the path printed as `SCREENSHOT: ...`) so you *see* the rendered page — what's visible, what's above/below the fold — and cross-reference the two text outlines:
 
-- **`b.Outline()`** is the raw DOM: find the actual selectors (ids, classes, tags, `data-*`) you'll target.
-- **`b.A11yOutline()`** is the role/name view: pick stable, human-meaningful anchors (a heading's text, a button's accessible name) and drive `b.WithText("…")` / XPath-by-text selectors.
+- **`b.A11yOutline()`** is the role/name view, and your **primary** map: pick stable, human-meaningful anchors (a heading's text, a button's accessible name) and drive them with semantic locators — `b.ByRole("button").WithName("Save")`, `b.ByText("…")`, `b.ByLabel("Email")`. These are the modern default selector and survive markup churn far better than structural paths.
+- **`b.Outline()`** is the raw DOM: fall back to it for ids/`data-*`/CSS when a11y names don't pin the element, or to confirm structure.
 
 > **You get this for free on failure too.** Under an AI agent or CI, Biloba auto-attaches a DOM outline of every tab and writes screenshots to disk on a failing spec (see `biloba:debug-failures`). So once you're iterating in Step 2, a failing readiness anchor already hands you the outline — `Read` it from the failure report instead of re-running the scratch spec.
 
@@ -62,8 +62,8 @@ var _ = Describe("<feature>", func() {
 	})
 
 	It("<does the obvious thing>", func() {
-		// b.SetValue("#search", "biloba")
-		// Eventually(b.WithText("Search")).Should(b.Click())
+		// b.SetValue(b.ByLabel("Search"), "biloba")
+		// Eventually(b.ByRole("button").WithName("Search")).Should(b.Click())
 		// Eventually(".result").Should(b.HaveCount(BeNumerically(">", 0)))
 	})
 })
@@ -72,10 +72,11 @@ var _ = Describe("<feature>", func() {
 A *good* draft:
 
 - **Readiness anchor** that's stable and meaningful — a heading or key container present once the page is interactive.
-- **Text/role selectors for actions** the user would name by label (`b.Click(b.WithText("Submit"))`) over brittle `nth-child` paths; fall back to ids/`data-*`.
+- **Semantic locators for actions** the user names by role/text/label (`b.Click(b.ByRole("button").WithName("Submit"))`) over brittle `nth-child` paths; fall back to ids/`data-*`/CSS, and XPath only for structural queries.
 - **Assert observable outcomes**: visible text, counts, URL/title, network effects — not implementation details.
 - **Leave `// TODO` markers** wherever you're guessing — a draft is a starting point for the human.
 - If the page hits a backend you don't want to depend on, stub it (`b.StubRequest(...)`) so the spec is fast and hermetic.
+- If a flow is **occlusion- or hover-sensitive** (a dropdown that opens on `:hover`, a click that must route around an overlay, a drag), the fast track may pass when a real user would be blocked. Add a focused smoke test on the **realistic track** (`b.Realistic()`, `Label("realistic")`) — see `biloba:realistic-mode`.
 
 ## Step 3 — clean up
 

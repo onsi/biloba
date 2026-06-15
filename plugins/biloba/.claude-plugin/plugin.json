@@ -1,6 +1,6 @@
 {
   "name": "biloba",
-  "description": "Write fast, stable browser tests with Biloba in your own Ginkgo/Gomega suite. Skills for setup, the dual immediate/matcher API, the XPath DSL, a full API reference, orienting to an unfamiliar page, and debugging failures.",
+  "description": "Write fast, stable browser tests with Biloba in your own Ginkgo/Gomega suite. Skills for setup, the dual immediate/matcher API, semantic role/text/label locators, realistic interactions (b.Realistic() for occlusion/hover/drag), the XPath DSL, a full API reference, orienting to an unfamiliar page, and debugging failures.",
   "version": "0.2.0",
   "author": {
     "name": "Onsi Fakhouri",
