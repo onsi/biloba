@@ -557,6 +557,10 @@ type Biloba struct {
 
 	bilobaIsInstalled bool
 
+	// realistic routes DOM interactions (Click/Hover) through real CDP input instead of the
+	// fast atomic JS simulations.  Set on the lightweight view returned by Realistic().
+	realistic bool
+
 	downloadDir     string
 	downloads       map[string]*Download
 	downloadHistory map[string]time.Time

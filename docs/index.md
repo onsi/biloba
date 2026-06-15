@@ -812,6 +812,25 @@ Biloba's disabled check is simply:
 
 As with `BeVisible()` you don't need to assert existence before asserting `BeEnabled()` - existence is implicitly validated by `BeEnabled()`
 
+---
+
+`BeVisible()` checks that an element has a non-zero footprint - but an element can be visible and still be impossible to actually click: another element might be sitting on top of it (a modal overlay, a sticky header, a transparent catch-all), or it might be scrolled out of view.  To assert that an element could really receive a click use `BeClickable()`:
+
+```go
+Eventually(selector).Should(b.BeClickable())
+```
+
+This performs the following javascript as one atomic unit:
+
+- query the selector and grab the first matching element
+- fail if no element is returned (validate existence)
+- fail if the element is not visible or is disabled
+- compute the element's center point and check that `document.elementFromPoint(...)` returns that element (or a descendant) - i.e. nothing is covering it - and that the center lies within the viewport
+
+Because `elementFromPoint` is synchronous this stays a single atomic check with no extra roundtrips, and - true to Biloba's [pragmatism](#pragmatism-how-biloba-interacts-with-the-dom) - it is deterministic and fails fast: it does **not** wait for animations to settle.
+
+`BeClickable()` is a guard you opt into.  Biloba's plain `Click()` does **not** run this check - it dispatches `el.click()` directly and will happily click an element that is covered or off-screen (that's the fast, pragmatic default).  Use `BeClickable()` when you specifically want to catch occlusion, or use [realistic interactions](#realistic-interactions) when you want a click that actually routes around it.
+
 ### Contents and Classes
 
 You can get the `innerText` of an element with `InnerText()`:
@@ -1309,7 +1328,26 @@ Eventually(".menu").Should(b.Hover())
 Eventually("#footer").Should(b.ScrollIntoView())
 ```
 
-`Hover` is, like `Click`, a pragmatic simulation: it synchronously dispatches the pointer/mouse events associated with hovering (`pointerover`, `mouseover`, `pointerenter`, `mouseenter`, `mousemove`).  This triggers JavaScript hover handlers - for example a menu that opens on `mouseenter` - but it does **not** activate CSS `:hover` styling, which only responds to a real pointer.  If you need to exercise CSS `:hover`, drop down to chromedp's input domain.
+`Hover` is, like `Click`, a pragmatic simulation: it synchronously dispatches the pointer/mouse events associated with hovering (`pointerover`, `mouseover`, `pointerenter`, `mouseenter`, `mousemove`).  This triggers JavaScript hover handlers - for example a menu that opens on `mouseenter` - but it does **not** activate CSS `:hover` styling, which only responds to a real pointer.  If you need to exercise CSS `:hover`, use [realistic interactions](#realistic-interactions) (or drop down to chromedp's input domain yourself).
+
+### Realistic Interactions
+
+Biloba's interactions are fast, atomic [pragmatic simulations](#pragmatism-how-biloba-interacts-with-the-dom) by default - and for the overwhelming majority of your specs that is exactly what you want.  But the realism Biloba trades away (occlusion, scroll-into-view, genuine CSS `:hover`) is occasionally the very thing you want to guard against regressing.  Rather than make you hand-roll chromedp for those cases, `b.Realistic()` gives you a view of the tab whose interactions are performed with **real Chrome DevTools Protocol input**:
+
+```go
+rb := b.Realistic()
+rb.Click("#submit")                    // scrolls into view, refuses to click through an overlay, dispatches a real mouse click
+Eventually(".menu").Should(rb.Hover()) // moves the real mouse, activating CSS :hover
+```
+
+`b.Realistic()` returns a `*Biloba` that shares this tab's Chrome connection and state - it's the *same tab*, just with `Click` and `Hover` routed through CDP.  The default `b` is untouched, so the rest of your suite keeps Biloba's fast behavior.  This is meant to be used per-spec, for the handful of "smoke tests" where realism matters; realistic interactions cost real CDP roundtrips and can reintroduce the timing sensitivity Biloba's atomic model avoids - that's the deliberate cost, which is why it's opt-in.
+
+In realistic mode:
+
+- **`Click`** scrolls the element to the center of the viewport, verifies it is enabled and is the topmost element at its center point (so an occluding overlay or an off-screen element does **not** click through - the matcher form keeps polling, the immediate form fails the spec), then dispatches a real `mousePressed`/`mouseReleased` at that point.  This is the inverse of plain `Click`, which clicks the element directly regardless of what's on top of it.
+- **`Hover`** scrolls into view and moves the real mouse to the element's center, which - unlike the synthetic `Hover` - activates genuine CSS `:hover` (e.g. a menu that only appears via a `:hover` rule).
+
+Both keep Biloba's dual immediate/matcher API (`rb.Click("#go")` vs `Eventually("#go").Should(rb.Click())`).  What `Realistic()` does **not** change: `Type` and `SendKeys` already use real CDP key events, and `SetValue` keeps its value-set semantics (use `Type` when you want realistic text entry).  For anything beyond `Click`/`Hover` you can still [drop down to chromedp](#chromedp-breaking-the-fourth-wall) via `b.Context`.
 
 ### Uploading Files
 

@@ -93,6 +93,30 @@ if (!window["_biloba"]) {
         return r()
     })
     b.scrollIntoView = one(n => r(n.scrollIntoView()))
+    // isClickable is a deterministic, atomic occlusion/hittability check: visible + enabled +
+    // the element (or a descendant) is the topmost thing at its own center point. elementFromPoint
+    // is synchronous, so this stays in one JS snippet - no async round-trips, no new flakiness.
+    // It fails fast (does not wait for animations); that is the deliberate stability tradeoff.
+    b.isClickable = one(b.isVisible, b.isEnabled, n => {
+        let rect = n.getBoundingClientRect()
+        let cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2
+        if (cx < 0 || cy < 0 || cx > window.innerWidth || cy > window.innerHeight) return r(false, "DOM element's center is outside the viewport (it would need to be scrolled into view)")
+        let top = document.elementFromPoint(cx, cy)
+        if (!top) return r(false, "DOM element is not hittable at its center point")
+        return r(n === top || n.contains(top), "DOM element is obscured by another element")
+    })
+    // scrollToAndPoint backs the realistic (CDP-driven) interactions: it scrolls the element to the
+    // viewport center, then reports its centroid plus whether that point is in the viewport, is
+    // hittable (topmost), and whether the element is enabled - so the Go side can decide whether a
+    // real mouse event at that point would actually land on the element.
+    b.scrollToAndPoint = one(b.isVisible, n => {
+        n.scrollIntoView({ block: "center", inline: "center" })
+        let rect = n.getBoundingClientRect()
+        let cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2
+        let inViewport = cx >= 0 && cy >= 0 && cx <= window.innerWidth && cy <= window.innerHeight
+        let top = inViewport ? document.elementFromPoint(cx, cy) : null
+        return rRes({ x: cx, y: cy, inViewport: inViewport, hittable: !!top && (n === top || n.contains(top)), enabled: !n.disabled })
+    })
     b.node = (s) => sel(s)
     b.clickEach = each(ns => {
         ns.forEach(n => b.click(n))

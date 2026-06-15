@@ -162,6 +162,26 @@ func (b *Biloba) BeEnabled() types.GomegaMatcher {
 }
 
 /*
+BeClickable() is a Gomega matcher that passes if the first element returned by selector is visible, enabled, and is the topmost element at its own center point - i.e. a real click would land on it rather than on something covering it.
+
+Unlike a plain BeVisible() check it performs a synchronous, atomic occlusion/hittability test (via document.elementFromPoint): it fails if the element is obscured by another element (e.g. an overlay) or if its center is scrolled out of the viewport.  Like all of Biloba's primitives the check is deterministic and fails fast - it does not wait for animations to settle.
+
+Use it like this:
+
+	Expect("#submit").To(tab.BeClickable())
+	Eventually("#submit").Should(tab.BeClickable())
+
+Note that Biloba's plain Click() does NOT run this check (it clicks the element directly, even when covered); BeClickable lets you guard against occlusion explicitly.  For interactions that actually route around occlusion use the realistic mode - see [Biloba.Realistic].
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+*/
+func (b *Biloba) BeClickable() types.GomegaMatcher {
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return b.runBilobaHandler("isClickable", selector).MatcherResult()
+	}).WithMessage("be clickable (visible, enabled, and not obscured)")
+}
+
+/*
 InnerText(selector) returns the innerText of the first element matching selector
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
@@ -681,16 +701,29 @@ Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about sel
 func (b *Biloba) Click(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
 	if len(args) > 0 {
+		if b.realistic {
+			ok, err := b.realisticClick(args[0])
+			if err != nil {
+				b.gt.Fatalf("Failed to click:\n%s", err.Error())
+			} else if !ok {
+				b.gt.Fatalf("Failed to click: element is not clickable (it is disabled, off-screen, or obscured by another element)")
+			}
+			return nil
+		}
 		r := b.runBilobaHandler("click", args[0])
 		if r.Error() != nil {
 			b.gt.Fatalf("Failed to click:\n%s", r.Error())
 		}
 		return nil
-	} else {
-		return gcustom.MakeMatcher(func(selector any) (bool, error) {
-			return b.runBilobaHandler("click", selector).MatcherResult()
-		}).WithMessage("be clickable")
 	}
+	if b.realistic {
+		return gcustom.MakeMatcher(func(selector any) (bool, error) {
+			return b.realisticClick(selector)
+		}).WithMessage("be clickable (realistically)")
+	}
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return b.runBilobaHandler("click", selector).MatcherResult()
+	}).WithMessage("be clickable")
 }
 
 /*
@@ -749,11 +782,25 @@ Read https://onsi.github.io/biloba/#interacting-with-elements to learn more abou
 func (b *Biloba) Hover(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
 	if len(args) > 0 {
+		if b.realistic {
+			ok, err := b.realisticHover(args[0])
+			if err != nil {
+				b.gt.Fatalf("Failed to hover:\n%s", err.Error())
+			} else if !ok {
+				b.gt.Fatalf("Failed to hover: element is off-screen")
+			}
+			return nil
+		}
 		r := b.runBilobaHandler("hover", args[0])
 		if r.Error() != nil {
 			b.gt.Fatalf("Failed to hover:\n%s", r.Error())
 		}
 		return nil
+	}
+	if b.realistic {
+		return gcustom.MakeMatcher(func(selector any) (bool, error) {
+			return b.realisticHover(selector)
+		}).WithMessage("be hoverable (realistically)")
 	}
 	return gcustom.MakeMatcher(func(selector any) (bool, error) {
 		return b.runBilobaHandler("hover", selector).MatcherResult()

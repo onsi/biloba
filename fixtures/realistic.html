@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Realistic Fixture</title>
+  <style>
+    #menu { position: relative; width: 160px; padding: 8px; background: #eee; }
+    #submenu { display: none; }
+    #menu:hover #submenu { display: block; }
+  </style>
+</head>
+<body>
+  <h1 id="heading">Realistic</h1>
+
+  <button id="plain-btn">Plain</button>
+  <span id="plain-result">no</span>
+
+  <button id="disabled-btn" disabled>Disabled</button>
+
+  <!-- a button fully covered by an overlay in its own stacking context -->
+  <div style="position: relative; display: inline-block">
+    <button id="covered-btn">Covered</button>
+    <div id="cover" style="position: absolute; inset: 0; background: rgba(0,0,0,0.2)"></div>
+  </div>
+  <span id="covered-result">no</span>
+
+  <!-- submenu revealed purely by CSS :hover -->
+  <div id="menu">Menu
+    <div id="submenu"><button id="submenu-item">Choose</button></div>
+  </div>
+  <p id="hover-result">no</p>
+
+  <!-- a button far below the fold -->
+  <div style="height: 3000px">spacer</div>
+  <button id="below-btn">Below the fold</button>
+  <p id="scroll-result">no</p>
+
+  <script>
+    const set = (id, v) => (document.getElementById(id).textContent = v);
+    document.getElementById('plain-btn').addEventListener('click', () => set('plain-result', 'clicked'));
+    document.getElementById('covered-btn').addEventListener('click', () => set('covered-result', 'clicked'));
+    document.getElementById('submenu-item').addEventListener('click', () => set('hover-result', 'selected'));
+    document.getElementById('below-btn').addEventListener('click', () => set('scroll-result', 'clicked'));
+  </script>
+</body>
+</html>
