@@ -123,4 +123,5 @@ Terse lookup. **(dual)** = acts immediately when fully applied, returns a Gomega
 - `b.Outline()` → string — indented DOM text.
 - `b.A11yOutline()` → string — accessibility tree (role + name).
 - `b.CaptureScreenshot()` → []byte (PNG) / `b.CaptureImgcatScreenshot()` → string / `b.CaptureScreenshotToFile(path)` → abs path.
+- `b.CaptureScreenshotOf(selector)` → []byte / `b.CaptureImgcatScreenshotOf(selector)` → string / `b.CaptureScreenshotOfToFile(selector, path)` → abs path — clipped to the first matching element (any selector; works below the fold and across `>>>` boundaries).
 - `b.SetWindowSize(w, h, ...opt)` (auto-resets via DeferCleanup) / `b.WindowSize()`.

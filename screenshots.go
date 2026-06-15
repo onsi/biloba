@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/BourgeoisBear/rasterm"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"golang.org/x/net/context"
 )
@@ -139,7 +140,15 @@ Read https://onsi.github.io/biloba/#capturing-screenshots for details.
 */
 func (b *Biloba) CaptureScreenshotToFile(path string) string {
 	b.gt.Helper()
-	img := b.CaptureScreenshot()
+	return b.writeScreenshotToFile(b.CaptureScreenshot(), path)
+}
+
+// writeScreenshotToFile resolves path to an absolute path, creates any missing intermediate
+// directories, writes img there as a PNG, prints the path to the test output (so it surfaces in
+// failure output and is readable by tools that render PNGs), and returns the absolute path.  It
+// fails the spec on any error.
+func (b *Biloba) writeScreenshotToFile(img []byte, path string) string {
+	b.gt.Helper()
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		b.gt.Fatalf("Failed to resolve screenshot path %q:\n%s", path, err.Error())
@@ -155,6 +164,70 @@ func (b *Biloba) CaptureScreenshotToFile(path string) string {
 	}
 	b.gt.Printf("Screenshot written to: %s\n", absPath)
 	return absPath
+}
+
+/*
+CaptureScreenshotOf(selector) returns a screenshot of the first element matching selector as a []byte array (you can decode it with the image package).  The screenshot is clipped to the element's bounding box and can capture an element below the fold without scrolling.  Same-origin >>>-pierced iframe elements are translated to top-level page coordinates.
+
+Read https://onsi.github.io/biloba/#capturing-screenshots for details.
+*/
+func (b *Biloba) CaptureScreenshotOf(selector any) []byte {
+	b.gt.Helper()
+	r := b.runBilobaHandler("boundingBox", selector)
+	if r.Error() != nil {
+		b.gt.Fatalf("Failed to capture screenshot of element:\n%s", r.Error())
+		return nil
+	}
+	box, ok := r.Result.(map[string]any)
+	if !ok {
+		b.gt.Fatalf("Failed to capture screenshot of element:\nunexpected bounding box result: %v", r.Result)
+		return nil
+	}
+	clip := &page.Viewport{
+		X:      toFloat64(box["x"]),
+		Y:      toFloat64(box["y"]),
+		Width:  toFloat64(box["width"]),
+		Height: toFloat64(box["height"]),
+		Scale:  1,
+	}
+	// TODO: roadmap §7 masking (cover other selectors before capturing) is not yet supported.
+	var img []byte
+	err := chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
+		var captureErr error
+		img, captureErr = page.CaptureScreenshot().
+			WithClip(clip).
+			WithFromSurface(true).
+			WithCaptureBeyondViewport(true).
+			Do(ctx)
+		return captureErr
+	}))
+	if err != nil {
+		b.gt.Fatalf("Failed to capture screenshot of element:\n%s", err.Error())
+		return nil
+	}
+	return img
+}
+
+/*
+CaptureImgcatScreenshotOf(selector) returns a screenshot of the first element matching selector as an iTerm2 imgcat-compatible string.  Simply print it out to see the image on your terminal.
+
+Read https://onsi.github.io/biloba/#capturing-screenshots for details.
+*/
+func (b *Biloba) CaptureImgcatScreenshotOf(selector any) string {
+	b.gt.Helper()
+	return b.asImgCat(b.CaptureScreenshotOf(selector))
+}
+
+/*
+CaptureScreenshotOfToFile writes a screenshot of the first element matching selector as a PNG file to the given path and returns its absolute path.
+The directory is created if it does not already exist.
+The absolute path is printed to the test output so it appears in failure output and is readable by tools that can render PNG files.
+
+Read https://onsi.github.io/biloba/#capturing-screenshots for details.
+*/
+func (b *Biloba) CaptureScreenshotOfToFile(selector any, path string) string {
+	b.gt.Helper()
+	return b.writeScreenshotToFile(b.CaptureScreenshotOf(selector), path)
 }
 
 func (b *Biloba) asImgCat(img []byte) string {

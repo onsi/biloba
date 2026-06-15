@@ -75,6 +75,85 @@ var _ = Describe("Screenshots", func() {
 		})
 	})
 
+	Describe("CaptureScreenshotOf", func() {
+		BeforeEach(func() {
+			b.Navigate(fixtureServer + "/element_screenshots.html")
+			Eventually("#box").Should(b.Exist())
+		})
+
+		It("returns PNG bytes clipped to the element's bounding box", func() {
+			data := b.CaptureScreenshotOf("#box")
+			Ω(data).ShouldNot(BeEmpty())
+
+			cfg, _, err := image.DecodeConfig(bytes.NewBuffer(data))
+			Ω(err).ShouldNot(HaveOccurred())
+
+			// #box is 120x80; assert the capture is clipped to roughly that (allowing for
+			// device-pixel scaling), and is nowhere near the 800x600 viewport.
+			Ω(cfg.Width).Should(BeNumerically("~", 120, 40))
+			Ω(cfg.Height).Should(BeNumerically("~", 80, 40))
+			Ω(cfg.Width).Should(BeNumerically("<", 400))
+
+			// the element is solid green; sample a pixel to confirm we captured the element.
+			img, _, err := image.Decode(bytes.NewBuffer(data))
+			Ω(err).ShouldNot(HaveOccurred())
+			r, g, bl, _ := img.At(img.Bounds().Dx()/2, img.Bounds().Dy()/2).RGBA()
+			Ω(g >> 8).Should(BeNumerically(">", 200))
+			Ω(r >> 8).Should(BeNumerically("<", 60))
+			Ω(bl >> 8).Should(BeNumerically("<", 60))
+		})
+
+		It("captures an element below the fold without scrolling", func() {
+			data := b.CaptureScreenshotOf("#below-the-fold")
+			Ω(data).ShouldNot(BeEmpty())
+
+			cfg, _, err := image.DecodeConfig(bytes.NewBuffer(data))
+			Ω(err).ShouldNot(HaveOccurred())
+			Ω(cfg.Width).Should(BeNumerically("~", 64, 40))
+			Ω(cfg.Height).Should(BeNumerically("~", 48, 40))
+
+			img, _, err := image.Decode(bytes.NewBuffer(data))
+			Ω(err).ShouldNot(HaveOccurred())
+			r, g, bl, _ := img.At(img.Bounds().Dx()/2, img.Bounds().Dy()/2).RGBA()
+			Ω(r >> 8).Should(BeNumerically(">", 200))
+			Ω(g >> 8).Should(BeNumerically("<", 60))
+			Ω(bl >> 8).Should(BeNumerically("<", 60))
+		})
+
+		It("fails the spec when no element matches", func() {
+			b.CaptureScreenshotOf("#does-not-exist")
+			ExpectFailures(ContainSubstring("Failed to capture screenshot of element"))
+		})
+	})
+
+	Describe("CaptureScreenshotOfToFile", func() {
+		BeforeEach(func() {
+			b.Navigate(fixtureServer + "/element_screenshots.html")
+			Eventually("#box").Should(b.Exist())
+		})
+
+		It("writes a valid PNG file and returns its absolute path", func() {
+			dir := GinkgoT().TempDir()
+			path := filepath.Join(dir, "box.png")
+			returned := b.CaptureScreenshotOfToFile("#box", path)
+
+			Ω(returned).Should(Equal(path))
+			Ω(returned).Should(BeAnExistingFile())
+
+			raw, err := os.ReadFile(returned)
+			Ω(err).ShouldNot(HaveOccurred())
+			cfg, _, err := image.DecodeConfig(bytes.NewBuffer(raw))
+			Ω(err).ShouldNot(HaveOccurred())
+			Ω(cfg.Width).Should(BeNumerically("<", 400))
+		})
+
+		It("fails the spec when no element matches", func() {
+			dir := GinkgoT().TempDir()
+			b.CaptureScreenshotOfToFile("#nope", filepath.Join(dir, "x.png"))
+			ExpectFailures(ContainSubstring("Failed to capture screenshot of element"))
+		})
+	})
+
 	Describe("inlineImagesSupported", Label("no-browser"), func() {
 		// detection reads several terminal environment variables; save and clear the
 		// full set so each spec controls exactly the inputs it sets.

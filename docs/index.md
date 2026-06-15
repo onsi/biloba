@@ -2440,6 +2440,18 @@ path := b.CaptureScreenshotToFile("/path/to/screenshot.png")
 
 This writes the PNG to the given path (creating any missing parent directories), prints the absolute path to the test output, and returns the absolute path.  This is particularly useful in environments that can render image files directly — for example, [Claude Code](https://claude.ai/claude-code) will render PNG files it reads from disk.
 
+#### Capturing a single element
+
+The capture methods above shoot the whole tab.  To capture just the first element matching a [selector](#working-with-the-dom) — clipped to its bounding box — use the `...Of` variants:
+
+```go
+b.CaptureScreenshotOf("#chart")                       // []byte (PNG), clipped to the element
+b.CaptureImgcatScreenshotOf("#chart")                 // string, iTerm imgcat format
+path := b.CaptureScreenshotOfToFile("#chart", "/tmp/chart.png") // PNG file, returns the absolute path
+```
+
+These accept any Biloba selector (CSS, `XPath`, `Locator`, or a `>>>`-pierced shadow-DOM/iframe selector).  An element below the fold is captured without scrolling, and a same-origin `>>>`-pierced iframe element is translated into top-level page coordinates.  Each fails the spec if no element matches or the element has zero area.
+
 #### Writing failure screenshots to a directory automatically
 
 Pass `BilobaConfigScreenshotsToDir(dir)` to `ConnectToChrome` to have Biloba automatically write each tab's failure screenshot to a PNG file in the given directory:

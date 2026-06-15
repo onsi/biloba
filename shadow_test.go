@@ -1,6 +1,10 @@
 package biloba_test
 
 import (
+	"bytes"
+	"image"
+	_ "image/png"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -42,6 +46,19 @@ var _ = Describe("Piercing shadow DOM and same-origin iframes with >>>", func() 
 
 		It("supports counting across the iframe boundary", func() {
 			Eventually("#inner >>> .cell").Should(b.HaveCount(2))
+		})
+
+		It("screenshots an element inside the iframe, translated to top-level coordinates", func() {
+			Eventually("#inner >>> #iframe-btn").Should(b.Exist())
+			data := b.CaptureScreenshotOf("#inner >>> #iframe-btn")
+			Ω(data).ShouldNot(BeEmpty())
+			// a valid (non-empty, correctly-clipped) PNG only results if the iframe-local
+			// bounding box was translated into top-level page coordinates - a bad translation
+			// would clip off-page and yield an error or an empty/degenerate image.
+			cfg, _, err := image.DecodeConfig(bytes.NewBuffer(data))
+			Ω(err).ShouldNot(HaveOccurred())
+			Ω(cfg.Width).Should(BeNumerically(">", 0))
+			Ω(cfg.Height).Should(BeNumerically(">", 0))
 		})
 	})
 })

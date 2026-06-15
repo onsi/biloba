@@ -285,6 +285,26 @@ if (!window["_biloba"]) {
         let inViewport = translatable && cx >= 0 && cy >= 0 && cx <= window.innerWidth && cy <= window.innerHeight
         return { x: cx, y: cy, inViewport: inViewport, hittable: hittable, enabled: !n.disabled }
     }
+    // boundingBox reports the first matching element's clip rectangle for page.CaptureScreenshot, in
+    // CSS pixels relative to the TOP-LEVEL document (so x/y already include page scroll).  Like
+    // measurePoint it walks the frameElement chain so an element inside a same-origin iframe is
+    // translated to top-level page coordinates; the final +scrollX/+scrollY converts the top-level
+    // viewport rect into document coordinates.  Errors on a zero-area element.
+    b.boundingBox = one(n => {
+        let rect = n.getBoundingClientRect()
+        if (rect.width <= 0 || rect.height <= 0) return rErr("DOM element has zero area")
+        let left = rect.left, top = rect.top, view = n.ownerDocument.defaultView
+        try {
+            while (view && view.frameElement) {
+                let fe = view.frameElement, fr = fe.getBoundingClientRect()
+                left += fr.left + fe.clientLeft
+                top += fr.top + fe.clientTop
+                view = view.parent
+            }
+        } catch (e) { } // cross-origin frame: cannot translate; fall back to local coordinates
+        let top0 = view || window
+        return rRes({ x: left + top0.scrollX, y: top + top0.scrollY, width: rect.width, height: rect.height })
+    })
     // scrollToStablePoint backs single-element realistic interactions: it scrolls the element to the
     // viewport center, waits for its box to stop moving (two consecutive animation frames with the
     // same rect - bounded so a perpetually-animating element can't hang), then returns measurePoint.
