@@ -23,62 +23,99 @@ Here's a quick taste of what Biloba specs look like:
 func login(tab *Biloba, user string, password string) {
 	GinkgoHelper()
 	tab.Navigate("/login")
-	Eventually("#user").Should(tab.SetValue("sally"))
-	tab.SetValue("#password", "yllas")
-	tab.Click("#log-in")
+	Eventually(tab.ByLabel("Username")).Should(tab.SetValue(user)) // locator: a form control by its label
+	tab.SetValue(tab.ByLabel("Password"), password)
+	tab.Click(tab.ByRole("button").WithName("Log in"))            // locator: role + accessible name
 	Eventually(".chat-page").Should(tab.Exist())
 }
 
 Describe("a simple chat app", func() {
-	var tab *Biloba
+	// b is a *Biloba instance spun up in our BeforeSuite (not shown).  We open an
+	// isolated tab per user, and generate reusable selectors/locators off b.
+	var tabSally, tabJane *Biloba
 	BeforeEach(func() {
-		login(b, "sally", "yllas")
-		tab = b.NewTab()
-		login(tab, "jane", "enaj")
+		tabSally = b.NewTab()
+		login(tabSally, "sally", "yllas")
+		tabJane = b.NewTab()
+		login(tabJane, "jane", "enaj")
 	})
 
 	It("shows all logged in users as present", func() {
-		userXPath := b.XPath("div").WithID("user-list").Descendant()
-		// b should show both users
-		Eventually(userXPath.WithText("Sally")).Should(b.HaveClass("online"))
-		Eventually(userXPath.WithText("Jane")).Should(b.HaveClass("online"))
-		// tab should show both users
-		Eventually(userXPath.WithText("Sally")).Should(tab.HaveClass("online"))
-		Eventually(userXPath.WithText("Jane")).Should(tab.HaveClass("online"))
+		// both tabs should show both users online, by the names a user actually reads
+		for _, tab := range []*Biloba{tabSally, tabJane} {
+			Eventually(b.ByText("Sally").Within("#user-list")).Should(tab.HaveClass("online"))
+			Eventually(b.ByText("Jane").Within("#user-list")).Should(tab.HaveClass("online"))
+		}
 	})
 
-	It("shows Jane when Sally is typing", func() {
-		lastEntryXPath := tab.XPath("#conversation").Descendant().WithClass("entry").Last()
-		b.SetValue("#input", "Hey Jane, how are you?")
-		Eventually(lastEntryXPath).Should(SatisfyAll(
-			tab.HaveInnerText("Jane is typing..."),
-			tab.HaveClass("typing"),
+	It("shows Jane that Sally is typing", func() {
+		lastEntry := b.ByRole("listitem").Within("#conversation").Last()
+		tabSally.SetValue("#input", "Hey Jane, how are you?")
+		Eventually(lastEntry).Should(SatisfyAll(
+			tabJane.HaveText("Sally is typing..."),
+			tabJane.HaveClass("typing"),
 		))
 
-		b.SetValue("#input", "")
-		Eventually(lastEntryXPath).ShouldNot(SatisfyAny(
-			tab.HaveInnerText("Jane is typing..."),
-			tab.HaveClass("typing"),
+		tabSally.SetValue("#input", "")
+		Eventually(lastEntry).ShouldNot(SatisfyAny(
+			tabJane.HaveText("Sally is typing..."),
+			tabJane.HaveClass("typing"),
 		))
 	})
 
-	It("shows Jane new messages from Sally, and sally new messages from Jane", func() {
-		lastEntryXPath := tab.XPath("#conversation").Descendant().WithClass("entry").Last()
-		b.SetValue("#input", "Hey Jane, how are you?")
-		b.Click("#send")
-		Eventually(lastEntryXPath).Should(tab.HaveInnerText("Hey Jane, how are you?"))
+	It("delivers messages between Sally and Jane", func() {
+		lastEntry := b.ByRole("listitem").Within("#conversation").Last()
+		tabSally.Type("#input", "Hey Jane, how are you?") // real keystrokes...
+		tabSally.SendKeys("#input", biloba.Keys.Enter)    // ...sent by pressing Enter
+		Eventually(lastEntry).Should(tabJane.HaveText("Hey Jane, how are you?"))
 
-		tab.SetValue("#input", "I'm splendid, Sally!")
-		tab.Click("#send")
-		Eventually(lastEntryXPath).Should(b.HaveInnerText("I'm splendid, Sally!"))
+		tabJane.Type("#input", "I'm splendid, Sally!")
+		tabJane.Click(b.ByRole("button").WithName("Send"))
+		Eventually(lastEntry).Should(tabSally.HaveText("I'm splendid, Sally!"))
+	})
+
+	It("lets Sally share a document that Jane can download", func() {
+		tabSally.SetUpload(b.ByLabel("Attach a file"), "./fixtures/report.pdf")
+		tabSally.Click(b.ByRole("button").WithName("Send"))
+
+		doc := b.ByRole("link").WithName("report.pdf")
+		Eventually(doc).Should(tabJane.BeVisible()) // Jane sees the shared document...
+		tabJane.Click(doc)                          // ...and downloads it
+		Eventually(tabJane).Should(tabJane.HaveDownloaded("report.pdf"))
+	})
+
+	It("reveals message actions on hover", func() {
+		rb := tabSally.Realistic() // a view of the same tab, driven by real Chrome input
+		tabSally.SetValue("#input", "Hey Jane")
+		tabSally.Click(b.ByRole("button").WithName("Send"))
+
+		last := b.ByRole("listitem").Within("#conversation").Last()
+		rb.Hover(last) // genuine CSS :hover — one of the few things the fast track can't do
+		Eventually(b.ByRole("button").WithName("React").Within(last)).Should(tabSally.BeVisible())
+	})
+
+	It("shows an error when a message fails to send", func() {
+		tabSally.AbortRequest(ContainSubstring("/messages")) // make the send fail, hermetically
+		tabSally.SetValue("#input", "Hey Jane")
+		tabSally.Click(b.ByRole("button").WithName("Send"))
+		Eventually(b.ByRole("alert")).Should(tabSally.HaveText("Message failed to send"))
+	})
+
+	It("loads conversation history", func() {
+		// stub the history response
+		tabSally.StubRequest(ContainSubstring("/history"), biloba.StubResponse{
+			Body: `[{"from":"Jane","text":"Welcome back!"}]`,
+		})
+		tabSally.Navigate("/chat")
+		Eventually(b.ByRole("listitem").Within("#conversation")).Should(tabSally.HaveText("Welcome back!"))
 	})
 
 	It("tracks when users aren't online", func() {
-		userXPath := b.XPath("div").WithID("user-list").Descendant()
-		Eventually(userXPath.WithText("Jane")).Should(b.HaveClass("online"))
+		jane := b.ByText("Jane").Within("#user-list")
+		Eventually(jane).Should(tabSally.HaveClass("online"))
 
-		tab.Close()
-		Eventually(userXPath.WithText("Jane")).Should(b.HaveClass("offline"))
+		tabJane.Close()
+		Eventually(jane).Should(tabSally.HaveClass("offline"))
 	})
 })
 ```
