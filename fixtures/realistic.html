@@ -90,6 +90,14 @@
   <span id="wheel-result">no</span>
   <div style="height: 800px">spacer</div>
 
+  <!-- a scroll target pinned against the document's bottom edge: scrollToStablePoint cannot center it
+       (there is no content below it), so its centroid stays near the BOTTOM of the viewport - exactly
+       where full ("new") headless Chrome used to drop trusted wheel input because the compositor's
+       real input surface was shorter than the emulated layout viewport.  This guards that the
+       layout-vs-compositor viewport mismatch is fixed (a real wheel here must scroll the box). -->
+  <div id="bottom-scroll-box" style="height: 140px; overflow: auto; background: #fee"><div style="height: 1000px">tall</div></div>
+  <span id="bottom-wheel-result">no</span>
+
   <script>
     const set = (id, v) => (document.getElementById(id).textContent = v);
     document.getElementById('plain-btn').addEventListener('click', () => set('plain-result', 'clicked'));
@@ -115,6 +123,7 @@
     document.getElementById('drag-src').addEventListener('pointerdown', () => (dragging = true));
     document.getElementById('drop-zone').addEventListener('pointerup', () => { if (dragging) set('drop-result', 'dropped'); dragging = false; });
     document.getElementById('scroll-box').addEventListener('wheel', () => set('wheel-result', 'wheeled'));
+    document.getElementById('bottom-scroll-box').addEventListener('wheel', () => set('bottom-wheel-result', 'wheeled'));
     document.getElementById('click-pad').addEventListener('click', (e) => { const r = document.getElementById('click-pad').getBoundingClientRect(); set('click-pad-result', Math.round(e.clientX - r.left) + ',' + Math.round(e.clientY - r.top)); });
     document.getElementById('aux-btn').addEventListener('auxclick', (e) => { if (e.button === 1) set('aux-result', 'middle'); });
     document.getElementById('tap-btn').addEventListener('touchend', () => set('tap-result', 'tapped'));

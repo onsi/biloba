@@ -145,6 +145,19 @@ var _ = Describe("BeClickable and realistic interactions", func() {
 				return b.GetProperty("#scroll-box", "scrollTop").(float64)
 			}).Should(BeNumerically(">", 0))
 		})
+
+		It("scrolls a target pinned near the bottom of the viewport with real wheel input", func() {
+			// #bottom-scroll-box sits at the document's end, so scrollToStablePoint cannot center it -
+			// its centroid stays near the viewport bottom, where full ("new") headless Chrome used to
+			// silently drop trusted wheel input (the emulated layout viewport was taller than the real
+			// compositor input surface).  This guards that the layout-vs-compositor mismatch is fixed.
+			Expect(b.GetProperty("#bottom-scroll-box", "scrollTop")).To(BeEquivalentTo(0))
+			b.Realistic().ScrollWheel("#bottom-scroll-box", 0, 200)
+			Eventually("#bottom-wheel-result").Should(b.HaveInnerText("wheeled"))
+			Eventually(func() float64 {
+				return b.GetProperty("#bottom-scroll-box", "scrollTop").(float64)
+			}).Should(BeNumerically(">", 0))
+		})
 	})
 
 	Describe("realistic Click with b.At(offset)", func() {

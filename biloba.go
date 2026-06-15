@@ -27,6 +27,7 @@ import (
 	"github.com/jehiah/agentdetection"
 
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
@@ -144,6 +145,58 @@ func ChromeFlags(options ...chromedp.ExecAllocatorOption) SpinUpOption {
 	}
 }
 
+// emulateViewportMatchingScreen is a chromedp.EmulateViewportOption that, in addition to the layout
+// viewport EmulateViewport already sets, overrides the emulated *screen* dimensions to match.  Full
+// ("new") headless Chrome composites into a small virtual screen (default 800x600) regardless of the
+// requested window size, and the compositor's trusted-input surface is clamped to that screen - so a
+// plain SetDeviceMetricsOverride grows the layout viewport while leaving real wheel/scroll input to
+// be silently dropped below the screen's bottom edge.  Growing the emulated screen to the viewport
+// size lifts that clamp, keeping the layout viewport and the real input surface in agreement.
+func emulateViewportMatchingScreen(p1 *emulation.SetDeviceMetricsOverrideParams, _ *emulation.SetTouchEmulationEnabledParams) {
+	p1.ScreenWidth = p1.Width
+	p1.ScreenHeight = p1.Height
+}
+
+// applyHighFidelityViewport (re)asserts the high-fidelity viewport emulation for this tab.  Full
+// ("new") headless renders into a small virtual screen (default 800x600) regardless of the requested
+// --window-size, so an un-emulated tab reports window.innerHeight well below the window height.  We
+// EmulateViewport to the requested window dimensions (captured by SpinUpChrome) to give the tab the
+// correct layout viewport, growing the emulated *screen* to match (emulateViewportMatchingScreen) so
+// the compositor's real trusted-input surface extends to the full viewport - otherwise CDP
+// wheel/scroll input is silently dropped below the small screen's bottom edge, making measurePoint's
+// inViewport check lie to realistic-mode interactions.  The compositor surface is (re)sized from the
+// device metrics in effect at page commit, so this must be re-applied after each navigation, not just
+// once at connect time.  It is a no-op in the default chrome-headless-shell lane, which has no such
+// clamp (and leaves WindowWidth/Height at 0).
+func (b *Biloba) applyHighFidelityViewport() error {
+	if !b.ChromeConnection.HighFidelity || b.ChromeConnection.WindowWidth <= 0 || b.ChromeConnection.WindowHeight <= 0 {
+		return nil
+	}
+	return chromedp.Run(b.Context, chromedp.EmulateViewport(
+		int64(b.ChromeConnection.WindowWidth),
+		int64(b.ChromeConnection.WindowHeight),
+		emulateViewportMatchingScreen,
+	))
+}
+
+// reassertViewportForCompositor re-applies the viewport emulation at this tab's *current* size after a
+// navigation.  In high-fidelity mode the override itself survives a navigation (window.innerHeight
+// stays put), but the compositor's trusted-input surface is only (re)sized from the device metrics in
+// effect at page commit - so without re-asserting, real wheel/scroll input is silently dropped below
+// the small virtual screen even though the layout viewport says the point is in view.  We re-apply at
+// the current inner size (not the connect-time default) so a SetWindowSize done earlier in the spec is
+// preserved.  A no-op in the default chrome-headless-shell lane.
+func (b *Biloba) reassertViewportForCompositor() {
+	if !b.ChromeConnection.HighFidelity || b.ChromeConnection.WindowWidth <= 0 || b.ChromeConnection.WindowHeight <= 0 {
+		return
+	}
+	var dims []int64
+	if err := chromedp.Run(b.Context, chromedp.Evaluate("[window.innerWidth, window.innerHeight]", &dims)); err != nil || len(dims) != 2 || dims[0] <= 0 || dims[1] <= 0 {
+		return
+	}
+	_ = chromedp.Run(b.Context, chromedp.EmulateViewport(dims[0], dims[1], emulateViewportMatchingScreen))
+}
+
 func gooseConfigPath(process int) string {
 	return fmt.Sprintf("./.biloba-config-%d", process)
 }
@@ -196,10 +249,12 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...SpinUpOption) ChromeConne
 	cc := ChromeConnection{HighFidelity: cfg.highFidelity}
 
 	if cfg.highFidelity {
-		// Full ("new") headless reports window.innerHeight smaller than --window-size due to
-		// virtual browser chrome, so we capture the outer dimensions here and have ConnectToChrome
-		// EmulateViewport each tab to the correct size.  chrome-headless-shell has no such chrome,
-		// so this probe and the EmulateViewport workaround are skipped in the default mode.
+		// Full ("new") headless renders into a small virtual screen (default 800x600) regardless of
+		// --window-size, so an un-emulated tab reports window.innerHeight well below the requested
+		// height.  We capture the outer (requested) window dimensions here and have ConnectToChrome
+		// EmulateViewport each tab back up to that size (see applyHighFidelityViewport).
+		// chrome-headless-shell has no such virtual-screen clamp, so this probe and the EmulateViewport
+		// workaround are skipped in the default mode.
 		var outerDims []int
 		if err := chromedp.Run(browserCtx, chromedp.Evaluate("[window.outerWidth, window.outerHeight]", &outerDims)); err != nil {
 			ginkgoT.Fatalf("failed to spin up chrome: %w", err)
@@ -448,19 +503,11 @@ func ConnectToChrome(ginkgoT GinkgoTInterface, options ...BilobaConfigOption) *B
 		return nil
 	}
 
-	// Full ("new") headless reports window.innerHeight smaller than --window-size due to virtual
-	// browser chrome. Apply EmulateViewport using the outer window dimensions stored in
-	// ChromeConnection (set by SpinUpChrome) to give each isolated tab the correct viewport. This
-	// is only needed in high-fidelity mode; chrome-headless-shell has no virtual chrome (and leaves
-	// WindowWidth/Height at 0), so the default mode skips it.
-	if b.ChromeConnection.HighFidelity && b.ChromeConnection.WindowWidth > 0 && b.ChromeConnection.WindowHeight > 0 {
-		if err := chromedp.Run(b.Context, chromedp.EmulateViewport(
-			int64(b.ChromeConnection.WindowWidth),
-			int64(b.ChromeConnection.WindowHeight),
-		)); err != nil {
-			ginkgoT.Fatalf("failed to set initial window size: %w", err)
-			return nil
-		}
+	// Give this root tab the high-fidelity viewport emulation (see applyHighFidelityViewport); a no-op
+	// in the default chrome-headless-shell lane.
+	if err := b.applyHighFidelityViewport(); err != nil {
+		ginkgoT.Fatalf("failed to set initial window size: %w", err)
+		return nil
 	}
 
 	b.downloadDir = b.gt.TempDir()

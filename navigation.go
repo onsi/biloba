@@ -50,6 +50,12 @@ func (b *Biloba) NavigateWithStatus(url string, status int) *Biloba {
 		return b
 	}
 
+	// In high-fidelity mode the compositor's trusted-input surface is (re)sized from the device
+	// metrics in effect at page commit, so re-assert the viewport emulation now that the new page has
+	// loaded - otherwise realistic-mode wheel/scroll input is silently dropped near the viewport
+	// bottom.  No-op in the default chrome-headless-shell lane.
+	b.reassertViewportForCompositor()
+
 	if capturedStatus != 0 {
 		if int(capturedStatus) != status {
 			b.gt.Fatalf("failed to navigate to %s: expected status code %d, got %d", url, status, capturedStatus)
