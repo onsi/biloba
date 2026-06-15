@@ -345,6 +345,30 @@ if (!window["_biloba"]) {
         return r()
     })
     b.scrollIntoView = one(n => r(n.scrollIntoView()))
+    // hitTest pierces open shadow roots: doc.elementFromPoint retargets to the shadow host, so we
+    // descend through each host's shadowRoot to find the element actually painted at (x, y). Without
+    // this the topmost check below would see the host (not the inner target) and call every element
+    // inside an open shadow root obscured.
+    let hitTest = (doc, x, y) => {
+        let top = doc.elementFromPoint(x, y)
+        while (top && top.shadowRoot) {
+            let inner = top.shadowRoot.elementFromPoint(x, y)
+            if (!inner || inner === top) break
+            top = inner
+        }
+        return top
+    }
+    // composedContains reports whether `n` is `top` or a flattened-tree ancestor of `top`, walking up
+    // across shadow boundaries (Node.contains does not cross them) so the hittability check accepts a
+    // target whose painted topmost element lives inside its own shadow tree.
+    let composedContains = (n, top) => {
+        let node = top
+        while (node) {
+            if (node === n) return true
+            node = node.parentNode || node.host
+        }
+        return false
+    }
     // isClickable is a deterministic, atomic occlusion/hittability check: visible + enabled +
     // the element (or a descendant) is the topmost thing at its own center point. elementFromPoint
     // is synchronous, so this stays in one JS snippet - no async round-trips, no new flakiness.
@@ -353,9 +377,9 @@ if (!window["_biloba"]) {
         let rect = n.getBoundingClientRect()
         let cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2
         if (cx < 0 || cy < 0 || cx > window.innerWidth || cy > window.innerHeight) return r(false, "DOM element's center is outside the viewport (it would need to be scrolled into view)")
-        let top = document.elementFromPoint(cx, cy)
+        let top = hitTest(n.ownerDocument, cx, cy)
         if (!top) return r(false, "DOM element is not hittable at its center point")
-        return r(n === top || n.contains(top), "DOM element is obscured by another element")
+        return r(composedContains(n, top), "DOM element is obscured by another element")
     })
     // measurePoint reports an element's centroid in TOP-LEVEL viewport coordinates (where CDP mouse
     // events live), plus whether that point is in the viewport, is hittable (the element/descendant
@@ -373,8 +397,8 @@ if (!window["_biloba"]) {
         let inLocalViewport = vx1 > vx0 && vy1 > vy0
         let lx = inLocalViewport ? (vx0 + vx1) / 2 : rect.left + rect.width / 2 // local to the element's own document
         let ly = inLocalViewport ? (vy0 + vy1) / 2 : rect.top + rect.height / 2
-        let top = inLocalViewport ? doc.elementFromPoint(lx, ly) : null
-        let hittable = !!top && (n === top || n.contains(top))
+        let top = inLocalViewport ? hitTest(doc, lx, ly) : null
+        let hittable = !!top && composedContains(n, top)
         let cx = lx, cy = ly, translatable = inLocalViewport
         try {
             while (view && view.frameElement) {

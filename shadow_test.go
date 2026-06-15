@@ -34,6 +34,17 @@ var _ = Describe("Piercing shadow DOM and same-origin iframes with >>>", func() 
 			b.Click("#hello >>> .nope")
 			ExpectFailures(ContainSubstring("could not find DOM element matching selector: #hello >>> .nope"))
 		})
+
+		It("clicks an element inside an open shadow root in realistic mode", func() {
+			// the realistic hittability check must pierce the shadow boundary: elementFromPoint
+			// retargets to the host, so a naive topmost check would call the inner button obscured
+			Eventually("my-widget >>> .shadow-btn").Should(b.Realistic().Click())
+			Eventually("my-widget >>> .shadow-btn").Should(b.HaveInnerText("Clicked"))
+		})
+
+		It("reports BeClickable for an element inside an open shadow root", func() {
+			Eventually("my-widget >>> .shadow-btn").Should(b.BeClickable())
+		})
 	})
 
 	Describe("same-origin iframes", func() {
