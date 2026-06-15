@@ -165,6 +165,59 @@ func (b *Biloba) realisticRightClick(selector any) (bool, error) {
 	return true, nil
 }
 
+// realisticMiddleClick implements MiddleClick for realistic mode: a real middle-button mouse click
+// at the element's stable centroid, which makes Chrome fire a genuine auxclick event.
+func (b *Biloba) realisticMiddleClick(selector any) (bool, error) {
+	pt, err := b.scrollToStablePoint(selector)
+	if err != nil {
+		return false, err
+	}
+	if !pt.enabled || !pt.inViewport || !pt.hittable {
+		return false, nil
+	}
+	if err := chromedp.Run(b.Context,
+		chromedp.MouseEvent(input.MouseMoved, pt.x, pt.y),
+		chromedp.MouseClickXY(pt.x, pt.y, chromedp.ButtonType(input.Middle)),
+	); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// realisticClickWith implements ClickWith for realistic mode: a real left-button mouse click at the
+// element's stable centroid with the requested keyboard modifiers held down.  MouseClickXY does not
+// expose modifiers, so we drive the raw mousePressed/mouseReleased pair with a modifier bitmask.
+func (b *Biloba) realisticClickWith(selector any, modifiers []ClickModifier) (bool, error) {
+	pt, err := b.scrollToStablePoint(selector)
+	if err != nil {
+		return false, err
+	}
+	if !pt.enabled || !pt.inViewport || !pt.hittable {
+		return false, nil
+	}
+	mods := input.ModifierNone
+	for _, m := range modifiers {
+		switch m {
+		case ModShift:
+			mods |= input.ModifierShift
+		case ModControl:
+			mods |= input.ModifierCtrl
+		case ModAlt:
+			mods |= input.ModifierAlt
+		case ModMeta:
+			mods |= input.ModifierMeta
+		}
+	}
+	if err := chromedp.Run(b.Context,
+		chromedp.MouseEvent(input.MouseMoved, pt.x, pt.y),
+		input.DispatchMouseEvent(input.MousePressed, pt.x, pt.y).WithButton(input.Left).WithClickCount(1).WithModifiers(mods),
+		input.DispatchMouseEvent(input.MouseReleased, pt.x, pt.y).WithButton(input.Left).WithClickCount(1).WithModifiers(mods),
+	); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // realisticDragTo implements DragTo for realistic mode.  It measures stable, actionable points for
 // both source and target (scroll-into-view + stability + occlusion, same as realisticClick), then
 // drives a real CDP pointer drag: press at the source, several interpolated moves toward the target,

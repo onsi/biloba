@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/onsi/biloba"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -1096,6 +1097,55 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		It("auto-fails if the element does not exist", func() {
 			b.ScrollWheel("#non-existing", 0, 200)
 			ExpectFailures("Failed to scroll wheel:\ncould not find DOM element matching selector: #non-existing")
+		})
+	})
+
+	Describe("MiddleClick", func() {
+		Context("when called directly", func() {
+			It("fires an auxclick event", func() {
+				b.MiddleClick("#aux-btn")
+				Ω("#aux-result").Should(b.HaveInnerText("middle"))
+			})
+
+			It("auto-fails if the element does not exist", func() {
+				b.MiddleClick("#non-existing")
+				ExpectFailures("Failed to middle-click:\ncould not find DOM element matching selector: #non-existing")
+			})
+		})
+
+		Context("when used as a matcher", func() {
+			It("middle-clicks when polled", func() {
+				Eventually("#aux-btn").Should(b.MiddleClick())
+				Ω("#aux-result").Should(b.HaveInnerText("middle"))
+			})
+
+			It("returns an error when the element does not exist", func() {
+				match, err := b.MiddleClick().Match("#non-existing")
+				Ω(match).Should(BeFalse())
+				Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
+			})
+		})
+	})
+
+	Describe("ClickWith", func() {
+		It("clicks with a single modifier", func() {
+			b.ClickWith("#mod-btn", biloba.ModShift)
+			Ω("#mod-result").Should(b.HaveInnerText("shift"))
+		})
+
+		It("clicks with multiple modifiers", func() {
+			b.ClickWith("#mod-btn", biloba.ModShift, biloba.ModMeta)
+			Ω("#mod-result").Should(b.HaveInnerText("shift+meta"))
+		})
+
+		It("clicks with no modifiers", func() {
+			b.ClickWith("#mod-btn")
+			Ω("#mod-result").Should(b.HaveInnerText("none"))
+		})
+
+		It("auto-fails if the element does not exist", func() {
+			b.ClickWith("#non-existing", biloba.ModShift)
+			ExpectFailures("Failed to click:\ncould not find DOM element matching selector: #non-existing")
 		})
 	})
 

@@ -1,6 +1,7 @@
 package biloba_test
 
 import (
+	"github.com/onsi/biloba"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -141,6 +142,20 @@ var _ = Describe("BeClickable and realistic interactions", func() {
 			Eventually(func() float64 {
 				return b.GetProperty("#scroll-box", "scrollTop").(float64)
 			}).Should(BeNumerically(">", 0))
+		})
+	})
+
+	Describe("realistic MiddleClick", func() {
+		It("dispatches a real middle-button click that fires auxclick", func() {
+			b.Realistic().MiddleClick("#aux-btn")
+			Eventually("#aux-result").Should(b.HaveInnerText("middle"))
+		})
+	})
+
+	Describe("realistic ClickWith", func() {
+		It("dispatches a real click carrying the modifier", func() {
+			b.Realistic().ClickWith("#mod-btn", biloba.ModShift)
+			Eventually("#mod-result").Should(b.HaveInnerText("shift"))
 		})
 	})
 

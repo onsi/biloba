@@ -15,6 +15,12 @@
   <button id="plain-btn">Plain</button>
   <span id="plain-result">no</span>
 
+  <!-- middle-click and modifier-click targets, positioned near the top so they're in view -->
+  <button id="aux-btn">Middle me</button>
+  <span id="aux-result">no</span>
+  <button id="mod-btn">Modify me</button>
+  <span id="mod-result">no</span>
+
   <!-- only registers a click if a mouseover preceded it (gates on real pointer arrival) -->
   <button id="gated-btn">Gated</button>
   <span id="gated-result">no</span>
@@ -100,6 +106,15 @@
     document.getElementById('drag-src').addEventListener('pointerdown', () => (dragging = true));
     document.getElementById('drop-zone').addEventListener('pointerup', () => { if (dragging) set('drop-result', 'dropped'); dragging = false; });
     document.getElementById('scroll-box').addEventListener('wheel', () => set('wheel-result', 'wheeled'));
+    document.getElementById('aux-btn').addEventListener('auxclick', (e) => { if (e.button === 1) set('aux-result', 'middle'); });
+    document.getElementById('mod-btn').addEventListener('click', (e) => {
+      let mods = [];
+      if (e.shiftKey) mods.push('shift');
+      if (e.ctrlKey) mods.push('control');
+      if (e.altKey) mods.push('alt');
+      if (e.metaKey) mods.push('meta');
+      set('mod-result', mods.join('+') || 'none');
+    });
   </script>
 </body>
 </html>

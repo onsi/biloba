@@ -1371,6 +1371,29 @@ Positive `deltaY` scrolls down and positive `deltaX` scrolls right (the standard
 
 Like `DragTo`, `ScrollWheel` always acts immediately and has **no matcher variant**; it fails the spec if the element can't be found (or, in realistic mode, isn't actionable).
 
+#### Middle-Clicking and Modifier-Clicking
+
+`b.MiddleClick` middle-clicks (auxiliary-clicks) an element, following the same dual immediate/matcher convention and visible+enabled checks as `Click`:
+
+```go
+b.MiddleClick("#row")                       // fires mousedown/mouseup/auxclick
+
+Eventually("#row").Should(b.MiddleClick())  // matcher form polls until clickable
+```
+
+The fast version dispatches `mousedown`/`mouseup`/`auxclick` events with the middle button (a middle click fires `auxclick`, not `click`).  In [realistic mode](#realistic-interactions) it scrolls into view, waits for stability, checks for occlusion, and dispatches a real middle-button click.
+
+`b.ClickWith` clicks an element with one or more keyboard modifiers held down (e.g. shift-click, ctrl-click):
+
+```go
+b.ClickWith("#row", biloba.ModShift)                   // shift-click
+b.ClickWith("#row", biloba.ModControl, biloba.ModMeta) // ctrl+meta-click
+```
+
+The modifiers come from the `biloba.ModShift`, `biloba.ModControl`, `biloba.ModAlt`, and `biloba.ModMeta` constants (`ModMeta` is Command on macOS and the Windows key elsewhere).  The fast version dispatches `mousedown`/`mouseup`/`click` events carrying the modifier flags; in [realistic mode](#realistic-interactions) it dispatches a real click with the modifier bitmask held down.
+
+Because the dual immediate/matcher API keys on argument count - which the modifier varargs would conflict with - `ClickWith` (like `DragTo` and `ScrollWheel`) always acts immediately and has **no matcher variant**.  If you need to wait for readiness first, poll `Eventually(sel).Should(b.Click())` and then `b.ClickWith`.
+
 ### Hovering, Focusing, and Scrolling
 
 Alongside `Click`, Biloba provides a few more first-class interactions, all following the same dual immediate/matcher convention:
@@ -1410,6 +1433,8 @@ In realistic mode:
 - **`DblClick`** / **`RightClick`** apply the same scroll/stability/occlusion machinery as `Click`, then dispatch a real double-click (two click sequences with an incrementing click-count, so Chrome fires a genuine `dblclick`) or a real right-button click (firing the browser's native `contextmenu`).
 - **`DragTo`** scrolls and measures stable, actionable points for *both* the source and target, then drives a real CDP pointer drag - press at the source, several interpolated moves toward the target, release at the target - so pointer-based drag-and-drop libraries see genuine pointer input (it still does not drive native HTML5 `draggable`).
 - **`ScrollWheel`** scrolls the element into view, measures a stable, actionable point, then dispatches a real CDP wheel event there - genuine trusted input that actually scrolls the page (unlike the synthetic fast `ScrollWheel`, which dispatches a `wheel` event and then manually scrolls the nearest scrollable ancestor).
+- **`MiddleClick`** applies the same scroll/stability/occlusion machinery as `Click`, then dispatches a real middle-button click (firing the browser's native `auxclick`).
+- **`ClickWith`** applies the same scroll/stability/occlusion machinery as `Click`, then dispatches a real left-button click with the requested modifier keys (`ModShift`/`ModControl`/`ModAlt`/`ModMeta`) held down via a CDP modifier bitmask.
 - **`Hover`** scrolls into view and moves the real mouse to the element's center, which - unlike the synthetic `Hover` - activates genuine CSS `:hover` (e.g. a menu that only appears via a `:hover` rule).
 - **`SetValue`** drives form controls with real input: a text input is focused with a real click, cleared, and typed with real key events (then blurred to fire `change`); a checkbox is toggled with a real click (and left alone if it's already in the desired state).  Native pickers - radio groups, `<select>`, and multi-selects - fall back to the fast JS path, because they can't be driven by a real pointer (Playwright's `selectOption` sets them programmatically too).
 - **`Type`** / **`SendKeys`** already use real CDP key events; in realistic mode they additionally scroll the element into view before typing.

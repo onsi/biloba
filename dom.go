@@ -864,6 +864,47 @@ func (b *Biloba) RightClick(args ...any) types.GomegaMatcher {
 }
 
 /*
+MiddleClick() middle-clicks (auxiliary-clicks) the first element matching selector.
+
+	tab.MiddleClick("#row")
+
+it immediately middle-clicks (fast mode dispatches mousedown/mouseup/auxclick events; realistic mode dispatches a real middle-button mouse click).  It fails if no element is found, or if the element is hidden or disabled.
+
+When invoked with no arguments, tab.MiddleClick() returns a Gomega matcher:
+
+	Eventually("#row").Should(tab.MiddleClick())
+
+Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
+*/
+func (b *Biloba) MiddleClick(args ...any) types.GomegaMatcher {
+	b.gt.Helper()
+	if len(args) > 0 {
+		if b.realistic {
+			ok, err := b.realisticMiddleClick(args[0])
+			if err != nil {
+				b.gt.Fatalf("Failed to middle-click:\n%s", err.Error())
+			} else if !ok {
+				b.gt.Fatalf("Failed to middle-click: element is not clickable (it is disabled, off-screen, or obscured by another element)")
+			}
+			return nil
+		}
+		r := b.runBilobaHandler("middleClick", args[0])
+		if r.Error() != nil {
+			b.gt.Fatalf("Failed to middle-click:\n%s", r.Error())
+		}
+		return nil
+	}
+	if b.realistic {
+		return gcustom.MakeMatcher(func(selector any) (bool, error) {
+			return b.realisticMiddleClick(selector)
+		}).WithMessage("be middle-clickable (realistically)")
+	}
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return b.runBilobaHandler("middleClick", selector).MatcherResult()
+	}).WithMessage("be middle-clickable")
+}
+
+/*
 DragTo() drags the first element matching source onto the first element matching target.
 
 	tab.DragTo("#card", "#column")

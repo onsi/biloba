@@ -170,6 +170,24 @@ if (!window["_biloba"]) {
         n.dispatchEvent(new MouseEvent('contextmenu', opts))
         return r()
     })
+    b.middleClick = one(b.isVisible, b.isEnabled, n => {
+        let opts = { bubbles: true, cancelable: true, view: window, button: 1, buttons: 4 }
+        n.dispatchEvent(new MouseEvent('mousedown', opts))
+        n.dispatchEvent(new MouseEvent('mouseup', opts))
+        n.dispatchEvent(new MouseEvent('auxclick', opts))
+        return r()
+    })
+    b.clickWith = one(b.isVisible, b.isEnabled, (n, mods) => {
+        let opts = {
+            bubbles: true, cancelable: true, view: window,
+            shiftKey: mods.includes('shift'), ctrlKey: mods.includes('control'),
+            altKey: mods.includes('alt'), metaKey: mods.includes('meta'),
+        }
+        n.dispatchEvent(new MouseEvent('mousedown', opts))
+        n.dispatchEvent(new MouseEvent('mouseup', opts))
+        n.dispatchEvent(new MouseEvent('click', opts))
+        return r()
+    })
     b.dragTo = one(b.isVisible, (src, targetSel) => {
         let tgt = sel(targetSel)
         if (!tgt) return rErr("could not find DOM element matching target selector")

@@ -140,6 +140,11 @@
     <div id="scroll-box" style="height:100px;overflow:auto"><div style="height:1000px">tall</div></div>
     <div id="wheel-result">no</div>
 
+    <button id="aux-btn">Middle me</button>
+    <div id="aux-result">no</div>
+    <button id="mod-btn">Modify me</button>
+    <div id="mod-result">no</div>
+
     <div id="inputs">
         <input type="text" id="disabled-text-input" value="i'm off" oninput="changeTextInput()" disabled></input>
         <div id="disabled-text-input-mirror"></div>
@@ -226,6 +231,18 @@
 
         document.getElementById("scroll-box").addEventListener("wheel", () => {
             document.getElementById("wheel-result").innerText = "wheeled"
+        })
+
+        document.getElementById("aux-btn").addEventListener("auxclick", (e) => {
+            if (e.button === 1) document.getElementById("aux-result").innerText = "middle"
+        })
+        document.getElementById("mod-btn").addEventListener("click", (e) => {
+            let mods = []
+            if (e.shiftKey) mods.push("shift")
+            if (e.ctrlKey) mods.push("control")
+            if (e.altKey) mods.push("alt")
+            if (e.metaKey) mods.push("meta")
+            document.getElementById("mod-result").innerText = mods.join("+") || "none"
         })
     </script>
 
