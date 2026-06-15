@@ -1616,7 +1616,7 @@ In realistic mode:
 - **`SetValue`** drives form controls with real input: a text input is focused with a real click, cleared, and typed with real key events (then blurred to fire `change`); a checkbox is toggled with a real click (and left alone if it's already in the desired state).  Native pickers - radio groups, `<select>`, and multi-selects - fall back to the fast JS path, because they can't be driven by a real pointer (Playwright's `selectOption` sets them programmatically too).
 - **`Type`** / **`SendKeys`** already use real CDP key events; in realistic mode they additionally scroll the element into view before typing.
 
-All keep Biloba's dual immediate/matcher API (`rb.Click("#go")` vs `Eventually("#go").Should(rb.Click())`).  `Focus` stays a plain JS focus (matching how real engines focus an element without a side-effecting click).  `ScrollIntoView` is already a real scroll on both tracks, so it composes unchanged.  For anything else you can still [drop down to chromedp](#chromedp-breaking-the-fourth-wall) via `b.Context`.
+All keep Biloba's dual immediate/matcher API (`rb.Click("#go")` vs `Eventually("#go").Should(rb.Click())`).  For anything else you can still [drop down to chromedp](#chromedp-breaking-the-fourth-wall) via `b.Context`.
 
 #### Using realistic mode across a spec or a suite
 
@@ -1639,8 +1639,6 @@ var _ = Describe("checkout (realistic smoke)", Label("realistic"), func() {
 ```
 
 Then `ginkgo --label-filter='realistic'` runs only the realistic lane and `--label-filter='!realistic'` skips it (handy for keeping the slow/flake-prone realism checks out of the fast inner loop).
-
-There is deliberately **no per-call decorator** (e.g. `b.Click(sel, biloba.Realistic)`).  Biloba's dual immediate/matcher API keys on *argument count*, and threading a realism flag through it would muddy that contract.  The `b.Realistic()` handle is the one honest seam - and because it's just a `*Biloba` view sharing the tab's state, it flows through your helpers and `Eventually` exactly like `b` does.
 
 #### The interaction capability matrix
 
