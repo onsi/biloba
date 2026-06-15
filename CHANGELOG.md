@@ -1,3 +1,11 @@
+## 0.3.1
+
+New performance comparisons with Playwright now online at [biloba-comparison](https://github.com/onsi/biloba-comparison).  tl;dr Biloba is 2.5-3x faster.
+
+### Fixes
+
+- **Realistic-mode clicks now pierce open shadow roots.** The realistic actionability/hittability check verifies the target (or a descendant) is the topmost element at its center point via `elementFromPoint` — but for an element inside an open shadow root `elementFromPoint` retargets to the shadow *host* and `Node.contains` doesn't cross the shadow boundary, so the check called every shadow-DOM element obscured and `b.Realistic().Click()` (and `DblClick`/`RightClick`/`BeClickable`/etc.) timed out. The hit-test now descends through each host's `shadowRoot.elementFromPoint` and walks the flattened (composed) tree to confirm containment across shadow boundaries, matching the fast track's `>>>`-piercing behavior. ([#5](https://github.com/onsi/biloba/issues/5))
+
 ## 0.3.0
 
 0.3.0 keeps pushing Biloba toward being best-in-class for AI-driven browser testing, with two headline additions:
