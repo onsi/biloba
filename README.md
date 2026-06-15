@@ -87,6 +87,24 @@ Run these in series with `ginkgo`.  And in parallel with `ginkgo -p` for fast, s
 
 Biloba is quite feature complete and in active development.  However, a 1.0 release milestone has not been reached yet, so the public API contract may shift as the project evolves.
 
+### Fast and realistic interaction tracks
+
+By default Biloba interactions are **fast**: atomic JavaScript simulations (`el.click()`, value-set, synthetic events) that run as a single in-browser snippet — no scroll, no occlusion check, no real pointer.  This is what keeps Biloba quick and stable, and it's the right default for the vast majority of specs.
+
+For the handful of specs that need genuine input fidelity — real CSS `:hover`, occlusion-aware clicks, scroll-into-view, real keystrokes/drags/wheel/touch — `b.Realistic()` returns a view of the *same tab* whose interactions route through real Chrome DevTools Protocol input.  Same API, just a more faithful (and slightly slower) interaction engine.  See the [documentation](https://onsi.github.io/biloba) (and the `biloba:realistic-mode` Claude Code skill).
+
+### Performance
+
+Biloba is fast.  [**onsi/biloba-comparison**](https://github.com/onsi/biloba-comparison) is a reproducible, three-way speed comparison against Playwright — an identical 32-scenario suite run under biloba-fast, biloba-realistic, and Playwright.  On an Apple M1 Max (whole-suite wall clock, median of 15 runs):
+
+| config | parallel (8 workers) | serial |
+|---|---:|---:|
+| **biloba-fast** | **2.57s** | **9.55s** |
+| **biloba-realistic** | **3.26s** | **18.60s** |
+| playwright | 8.23s | 38.37s |
+
+biloba-fast runs the suite **~3.2× faster in parallel / ~4.0× serial** than Playwright; even biloba-realistic — doing the same real-CDP-input work Playwright does — stays **~2.5× / ~2.1×** ahead.  See [the comparison repo](https://github.com/onsi/biloba-comparison) for the methodology, the per-bucket breakdown, and the charts.
+
 ### Failure Output
 
 Biloba automatically captures and emits screenshots and any JavaScript console output when tests fail.  It even hooks into Ginkgo's progress emitter infrastructure so `^T`/`SIGNIFO` on a mac (`SIGUSR2` on linux) will spit out a screenshot.
