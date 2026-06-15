@@ -1,6 +1,9 @@
 package biloba_test
 
 import (
+	"strconv"
+	"strings"
+
 	"github.com/onsi/biloba"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -142,6 +145,32 @@ var _ = Describe("BeClickable and realistic interactions", func() {
 			Eventually(func() float64 {
 				return b.GetProperty("#scroll-box", "scrollTop").(float64)
 			}).Should(BeNumerically(">", 0))
+		})
+	})
+
+	Describe("realistic ClickAt", func() {
+		It("clicks at the requested offset from the element's top-left corner with real input", func() {
+			b.Realistic().ClickAt("#click-pad", 30, 40)
+			var x, y int
+			Eventually(func() string {
+				return b.GetProperty("#click-pad-result", "innerText").(string)
+			}).Should(SatisfyAll(
+				ContainSubstring(","),
+				WithTransform(func(s string) bool {
+					parts := strings.Split(s, ",")
+					if len(parts) != 2 {
+						return false
+					}
+					var err error
+					if x, err = strconv.Atoi(parts[0]); err != nil {
+						return false
+					}
+					y, err = strconv.Atoi(parts[1])
+					return err == nil
+				}, BeTrue()),
+			))
+			Expect(x).To(BeNumerically("~", 30, 2))
+			Expect(y).To(BeNumerically("~", 40, 2))
 		})
 	})
 

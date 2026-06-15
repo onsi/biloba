@@ -140,6 +140,9 @@
     <div id="scroll-box" style="height:100px;overflow:auto"><div style="height:1000px">tall</div></div>
     <div id="wheel-result">no</div>
 
+    <div id="click-pad" style="width:200px;height:200px;background:#cde"></div>
+    <div id="click-pad-result">none</div>
+
     <button id="aux-btn">Middle me</button>
     <div id="aux-result">no</div>
     <button id="mod-btn">Modify me</button>
@@ -233,6 +236,11 @@
 
         document.getElementById("scroll-box").addEventListener("wheel", () => {
             document.getElementById("wheel-result").innerText = "wheeled"
+        })
+
+        document.getElementById("click-pad").addEventListener("click", (e) => {
+            const r = document.getElementById("click-pad").getBoundingClientRect()
+            document.getElementById("click-pad-result").innerText = Math.round(e.clientX - r.left) + "," + Math.round(e.clientY - r.top)
         })
 
         document.getElementById("aux-btn").addEventListener("auxclick", (e) => {

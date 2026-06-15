@@ -1330,6 +1330,18 @@ b.ClickEach(selector)
 
 unlike `Click`, `ClickEach` does not have a matcher variant.  It simply clicks on all the elements that match the selector that are also visible and enabled.  Elements that are not visible or enabled are silently skipped.
 
+#### Clicking at a Position Offset
+
+`b.ClickAt` clicks an element at a point offset from its **top-left corner** (matching Playwright's `position` option):
+
+```go
+b.ClickAt("#canvas", 30, 40)   // clicks 30px right and 40px down from the element's top-left corner
+```
+
+`offsetX` and `offsetY` are CSS pixels measured from the element's top-left corner.  Unlike `Click` - which calls `element.click()` and therefore can't carry coordinates - `ClickAt` dispatches a synthetic `mousedown`/`mouseup`/`click` sequence with the real `clientX`/`clientY`, so an app that reads `e.clientX`/`e.offsetX` (a `<canvas>` painter, a map, a custom slider) sees the point you targeted.  It runs the same visible+enabled checks as `Click`.  In [realistic mode](#realistic-interactions) it scrolls the element into view, translates the corner to top-level viewport coordinates, and dispatches a real CDP click at that exact point (failing if the offset point is off-screen or obscured).
+
+Like `ClickEach`, `ClickAt` always acts immediately and has **no matcher variant**; it fails the spec if the element can't be found, is hidden, or is disabled.
+
 #### Double-Clicking and Right-Clicking
 
 Alongside `Click`, Biloba provides `b.DblClick` and `b.RightClick`, following the same dual immediate/matcher convention and the same visible+enabled checks:
@@ -1441,6 +1453,7 @@ Eventually(".menu").Should(rb.Hover()) // moves the real mouse, activating CSS :
 In realistic mode:
 
 - **`Click`** scrolls the element to the center of the viewport, **waits for its box to stop moving**, verifies it is enabled and is the topmost element at its center point (so an occluding overlay or an off-screen element does **not** click through - the matcher form keeps polling, the immediate form fails the spec), moves the real pointer to it (so hover-gated clicks register), then dispatches a real `mousePressed`/`mouseReleased`.  This is the inverse of plain `Click`, which clicks the element directly regardless of what's on top of it.  Clicks through `>>>` same-origin iframe boundaries are translated to top-level viewport coordinates so the real mouse lands in the right place.
+- **`ClickAt`** scrolls the element into view, waits for its box to stop moving, translates its top-left corner to top-level viewport coordinates (so `>>>` same-origin iframe targets work), adds the requested offset, and dispatches a real CDP click at that exact point - failing if the point is off-screen or obscured.
 - **`ClickEach`** clicks every matching element with real input, scrolling and re-measuring each in turn, and skipping any that are hidden, disabled, off-screen, or obscured.
 - **`DblClick`** / **`RightClick`** apply the same scroll/stability/occlusion machinery as `Click`, then dispatch a real double-click (two click sequences with an incrementing click-count, so Chrome fires a genuine `dblclick`) or a real right-button click (firing the browser's native `contextmenu`).
 - **`DragTo`** scrolls and measures stable, actionable points for *both* the source and target, then drives a real CDP pointer drag - press at the source, several interpolated moves toward the target, release at the target - so pointer-based drag-and-drop libraries see genuine pointer input (it still does not drive native HTML5 `draggable`).

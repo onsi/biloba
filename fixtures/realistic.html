@@ -23,6 +23,10 @@
   <button id="tap-btn">Tap me</button>
   <span id="tap-result">no</span>
 
+  <!-- a sized pad that records the click offset relative to its own top-left, near the top so it's in view -->
+  <div id="click-pad" style="width: 200px; height: 200px; background: #cde"></div>
+  <span id="click-pad-result">none</span>
+
   <!-- only registers a click if a mouseover preceded it (gates on real pointer arrival) -->
   <button id="gated-btn">Gated</button>
   <span id="gated-result">no</span>
@@ -108,6 +112,7 @@
     document.getElementById('drag-src').addEventListener('pointerdown', () => (dragging = true));
     document.getElementById('drop-zone').addEventListener('pointerup', () => { if (dragging) set('drop-result', 'dropped'); dragging = false; });
     document.getElementById('scroll-box').addEventListener('wheel', () => set('wheel-result', 'wheeled'));
+    document.getElementById('click-pad').addEventListener('click', (e) => { const r = document.getElementById('click-pad').getBoundingClientRect(); set('click-pad-result', Math.round(e.clientX - r.left) + ',' + Math.round(e.clientY - r.top)); });
     document.getElementById('aux-btn').addEventListener('auxclick', (e) => { if (e.button === 1) set('aux-result', 'middle'); });
     document.getElementById('tap-btn').addEventListener('touchend', () => set('tap-result', 'tapped'));
     document.getElementById('mod-btn').addEventListener('click', (e) => {

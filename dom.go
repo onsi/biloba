@@ -761,6 +761,34 @@ func (b *Biloba) Click(args ...any) types.GomegaMatcher {
 }
 
 /*
+ClickAt() clicks the first element matching selector at a point offset from its top-left corner:
+
+	tab.ClickAt("#canvas", 30, 40)   // clicks 30px right and 40px down from the element's top-left corner
+
+offsetX and offsetY are CSS pixels measured from the element's top-left corner (matching Playwright's position option).  The click carries the real coordinates, so apps reading e.clientX/e.offsetX see the point you targeted.  It fails if the element is not found, hidden, or disabled (realistic mode also fails if the offset point is off-screen or obscured).
+
+Unlike Click, ClickAt has no matcher variant.
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+*/
+func (b *Biloba) ClickAt(selector any, offsetX, offsetY float64) {
+	b.gt.Helper()
+	if b.realistic {
+		ok, err := b.realisticClickAt(selector, offsetX, offsetY)
+		if err != nil {
+			b.gt.Fatalf("Failed to click:\n%s", err.Error())
+		} else if !ok {
+			b.gt.Fatalf("Failed to click: element is not clickable at that offset (off-screen or obscured)")
+		}
+		return
+	}
+	r := b.runBilobaHandler("clickAt", selector, offsetX, offsetY)
+	if r.Error() != nil {
+		b.gt.Fatalf("Failed to click:\n%s", r.Error())
+	}
+}
+
+/*
 ClickEach() clicks on every DOM element matching selector that is visible and enabled.
 
 If no elements match, nothing happens.

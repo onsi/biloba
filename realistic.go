@@ -125,6 +125,41 @@ func (b *Biloba) realisticClick(selector any) (bool, error) {
 	return true, nil
 }
 
+// realisticClickAt implements ClickAt for realistic mode.  It scrolls the element to a stable point
+// (reusing scrollToStablePoint's scroll + stability wait), then measures the element's top-left
+// corner translated to top-level viewport coordinates and targets (left+offsetX, top+offsetY).  If
+// that point falls outside the viewport it returns (false, nil) like realisticClick.  Otherwise it
+// moves the real pointer there and dispatches a real CDP left click at that exact point.
+func (b *Biloba) realisticClickAt(selector any, offsetX, offsetY float64) (bool, error) {
+	// scroll into view + wait for stability (we don't need the returned centroid, just the side
+	// effects); then re-measure the corner, which is what we actually click relative to.
+	if _, err := b.scrollToStablePoint(selector); err != nil {
+		return false, err
+	}
+	r := b.runBilobaHandlerAsync("scrollToStableCorner", selector)
+	if r.Error() != nil {
+		return false, r.Error()
+	}
+	m, ok := r.Result.(map[string]any)
+	if !ok {
+		return false, fmt.Errorf("unexpected scrollToStableCorner result: %v", r.Result)
+	}
+	if m["translatable"] != true {
+		return false, nil
+	}
+	x, y := toFloat64(m["left"])+offsetX, toFloat64(m["top"])+offsetY
+	if x < 0 || y < 0 || x > toFloat64(m["innerWidth"]) || y > toFloat64(m["innerHeight"]) {
+		return false, nil
+	}
+	if err := chromedp.Run(b.Context,
+		chromedp.MouseEvent(input.MouseMoved, x, y),
+		chromedp.MouseClickXY(x, y),
+	); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // realisticDblClick implements DblClick for realistic mode.  Like realisticClick it scrolls the
 // element to a stable point and checks actionability, then dispatches two real click sequences with
 // an incrementing clickCount so Chrome fires a genuine dblclick (a single clickCount:2 release is

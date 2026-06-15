@@ -157,6 +157,14 @@ if (!window["_biloba"]) {
     b.isVisible = one(n => r(n.offsetWidth > 0 || n.offsetHeight > 0 || n.offsetParent != null, "DOM element is not visible"))
     b.isEnabled = one(n => r(!n.disabled, "DOM element is not enabled"))
     b.click = one(b.isVisible, b.isEnabled, n => r(n.click()))
+    b.clickAt = one(b.isVisible, b.isEnabled, (n, ox, oy) => {
+        let rect = n.getBoundingClientRect(), cx = rect.left + ox, cy = rect.top + oy
+        let opts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 }
+        n.dispatchEvent(new MouseEvent('mousedown', opts))
+        n.dispatchEvent(new MouseEvent('mouseup', opts))
+        n.dispatchEvent(new MouseEvent('click', opts))
+        return r()
+    })
     b.dblClick = one(b.isVisible, b.isEnabled, n => {
         n.click()
         n.click()
@@ -321,6 +329,43 @@ if (!window["_biloba"]) {
                 let bx = n.getBoundingClientRect()
                 let k = [bx.left, bx.top, bx.width, bx.height].join(",")
                 if (k === prev || frames++ > 30) resolve(rRes(measurePoint(n)))
+                else { prev = k; requestAnimationFrame(check) }
+            }
+            requestAnimationFrame(check)
+        })
+    }
+    // measureCorner reports an element's top-left corner in TOP-LEVEL viewport coordinates (where CDP
+    // mouse events live), plus whether the element is enabled.  Like measurePoint it walks the
+    // frameElement chain so a corner inside a same-origin iframe is translated to top-level coords.
+    // Callers add their own (offsetX, offsetY) and check the resulting point against the viewport.
+    let measureCorner = (n) => {
+        let rect = n.getBoundingClientRect()
+        let left = rect.left, top = rect.top, view = n.ownerDocument.defaultView, translatable = true
+        try {
+            while (view && view.frameElement) {
+                let fe = view.frameElement, fr = fe.getBoundingClientRect()
+                left += fr.left + fe.clientLeft
+                top += fr.top + fe.clientTop
+                view = view.parent
+            }
+        } catch (e) { translatable = false } // cross-origin frame: cannot translate
+        return { left: left, top: top, translatable: translatable, enabled: !n.disabled, innerWidth: window.innerWidth, innerHeight: window.innerHeight }
+    }
+    // scrollToStableCorner backs ClickAt in realistic mode: it scrolls the element to the viewport
+    // center, waits for its box to stop moving (same stability wait as scrollToStablePoint), then
+    // returns its top-left corner in top-level viewport coordinates.  Async (returns a Promise).
+    b.scrollToStableCorner = (s) => {
+        let ann = (typeof s == "string" ? ": " + s.slice(1) : "")
+        let n = sel(s)
+        if (!n) return Promise.resolve(rErr("could not find DOM element matching selector" + ann))
+        if (!b.isVisible(n).success) return Promise.resolve(rErr("DOM element is not visible" + ann))
+        n.scrollIntoView({ block: "center", inline: "center" })
+        return new Promise(resolve => {
+            let prev = null, frames = 0
+            let check = () => {
+                let bx = n.getBoundingClientRect()
+                let k = [bx.left, bx.top, bx.width, bx.height].join(",")
+                if (k === prev || frames++ > 30) resolve(rRes(measureCorner(n)))
                 else { prev = k; requestAnimationFrame(check) }
             }
             requestAnimationFrame(check)

@@ -1086,6 +1086,18 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 	})
 
+	Describe("ClickAt", func() {
+		It("clicks the element at the requested offset from its top-left corner", func() {
+			b.ClickAt("#click-pad", 30, 40)
+			Ω("#click-pad-result").Should(b.HaveInnerText("30,40"))
+		})
+
+		It("auto-fails if the element does not exist", func() {
+			b.ClickAt("#non-existing", 30, 40)
+			ExpectFailures("Failed to click:\ncould not find DOM element matching selector: #non-existing")
+		})
+	})
+
 	Describe("ScrollWheel", func() {
 		It("fires the wheel handler and scrolls the element", func() {
 			Ω(b.GetProperty("#scroll-box", "scrollTop")).Should(BeEquivalentTo(0))
