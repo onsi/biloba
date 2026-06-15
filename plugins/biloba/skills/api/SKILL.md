@@ -50,15 +50,15 @@ Three pathways, all flow through every method/matcher. **CSS is the default** (t
 - `b.HasElement(selector)` → bool (first).
 - `b.Exist()` (matcher) — element matches.
 - `b.Count(selector)` → int / `b.HaveCount(int|matcher)` (matcher).
-- `b.BeVisible()` (matcher) — non-zero `offsetWidth`/`offsetHeight`.
-- `b.BeEnabled()` (matcher) — `!el.disabled`.
+- `b.BeVisible()` (matcher) — non-zero `offsetWidth`/`offsetHeight`. / `b.EachBeVisible()` (matcher) — every match visible (vacuously true if none).
+- `b.BeEnabled()` (matcher) — `!el.disabled`. / `b.EachBeEnabled()` (matcher) — every match enabled (vacuously true if none).
 - `b.BeClickable()` (matcher) — visible + enabled + topmost at its center (deterministic occlusion guard; opt-in, `Click` does **not** run it).
 
 ## Contents, classes, attributes, state
 - `b.InnerText(selector)` → string (first) / `b.HaveInnerText(string|matcher)` (matcher, exact).
 - `b.HaveText(string|matcher)` (matcher) — trims & collapses whitespace before matching.
 - `b.InnerTextForEach(selector)` → []string (each) / `b.EachHaveInnerText(...)` (matcher).
-- `b.HaveClass(string|matcher)` (matcher) — string ⇒ "list contains"; matcher receives `[]string`.
+- `b.HaveClass(string|matcher)` (matcher) — string ⇒ "list contains"; matcher receives `[]string`. / `b.EachHaveClass(string)` (matcher) — every match has the class (vacuously true if none).
 - `b.HaveAttribute(name[, string|matcher])` (matcher) — HTML attribute via `getAttribute`.
 - `b.HaveComputedStyle(prop, string|matcher)` (matcher) — via `getComputedStyle`.
 - `b.BeChecked()` (matcher) — checkbox/radio checked.

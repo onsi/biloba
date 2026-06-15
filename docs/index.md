@@ -289,9 +289,9 @@ This philosophy applies to most of Biloba's DOM interactions: Biloba doesn't typ
 
 > OK, cool.  But what if I really need more realistic interactions?  Is Biloba out?
 
-Not at all - you actually get to **choose**.  Biloba defaults to the fast, pragmatic, atomic path described above (and that's what you want for the overwhelming bulk of your specs).  But at any point you can generate a *realistic view* into your tab with `b.Realistic()`: a lightweight handle whose interactions run through **real Chrome DevTools Protocol input** instead of the synchronous Javascript simulations.  In that mode a click scrolls the element into view, waits for it to stop moving, refuses to click through an occluding overlay, moves the real pointer (so hover-gated clicks fire and CSS `:hover` activates), and dispatches a genuine mouse event - the very realism the fast path trades away.
+Not at all - you actually get to **choose**.  Biloba defaults to the fast, pragmatic, atomic path described above (and that's what you want for the overwhelming bulk of your specs).  But at any point you can generate a *realistic view* into your tab with `b.Realistic()`: a lightweight handle whose interactions run through **real Chrome DevTools Protocol input** instead of the synchronous Javascript simulations.  In that mode a click scrolls the element into view, waits for it to stop moving, refuses to click through an occluding overlay, moves the real pointer (so hover-gated clicks fire and CSS `:hover` activates), and dispatches a real mouse event.
 
-It's opt-in *per spec*, so the realism (and the cost and timing-sensitivity that come with it) stays quarantined to the handful of smoke tests where it matters, while the rest of your suite keeps Biloba's fast, stable default.  You don't have to pick a side once and for all - you pick per interaction.  See [Realistic Interactions](#realistic-interactions) for the full story.
+It's opt-in *per spec*, so the realism (and the cost and timing-sensitivity that come with it) becomes a tool you get to choose how to deploy.  See [Realistic Interactions](#realistic-interactions) for more details.
 
 #### Headless Fidelity: `chrome-headless-shell` by default
 
@@ -458,6 +458,7 @@ This installs a family of `biloba:*` skills that activate automatically while yo
 | `biloba:overview` | The mental model — the three principles and how they shape your specs. |
 | `biloba:setup` | Wiring Biloba into your suite: bootstrap, `chrome-headless-shell`, the bootstrap variations. |
 | `biloba:write-tests` | Authoring specs: the dual immediate/matcher API, selecting elements, hermetic tests, multiple tabs. |
+| `biloba:realistic-mode` | The realistic interaction track (`b.Realistic()`) for occlusion/hover/drag/scroll/touch-sensitive flows. |
 | `biloba:xpath` | Building selectors with the `b.XPath()` DSL. |
 | `biloba:api` | A one-line reference for every method and matcher. |
 | `biloba:explore-unfamiliar-page` | Orienting to a page you haven't seen, then drafting a starter spec. |

@@ -1,6 +1,6 @@
 ---
 name: write-tests
-description: Author good Biloba specs in your own Ginkgo/Gomega suite — the dual immediate/matcher API (act now vs. return a matcher you poll with Eventually), first-vs-all naming, the navigate-then-readiness-anchor shape, selecting elements (semantic role/text/label locators as the default, CSS, the >>> piercing combinator, XPath), the interaction vocabulary (click variants, drag, scroll, tap), realistic mode for occlusion/hover smoke tests, hermetic tests via request stubbing/aborting/modifying, multi-tab flows, and seeding state. Use when writing or reviewing Biloba browser tests.
+description: Author good Biloba specs in your own Ginkgo/Gomega suite — the dual immediate/matcher API (act now vs. return a matcher you poll with Eventually), first-vs-all naming, the navigate-then-readiness-anchor shape, selecting elements (CSS targeting stable hooks as the default, semantic role/text/label locators, the >>> piercing combinator, XPath), the interaction vocabulary (click variants, drag, scroll, tap), realistic mode for occlusion/hover smoke tests, hermetic tests via request stubbing/aborting/modifying, multi-tab flows, and seeding state. Use when writing or reviewing Biloba browser tests.
 ---
 
 # Writing Biloba specs
