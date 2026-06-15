@@ -651,7 +651,7 @@ Assuming you've read that section, we'll dive into problem number one: telling B
 
 ### Selecting DOM Elements
 
-Biloba supports two mechanisms for selecting DOM elements.  CSS selectors (i.e. what you'd pass into `document.QuerySelector()`) and XPath Queries (i.e. what you'd pass into `document.evaluate`).  Throughout this chapter you'll use the word `selector` in code snippets and examples.  If you pass a `string` in as `selector`, Biloba interprets that string as a CSS query.  For example:
+Biloba supports three mechanisms for selecting DOM elements: **semantic locators** (by accessible role, text, or label - the modern default), **CSS selectors** (what you'd pass into `document.querySelector()`), and **XPath queries** (what you'd pass into `document.evaluate` - a power tool for the structural long tail).  Throughout this chapter you'll use the word `selector` in code snippets and examples.  If you pass a `string` in as `selector`, Biloba interprets that string as a CSS query.  For example:
 
 ```go
 b.Click("button.submit")
@@ -673,7 +673,27 @@ b.Click(b.XPath("button").WithClass("submit"))
 
 We'll dive into the XPath DSL in more details at the end of this chapter.  As you can see from this example, it can help generate some fairly complex XPath queries with a much simpler series of invocations.
 
-If you'd like to learn more about XPath queries the [MDN docs](https://developer.mozilla.org/en-US/docs/Web/XPath) will give you a good mental model while the [XPath Cheatsheet at devhints.io](https://devhints.io/xpath) is a fantastic, concise, reference.  If you're more familiar with CSS queries it's definitely a worthwhile investment of effort to learn XPath - as a whole class of queries that aren't possible with CSS queries are straightforward with XPath.
+If you'd like to learn more about XPath queries the [MDN docs](https://developer.mozilla.org/en-US/docs/Web/XPath) will give you a good mental model while the [XPath Cheatsheet at devhints.io](https://devhints.io/xpath) is a fantastic, concise, reference.
+
+> **A note on XPath in 2024+.** XPath used to be the only way to select by visible text or to navigate *up* the tree ("the row that contains this cell").  Today, **semantic locators** (below) handle the text/role/label cases more robustly, and because Biloba only drives Chrome you always have CSS [`:has()`](https://developer.mozilla.org/en-US/docs/Web/CSS/:has) for the structural cases ("the `<tr>` that `:has(td:contains)`...").  So reach for locators and CSS first; XPath remains available as a power tool for the rare ordinal/axis query those can't express.
+
+#### Selecting by Role, Text, and Label
+
+The most robust selectors describe an element the way a *user* perceives it - by its accessible role and name, its visible text, or its form label - rather than by brittle CSS/XPath structure.  Build these with `b.ByRole`, `b.ByText`/`b.ByTextContains`, and `b.ByLabel`/`b.ByLabelContains`.  Like any selector they flow through every Biloba action and matcher (and through [realistic mode](#realistic-interactions)):
+
+```go
+b.Click(b.ByRole("button").WithName("Save"))                  // accessible role + accessible name
+Eventually(b.ByRole("heading").WithNameContains("Getting")).Should(b.BeVisible())
+b.SetValue(b.ByLabel("Email"), "jane@example.com")            // the <input> labelled "Email"
+Eventually(b.ByText("Welcome back, Jane")).Should(b.Exist())  // the smallest element with that exact text
+b.Click(b.ByTextContains("Sign"))
+```
+
+- **`b.ByRole(role)`** matches the element's [ARIA role](https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA/Roles) - explicit `role="..."` or the common implicit role of a tag (`button`, `link`, `heading`, `checkbox`, `radio`, `textbox`, `combobox`, `list`, ...).  Chain `.WithName("...")` / `.WithNameContains("...")` to also match the **accessible name** (computed from `aria-labelledby` → `aria-label` → associated `<label>` → `alt`/`value` → text content → `title`).
+- **`b.ByText(text)`** / **`b.ByTextContains(text)`** match the *smallest* element whose visible text equals / contains `text`.  These are the modern replacement for `b.WithText`/`b.WithTextContains`.
+- **`b.ByLabel(text)`** / **`b.ByLabelContains(text)`** match the form control whose accessible label equals / contains `text`.
+
+Coverage is pragmatic rather than the full ARIA specification - it handles explicit roles plus the common implicit ones, and the common accessible-name sources - and it operates at the document level (it does not yet pierce shadow roots).  For anything it can't express, CSS `:has()` and the XPath DSL are right there.
 
 Before we go further and explore the catalog of DOM interactions Biloba provides we should pause and point out an important design decision in Biloba.
 

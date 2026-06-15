@@ -35,6 +35,8 @@ func encodeSelector(selector any) (string, error) {
 	switch x := selector.(type) {
 	case XPath:
 		return "x" + string(x), nil
+	case Locator:
+		return x.encode()
 	case string:
 		if x[0] == '/' {
 			return "x" + x, nil

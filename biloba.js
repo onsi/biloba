@@ -22,10 +22,82 @@ if (!window["_biloba"]) {
         }
         return [ctx, segs[segs.length - 1].trim()]
     }
+    // ---- role / text / label locators (the "a" selector kind) -------------------------------
+    // A pragmatic in-page implementation of ARIA role + accessible-name matching (à la
+    // getByRole/getByText/getByLabel). It is NOT the full accname spec: it covers explicit
+    // role="" + the common implicit roles, and names from aria-labelledby/aria-label/<label>/
+    // alt/value/text/title. Document-level only (does not pierce shadow roots in v1).
+    let normText = (s) => (s || "").replace(/\s+/g, " ").trim()
+    let implicitRole = (el) => {
+        let tag = el.tagName.toLowerCase()
+        if (tag === "a" || tag === "area") return el.hasAttribute("href") ? "link" : ""
+        if (tag === "h1" || tag === "h2" || tag === "h3" || tag === "h4" || tag === "h5" || tag === "h6") return "heading"
+        if (tag === "input") {
+            let t = (el.getAttribute("type") || "text").toLowerCase()
+            if (t === "checkbox") return "checkbox"
+            if (t === "radio") return "radio"
+            if (t === "button" || t === "submit" || t === "reset" || t === "image") return "button"
+            if (t === "range") return "slider"
+            if (t === "search") return "searchbox"
+            if (t === "number") return "spinbutton"
+            return "textbox" // text, email, tel, url, password, ...
+        }
+        let map = { button: "button", select: el.multiple ? "listbox" : "combobox", textarea: "textbox", img: el.getAttribute("alt") === "" ? "presentation" : "img", nav: "navigation", main: "main", header: "banner", footer: "contentinfo", aside: "complementary", form: "form", ul: "list", ol: "list", li: "listitem", table: "table", dialog: "dialog", output: "status", progress: "progressbar" }
+        return map[tag] || ""
+    }
+    let roleOf = (el) => {
+        let explicit = (el.getAttribute("role") || "").trim().split(/\s+/)[0]
+        return explicit || implicitRole(el)
+    }
+    let accessibleName = (el) => {
+        let labelledby = el.getAttribute("aria-labelledby")
+        if (labelledby) {
+            let names = labelledby.split(/\s+/).map(id => { let r = el.ownerDocument.getElementById(id); return r ? normText(r.textContent) : "" }).filter(Boolean)
+            if (names.length) return names.join(" ")
+        }
+        let aria = el.getAttribute("aria-label")
+        if (aria != null && normText(aria)) return normText(aria)
+        if (el.labels && el.labels.length) {
+            let n = [...el.labels].map(l => normText(l.textContent)).filter(Boolean).join(" ")
+            if (n) return n
+        }
+        let alt = el.getAttribute("alt")
+        if (alt != null && normText(alt)) return normText(alt)
+        let tag = el.tagName.toLowerCase()
+        if (tag === "input") {
+            let t = (el.getAttribute("type") || "").toLowerCase()
+            if ((t === "button" || t === "submit" || t === "reset") && el.value) return normText(el.value)
+        }
+        let content = normText(el.textContent)
+        if (content) return content
+        let title = el.getAttribute("title")
+        if (title != null && normText(title)) return normText(title)
+        return ""
+    }
+    let matchText = (actual, target, mode) => mode === "contains" ? actual.includes(target) : actual === target
+    let locate = (q) => {
+        let all = [...document.querySelectorAll("*")]
+        if (q.by === "role") {
+            return all.filter(el => roleOf(el) === q.role && (!q.nameSet || matchText(accessibleName(el), q.name, q.nameMode)))
+        }
+        if (q.by === "label") {
+            return all.filter(el => el.matches("input,select,textarea,button,[contenteditable],[role]") && matchText(accessibleName(el), q.text, q.textMode))
+        }
+        if (q.by === "text") {
+            let m = all.filter(el => matchText(normText(el.textContent), q.text, q.textMode))
+            return m.filter(el => !m.some(other => other !== el && el.contains(other))) // smallest matching element
+        }
+        return []
+    }
+
     let sel = (s) => {
         if (typeof s == "string") {
             if (s.charAt(0) == "x") {
                 return document.evaluate(s.slice(1), document, null, XPathResult.ANY_UNORDERED_NODE_TYPE, null).singleNodeValue
+            }
+            if (s.charAt(0) == "a") {
+                let ns = locate(JSON.parse(s.slice(1)))
+                return ns.length ? ns[0] : null
             }
             let css = s.slice(1)
             if (css.includes(">>>")) {
@@ -43,6 +115,9 @@ if (!window["_biloba"]) {
                 const nodes = [];
                 for (let node = xPathResult.iterateNext(); node != null; node = xPathResult.iterateNext()) nodes.push(node)
                 return nodes
+            }
+            if (s.charAt(0) == "a") {
+                return locate(JSON.parse(s.slice(1)))
             }
             let css = s.slice(1)
             if (css.includes(">>>")) {
