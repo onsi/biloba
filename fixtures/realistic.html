@@ -59,6 +59,13 @@
   <div id="big" style="height: 150vh; background: #f0f0f0">Big region</div>
   <span id="big-result">no</span>
 
+  <!-- double-click and right-click targets -->
+  <button id="dbl-btn">Double me</button>
+  <span id="dbl-clicks">0</span>
+  <span id="dbl-result">no</span>
+  <button id="ctx-btn">Right me</button>
+  <span id="ctx-result">no</span>
+
   <script>
     const set = (id, v) => (document.getElementById(id).textContent = v);
     document.getElementById('plain-btn').addEventListener('click', () => set('plain-result', 'clicked'));
@@ -75,6 +82,11 @@
     document.getElementById('covered-btn').addEventListener('click', () => set('covered-result', 'clicked'));
     document.getElementById('submenu-item').addEventListener('click', () => set('hover-result', 'selected'));
     document.getElementById('below-btn').addEventListener('click', () => set('scroll-result', 'clicked'));
+    let dblClicks = 0;
+    const dblBtn = document.getElementById('dbl-btn');
+    dblBtn.addEventListener('click', () => set('dbl-clicks', ++dblClicks));
+    dblBtn.addEventListener('dblclick', () => set('dbl-result', 'double'));
+    document.getElementById('ctx-btn').addEventListener('contextmenu', (e) => { e.preventDefault(); set('ctx-result', 'menu'); });
   </script>
 </body>
 </html>

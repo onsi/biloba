@@ -126,6 +126,13 @@
     <button id="increment">Increment</button>
     <button id="decrement">Decrement</button>
 
+    <button id="dbl-btn">Double me</button>
+    <div id="dbl-clicks">0</div>
+    <div id="dbl-dblclicks">0</div>
+    <button id="ctx-btn">Right me</button>
+    <div id="ctx-result">no</div>
+    <button id="disabled-dbl-btn" disabled>Disabled</button>
+
     <div id="inputs">
         <input type="text" id="disabled-text-input" value="i'm off" oninput="changeTextInput()" disabled></input>
         <div id="disabled-text-input-mirror"></div>
@@ -188,6 +195,20 @@
         }
         document.querySelector(".notice").count = 3
         document.querySelector(".notice").flavor = "strawberry"
+
+        let dblClicks = 0, dblDblClicks = 0
+        document.getElementById("dbl-btn").addEventListener("click", () => {
+            dblClicks += 1
+            document.getElementById("dbl-clicks").innerText = dblClicks
+        })
+        document.getElementById("dbl-btn").addEventListener("dblclick", () => {
+            dblDblClicks += 1
+            document.getElementById("dbl-dblclicks").innerText = dblDblClicks
+        })
+        document.getElementById("ctx-btn").addEventListener("contextmenu", (e) => {
+            e.preventDefault()
+            document.getElementById("ctx-result").innerText = "menu"
+        })
     </script>
 
 </body>

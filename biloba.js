@@ -157,6 +157,19 @@ if (!window["_biloba"]) {
     b.isVisible = one(n => r(n.offsetWidth > 0 || n.offsetHeight > 0 || n.offsetParent != null, "DOM element is not visible"))
     b.isEnabled = one(n => r(!n.disabled, "DOM element is not enabled"))
     b.click = one(b.isVisible, b.isEnabled, n => r(n.click()))
+    b.dblClick = one(b.isVisible, b.isEnabled, n => {
+        n.click()
+        n.click()
+        n.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window, detail: 2 }))
+        return r()
+    })
+    b.rightClick = one(b.isVisible, b.isEnabled, n => {
+        let opts = { bubbles: true, cancelable: true, view: window, button: 2, buttons: 2 }
+        n.dispatchEvent(new MouseEvent('mousedown', opts))
+        n.dispatchEvent(new MouseEvent('mouseup', opts))
+        n.dispatchEvent(new MouseEvent('contextmenu', opts))
+        return r()
+    })
     b.focus = one(b.isVisible, b.isEnabled, n => r(n.focus()))
     b.hover = one(b.isVisible, n => {
         let opts = { bubbles: true, cancelable: true, view: window }

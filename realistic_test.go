@@ -106,6 +106,26 @@ var _ = Describe("BeClickable and realistic interactions", func() {
 		})
 	})
 
+	Describe("realistic DblClick", func() {
+		It("dispatches a real double-click (two clicks plus dblclick)", func() {
+			b.Realistic().DblClick("#dbl-btn")
+			Eventually("#dbl-result").Should(b.HaveInnerText("double"))
+			Expect("#dbl-clicks").To(b.HaveInnerText("2"))
+		})
+
+		It("scrolls an off-screen element into view before double-clicking", func() {
+			Eventually("#dbl-btn").Should(b.Realistic().DblClick())
+			Eventually("#dbl-result").Should(b.HaveInnerText("double"))
+		})
+	})
+
+	Describe("realistic RightClick", func() {
+		It("dispatches a real right-button click that fires contextmenu", func() {
+			b.Realistic().RightClick("#ctx-btn")
+			Eventually("#ctx-result").Should(b.HaveInnerText("menu"))
+		})
+	})
+
 	Describe("realistic Type", func() {
 		It("scrolls an off-screen input into view before typing into it", func() {
 			b.Realistic().Type("#below-input", "typed")

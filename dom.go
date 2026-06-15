@@ -782,6 +782,88 @@ func (b *Biloba) ClickEach(selector any) {
 }
 
 /*
+DblClick() double-clicks the first element matching selector.
+
+	tab.DblClick("#row")
+
+it immediately double-clicks (fast mode fires two click events plus a dblclick event; realistic mode dispatches a real double mouse click).  It fails if no element is found, or if the element is hidden or disabled.
+
+When invoked with no arguments, tab.DblClick() returns a Gomega matcher:
+
+	Eventually("#row").Should(tab.DblClick())
+
+Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
+*/
+func (b *Biloba) DblClick(args ...any) types.GomegaMatcher {
+	b.gt.Helper()
+	if len(args) > 0 {
+		if b.realistic {
+			ok, err := b.realisticDblClick(args[0])
+			if err != nil {
+				b.gt.Fatalf("Failed to double-click:\n%s", err.Error())
+			} else if !ok {
+				b.gt.Fatalf("Failed to double-click: element is not clickable (it is disabled, off-screen, or obscured by another element)")
+			}
+			return nil
+		}
+		r := b.runBilobaHandler("dblClick", args[0])
+		if r.Error() != nil {
+			b.gt.Fatalf("Failed to double-click:\n%s", r.Error())
+		}
+		return nil
+	}
+	if b.realistic {
+		return gcustom.MakeMatcher(func(selector any) (bool, error) {
+			return b.realisticDblClick(selector)
+		}).WithMessage("be double-clickable (realistically)")
+	}
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return b.runBilobaHandler("dblClick", selector).MatcherResult()
+	}).WithMessage("be double-clickable")
+}
+
+/*
+RightClick() right-clicks (context-clicks) the first element matching selector.
+
+	tab.RightClick("#row")
+
+it immediately right-clicks (fast mode dispatches mousedown/mouseup/contextmenu events; realistic mode dispatches a real right-button mouse click).  It fails if no element is found, or if the element is hidden or disabled.
+
+When invoked with no arguments, tab.RightClick() returns a Gomega matcher:
+
+	Eventually("#row").Should(tab.RightClick())
+
+Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
+*/
+func (b *Biloba) RightClick(args ...any) types.GomegaMatcher {
+	b.gt.Helper()
+	if len(args) > 0 {
+		if b.realistic {
+			ok, err := b.realisticRightClick(args[0])
+			if err != nil {
+				b.gt.Fatalf("Failed to right-click:\n%s", err.Error())
+			} else if !ok {
+				b.gt.Fatalf("Failed to right-click: element is not clickable (it is disabled, off-screen, or obscured by another element)")
+			}
+			return nil
+		}
+		r := b.runBilobaHandler("rightClick", args[0])
+		if r.Error() != nil {
+			b.gt.Fatalf("Failed to right-click:\n%s", r.Error())
+		}
+		return nil
+	}
+	if b.realistic {
+		return gcustom.MakeMatcher(func(selector any) (bool, error) {
+			return b.realisticRightClick(selector)
+		}).WithMessage("be right-clickable (realistically)")
+	}
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return b.runBilobaHandler("rightClick", selector).MatcherResult()
+	}).WithMessage("be right-clickable")
+}
+
+/*
 Focus() focuses the first element matching selector.
 
 When invoked with a selector, tab.Focus("input.search") acts immediately and fails the spec if no element is found, or if the element is hidden or disabled.

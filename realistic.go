@@ -124,6 +124,47 @@ func (b *Biloba) realisticClick(selector any) (bool, error) {
 	return true, nil
 }
 
+// realisticDblClick implements DblClick for realistic mode.  Like realisticClick it scrolls the
+// element to a stable point and checks actionability, then dispatches two real click sequences with
+// an incrementing clickCount so Chrome fires a genuine dblclick (a single clickCount:2 release is
+// what the renderer keys the dblclick off of).
+func (b *Biloba) realisticDblClick(selector any) (bool, error) {
+	pt, err := b.scrollToStablePoint(selector)
+	if err != nil {
+		return false, err
+	}
+	if !pt.enabled || !pt.inViewport || !pt.hittable {
+		return false, nil
+	}
+	if err := chromedp.Run(b.Context,
+		chromedp.MouseEvent(input.MouseMoved, pt.x, pt.y),
+		chromedp.MouseClickXY(pt.x, pt.y, chromedp.ClickCount(1)),
+		chromedp.MouseClickXY(pt.x, pt.y, chromedp.ClickCount(2)),
+	); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// realisticRightClick implements RightClick for realistic mode: a real right-button mouse click at
+// the element's stable centroid, which makes Chrome fire a genuine contextmenu event.
+func (b *Biloba) realisticRightClick(selector any) (bool, error) {
+	pt, err := b.scrollToStablePoint(selector)
+	if err != nil {
+		return false, err
+	}
+	if !pt.enabled || !pt.inViewport || !pt.hittable {
+		return false, nil
+	}
+	if err := chromedp.Run(b.Context,
+		chromedp.MouseEvent(input.MouseMoved, pt.x, pt.y),
+		chromedp.MouseClickXY(pt.x, pt.y, chromedp.ButtonType(input.Right)),
+	); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // realisticSetValue implements SetValue for realistic mode.  Text inputs are focused with a real
 // click, cleared, typed with real CDP key events, then blurred to fire change (matching SetValue's
 // value-set contract); checkboxes are toggled with a real click only when not already in the

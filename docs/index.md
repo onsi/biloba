@@ -1330,6 +1330,20 @@ b.ClickEach(selector)
 
 unlike `Click`, `ClickEach` does not have a matcher variant.  It simply clicks on all the elements that match the selector that are also visible and enabled.  Elements that are not visible or enabled are silently skipped.
 
+#### Double-Clicking and Right-Clicking
+
+Alongside `Click`, Biloba provides `b.DblClick` and `b.RightClick`, following the same dual immediate/matcher convention and the same visible+enabled checks:
+
+```go
+b.DblClick("#row")                       // fires two click events plus a dblclick
+b.RightClick("#row")                     // fires mousedown/mouseup/contextmenu
+
+Eventually("#row").Should(b.DblClick())  // matcher forms poll until clickable
+Eventually("#row").Should(b.RightClick())
+```
+
+Like `Click` and `Hover`, the default (fast) versions are pragmatic simulations: `DblClick` calls `element.click()` twice and dispatches a `dblclick` event; `RightClick` dispatches `mousedown`/`mouseup`/`contextmenu` with the secondary button.  In [realistic mode](#realistic-interactions) both scroll into view, wait for the element to stop moving, refuse to click through an overlay, and dispatch real CDP mouse input (a genuine double-click and a genuine right-button click that fires the browser's native context menu event).
+
 ### Hovering, Focusing, and Scrolling
 
 Alongside `Click`, Biloba provides a few more first-class interactions, all following the same dual immediate/matcher convention:
@@ -1366,6 +1380,7 @@ In realistic mode:
 
 - **`Click`** scrolls the element to the center of the viewport, **waits for its box to stop moving**, verifies it is enabled and is the topmost element at its center point (so an occluding overlay or an off-screen element does **not** click through - the matcher form keeps polling, the immediate form fails the spec), moves the real pointer to it (so hover-gated clicks register), then dispatches a real `mousePressed`/`mouseReleased`.  This is the inverse of plain `Click`, which clicks the element directly regardless of what's on top of it.  Clicks through `>>>` same-origin iframe boundaries are translated to top-level viewport coordinates so the real mouse lands in the right place.
 - **`ClickEach`** clicks every matching element with real input, scrolling and re-measuring each in turn, and skipping any that are hidden, disabled, off-screen, or obscured.
+- **`DblClick`** / **`RightClick`** apply the same scroll/stability/occlusion machinery as `Click`, then dispatch a real double-click (two click sequences with an incrementing click-count, so Chrome fires a genuine `dblclick`) or a real right-button click (firing the browser's native `contextmenu`).
 - **`Hover`** scrolls into view and moves the real mouse to the element's center, which - unlike the synthetic `Hover` - activates genuine CSS `:hover` (e.g. a menu that only appears via a `:hover` rule).
 - **`SetValue`** drives form controls with real input: a text input is focused with a real click, cleared, and typed with real key events (then blurred to fire `change`); a checkbox is toggled with a real click (and left alone if it's already in the desired state).  Native pickers - radio groups, `<select>`, and multi-selects - fall back to the fast JS path, because they can't be driven by a real pointer (Playwright's `selectOption` sets them programmatically too).
 - **`Type`** / **`SendKeys`** already use real CDP key events; in realistic mode they additionally scroll the element into view before typing.

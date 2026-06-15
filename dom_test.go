@@ -1014,6 +1014,60 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 	})
 
+	Describe("DblClick", func() {
+		Context("when called directly", func() {
+			It("fires two clicks plus a dblclick", func() {
+				b.DblClick("#dbl-btn")
+				Ω("#dbl-clicks").Should(b.HaveInnerText("2"))
+				Ω("#dbl-dblclicks").Should(b.HaveInnerText("1"))
+			})
+
+			It("auto-fails if the element does not exist", func() {
+				b.DblClick("#non-existing")
+				ExpectFailures("Failed to double-click:\ncould not find DOM element matching selector: #non-existing")
+			})
+
+			It("auto-fails if the element is not enabled", func() {
+				b.DblClick("#disabled-dbl-btn")
+				ExpectFailures("Failed to double-click:\nDOM element is not enabled: #disabled-dbl-btn")
+			})
+		})
+
+		Context("when used as a matcher", func() {
+			It("double-clicks when polled", func() {
+				Eventually("#dbl-btn").Should(b.DblClick())
+				Ω("#dbl-dblclicks").Should(b.HaveInnerText("1"))
+			})
+
+			It("returns an error when the element does not exist", func() {
+				match, err := b.DblClick().Match("#non-existing")
+				Ω(match).Should(BeFalse())
+				Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
+			})
+		})
+	})
+
+	Describe("RightClick", func() {
+		Context("when called directly", func() {
+			It("fires a contextmenu event", func() {
+				b.RightClick("#ctx-btn")
+				Ω("#ctx-result").Should(b.HaveInnerText("menu"))
+			})
+
+			It("auto-fails if the element does not exist", func() {
+				b.RightClick("#non-existing")
+				ExpectFailures("Failed to right-click:\ncould not find DOM element matching selector: #non-existing")
+			})
+		})
+
+		Context("when used as a matcher", func() {
+			It("right-clicks when polled", func() {
+				Eventually("#ctx-btn").Should(b.RightClick())
+				Ω("#ctx-result").Should(b.HaveInnerText("menu"))
+			})
+		})
+	})
+
 	Describe("invokeOn and invokeOnEach", func() {
 		It("invokes the requested function on the selected dom element", func() {
 			b.InvokeOn("#increment", "click")

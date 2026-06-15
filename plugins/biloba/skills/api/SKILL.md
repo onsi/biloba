@@ -68,6 +68,7 @@ Terse lookup. **(dual)** = acts immediately when fully applied, returns a Gomega
 
 ## Clicking & interactions  (pragmatic simulations)
 - `b.Click(selector)` (dual) — visible+enabled, then `el.click()`.
+- `b.DblClick(selector)` (dual) — two clicks + `dblclick`. `b.RightClick(selector)` (dual) — `mousedown`/`mouseup`/`contextmenu`.
 - `b.ClickEach(selector)` — click all visible+enabled matches (no matcher).
 - `b.Focus(selector)` (dual) / `b.Hover(selector)` (dual; fires pointer/mouse events, not CSS `:hover`) / `b.ScrollIntoView(selector)` (dual).
 
