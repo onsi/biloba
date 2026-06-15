@@ -83,9 +83,12 @@
   <div id="drop-zone" style="display: inline-block; padding: 8px; background: #dec">Drop here</div>
   <span id="drop-result">no</span>
 
-  <!-- scrollable wheel target -->
+  <!-- scrollable wheel target; the trailing spacer keeps it a mid-document region so it can scroll
+       to the viewport center (a scroll target pinned against the document's bottom edge lands below
+       full ("new") headless Chrome's real compositor viewport, where trusted wheel input is dropped) -->
   <div id="scroll-box" style="height: 100px; overflow: auto; background: #eef"><div style="height: 1000px">tall</div></div>
   <span id="wheel-result">no</span>
+  <div style="height: 800px">spacer</div>
 
   <script>
     const set = (id, v) => (document.getElementById(id).textContent = v);
