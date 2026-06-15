@@ -40,10 +40,20 @@
   </div>
   <p id="hover-result">no</p>
 
-  <!-- a button far below the fold -->
+  <!-- several buttons for ClickEach -->
+  <button class="each-btn">E1</button>
+  <button class="each-btn">E2</button>
+  <button class="each-btn">E3</button>
+
+  <!-- a button that transitions into place on load (for the stability wait) -->
+  <button id="moving-btn" style="position: relative; left: 0; transition: left 120ms">Moving</button>
+  <span id="moving-result">no</span>
+
+  <!-- a button (and input) far below the fold -->
   <div style="height: 3000px">spacer</div>
   <button id="below-btn">Below the fold</button>
   <p id="scroll-result">no</p>
+  <input id="below-input" type="text" />
 
   <script>
     const set = (id, v) => (document.getElementById(id).textContent = v);
@@ -54,6 +64,9 @@
     gated.addEventListener('click', () => { if (gatedHovered) set('gated-result', 'clicked'); });
     document.getElementById('text-input').addEventListener('change', () => set('text-changed', 'yes'));
     document.getElementById('check-input').addEventListener('change', () => set('check-changed', 'yes'));
+    document.querySelectorAll('.each-btn').forEach((btn) => btn.addEventListener('click', () => (btn.textContent = 'clicked')));
+    requestAnimationFrame(() => (document.getElementById('moving-btn').style.left = '60px'));
+    document.getElementById('moving-btn').addEventListener('click', () => set('moving-result', 'clicked'));
     document.getElementById('covered-btn').addEventListener('click', () => set('covered-result', 'clicked'));
     document.getElementById('submenu-item').addEventListener('click', () => set('hover-result', 'selected'));
     document.getElementById('below-btn').addEventListener('click', () => set('scroll-result', 'clicked'));

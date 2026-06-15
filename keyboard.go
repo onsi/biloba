@@ -60,6 +60,13 @@ var Keys = struct {
 // disabled) then dispatches keys as real keyboard events via chromedp.  The element is resolved
 // fresh in the browser so keydown/keypress/keyup all fire.
 func (b *Biloba) focusAndSendKeys(selector any, keys string) (bool, error) {
+	if b.realistic {
+		// realistically bring the element into view before focusing+typing (Playwright focuses
+		// inputs via JS too, so the keys path is unchanged - only the scroll is added)
+		if sr := b.runBilobaHandler("scrollIntoView", selector); sr.Error() != nil {
+			return false, sr.Error()
+		}
+	}
 	r := b.runBilobaHandler("focus", selector)
 	if r.Error() != nil {
 		return false, r.Error()

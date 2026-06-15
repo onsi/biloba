@@ -62,6 +62,25 @@ func (b *Biloba) runBilobaHandler(name string, selector any, args ...any) *bilob
 	return result
 }
 
+// runBilobaHandlerAsync is runBilobaHandler for primitives that return a Promise (e.g. the
+// stability-aware scrollToStablePoint): it awaits the promise before decoding the response.
+func (b *Biloba) runBilobaHandlerAsync(name string, selector any, args ...any) *bilobaJSResponse {
+	b.ensureBiloba()
+	result := &bilobaJSResponse{}
+	encoded, err := encodeSelector(selector)
+	if err != nil {
+		result.Err = err.Error()
+		return result
+	}
+	parameters := []any{encoded}
+	parameters = append(parameters, args...)
+	_, err = b.runErr(b.JSFunc("_biloba."+name).Invoke(parameters...), true, result)
+	if err != nil {
+		result.Err = err.Error()
+	}
+	return result
+}
+
 /*
 HasElement(selector) returns true if an element matching selector is found
 
@@ -748,6 +767,12 @@ Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about sel
 */
 func (b *Biloba) ClickEach(selector any) {
 	b.gt.Helper()
+	if b.realistic {
+		if err := b.realisticClickEach(selector); err != nil {
+			b.gt.Fatalf("Failed to click each:\n%s", err.Error())
+		}
+		return
+	}
 	r := b.runBilobaHandler("clickEach", selector)
 	if r.Error() != nil {
 		b.gt.Fatalf("Failed to click each:\n%s", r.Error())

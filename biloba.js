@@ -105,22 +105,18 @@ if (!window["_biloba"]) {
         if (!top) return r(false, "DOM element is not hittable at its center point")
         return r(n === top || n.contains(top), "DOM element is obscured by another element")
     })
-    // scrollToAndPoint backs the realistic (CDP-driven) interactions: it scrolls the element to the
-    // viewport center, then reports its centroid plus whether that point is in the viewport, is
-    // hittable (topmost), and whether the element is enabled - so the Go side can decide whether a
-    // real mouse event at that point would actually land on the element.
-    b.scrollToAndPoint = one(b.isVisible, n => {
-        n.scrollIntoView({ block: "center", inline: "center" })
+    // measurePoint reports an element's centroid in TOP-LEVEL viewport coordinates (where CDP mouse
+    // events live), plus whether that point is in the viewport, is hittable (the element/descendant
+    // is topmost there), and whether the element is enabled.  It does NOT scroll - callers scroll
+    // first.  Coordinates from inside a same-origin iframe are translated by walking up the
+    // frameElement chain; the hit-test runs in the element's own document with its local coords.
+    let measurePoint = (n) => {
         let doc = n.ownerDocument, view = doc.defaultView
         let rect = n.getBoundingClientRect()
-        // local coords within the element's OWN document (an iframe has its own viewport/coordinate space)
-        let lx = rect.left + rect.width / 2, ly = rect.top + rect.height / 2
-        // hit-test in the element's own document with its local coords
+        let lx = rect.left + rect.width / 2, ly = rect.top + rect.height / 2 // local to the element's own document
         let inLocalViewport = lx >= 0 && ly >= 0 && lx <= view.innerWidth && ly <= view.innerHeight
         let top = inLocalViewport ? doc.elementFromPoint(lx, ly) : null
         let hittable = !!top && (n === top || n.contains(top))
-        // translate local coords to TOP-LEVEL viewport coords (where CDP mouse events live) by
-        // walking up through any same-origin iframe boundaries and adding each iframe's offset
         let cx = lx, cy = ly, translatable = inLocalViewport
         try {
             while (view && view.frameElement) {
@@ -131,7 +127,36 @@ if (!window["_biloba"]) {
             }
         } catch (e) { translatable = false } // cross-origin frame: cannot translate
         let inViewport = translatable && cx >= 0 && cy >= 0 && cx <= window.innerWidth && cy <= window.innerHeight
-        return rRes({ x: cx, y: cy, inViewport: inViewport, hittable: hittable, enabled: !n.disabled })
+        return { x: cx, y: cy, inViewport: inViewport, hittable: hittable, enabled: !n.disabled }
+    }
+    // scrollToStablePoint backs single-element realistic interactions: it scrolls the element to the
+    // viewport center, waits for its box to stop moving (two consecutive animation frames with the
+    // same rect - bounded so a perpetually-animating element can't hang), then returns measurePoint.
+    // Async (returns a Promise); invoked with awaitPromise on the Go side.
+    b.scrollToStablePoint = (s) => {
+        let ann = (typeof s == "string" ? ": " + s.slice(1) : "")
+        let n = sel(s)
+        if (!n) return Promise.resolve(rErr("could not find DOM element matching selector" + ann))
+        if (!b.isVisible(n).success) return Promise.resolve(rErr("DOM element is not visible" + ann))
+        n.scrollIntoView({ block: "center", inline: "center" })
+        return new Promise(resolve => {
+            let prev = null, frames = 0
+            let check = () => {
+                let bx = n.getBoundingClientRect()
+                let k = [bx.left, bx.top, bx.width, bx.height].join(",")
+                if (k === prev || frames++ > 30) resolve(rRes(measurePoint(n)))
+                else { prev = k; requestAnimationFrame(check) }
+            }
+            requestAnimationFrame(check)
+        })
+    }
+    // scrollToAndPointAt backs realistic ClickEach: scroll+measure the index-th match (no stability
+    // wait), or null when it is missing/hidden so the caller can skip it.
+    b.scrollToAndPointAt = each((ns, i) => {
+        let n = ns[i]
+        if (!n || !b.isVisible(n).success) return rRes(null)
+        n.scrollIntoView({ block: "center", inline: "center" })
+        return rRes(measurePoint(n))
     })
     // inputKind classifies a form control so the realistic track can decide how to drive it.
     b.inputKind = one(n => {

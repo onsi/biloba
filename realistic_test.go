@@ -60,6 +60,12 @@ var _ = Describe("BeClickable and realistic interactions", func() {
 			Eventually("#scroll-result").Should(b.HaveInnerText("clicked"))
 		})
 
+		It("waits for a moving element to settle before clicking it", func() {
+			// #moving-btn transitions into place on load; the stability wait clicks its settled spot
+			b.Realistic().Click("#moving-btn")
+			Eventually("#moving-result").Should(b.HaveInnerText("clicked"))
+		})
+
 		It("moves the pointer before pressing, so hover-gated clicks register", func() {
 			// #gated-btn only counts a click if a mouseover preceded it
 			b.Realistic().Click("#gated-btn")
@@ -83,6 +89,20 @@ var _ = Describe("BeClickable and realistic interactions", func() {
 			b.Realistic().Click("#covered-btn")
 			ExpectFailures(ContainSubstring("not clickable"))
 			Expect("#covered-result").To(b.HaveInnerText("reset"))
+		})
+	})
+
+	Describe("realistic ClickEach", func() {
+		It("clicks every matching element with real input", func() {
+			b.Realistic().ClickEach(".each-btn")
+			Eventually(".each-btn").Should(b.EachHaveInnerText("clicked", "clicked", "clicked"))
+		})
+	})
+
+	Describe("realistic Type", func() {
+		It("scrolls an off-screen input into view before typing into it", func() {
+			b.Realistic().Type("#below-input", "typed")
+			Expect("#below-input").To(b.HaveValue("typed"))
 		})
 	})
 
