@@ -34,7 +34,7 @@ var _ = Describe("Role / text / label locators", func() {
 		})
 
 		It("matches all elements of a role when no name is given", func() {
-			Expect(b.ByRole("button")).To(b.HaveCount(3))
+			Expect(b.ByRole("button")).To(b.HaveCount(6))
 		})
 
 		It("flows through actions (Click)", func() {
@@ -70,6 +70,60 @@ var _ = Describe("Role / text / label locators", func() {
 
 		It("matches a form control by aria-label", func() {
 			Expect(b.GetProperty(b.ByLabel("Site search"), "id")).To(Equal("search"))
+		})
+
+		It("matches a form control by its placeholder", func() {
+			Expect(b.GetProperty(b.ByLabel("Phone number"), "id")).To(Equal("phone"))
+		})
+	})
+
+	Describe("Within", func() {
+		It("restricts matches to descendants of the scope element", func() {
+			Expect(b.ByRole("button").WithName("Delete")).To(b.HaveCount(2))
+			Expect(b.ByRole("button").WithName("Delete").Within("#dialog-a")).To(b.HaveCount(1))
+			b.Click(b.ByRole("button").WithName("Delete").Within("#dialog-b"))
+		})
+
+		It("accepts a CSS scope and finds the right element", func() {
+			Expect(b.GetProperty(b.ByText("Delete").Within("#dialog-a"), "tagName")).To(Equal("BUTTON"))
+		})
+
+		It("matches nothing when the scope is not found", func() {
+			Expect(b.ByRole("button").WithName("Delete").Within("#nope")).To(b.HaveCount(0))
+			Expect(b.ByRole("button").WithName("Delete").Within("#nope")).NotTo(b.Exist())
+		})
+	})
+
+	Describe("Nth / First / Last", func() {
+		It("selects the first match", func() {
+			Expect(b.InnerText(b.ByRole("listitem").First())).To(Equal("Apple"))
+		})
+
+		It("selects the nth match", func() {
+			Expect(b.InnerText(b.ByRole("listitem").Nth(2))).To(Equal("Cherry"))
+		})
+
+		It("selects the last match", func() {
+			Expect(b.InnerText(b.ByRole("listitem").Last())).To(Equal("Date"))
+		})
+
+		It("matches nothing for an out-of-range index", func() {
+			Expect(b.ByRole("listitem").Nth(99)).NotTo(b.Exist())
+			Expect(b.ByRole("listitem").Nth(99)).To(b.HaveCount(0))
+		})
+
+		It("composes with Within", func() {
+			Expect(b.InnerText(b.ByRole("listitem").Within("#fruits").Last())).To(Equal("Date"))
+		})
+	})
+
+	Describe("shadow-DOM piercing", func() {
+		It("finds a role+name match inside an open shadow root", func() {
+			Expect(b.ByRole("button").WithName("Shadow Action")).To(b.Exist())
+		})
+
+		It("flows through actions into the shadow root", func() {
+			Eventually(b.ByRole("button").WithName("Shadow Action")).Should(b.BeVisible())
 		})
 	})
 })

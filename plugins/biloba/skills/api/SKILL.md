@@ -5,7 +5,13 @@ description: One-line reference for every Biloba method and matcher, grouped by 
 
 # Biloba API reference
 
-Terse lookup. **(dual)** = acts immediately when fully applied, returns a Gomega matcher when under-applied (poll with `Eventually`). **(matcher)** = always returns a matcher. **first** = acts on the first match; **each** = acts on all matches (empty slice when none). Selectors are CSS strings or `XPath` (see `biloba:xpath`). Full docs: <https://onsi.github.io/biloba/>.
+Terse lookup. **(dual)** = acts immediately when fully applied, returns a Gomega matcher when under-applied (poll with `Eventually`). **(matcher)** = always returns a matcher. **first** = acts on the first match; **each** = acts on all matches (empty slice when none). Selectors are CSS strings, `XPath` (see `biloba:xpath`), or semantic **`Locator`**s. Full docs: <https://onsi.github.io/biloba/>.
+
+## Selectors / locators
+- CSS string (`"#id"`, `".cls"`); `>>>` pierces open shadow roots / same-origin iframes. `XPath` via `b.XPath(...)` (see `biloba:xpath`).
+- Semantic locators (preferred for text/role/label): `b.ByRole(role)` + `.WithName(n)`/`.WithNameContains(n)`; `b.ByText(t)`/`b.ByTextContains(t)`; `b.ByLabel(t)`/`b.ByLabelContains(t)`. A `Locator` flows through every method/matcher.
+- Compose: `.Within(scope)` restricts to descendants of `scope` (any selector); `.Nth(i)`/`.First()`/`.Last()` pick by ordinal. Example: `b.ByRole("button").WithName("Delete").Within("#dialog").First()`.
+- Locators **pierce open shadow roots** automatically (no `>>>` needed). Accname covers aria-labelledby/aria-label/`<label>`/alt/placeholder/value/text/figcaption/caption/title.
 
 ## Lifecycle / config
 - `biloba.SpinUpChrome(GinkgoT(), ...SpinUpOption)` — start Chrome (process 1). Options: `HighFidelityHeadless()`, `AutoInstallHeadlessShell()`, `HeadlessShellPath(p)`, `StartingWindowSize(w,h)`, `ChromeFlags(...)`. See `biloba:setup`.

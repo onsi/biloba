@@ -26,8 +26,28 @@ if (!window["_biloba"]) {
     // A pragmatic in-page implementation of ARIA role + accessible-name matching (à la
     // getByRole/getByText/getByLabel). It is NOT the full accname spec: it covers explicit
     // role="" + the common implicit roles, and names from aria-labelledby/aria-label/<label>/
-    // alt/value/text/title. Document-level only (does not pierce shadow roots in v1).
+    // alt/placeholder/value/text/figcaption/caption/title. It pierces OPEN shadow roots (closed
+    // roots and cross-origin frames are skipped, matching crossInto's conservative behavior).
     let normText = (s) => (s || "").replace(/\s+/g, " ").trim()
+    // collectElements returns root's element descendants, descending into open shadow roots.
+    // root may be a Document, DocumentFragment (shadowRoot), or Element. When root is an Element
+    // it is included in the result. Closed shadow roots are skipped.
+    let collectElements = (root) => {
+        let out = []
+        let walk = (node) => {
+            let kids = node.querySelectorAll ? node.querySelectorAll("*") : []
+            for (let el of kids) {
+                out.push(el)
+                if (el.shadowRoot) walk(el.shadowRoot)
+            }
+        }
+        if (root.nodeType === 1) { // Element: include it, then walk its (light + shadow) subtree
+            out.push(root)
+            if (root.shadowRoot) walk(root.shadowRoot)
+        }
+        walk(root)
+        return out
+    }
     let implicitRole = (el) => {
         let tag = el.tagName.toLowerCase()
         if (tag === "a" || tag === "area") return el.hasAttribute("href") ? "link" : ""
@@ -64,9 +84,19 @@ if (!window["_biloba"]) {
         let alt = el.getAttribute("alt")
         if (alt != null && normText(alt)) return normText(alt)
         let tag = el.tagName.toLowerCase()
-        if (tag === "input") {
+        if (tag === "input" || tag === "textarea" || tag === "select") {
             let t = (el.getAttribute("type") || "").toLowerCase()
             if ((t === "button" || t === "submit" || t === "reset") && el.value) return normText(el.value)
+            let ph = el.getAttribute("placeholder")
+            if (ph != null && normText(ph)) return normText(ph)
+        }
+        if (tag === "figure") {
+            let cap = el.querySelector("figcaption")
+            if (cap && normText(cap.textContent)) return normText(cap.textContent)
+        }
+        if (tag === "table") {
+            let cap = el.querySelector("caption")
+            if (cap && normText(cap.textContent)) return normText(cap.textContent)
         }
         let content = normText(el.textContent)
         if (content) return content
@@ -76,18 +106,30 @@ if (!window["_biloba"]) {
     }
     let matchText = (actual, target, mode) => mode === "contains" ? actual.includes(target) : actual === target
     let locate = (q) => {
-        let all = [...document.querySelectorAll("*")]
+        // Resolve the candidate set, piercing open shadow roots. When `within` is set, scope to
+        // that element's subtree (and return [] if it can't be resolved).
+        let all
+        if (q.within) {
+            let scope = sel(q.within)
+            if (!scope) return []
+            all = collectElements(scope).filter(el => el !== scope) // descendants only
+        } else {
+            all = collectElements(document)
+        }
+        let matched = []
         if (q.by === "role") {
-            return all.filter(el => roleOf(el) === q.role && (!q.nameSet || matchText(accessibleName(el), q.name, q.nameMode)))
-        }
-        if (q.by === "label") {
-            return all.filter(el => el.matches("input,select,textarea,button,[contenteditable],[role]") && matchText(accessibleName(el), q.text, q.textMode))
-        }
-        if (q.by === "text") {
+            matched = all.filter(el => roleOf(el) === q.role && (!q.nameSet || matchText(accessibleName(el), q.name, q.nameMode)))
+        } else if (q.by === "label") {
+            matched = all.filter(el => el.matches("input,select,textarea,button,[contenteditable],[role]") && matchText(accessibleName(el), q.text, q.textMode))
+        } else if (q.by === "text") {
             let m = all.filter(el => matchText(normText(el.textContent), q.text, q.textMode))
-            return m.filter(el => !m.some(other => other !== el && el.contains(other))) // smallest matching element
+            matched = m.filter(el => !m.some(other => other !== el && el.contains(other))) // smallest matching element
         }
-        return []
+        if (q.nthSet) {
+            let i = q.nth === -1 ? matched.length - 1 : q.nth
+            return (i >= 0 && i < matched.length) ? [matched[i]] : []
+        }
+        return matched
     }
 
     let sel = (s) => {

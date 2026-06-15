@@ -79,7 +79,7 @@ someList.First()
 
 ## Top-level text shortcuts
 
-For "the element that says X", prefer the locator engine (see the `biloba:write-tests` skill): `b.ByText("Submit")` / `b.ByTextContains("Welcome")` match *visible* text. `b.WithText`/`b.WithTextContains` are back-compat aliases for those (they no longer return an `XPath`). Refine with a tag via the XPath DSL when you need one: `b.XPath("button").WithText("Submit")`.
+For "the element that says X", prefer the locator engine (see the `biloba:write-tests` skill): `b.ByText("Submit")` / `b.ByTextContains("Welcome")` match *visible* text; `b.ByRole("button").WithName("Save")` and `b.ByLabel("Email")` cover role/label. `b.WithText`/`b.WithTextContains` are back-compat aliases for the text variants (they no longer return an `XPath`). Locators **compose** — `.Within(scope)` (scope to a container), `.Nth(i)`/`.First()`/`.Last()` (ordinal) — and **pierce open shadow roots** automatically, which XPath cannot. Refine with a tag via the XPath DSL when you need one: `b.XPath("button").WithText("Submit")`.
 
 ## Reuse partial queries
 
@@ -93,4 +93,4 @@ Eventually(users.WithText("Jane")).Should(b.HaveClass("online"))
 
 ## Limits
 
-XPath selectors **do not cross** shadow DOM or iframe boundaries — the `>>>` piercing combinator is CSS-only (see `biloba:write-tests`). For those, use a CSS selector with `>>>`.
+XPath selectors **do not cross** shadow DOM or iframe boundaries — the `>>>` piercing combinator is CSS-only (see `biloba:write-tests`). For those, use a CSS selector with `>>>`, or reach for a semantic locator (`b.ByRole`/`b.ByText`/`b.ByLabel`), which pierces open shadow roots automatically.

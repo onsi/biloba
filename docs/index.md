@@ -689,11 +689,25 @@ Eventually(b.ByText("Welcome back, Jane")).Should(b.Exist())  // the smallest el
 b.Click(b.ByTextContains("Sign"))
 ```
 
-- **`b.ByRole(role)`** matches the element's [ARIA role](https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA/Roles) - explicit `role="..."` or the common implicit role of a tag (`button`, `link`, `heading`, `checkbox`, `radio`, `textbox`, `combobox`, `list`, ...).  Chain `.WithName("...")` / `.WithNameContains("...")` to also match the **accessible name** (computed from `aria-labelledby` → `aria-label` → associated `<label>` → `alt`/`value` → text content → `title`).
+- **`b.ByRole(role)`** matches the element's [ARIA role](https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA/Roles) - explicit `role="..."` or the common implicit role of a tag (`button`, `link`, `heading`, `checkbox`, `radio`, `textbox`, `combobox`, `list`, ...).  Chain `.WithName("...")` / `.WithNameContains("...")` to also match the **accessible name** (computed from `aria-labelledby` → `aria-label` → associated `<label>` → `alt` → `placeholder` → `value` → text content → `<figcaption>`/`<caption>` → `title`).
 - **`b.ByText(text)`** / **`b.ByTextContains(text)`** match the *smallest* element whose visible text equals / contains `text`.  These are the modern replacement for `b.WithText`/`b.WithTextContains`.
 - **`b.ByLabel(text)`** / **`b.ByLabelContains(text)`** match the form control whose accessible label equals / contains `text`.
 
-Coverage is pragmatic rather than the full ARIA specification - it handles explicit roles plus the common implicit ones, and the common accessible-name sources - and it operates at the document level (it does not yet pierce shadow roots).  For anything it can't express, CSS `:has()` and the XPath DSL are right there.
+Locators **compose**.  Chain any of these to narrow the match:
+
+```go
+b.Click(b.ByRole("button").WithName("Delete").Within("#dialog"))  // only inside the matching scope
+b.Click(b.ByRole("listitem").Nth(2))                              // the third matching element (0-based)
+Expect(b.ByRole("listitem").First())...                          // first match (== .Nth(0))
+Expect(b.ByRole("listitem").Last())...                           // final match
+```
+
+- **`.Within(scope)`** restricts matches to descendants of the element matching `scope` - any selector (a CSS string, an `XPath`, or another `Locator`).  If `scope` matches nothing the locator matches nothing.  This is the clean way to disambiguate "the Save button *in this dialog*".
+- **`.Nth(i)` / `.First()` / `.Last()`** select a single element by ordinal among the matches (out-of-range → no match).  `.Nth`/`.Last` are genuinely new power; `.First()` is mostly explicitness since single-element actions already use the first match.
+
+Locators **pierce open shadow roots** - a `b.ByRole("button").WithName("Submit")` will find a button inside a custom element's open shadow DOM with no `>>>` ceremony (closed roots and cross-origin frames are skipped, matching the rest of Biloba).
+
+Coverage is pragmatic rather than the full ARIA specification - it handles explicit roles plus the common implicit ones, and the common accessible-name sources.  For anything it can't express, CSS `:has()` and the XPath DSL are right there.  Between semantic locators, `Within`, the ordinal selectors, and CSS `:has()`, XPath is now a rarely-needed power tool for the ordinal/axis long tail.
 
 Before we go further and explore the catalog of DOM interactions Biloba provides we should pause and point out an important design decision in Biloba.
 

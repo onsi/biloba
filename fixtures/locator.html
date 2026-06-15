@@ -25,5 +25,35 @@
 
   <input id="agree" type="checkbox" />
   <label for="agree">I agree</label>
+
+  <!-- Within scoping: two "Delete" buttons in distinct containers -->
+  <div id="dialog-a">
+    <button>Delete</button>
+  </div>
+  <div id="dialog-b">
+    <button>Delete</button>
+  </div>
+
+  <!-- Ordinal selection: a list of same-role items -->
+  <ul id="fruits">
+    <li>Apple</li>
+    <li>Banana</li>
+    <li>Cherry</li>
+    <li>Date</li>
+  </ul>
+
+  <!-- Accessible name from placeholder -->
+  <input id="phone" type="tel" placeholder="Phone number" />
+
+  <!-- Open shadow root containing a button with an accessible name -->
+  <shadow-card id="card"></shadow-card>
+  <script>
+    customElements.define("shadow-card", class extends HTMLElement {
+      connectedCallback() {
+        let root = this.attachShadow({ mode: "open" })
+        root.innerHTML = '<button aria-label="Shadow Action">go</button>'
+      }
+    })
+  </script>
 </body>
 </html>
