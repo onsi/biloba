@@ -183,6 +183,40 @@ func (b *Biloba) BeEnabled() types.GomegaMatcher {
 }
 
 /*
+EachBeVisible() is a Gomega matcher that passes if every element returned by selector is visible.  It passes vacuously when no elements match.
+
+Use it like this:
+
+	Expect("div.comment").To(tab.EachBeVisible())
+	Eventually("div.comment").Should(tab.EachBeVisible())
+
+visibility is determined by non-zero offsetWidth and offsetHeight
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+*/
+func (b *Biloba) EachBeVisible() types.GomegaMatcher {
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return b.runBilobaHandler("eachIsVisible", selector).MatcherResult()
+	}).WithMessage("each be visible")
+}
+
+/*
+EachBeEnabled() is a Gomega matcher that passes if every element returned by selector is not disabled.  It passes vacuously when no elements match.
+
+Use it like this:
+
+	Expect("input").To(tab.EachBeEnabled())
+	Eventually("button").Should(tab.EachBeEnabled())
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+*/
+func (b *Biloba) EachBeEnabled() types.GomegaMatcher {
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return b.runBilobaHandler("eachIsEnabled", selector).MatcherResult()
+	}).WithMessage("each be enabled")
+}
+
+/*
 BeClickable() is a Gomega matcher that passes if the first element returned by selector is visible, enabled, and is the topmost element at its own center point - i.e. a real click would land on it rather than on something covering it.
 
 Unlike a plain BeVisible() check it performs a synchronous, atomic occlusion/hittability test (via document.elementFromPoint): it fails if the element is obscured by another element (e.g. an overlay) or if its center is scrolled out of the viewport.  Like all of Biloba's primitives the check is deterministic and fails fast - it does not wait for animations to settle.
@@ -590,6 +624,28 @@ func (b *Biloba) HaveClass(expected string) types.GomegaMatcher {
 		data["Result"] = r.ResultStringSlice()
 		return matcher.Match(data["Result"])
 	}).WithTemplate("HaveClass for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+}
+
+/*
+EachHaveClass returns a Gomega matcher to assert that every element matching selector has the expected class.  It passes vacuously when no elements match.
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+*/
+func (b *Biloba) EachHaveClass(expected string) types.GomegaMatcher {
+	var data = map[string]any{}
+	var matcher = gomega.HaveEach(gomega.ContainElement(expected))
+	data["Matcher"] = matcher
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		r := b.runBilobaHandler("getPropertyForEach", selector, "classList")
+		if r.Error() != nil {
+			return false, r.Error()
+		}
+		data["Result"] = r.Result
+		if classLists, ok := r.Result.([]any); ok && len(classLists) == 0 {
+			return true, nil // vacuously true when no elements match
+		}
+		return matcher.Match(data["Result"])
+	}).WithTemplate("EachHaveClass for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
 }
 
 /*

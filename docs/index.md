@@ -941,6 +941,12 @@ This will catch cases where the DOM element has `display:none` or if it's parent
 
 Since `BeVisible()` validates existence you do not need to have an `Eventually(selector).Should(b.Exist())` before checking `BeVisible()`
 
+`BeVisible()` operates on the **first** element found by `selector`.  To assert that **every** matching element is visible use `EachBeVisible()` (it passes vacuously when no elements match):
+
+```go
+Eventually(selector).Should(b.EachBeVisible())
+```
+
 ---
 
 To assert that an element can be interacted with use `BeEnabled()`:
@@ -962,6 +968,12 @@ Biloba's disabled check is simply:
 ```
 
 As with `BeVisible()` you don't need to assert existence before asserting `BeEnabled()` - existence is implicitly validated by `BeEnabled()`
+
+`BeEnabled()` operates on the **first** element found by `selector`.  To assert that **every** matching element is enabled use `EachBeEnabled()` (it passes vacuously when no elements match):
+
+```go
+Eventually(selector).Should(b.EachBeEnabled())
+```
 
 ---
 
@@ -1061,6 +1073,12 @@ Eventually(selector).Should(b.HaveClass(ContainElement("published")))
 ```
 
 i.e. the class list should include `published`.  `HaveClass` always operates on the **first** element found by `selector`.
+
+To assert that **every** matching element has a given class use `EachHaveClass(string)` (it passes vacuously when no elements match):
+
+```go
+Eventually(selector).Should(b.EachHaveClass("published"))
+```
 
 ---
 

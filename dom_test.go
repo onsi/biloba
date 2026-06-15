@@ -122,6 +122,60 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 	})
 
+	Describe("EachBeVisible", func() {
+		It("matches when every element is visible", func() {
+			Ω(".each-vis:not(.hidden)").Should(b.EachBeVisible())
+		})
+
+		It("does not match when any element is hidden", func() {
+			Ω(".each-vis").ShouldNot(b.EachBeVisible())
+		})
+
+		It("matches vacuously when no elements match the selector", func() {
+			Ω(".non-existing").Should(b.EachBeVisible())
+		})
+
+		It("fails the spec via the immediate-failure path of a captured failure", func() {
+			match, err := b.EachBeVisible().Match(".each-vis")
+			Ω(match).Should(BeFalse())
+			Ω(err).Should(BeNil())
+			Ω(b.EachBeVisible().FailureMessage(".each-vis")).Should(ContainSubstring("each be visible"))
+		})
+	})
+
+	Describe("EachBeEnabled", func() {
+		It("matches when every element is enabled", func() {
+			Ω(".each-en:not([disabled])").Should(b.EachBeEnabled())
+		})
+
+		It("does not match when any element is disabled", func() {
+			Ω(".each-en").ShouldNot(b.EachBeEnabled())
+		})
+
+		It("matches enabled elements even when some are hidden", func() {
+			Ω(".each-vis").Should(b.EachBeEnabled())
+		})
+
+		It("matches vacuously when no elements match the selector", func() {
+			Ω(".non-existing").Should(b.EachBeEnabled())
+		})
+	})
+
+	Describe("EachHaveClass", func() {
+		It("matches when every element has the class", func() {
+			Ω(".each-vis").Should(b.EachHaveClass("tagged"))
+			Ω(".each-vis").Should(b.EachHaveClass("each-vis"))
+		})
+
+		It("does not match when any element lacks the class", func() {
+			Ω("#each-group > *").ShouldNot(b.EachHaveClass("tagged"))
+		})
+
+		It("matches vacuously when no elements match the selector", func() {
+			Ω(".non-existing").Should(b.EachHaveClass("tagged"))
+		})
+	})
+
 	Describe("InnerText", func() {
 		It("returns the InnerText of the element", func() {
 			Ω(b.InnerText("#hello")).Should(Equal("Hello Biloba!"))

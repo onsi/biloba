@@ -243,6 +243,8 @@ if (!window["_biloba"]) {
     b.count = each(ns => rRes(ns.length))
     b.isVisible = one(n => r(n.offsetWidth > 0 || n.offsetHeight > 0 || n.offsetParent != null, "DOM element is not visible"))
     b.isEnabled = one(n => r(!n.disabled, "DOM element is not enabled"))
+    b.eachIsVisible = each(ns => r(ns.every(n => b.isVisible(n).success), "not all DOM elements are visible"))
+    b.eachIsEnabled = each(ns => r(ns.every(n => b.isEnabled(n).success), "not all DOM elements are enabled"))
     // pointerOpts builds a MouseEvent init from a pointer options object {ox,oy,hasOffset,shift,...}:
     // the coordinates are the element's center, or its top-left corner plus the offset when one is
     // given, and the modifier flags carry through to shift/ctrl/alt/meta-aware handlers.
