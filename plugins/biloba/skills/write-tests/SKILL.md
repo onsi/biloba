@@ -53,14 +53,17 @@ var _ = Describe("the search page", func() {
 
 ## Selecting elements
 
-A `selector` is either a **CSS string** or an **`XPath`** value:
+A `selector` is a **CSS string**, a **semantic `Locator`** (by role/text/label), or an **`XPath`** value:
 
 ```go
-b.Click("button.submit")                 // CSS — first matching element
-b.Click(b.XPath("button").WithText("OK")) // XPath via the DSL → biloba:xpath
-b.Click(b.WithText("Submit"))            // sugar for b.XPath().WithText(...) — any element by exact text
-b.Click(b.WithTextContains("Sub"))       // ...by substring
+b.Click("button.submit")                          // CSS — first matching element
+b.Click(b.ByRole("button").WithName("Save"))      // by accessible role + name — preferred for controls
+b.Click(b.ByText("Submit"))                       // by exact visible text (b.ByTextContains for substring)
+b.SetValue(b.ByLabel("Email"), "jane@acme.com")   // a form control by its label
+b.Click(b.XPath("button").WithText("OK"))         // XPath via the DSL → biloba:xpath (structural power tool)
 ```
+
+Prefer role/text/label locators and CSS; reach for XPath only for ordinal/axis structural queries. `b.WithText`/`b.WithTextContains` are back-compat aliases for `b.ByText`/`b.ByTextContains`.
 
 Prefer text/role selectors for things a user names by label; fall back to ids/`data-*` for the rest. Never fetch-then-act — always pass the selector *into* the action so find-and-act is one atomic JS snippet.
 

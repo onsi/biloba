@@ -1602,25 +1602,15 @@ b.XPath("ul").Nth(2).Descendant("li").Last()
 
 #### Text selectors
 
-A common need is to find "the element that says X" — for example, clicking the button labelled "Submit" or waiting for a confirmation message to appear.  Rather than writing `b.XPath().WithText("Submit")` every time, Biloba provides two top-level shortcuts that mirror the XPath DSL's `WithText`/`WithTextContains` vocabulary:
+A common need is to find "the element that says X" — for example, clicking the button labelled "Submit" or waiting for a confirmation message to appear.  Reach for the [text and label locators](#selecting-by-role-text-and-label) — `b.ByText`/`b.ByTextContains` — for this; they match on *visible* text (what the user actually perceives) rather than a raw XPath `text()` node:
 
 ```go
-// select any element whose full text is exactly "Submit"
-b.WithText("Submit")
-
-// select any element whose text contains the substring "Subm"
-b.WithTextContains("Subm")
+b.Click(b.ByText("Submit"))
+Eventually(b.ByText("Save changes")).Should(b.BeVisible())
+Eventually(b.ByTextContains("Welcome")).Should(b.Exist())
 ```
 
-Both return an `XPath` value and compose freely with every Biloba action and matcher:
-
-```go
-b.Click(b.WithText("Submit"))
-Eventually(b.WithText("Save changes")).Should(b.BeVisible())
-Eventually(b.WithTextContains("Welcome")).Should(b.Exist())
-```
-
-`b.WithText(text)` is sugar for `b.XPath().WithText(text)` and `b.WithTextContains(text)` is sugar for `b.XPath().WithTextContains(text)`.  Both match any element type; refine with the full XPath DSL when you need a specific tag:
+`b.WithText`/`b.WithTextContains` remain as back-compat aliases for `b.ByText`/`b.ByTextContains`.  (In earlier versions they returned an `XPath`; they now use the locator engine.)  When you need to scope text matching to a specific tag, use the XPath DSL:
 
 ```go
 b.XPath("button").WithText("Submit")       // only <button> elements

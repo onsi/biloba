@@ -45,29 +45,31 @@ func (b *Biloba) XPath(path ...string) XPath {
 }
 
 /*
-WithText(text) returns an XPath that selects any element whose text content equals text exactly.
-It is a top-level shortcut for b.XPath().WithText(text) and composes with all Biloba actions and matchers:
+WithText(text) is a back-compat alias for [Biloba.ByText]: it returns a [Locator] that matches the smallest element whose visible text equals text exactly.
 
 	b.Click(b.WithText("Submit"))
 	Eventually(b.WithText("Save")).Should(b.BeVisible())
 
-Read https://onsi.github.io/biloba/#the-xpath-dsl to learn more about Biloba's XPath DSL
+Prefer [Biloba.ByText] in new code.  (Earlier versions returned an [XPath]; it now uses the locator engine, which matches visible text rather than a literal text() node.  For a tag-scoped structural query, use b.XPath("button").WithText("Submit").)
+
+Read https://onsi.github.io/biloba/#selecting-dom-elements to learn more about selectors.
 */
-func (b *Biloba) WithText(text string) XPath {
-	return b.XPath().WithText(text)
+func (b *Biloba) WithText(text string) Locator {
+	return b.ByText(text)
 }
 
 /*
-WithTextContains(text) returns an XPath that selects any element whose text content contains text.
-It is a top-level shortcut for b.XPath().WithTextContains(text) and composes with all Biloba actions and matchers:
+WithTextContains(text) is a back-compat alias for [Biloba.ByTextContains]: it returns a [Locator] that matches the smallest element whose visible text contains text.
 
 	b.Click(b.WithTextContains("Subm"))
 	Eventually(b.WithTextContains("Sav")).Should(b.BeVisible())
 
-Read https://onsi.github.io/biloba/#the-xpath-dsl to learn more about Biloba's XPath DSL
+Prefer [Biloba.ByTextContains] in new code.
+
+Read https://onsi.github.io/biloba/#selecting-dom-elements to learn more about selectors.
 */
-func (b *Biloba) WithTextContains(text string) XPath {
-	return b.XPath().WithTextContains(text)
+func (b *Biloba) WithTextContains(text string) Locator {
+	return b.ByTextContains(text)
 }
 
 /*

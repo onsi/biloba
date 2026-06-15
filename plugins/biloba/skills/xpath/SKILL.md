@@ -79,12 +79,7 @@ someList.First()
 
 ## Top-level text shortcuts
 
-```go
-b.WithText("Submit")          // == b.XPath().WithText("Submit")
-b.WithTextContains("Welcome") // == b.XPath().WithTextContains("Welcome")
-```
-
-Use these for "the element that says X". Refine with a tag when you need one: `b.XPath("button").WithText("Submit")`.
+For "the element that says X", prefer the locator engine (see the `biloba:write-tests` skill): `b.ByText("Submit")` / `b.ByTextContains("Welcome")` match *visible* text. `b.WithText`/`b.WithTextContains` are back-compat aliases for those (they no longer return an `XPath`). Refine with a tag via the XPath DSL when you need one: `b.XPath("button").WithText("Submit")`.
 
 ## Reuse partial queries
 
