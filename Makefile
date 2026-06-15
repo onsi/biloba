@@ -20,11 +20,13 @@ test-all:
 ## stress-test: flake hunt - 6 procs under moderate CPU/IO load, 41 repeats, generous total budget
 ## so a wedge surfaces as a TIMEDOUT (with a goroutine dump) rather than a false budget-exhaustion.
 ## Slow; run periodically or when you suspect a change might be flaky. Needs `stress` (brew install stress).
+## Cleanup reaps stress's worker children (pkill -P) before the launcher - SIGTERMing only the launcher
+## orphans the --cpu/--io workers to init, where they peg the CPU until their own --timeout fires.
 stress-test:
 	@command -v stress >/dev/null || { echo "stress not found - install with: brew install stress"; exit 1; }
 	stress --cpu 4 --io 1 --timeout 2000s & \
 	stress_pid=$$!; \
 	$(GINKGO) -procs=6 --randomize-all --repeat 40 --timeout=1500s --poll-progress-after=45s ./... ; \
 	status=$$?; \
-	kill $$stress_pid 2>/dev/null; \
+	pkill -P $$stress_pid 2>/dev/null; kill $$stress_pid 2>/dev/null; \
 	exit $$status
