@@ -126,6 +126,13 @@ var _ = Describe("BeClickable and realistic interactions", func() {
 		})
 	})
 
+	Describe("realistic DragTo", func() {
+		It("drags the source onto the target with real pointer input", func() {
+			b.Realistic().DragTo("#drag-src", "#drop-zone")
+			Eventually("#drop-result").Should(b.HaveInnerText("dropped"))
+		})
+	})
+
 	Describe("realistic Type", func() {
 		It("scrolls an off-screen input into view before typing into it", func() {
 			b.Realistic().Type("#below-input", "typed")

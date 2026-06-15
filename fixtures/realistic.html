@@ -66,6 +66,11 @@
   <button id="ctx-btn">Right me</button>
   <span id="ctx-result">no</span>
 
+  <!-- pointer-based drag-and-drop targets -->
+  <div id="drag-src" style="display: inline-block; padding: 8px; background: #cde">Drag me</div>
+  <div id="drop-zone" style="display: inline-block; padding: 8px; background: #dec">Drop here</div>
+  <span id="drop-result">no</span>
+
   <script>
     const set = (id, v) => (document.getElementById(id).textContent = v);
     document.getElementById('plain-btn').addEventListener('click', () => set('plain-result', 'clicked'));
@@ -87,6 +92,9 @@
     dblBtn.addEventListener('click', () => set('dbl-clicks', ++dblClicks));
     dblBtn.addEventListener('dblclick', () => set('dbl-result', 'double'));
     document.getElementById('ctx-btn').addEventListener('contextmenu', (e) => { e.preventDefault(); set('ctx-result', 'menu'); });
+    let dragging = false;
+    document.getElementById('drag-src').addEventListener('pointerdown', () => (dragging = true));
+    document.getElementById('drop-zone').addEventListener('pointerup', () => { if (dragging) set('drop-result', 'dropped'); dragging = false; });
   </script>
 </body>
 </html>

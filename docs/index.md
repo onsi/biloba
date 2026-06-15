@@ -1344,6 +1344,20 @@ Eventually("#row").Should(b.RightClick())
 
 Like `Click` and `Hover`, the default (fast) versions are pragmatic simulations: `DblClick` calls `element.click()` twice and dispatches a `dblclick` event; `RightClick` dispatches `mousedown`/`mouseup`/`contextmenu` with the secondary button.  In [realistic mode](#realistic-interactions) both scroll into view, wait for the element to stop moving, refuse to click through an overlay, and dispatch real CDP mouse input (a genuine double-click and a genuine right-button click that fires the browser's native context menu event).
 
+#### Dragging and Dropping
+
+`b.DragTo` drags one element onto another:
+
+```go
+b.DragTo("#card", "#column")             // drags #card's center onto #column's center
+```
+
+`DragTo` is **pointer-based**: it drives a drag with `pointerdown`/`pointermove`/`pointerup` (plus the matching `mouse` events) from the source's center to the target's center.  This is what modern drag-and-drop libraries - [@dnd-kit](https://dndkit.com), Sortable, and friends - listen for, so `DragTo` exercises them.  In [realistic mode](#realistic-interactions) it scrolls both elements into view, checks their actionability, and drives the same drag with real CDP mouse input.
+
+Like `ClickEach`, `DragTo` takes two selectors and so has **no matcher variant** - it always acts immediately and fails the spec if either element can't be found (or, in realistic mode, isn't actionable).
+
+`DragTo` does **not** drive native HTML5 drag-and-drop (the `draggable` attribute and the `dragstart`/`dragover`/`drop` event family).  Synthesizing the native protocol convincingly requires the real OS-level drag machinery, which is outside Biloba's atomic model.  If you need to test a native HTML5 `draggable` interaction, drop down to chromedp via `b.Context`.
+
 ### Hovering, Focusing, and Scrolling
 
 Alongside `Click`, Biloba provides a few more first-class interactions, all following the same dual immediate/matcher convention:
@@ -1381,6 +1395,7 @@ In realistic mode:
 - **`Click`** scrolls the element to the center of the viewport, **waits for its box to stop moving**, verifies it is enabled and is the topmost element at its center point (so an occluding overlay or an off-screen element does **not** click through - the matcher form keeps polling, the immediate form fails the spec), moves the real pointer to it (so hover-gated clicks register), then dispatches a real `mousePressed`/`mouseReleased`.  This is the inverse of plain `Click`, which clicks the element directly regardless of what's on top of it.  Clicks through `>>>` same-origin iframe boundaries are translated to top-level viewport coordinates so the real mouse lands in the right place.
 - **`ClickEach`** clicks every matching element with real input, scrolling and re-measuring each in turn, and skipping any that are hidden, disabled, off-screen, or obscured.
 - **`DblClick`** / **`RightClick`** apply the same scroll/stability/occlusion machinery as `Click`, then dispatch a real double-click (two click sequences with an incrementing click-count, so Chrome fires a genuine `dblclick`) or a real right-button click (firing the browser's native `contextmenu`).
+- **`DragTo`** scrolls and measures stable, actionable points for *both* the source and target, then drives a real CDP pointer drag - press at the source, several interpolated moves toward the target, release at the target - so pointer-based drag-and-drop libraries see genuine pointer input (it still does not drive native HTML5 `draggable`).
 - **`Hover`** scrolls into view and moves the real mouse to the element's center, which - unlike the synthetic `Hover` - activates genuine CSS `:hover` (e.g. a menu that only appears via a `:hover` rule).
 - **`SetValue`** drives form controls with real input: a text input is focused with a real click, cleared, and typed with real key events (then blurred to fire `change`); a checkbox is toggled with a real click (and left alone if it's already in the desired state).  Native pickers - radio groups, `<select>`, and multi-selects - fall back to the fast JS path, because they can't be driven by a real pointer (Playwright's `selectOption` sets them programmatically too).
 - **`Type`** / **`SendKeys`** already use real CDP key events; in realistic mode they additionally scroll the element into view before typing.

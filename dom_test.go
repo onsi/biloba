@@ -1068,6 +1068,23 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 	})
 
+	Describe("DragTo", func() {
+		It("drags the source onto the target", func() {
+			b.DragTo("#drag-src", "#drop-zone")
+			Ω("#drop-result").Should(b.HaveInnerText("dropped"))
+		})
+
+		It("auto-fails if the source element does not exist", func() {
+			b.DragTo("#non-existing", "#drop-zone")
+			ExpectFailures("Failed to drag:\ncould not find DOM element matching selector: #non-existing")
+		})
+
+		It("auto-fails if the target element does not exist", func() {
+			b.DragTo("#drag-src", "#non-existing")
+			ExpectFailures("Failed to drag:\ncould not find DOM element matching target selector: #drag-src")
+		})
+	})
+
 	Describe("invokeOn and invokeOnEach", func() {
 		It("invokes the requested function on the selected dom element", func() {
 			b.InvokeOn("#increment", "click")

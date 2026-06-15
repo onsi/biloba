@@ -165,6 +165,44 @@ func (b *Biloba) realisticRightClick(selector any) (bool, error) {
 	return true, nil
 }
 
+// realisticDragTo implements DragTo for realistic mode.  It measures stable, actionable points for
+// both source and target (scroll-into-view + stability + occlusion, same as realisticClick), then
+// drives a real CDP pointer drag: press at the source, several interpolated moves toward the target,
+// and a release at the target.  This drives pointer-based drag-and-drop libraries; it does not drive
+// native HTML5 draggable (use chromedp via b.Context for that).  Returns an error if either element
+// is missing/hidden or is not actionable (off-screen, disabled, or obscured).
+func (b *Biloba) realisticDragTo(source any, target any) error {
+	src, err := b.scrollToStablePoint(source)
+	if err != nil {
+		return err
+	}
+	if !src.enabled || !src.inViewport || !src.hittable {
+		return fmt.Errorf("source element is not actionable (it is disabled, off-screen, or obscured by another element)")
+	}
+	tgt, err := b.scrollToStablePoint(target)
+	if err != nil {
+		return err
+	}
+	if !tgt.enabled || !tgt.inViewport || !tgt.hittable {
+		return fmt.Errorf("target element is not actionable (it is disabled, off-screen, or obscured by another element)")
+	}
+	actions := []chromedp.Action{
+		chromedp.MouseEvent(input.MouseMoved, src.x, src.y),
+		chromedp.MouseEvent(input.MousePressed, src.x, src.y, chromedp.ButtonType(input.Left), chromedp.ClickCount(1)),
+	}
+	steps := 5
+	for i := 1; i <= steps; i++ {
+		x := src.x + (tgt.x-src.x)*float64(i)/float64(steps)
+		y := src.y + (tgt.y-src.y)*float64(i)/float64(steps)
+		actions = append(actions, chromedp.MouseEvent(input.MouseMoved, x, y, chromedp.ButtonType(input.Left)))
+	}
+	actions = append(actions,
+		chromedp.MouseEvent(input.MouseMoved, tgt.x, tgt.y, chromedp.ButtonType(input.Left)),
+		chromedp.MouseEvent(input.MouseReleased, tgt.x, tgt.y, chromedp.ButtonType(input.Left), chromedp.ClickCount(1)),
+	)
+	return chromedp.Run(b.Context, actions...)
+}
+
 // realisticSetValue implements SetValue for realistic mode.  Text inputs are focused with a real
 // click, cleared, typed with real CDP key events, then blurred to fire change (matching SetValue's
 // value-set contract); checkboxes are toggled with a real click only when not already in the

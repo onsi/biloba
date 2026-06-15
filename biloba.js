@@ -170,6 +170,22 @@ if (!window["_biloba"]) {
         n.dispatchEvent(new MouseEvent('contextmenu', opts))
         return r()
     })
+    b.dragTo = one(b.isVisible, (src, targetSel) => {
+        let tgt = sel(targetSel)
+        if (!tgt) return rErr("could not find DOM element matching target selector")
+        let center = (el) => { let b = el.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2] }
+        let [sx, sy] = center(src), [tx, ty] = center(tgt)
+        let fire = (el, type, x, y, buttons) => {
+            let opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0, buttons: buttons }
+            el.dispatchEvent(new PointerEvent('pointer' + type, opts))
+            el.dispatchEvent(new MouseEvent('mouse' + type, opts))
+        }
+        fire(src, 'down', sx, sy, 1)
+        let steps = 5
+        for (let i = 1; i <= steps; i++) fire(tgt, 'move', sx + (tx - sx) * i / steps, sy + (ty - sy) * i / steps, 1)
+        fire(tgt, 'up', tx, ty, 0)
+        return r()
+    })
     b.focus = one(b.isVisible, b.isEnabled, n => r(n.focus()))
     b.hover = one(b.isVisible, n => {
         let opts = { bubbles: true, cancelable: true, view: window }

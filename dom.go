@@ -864,6 +864,36 @@ func (b *Biloba) RightClick(args ...any) types.GomegaMatcher {
 }
 
 /*
+DragTo() drags the first element matching source onto the first element matching target.
+
+	tab.DragTo("#card", "#column")
+
+it immediately drags source's center to target's center with a pointer-based drag sequence (pointerdown/pointermove/pointerup plus the matching mouse events; realistic mode dispatches the drag with real CDP mouse input).  It is meant for pointer-based drag-and-drop libraries (@dnd-kit and the like); it does NOT drive native HTML5 draggable - for that, drop to chromedp via tab.Context.  It fails if either element is not found, or if source is hidden.
+
+Unlike Click, DragTo has no matcher variant.
+
+Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
+*/
+func (b *Biloba) DragTo(source any, target any) {
+	b.gt.Helper()
+	if b.realistic {
+		if err := b.realisticDragTo(source, target); err != nil {
+			b.gt.Fatalf("Failed to drag:\n%s", err.Error())
+		}
+		return
+	}
+	encodedTarget, err := encodeSelector(target)
+	if err != nil {
+		b.gt.Fatalf("Failed to drag:\n%s", err.Error())
+		return
+	}
+	r := b.runBilobaHandler("dragTo", source, encodedTarget)
+	if r.Error() != nil {
+		b.gt.Fatalf("Failed to drag:\n%s", r.Error())
+	}
+}
+
+/*
 Focus() focuses the first element matching selector.
 
 When invoked with a selector, tab.Focus("input.search") acts immediately and fails the spec if no element is found, or if the element is hidden or disabled.
