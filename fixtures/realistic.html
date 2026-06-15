@@ -21,6 +21,12 @@
 
   <button id="disabled-btn" disabled>Disabled</button>
 
+  <!-- form controls for realistic SetValue -->
+  <input id="text-input" type="text" value="old" />
+  <span id="text-changed">no</span>
+  <input id="check-input" type="checkbox" />
+  <span id="check-changed">no</span>
+
   <!-- a button fully covered by an overlay in its own stacking context -->
   <div style="position: relative; display: inline-block">
     <button id="covered-btn">Covered</button>
@@ -46,6 +52,8 @@
     const gated = document.getElementById('gated-btn');
     gated.addEventListener('mouseover', () => (gatedHovered = true));
     gated.addEventListener('click', () => { if (gatedHovered) set('gated-result', 'clicked'); });
+    document.getElementById('text-input').addEventListener('change', () => set('text-changed', 'yes'));
+    document.getElementById('check-input').addEventListener('change', () => set('check-changed', 'yes'));
     document.getElementById('covered-btn').addEventListener('click', () => set('covered-result', 'clicked'));
     document.getElementById('submenu-item').addEventListener('click', () => set('hover-result', 'selected'));
     document.getElementById('below-btn').addEventListener('click', () => set('scroll-result', 'clicked'));

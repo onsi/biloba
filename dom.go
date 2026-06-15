@@ -527,16 +527,29 @@ Read https://onsi.github.io/biloba/#form-elements to learn more about working wi
 func (b *Biloba) SetValue(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
 	if len(args) == 2 {
+		if b.realistic {
+			ok, err := b.realisticSetValue(args[0], args[1])
+			if err != nil {
+				b.gt.Fatalf("Failed to set value:\n%s", err.Error())
+			} else if !ok {
+				b.gt.Fatalf("Failed to set value: element is not settable (not visible, enabled, in view, or unobscured)")
+			}
+			return nil
+		}
 		r := b.runBilobaHandler("setValue", args[0], args[1])
 		if r.Error() != nil {
 			b.gt.Fatalf("Failed to set value:\n%s", r.Error())
 		}
 		return nil
-	} else {
-		return gcustom.MakeMatcher(func(selector any) (bool, error) {
-			return b.runBilobaHandler("setValue", selector, args[0]).MatcherResult()
-		}).WithMessage("be value-settable")
 	}
+	if b.realistic {
+		return gcustom.MakeMatcher(func(selector any) (bool, error) {
+			return b.realisticSetValue(selector, args[0])
+		}).WithMessage("be value-settable (realistically)")
+	}
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return b.runBilobaHandler("setValue", selector, args[0]).MatcherResult()
+	}).WithMessage("be value-settable")
 }
 
 /*

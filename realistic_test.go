@@ -86,6 +86,27 @@ var _ = Describe("BeClickable and realistic interactions", func() {
 		})
 	})
 
+	Describe("realistic SetValue", func() {
+		It("types a real value into a text input (and fires change on blur)", func() {
+			b.Realistic().SetValue("#text-input", "hello")
+			Expect("#text-input").To(b.HaveValue("hello"))
+			Eventually("#text-changed").Should(b.HaveInnerText("yes"))
+		})
+
+		It("toggles a checkbox with a real click when it isn't in the desired state", func() {
+			Expect(b.GetValue("#check-input")).To(BeFalse())
+			b.Realistic().SetValue("#check-input", true)
+			Expect("#check-input").To(b.BeChecked())
+			Eventually("#check-changed").Should(b.HaveInnerText("yes"))
+		})
+
+		It("leaves a checkbox untouched when it is already in the desired state", func() {
+			b.Realistic().SetValue("#check-input", false) // already unchecked
+			Expect("#check-input").NotTo(b.BeChecked())
+			Expect("#check-changed").To(b.HaveInnerText("no")) // no click => no change event
+		})
+	})
+
 	Describe("realistic Hover", func() {
 		It("activates real CSS :hover, revealing a submenu - unlike plain Hover", func() {
 			// plain Hover fires synthetic events but does not activate CSS :hover

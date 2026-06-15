@@ -19,10 +19,11 @@ Use it per-spec:
 The returned *Biloba shares this tab's Chrome connection and state - it is the same tab, just with Click and Hover routed through CDP.  The default (non-realistic) tab is unchanged, so the bulk of your suite keeps Biloba's fast, atomic behavior.
 
 What realistic mode does differently:
-  - Click: scrolls the element to the viewport center, verifies it is enabled and is the topmost element at its centroid (so an occluding overlay or an off-screen element does NOT click through - it polls/fails like a real interaction), then dispatches a real mousePressed/mouseReleased at that point.
+  - Click: scrolls the element to the viewport center, verifies it is enabled and is the topmost element at its centroid (so an occluding overlay or an off-screen element does NOT click through - it polls/fails like a real interaction), moves the real pointer to it, then dispatches a real mousePressed/mouseReleased at that point.
   - Hover: scrolls into view and moves the real mouse to the centroid, which activates genuine CSS :hover (Biloba's synthetic Hover does not).
+  - SetValue: text inputs are focused with a real click, cleared, and typed with real key events (then blurred to fire change); checkboxes are toggled with a real click. Native pickers - radio groups, <select>, multi-selects - fall back to the fast JS path, since they can't be driven by a real pointer (Playwright's selectOption sets them programmatically too).
 
-What it does NOT change (yet): Type and SendKeys already use real CDP key events; SetValue keeps its value-set semantics (use Type for realistic text entry).  Realistic interactions cost real CDP round-trips and can reintroduce the timing sensitivity Biloba's atomic model avoids - that is the deliberate cost, which is why it is opt-in per spec.
+What it does NOT change: Type and SendKeys already use real CDP key events.  Realistic interactions cost real CDP round-trips and can reintroduce the timing sensitivity Biloba's atomic model avoids - that is the deliberate cost, which is why it is opt-in per spec.
 
 Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
 */
@@ -83,6 +84,51 @@ func (b *Biloba) realisticClick(selector any) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// realisticSetValue implements SetValue for realistic mode.  Text inputs are focused with a real
+// click, cleared, typed with real CDP key events, then blurred to fire change (matching SetValue's
+// value-set contract); checkboxes are toggled with a real click only when not already in the
+// desired state.  Radio groups, <select>, and multi-selects fall back to the fast JS path - native
+// pickers can't be driven by a real pointer (Playwright's selectOption sets them programmatically
+// too).
+func (b *Biloba) realisticSetValue(selector any, value any) (bool, error) {
+	kind := b.runBilobaHandler("inputKind", selector)
+	if kind.Error() != nil {
+		return false, kind.Error()
+	}
+	switch kind.ResultString() {
+	case "checkbox":
+		desired, ok := value.(bool)
+		if !ok {
+			return false, fmt.Errorf("checkboxes only accept boolean values")
+		}
+		cur := b.runBilobaHandler("getValue", selector)
+		if cur.Error() != nil {
+			return false, cur.Error()
+		}
+		if cur.ResultBool() == desired {
+			return true, nil // already in the desired state - nothing to click
+		}
+		return b.realisticClick(selector)
+	case "text":
+		ok, err := b.realisticClick(selector) // real click to focus
+		if err != nil || !ok {
+			return ok, err
+		}
+		if r := b.runBilobaHandler("setProperty", selector, "value", ""); r.Error() != nil {
+			return false, r.Error()
+		}
+		if err := chromedp.Run(b.Context, chromedp.KeyEvent(toString(value))); err != nil {
+			return false, err
+		}
+		if r := b.runBilobaHandler("blur", selector); r.Error() != nil {
+			return false, r.Error()
+		}
+		return true, nil
+	default: // radio, select, multi-select
+		return b.runBilobaHandler("setValue", selector, value).MatcherResult()
+	}
 }
 
 // realisticHover implements Hover for realistic mode: it scrolls into view and moves the real

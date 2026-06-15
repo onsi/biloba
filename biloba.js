@@ -133,6 +133,15 @@ if (!window["_biloba"]) {
         let inViewport = translatable && cx >= 0 && cy >= 0 && cx <= window.innerWidth && cy <= window.innerHeight
         return rRes({ x: cx, y: cy, inViewport: inViewport, hittable: hittable, enabled: !n.disabled })
     })
+    // inputKind classifies a form control so the realistic track can decide how to drive it.
+    b.inputKind = one(n => {
+        let t = n.type
+        if (t === "checkbox") return rRes("checkbox")
+        if (t === "radio") return rRes("radio")
+        if (t === "select-one" || t === "select-multiple") return rRes("select")
+        return rRes("text")
+    })
+    b.blur = one(n => r(n.blur()))
     b.node = (s) => sel(s)
     b.clickEach = each(ns => {
         ns.forEach(n => b.click(n))
