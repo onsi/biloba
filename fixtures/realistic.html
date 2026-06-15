@@ -71,6 +71,10 @@
   <div id="drop-zone" style="display: inline-block; padding: 8px; background: #dec">Drop here</div>
   <span id="drop-result">no</span>
 
+  <!-- scrollable wheel target -->
+  <div id="scroll-box" style="height: 100px; overflow: auto; background: #eef"><div style="height: 1000px">tall</div></div>
+  <span id="wheel-result">no</span>
+
   <script>
     const set = (id, v) => (document.getElementById(id).textContent = v);
     document.getElementById('plain-btn').addEventListener('click', () => set('plain-result', 'clicked'));
@@ -95,6 +99,7 @@
     let dragging = false;
     document.getElementById('drag-src').addEventListener('pointerdown', () => (dragging = true));
     document.getElementById('drop-zone').addEventListener('pointerup', () => { if (dragging) set('drop-result', 'dropped'); dragging = false; });
+    document.getElementById('scroll-box').addEventListener('wheel', () => set('wheel-result', 'wheeled'));
   </script>
 </body>
 </html>

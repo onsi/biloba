@@ -203,6 +203,22 @@ func (b *Biloba) realisticDragTo(source any, target any) error {
 	return chromedp.Run(b.Context, actions...)
 }
 
+// realisticScrollWheel implements ScrollWheel for realistic mode.  It measures a stable, actionable
+// point for the element (scroll-into-view + stability + occlusion, same as realisticClick), then
+// dispatches a real CDP wheel event at that point with the given deltas.  Because this is genuine
+// trusted input, Chrome actually scrolls the page (no synthetic-scroll fallback needed).  Returns an
+// error if the element is missing/hidden or is not actionable (off-screen or obscured).
+func (b *Biloba) realisticScrollWheel(selector any, deltaX, deltaY float64) error {
+	pt, err := b.scrollToStablePoint(selector)
+	if err != nil {
+		return err
+	}
+	if !pt.inViewport || !pt.hittable {
+		return fmt.Errorf("element is not actionable (it is off-screen or obscured by another element)")
+	}
+	return chromedp.Run(b.Context, input.DispatchMouseEvent(input.MouseWheel, pt.x, pt.y).WithDeltaX(deltaX).WithDeltaY(deltaY))
+}
+
 // realisticSetValue implements SetValue for realistic mode.  Text inputs are focused with a real
 // click, cleared, typed with real CDP key events, then blurred to fire change (matching SetValue's
 // value-set contract); checkboxes are toggled with a real click only when not already in the

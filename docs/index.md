@@ -1358,6 +1358,19 @@ Like `ClickEach`, `DragTo` takes two selectors and so has **no matcher variant**
 
 `DragTo` does **not** drive native HTML5 drag-and-drop (the `draggable` attribute and the `dragstart`/`dragover`/`drop` event family).  Synthesizing the native protocol convincingly requires the real OS-level drag machinery, which is outside Biloba's atomic model.  If you need to test a native HTML5 `draggable` interaction, drop down to chromedp via `b.Context`.
 
+#### Scrolling the Mouse Wheel
+
+`b.ScrollWheel` scrolls the mouse wheel over an element:
+
+```go
+b.ScrollWheel("#scroll-box", 0, 200)     // scrolls down 200px
+b.ScrollWheel("#scroll-box", 50, 0)      // scrolls right 50px
+```
+
+Positive `deltaY` scrolls down and positive `deltaX` scrolls right (the standard wheel convention).  The fast version dispatches a synthetic `wheel` event at the element's center (so the app's `wheel` handlers fire) and then - because synthetic wheel events don't actually move the page - manually scrolls the nearest scrollable ancestor, *unless* a handler called `preventDefault()` (mirroring how a real browser suppresses scrolling).  In [realistic mode](#realistic-interactions) it scrolls the element into view and dispatches a real CDP wheel event, which is genuine trusted input and so scrolls the page itself.
+
+Like `DragTo`, `ScrollWheel` always acts immediately and has **no matcher variant**; it fails the spec if the element can't be found (or, in realistic mode, isn't actionable).
+
 ### Hovering, Focusing, and Scrolling
 
 Alongside `Click`, Biloba provides a few more first-class interactions, all following the same dual immediate/matcher convention:
@@ -1396,6 +1409,7 @@ In realistic mode:
 - **`ClickEach`** clicks every matching element with real input, scrolling and re-measuring each in turn, and skipping any that are hidden, disabled, off-screen, or obscured.
 - **`DblClick`** / **`RightClick`** apply the same scroll/stability/occlusion machinery as `Click`, then dispatch a real double-click (two click sequences with an incrementing click-count, so Chrome fires a genuine `dblclick`) or a real right-button click (firing the browser's native `contextmenu`).
 - **`DragTo`** scrolls and measures stable, actionable points for *both* the source and target, then drives a real CDP pointer drag - press at the source, several interpolated moves toward the target, release at the target - so pointer-based drag-and-drop libraries see genuine pointer input (it still does not drive native HTML5 `draggable`).
+- **`ScrollWheel`** scrolls the element into view, measures a stable, actionable point, then dispatches a real CDP wheel event there - genuine trusted input that actually scrolls the page (unlike the synthetic fast `ScrollWheel`, which dispatches a `wheel` event and then manually scrolls the nearest scrollable ancestor).
 - **`Hover`** scrolls into view and moves the real mouse to the element's center, which - unlike the synthetic `Hover` - activates genuine CSS `:hover` (e.g. a menu that only appears via a `:hover` rule).
 - **`SetValue`** drives form controls with real input: a text input is focused with a real click, cleared, and typed with real key events (then blurred to fire `change`); a checkbox is toggled with a real click (and left alone if it's already in the desired state).  Native pickers - radio groups, `<select>`, and multi-selects - fall back to the fast JS path, because they can't be driven by a real pointer (Playwright's `selectOption` sets them programmatically too).
 - **`Type`** / **`SendKeys`** already use real CDP key events; in realistic mode they additionally scroll the element into view before typing.

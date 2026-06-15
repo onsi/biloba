@@ -894,6 +894,31 @@ func (b *Biloba) DragTo(source any, target any) {
 }
 
 /*
+ScrollWheel() scrolls the mouse wheel over the first element matching selector.
+
+	tab.ScrollWheel("#scroll-box", 0, 200)   // scrolls down 200px (positive deltaY is down, positive deltaX is right)
+
+it immediately dispatches a wheel event at the element's center and scrolls the nearest scrollable ancestor (realistic mode dispatches a real CDP wheel event that scrolls via genuine trusted input).  It fails if the element is not found or is hidden.
+
+Unlike Click, ScrollWheel has no matcher variant.
+
+Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
+*/
+func (b *Biloba) ScrollWheel(selector any, deltaX, deltaY float64) {
+	b.gt.Helper()
+	if b.realistic {
+		if err := b.realisticScrollWheel(selector, deltaX, deltaY); err != nil {
+			b.gt.Fatalf("Failed to scroll wheel:\n%s", err.Error())
+		}
+		return
+	}
+	r := b.runBilobaHandler("scrollWheel", selector, deltaX, deltaY)
+	if r.Error() != nil {
+		b.gt.Fatalf("Failed to scroll wheel:\n%s", r.Error())
+	}
+}
+
+/*
 Focus() focuses the first element matching selector.
 
 When invoked with a selector, tab.Focus("input.search") acts immediately and fails the spec if no element is found, or if the element is hidden or disabled.

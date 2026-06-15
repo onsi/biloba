@@ -133,6 +133,17 @@ var _ = Describe("BeClickable and realistic interactions", func() {
 		})
 	})
 
+	Describe("realistic ScrollWheel", func() {
+		It("scrolls the element with real wheel input", func() {
+			Expect(b.GetProperty("#scroll-box", "scrollTop")).To(BeEquivalentTo(0))
+			b.Realistic().ScrollWheel("#scroll-box", 0, 200)
+			Eventually("#wheel-result").Should(b.HaveInnerText("wheeled"))
+			Eventually(func() float64 {
+				return b.GetProperty("#scroll-box", "scrollTop").(float64)
+			}).Should(BeNumerically(">", 0))
+		})
+	})
+
 	Describe("realistic Type", func() {
 		It("scrolls an off-screen input into view before typing into it", func() {
 			b.Realistic().Type("#below-input", "typed")

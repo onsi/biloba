@@ -186,6 +186,23 @@ if (!window["_biloba"]) {
         fire(tgt, 'up', tx, ty, 0)
         return r()
     })
+    b.scrollWheel = one(b.isVisible, (n, dx, dy) => {
+        let box = n.getBoundingClientRect(), x = box.left + box.width / 2, y = box.top + box.height / 2
+        let e = new WheelEvent('wheel', { bubbles: true, cancelable: true, view: window, deltaX: dx, deltaY: dy, clientX: x, clientY: y })
+        n.dispatchEvent(e)
+        if (!e.defaultPrevented) {
+            let scrollable = (el) => {
+                let s = getComputedStyle(el)
+                return (/(auto|scroll)/.test(s.overflowY) && el.scrollHeight > el.clientHeight) || (/(auto|scroll)/.test(s.overflowX) && el.scrollWidth > el.clientWidth)
+            }
+            let el = n
+            while (el && el != document.body && !scrollable(el)) el = el.parentElement
+            if (!el || !scrollable(el)) el = document.scrollingElement
+            el.scrollTop += dy
+            el.scrollLeft += dx
+        }
+        return r()
+    })
     b.focus = one(b.isVisible, b.isEnabled, n => r(n.focus()))
     b.hover = one(b.isVisible, n => {
         let opts = { bubbles: true, cancelable: true, view: window }

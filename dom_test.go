@@ -1085,6 +1085,20 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 	})
 
+	Describe("ScrollWheel", func() {
+		It("fires the wheel handler and scrolls the element", func() {
+			Ω(b.GetProperty("#scroll-box", "scrollTop")).Should(BeEquivalentTo(0))
+			b.ScrollWheel("#scroll-box", 0, 200)
+			Ω("#wheel-result").Should(b.HaveInnerText("wheeled"))
+			Ω(b.GetProperty("#scroll-box", "scrollTop")).Should(BeEquivalentTo(200))
+		})
+
+		It("auto-fails if the element does not exist", func() {
+			b.ScrollWheel("#non-existing", 0, 200)
+			ExpectFailures("Failed to scroll wheel:\ncould not find DOM element matching selector: #non-existing")
+		})
+	})
+
 	Describe("invokeOn and invokeOnEach", func() {
 		It("invokes the requested function on the selected dom element", func() {
 			b.InvokeOn("#increment", "click")
