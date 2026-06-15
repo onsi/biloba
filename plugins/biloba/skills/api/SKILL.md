@@ -111,7 +111,10 @@ Terse lookup. **(dual)** = acts immediately when fully applied, returns a Gomega
 - `b.JSVar(nameOrExpr)` — reference a JS variable/expression as a `JSFunc` argument (don't quote it).
 
 ## Network  (per-tab; reset by Prepare)
-- `b.StubRequest(url string|matcher, biloba.StubResponse{Status,Body,Headers})` — first stub enables interception; unmatched requests pass through.
+- `b.StubRequest(url string|matcher, biloba.StubResponse{Status,Body,Headers})` — first handler enables interception; unmatched requests pass through. Handlers below share one ordered, first-match-wins list.
+- `b.AbortRequest(url string|matcher)` — fail matching requests (page's fetch rejects).
+- `b.ModifyRequest(url string|matcher)` → builder `.WithURL(u).WithMethod(m).WithHeader(n,v).WithBody(b)` — continue to the real network with overrides (only what you set).
+- `b.ModifyResponse(url string|matcher)` → builder `.WithStatus(s).WithHeader(n,v).WithBody(b)` or `.Using(func(biloba.InterceptedResponse) biloba.StubResponse)` — rewrite the real response (reads real status/headers/body; heavier: pauses twice).
 - `b.HaveMadeRequest(url string|matcher)` (matcher) — chain `.WithMethod(m)`.
 - `b.AllRequests()` → `Requests` (each `*Request` has `.URL/.Method/.Headers/.ResourceType`); `b.RequestMatching(...)` predicate for `.Find/.Filter`.
 - `b.BeNetworkIdle()` (matcher) — zero in-flight requests.

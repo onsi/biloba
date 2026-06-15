@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Network Interception Testpage</title>
+</head>
+<body>
+    <h1 id="hello">Network Interception Testpage</h1>
+    <button id="fetch" onclick="doFetch('/api/echo')">Fetch</button>
+    <pre id="status"></pre>
+    <pre id="body"></pre>
+    <pre id="error"></pre>
+
+    <script>
+        async function doFetch(url, opts) {
+            document.getElementById("status").innerText = ""
+            document.getElementById("body").innerText = ""
+            document.getElementById("error").innerText = ""
+            try {
+                const response = await fetch(url, opts)
+                document.getElementById("status").innerText = String(response.status)
+                document.getElementById("body").innerText = await response.text()
+            } catch (e) {
+                document.getElementById("error").innerText = "fetch failed: " + e.message
+            }
+        }
+    </script>
+</body>
+</html>

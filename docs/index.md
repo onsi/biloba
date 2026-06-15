@@ -2286,6 +2286,56 @@ A few things to keep in mind:
 - **Registering the first stub turns on request interception for that tab.**  Under the hood Biloba pauses and resumes *every* request the tab makes so it can decide whether to fulfill or pass each one through.  That has a small per-request cost, so interception is only enabled once you register a stub (and is torn down at the next `Prepare()`).
 - **Stubbed requests are still observed.**  `HaveMadeRequest` and `AllRequests` (below) see stubbed requests just like real ones.
 
+`StubRequest` is one of a family of network handlers.  All of them are registered the same way - on a tab, scoped to it, cleared by `Prepare()` - and consulted in **registration order, first-match-wins**.  A request that matches no handler passes through to the real network.  The rest of the family is below.
+
+### Aborting requests
+
+`b.AbortRequest` fails any request whose URL matches, simulating a network failure: the page's `fetch`/XHR rejects exactly as it would if the request couldn't be made.  Use it to exercise your app's error paths:
+
+```go
+b.AbortRequest(ContainSubstring("/api/users"))
+b.Click("#load-users")
+Eventually("#error").Should(b.HaveText("Couldn't reach the server"))
+```
+
+The `url` argument is a string (exact match) or any Gomega matcher.  Like all the network handlers, aborts are per-tab and reset by `Prepare()`.
+
+### Modifying requests (continue with overrides)
+
+`b.ModifyRequest` lets the request reach the real network but rewrites parts of it on the way out.  It returns a chainable builder; only the overrides you set are applied:
+
+```go
+b.ModifyRequest(ContainSubstring("/api/users")).
+	WithURL("/api/v2/users").          // rewrite the destination (not observable by the page)
+	WithMethod("POST").                // override the HTTP method
+	WithHeader("Authorization", tok).  // set a header (call repeatedly to add more)
+	WithBody(`{"name":"Jane"}`)        // override the request body
+```
+
+Each `WithHeader` accumulates, so you can build up several headers.  Anything you don't set passes through unchanged.
+
+### Modifying responses
+
+`b.ModifyResponse` intercepts the **real** response coming back and hands the page a modified version of it.  Use the chainable form to override pieces of the response:
+
+```go
+b.ModifyResponse(ContainSubstring("/api/users")).
+	WithStatus(503).
+	WithHeader("Content-Type", "text/plain").
+	WithBody("service unavailable")
+```
+
+Or supply a transform with `Using` that receives the real response (status, headers, and body) and returns a replacement `StubResponse` - handy when you want to tweak the real payload rather than replace it wholesale:
+
+```go
+b.ModifyResponse(ContainSubstring("/api/users")).Using(func(r biloba.InterceptedResponse) biloba.StubResponse {
+	// e.g. inject a field into the real JSON, or corrupt it to test a parse-error path
+	return biloba.StubResponse{Status: r.Status, Headers: r.Headers, Body: strings.Replace(r.Body, `"active"`, `"disabled"`, 1)}
+})
+```
+
+Response interception is a heavier mode than the request-stage handlers: the tab pauses each matching request twice (once on the way out, once when the response arrives) so Biloba can read the real body.  As with the others, it's per-tab, reset by `Prepare()`, and first-match-wins.
+
 ### Observing requests
 
 Biloba records every request each tab makes.  Use `b.HaveMadeRequest(url)` to assert (and poll for) a request - `url` is a string (exact match) or a Gomega matcher:

@@ -570,7 +570,8 @@ type Biloba struct {
 
 	requests         []*Request
 	inflightRequests map[network.RequestID]bool
-	stubs            []*requestStub
+	requestHandlers  []*requestHandler       // ordered, first-match-wins: stub / abort / modify-request
+	responseHandlers []*ResponseModification // ordered, first-match-wins: modify-response (response stage)
 	fetchEnabled     bool
 
 	// The boolean failure-artifact knobs are stored positive-sense and default to their human
@@ -672,7 +673,8 @@ func (b *Biloba) Prepare() {
 	b.dialogs = Dialogs{}
 	b.requests = nil
 	b.inflightRequests = map[network.RequestID]bool{}
-	b.stubs = nil
+	b.requestHandlers = nil
+	b.responseHandlers = nil
 	wasFetchEnabled := b.fetchEnabled
 	b.fetchEnabled = false
 	b.lock.Unlock()

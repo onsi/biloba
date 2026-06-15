@@ -1,6 +1,8 @@
 package biloba_test
 
 import (
+	"strings"
+
 	"github.com/onsi/biloba"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -78,6 +80,91 @@ var _ = Describe("Observing the network", func() {
 			b.StubRequest(ContainSubstring("/api/users"), biloba.StubResponse{Body: "{}"})
 			b.Click("#fetch-users")
 			Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")))
+		})
+	})
+
+	Describe("AbortRequest", func() {
+		BeforeEach(func() {
+			b.Navigate(fixtureServer + "/network-interception.html")
+			Eventually("#hello").Should(b.Exist())
+		})
+
+		It("makes matching requests fail, so the page sees a rejected fetch", func() {
+			b.AbortRequest(ContainSubstring("/api/echo"))
+			b.Click("#fetch")
+			Eventually("#error").Should(b.HaveInnerText(ContainSubstring("fetch failed")))
+			Expect("#status").To(b.HaveInnerText(""))
+		})
+
+		It("only aborts matching requests; others pass through", func() {
+			b.AbortRequest(ContainSubstring("/api/widgets"))
+			b.Click("#fetch")
+			// /api/echo matches no abort, so it reaches the real echoing backend
+			Eventually("#status").Should(b.HaveInnerText("200"))
+			Expect("#error").To(b.HaveInnerText(""))
+		})
+	})
+
+	Describe("ModifyRequest", func() {
+		BeforeEach(func() {
+			b.Navigate(fixtureServer + "/network-interception.html")
+			Eventually("#hello").Should(b.Exist())
+		})
+
+		It("rewrites the URL, method, and body before the request goes out", func() {
+			b.ModifyRequest(ContainSubstring("/api/echo")).
+				WithURL(fixtureServer + "/api/rewritten").
+				WithMethod("POST").
+				WithBody(`{"name":"Jane"}`)
+			b.Click("#fetch")
+			// the backend echoes path/method/body, so we can observe every override landed
+			Eventually("#body").Should(b.HaveInnerText(ContainSubstring(`"path":"/api/rewritten"`)))
+			Expect("#body").To(b.HaveInnerText(ContainSubstring(`"method":"POST"`)))
+			Expect("#body").To(b.HaveInnerText(ContainSubstring(`{\"name\":\"Jane\"}`)))
+		})
+
+		It("can add a header without disturbing the rest of the request", func() {
+			b.ModifyRequest(ContainSubstring("/api/echo")).WithHeader("X-Test", "true")
+			b.Click("#fetch")
+			Eventually("#status").Should(b.HaveInnerText("200"))
+			Expect("#body").To(b.HaveInnerText(ContainSubstring(`"path":"/api/echo"`)))
+		})
+	})
+
+	Describe("ModifyResponse", func() {
+		BeforeEach(func() {
+			b.Navigate(fixtureServer + "/network-interception.html")
+			Eventually("#hello").Should(b.Exist())
+		})
+
+		It("overrides the status and body of a real response", func() {
+			b.ModifyResponse(ContainSubstring("/api/echo")).
+				WithStatus(503).
+				WithBody("service unavailable")
+			b.Click("#fetch")
+			Eventually("#status").Should(b.HaveInnerText("503"))
+			Expect("#body").To(b.HaveInnerText("service unavailable"))
+		})
+
+		It("can read the real response and transform it via Using", func() {
+			b.ModifyResponse(ContainSubstring("/api/echo")).Using(func(r biloba.InterceptedResponse) biloba.StubResponse {
+				return biloba.StubResponse{
+					Status:  r.Status,
+					Body:    strings.ToUpper(r.Body),
+					Headers: r.Headers,
+				}
+			})
+			b.Click("#fetch")
+			Eventually("#status").Should(b.HaveInnerText("200"))
+			// the real echoed body contains the lowercase path; the transform upcases it
+			Expect("#body").To(b.HaveInnerText(ContainSubstring("/API/ECHO")))
+		})
+
+		It("leaves non-matching responses untouched", func() {
+			b.ModifyResponse(ContainSubstring("/api/widgets")).WithStatus(503)
+			b.Click("#fetch")
+			Eventually("#status").Should(b.HaveInnerText("200"))
+			Expect("#body").To(b.HaveInnerText(ContainSubstring("/api/echo")))
 		})
 	})
 
