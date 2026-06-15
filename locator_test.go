@@ -3,6 +3,8 @@ package biloba_test
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	"github.com/onsi/biloba"
 )
 
 var _ = Describe("Role / text / label locators", func() {
@@ -34,7 +36,7 @@ var _ = Describe("Role / text / label locators", func() {
 		})
 
 		It("matches all elements of a role when no name is given", func() {
-			Expect(b.ByRole("button")).To(b.HaveCount(6))
+			Expect(b.ByRole("button")).To(b.HaveCount(14))
 		})
 
 		It("flows through actions (Click)", func() {
@@ -96,15 +98,15 @@ var _ = Describe("Role / text / label locators", func() {
 
 	Describe("Nth / First / Last", func() {
 		It("selects the first match", func() {
-			Expect(b.InnerText(b.ByRole("listitem").First())).To(Equal("Apple"))
+			Expect(b.InnerText(b.ByRole("listitem").Within("#fruits").First())).To(Equal("Apple"))
 		})
 
 		It("selects the nth match", func() {
-			Expect(b.InnerText(b.ByRole("listitem").Nth(2))).To(Equal("Cherry"))
+			Expect(b.InnerText(b.ByRole("listitem").Within("#fruits").Nth(2))).To(Equal("Cherry"))
 		})
 
 		It("selects the last match", func() {
-			Expect(b.InnerText(b.ByRole("listitem").Last())).To(Equal("Date"))
+			Expect(b.InnerText(b.ByRole("listitem").Within("#fruits").Last())).To(Equal("Date"))
 		})
 
 		It("matches nothing for an out-of-range index", func() {
@@ -124,6 +126,112 @@ var _ = Describe("Role / text / label locators", func() {
 
 		It("flows through actions into the shadow root", func() {
 			Eventually(b.ByRole("button").WithName("Shadow Action")).Should(b.BeVisible())
+		})
+	})
+
+	Describe("ByPlaceholder / ByAltText / ByTitle / ByTestID", func() {
+		It("matches an input by placeholder", func() {
+			Expect(b.GetProperty(b.ByPlaceholder("Phone number"), "id")).To(Equal("phone"))
+			Expect(b.GetProperty(b.ByPlaceholderContains("Phone"), "id")).To(Equal("phone"))
+		})
+
+		It("matches an element by alt text", func() {
+			Expect(b.GetProperty(b.ByAltText("Company logo"), "id")).To(Equal("logo"))
+			Expect(b.ByAltTextContains("logo")).To(b.Exist())
+		})
+
+		It("matches an element by title", func() {
+			Expect(b.GetProperty(b.ByTitle("Tooltip help"), "id")).To(Equal("help"))
+		})
+
+		It("matches an element by test id", func() {
+			Expect(b.InnerText(b.ByTestID("submit-btn"))).To(Equal("Go"))
+		})
+
+		It("honors a custom TestIDAttribute", func() {
+			biloba.TestIDAttribute = "data-test"
+			DeferCleanup(func() { biloba.TestIDAttribute = "data-testid" })
+			b.Run(`document.querySelector('[data-testid=submit-btn]').setAttribute('data-test', 'custom')`)
+			Expect(b.ByTestID("custom")).To(b.Exist())
+		})
+	})
+
+	Describe("ContainingText / NotContainingText", func() {
+		It("filters a role to elements whose visible text contains a string", func() {
+			Expect(b.ByRole("listitem").ContainingText("Product 2")).To(b.HaveCount(1))
+			Expect(b.InnerText(b.ByRole("listitem").ContainingText("Product 2"))).To(ContainSubstring("Product 2"))
+		})
+
+		It("filters out elements containing a string", func() {
+			// of the three #products items, only "Product 2" has no Remove button
+			Expect(b.ByRole("listitem").Within("#products").NotContainingText("Remove")).To(b.HaveCount(1))
+		})
+	})
+
+	Describe("Containing / NotContaining", func() {
+		It("filters a role to elements that have a matching descendant", func() {
+			Expect(b.ByRole("listitem").Containing(".del")).To(b.HaveCount(2))
+		})
+
+		It("accepts a sub-locator as the descendant matcher", func() {
+			Expect(b.ByRole("listitem").Containing(b.ByRole("button").WithName("Remove"))).To(b.HaveCount(2))
+		})
+
+		It("filters out elements that have a matching descendant", func() {
+			Expect(b.InnerText(b.ByRole("listitem").Within("#products").NotContaining(".del"))).To(ContainSubstring("Product 2"))
+		})
+	})
+
+	Describe("And / Or", func() {
+		It("intersects with another selector", func() {
+			Expect(b.ByRole("button").And(".primary")).To(b.HaveCount(1))
+			Expect(b.InnerText(b.ByRole("button").And(".primary"))).To(Equal("Primary Action"))
+		})
+
+		It("unions with another selector", func() {
+			both := b.ByRole("button").WithName("Primary Action").Or(b.ByRole("button").WithName("Secondary Action"))
+			Expect(both).To(b.HaveCount(2))
+		})
+
+		It("unions in document order regardless of operand order", func() {
+			both := b.ByRole("button").WithName("Secondary Action").Or(b.ByRole("button").WithName("Primary Action"))
+			Expect(b.InnerText(both.First())).To(Equal("Primary Action")) // primary precedes secondary in the DOM
+		})
+	})
+
+	Describe("Level (heading level)", func() {
+		It("matches a heading at a given level", func() {
+			Expect(b.InnerText(b.ByRole("heading").Level(1))).To(Equal("Locators"))
+			Expect(b.InnerText(b.ByRole("heading").Level(2))).To(Equal("Getting Started"))
+			Expect(b.InnerText(b.ByRole("heading").Level(3))).To(Equal("Subsection"))
+		})
+
+		It("composes with a name filter", func() {
+			Expect(b.ByRole("heading").Level(2).WithName("Getting Started")).To(b.Exist())
+			Expect(b.ByRole("heading").Level(3).WithName("Getting Started")).NotTo(b.Exist())
+		})
+	})
+
+	Describe("ARIA state filters", func() {
+		It("filters by checked", func() {
+			Expect(b.ByRole("checkbox").Checked()).To(b.HaveCount(1))
+			Expect(b.GetProperty(b.ByRole("checkbox").Checked(), "id")).To(Equal("checked-box"))
+		})
+
+		It("filters by disabled", func() {
+			Expect(b.GetProperty(b.ByRole("button").Disabled(), "id")).To(Equal("disabled-btn"))
+		})
+
+		It("filters by expanded", func() {
+			Expect(b.GetProperty(b.ByRole("button").Expanded(), "id")).To(Equal("menu-btn"))
+		})
+
+		It("filters by pressed", func() {
+			Expect(b.GetProperty(b.ByRole("button").Pressed(), "id")).To(Equal("toggle-btn"))
+		})
+
+		It("filters by selected", func() {
+			Expect(b.GetProperty(b.ByRole("option").Selected(), "id")).To(Equal("opt-2"))
 		})
 	})
 })

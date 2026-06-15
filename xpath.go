@@ -45,34 +45,6 @@ func (b *Biloba) XPath(path ...string) XPath {
 }
 
 /*
-WithText(text) is a back-compat alias for [Biloba.ByText]: it returns a [Locator] that matches the smallest element whose visible text equals text exactly.
-
-	b.Click(b.WithText("Submit"))
-	Eventually(b.WithText("Save")).Should(b.BeVisible())
-
-Prefer [Biloba.ByText] in new code.  (Earlier versions returned an [XPath]; it now uses the locator engine, which matches visible text rather than a literal text() node.  For a tag-scoped structural query, use b.XPath("button").WithText("Submit").)
-
-Read https://onsi.github.io/biloba/#selecting-dom-elements to learn more about selectors.
-*/
-func (b *Biloba) WithText(text string) Locator {
-	return b.ByText(text)
-}
-
-/*
-WithTextContains(text) is a back-compat alias for [Biloba.ByTextContains]: it returns a [Locator] that matches the smallest element whose visible text contains text.
-
-	b.Click(b.WithTextContains("Subm"))
-	Eventually(b.WithTextContains("Sav")).Should(b.BeVisible())
-
-Prefer [Biloba.ByTextContains] in new code.
-
-Read https://onsi.github.io/biloba/#selecting-dom-elements to learn more about selectors.
-*/
-func (b *Biloba) WithTextContains(text string) Locator {
-	return b.ByTextContains(text)
-}
-
-/*
 RelativeXPath() begins a relative XPath query - one that begins with "./"
 
 It is primarily used with [XPath.WithChildMatching]:

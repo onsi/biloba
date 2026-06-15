@@ -13,51 +13,51 @@ var _ = Describe("Text and TextContains selectors", func() {
 		Eventually(b.XPath().WithID("hometown-label")).Should(b.Exist())
 	})
 
-	Describe("b.WithText", func() {
+	Describe("b.ByText", func() {
 		It("selects the element whose text matches exactly", func() {
-			Ω(b.WithText("Hometown:")).Should(b.HaveProperty("id", "hometown-label"))
+			Ω(b.ByText("Hometown:")).Should(b.HaveProperty("id", "hometown-label"))
 		})
 
 		It("composes with matchers like BeVisible and Exist", func() {
-			Eventually(b.WithText("Hometown:")).Should(b.Exist())
-			Ω(b.WithText("Hometown:")).Should(b.BeVisible())
+			Eventually(b.ByText("Hometown:")).Should(b.Exist())
+			Ω(b.ByText("Hometown:")).Should(b.BeVisible())
 		})
 
 		It("composes with actions like Click", func() {
 			// clicking a label is fine; we just assert no test failure occurs
-			b.Click(b.WithText("Hometown:"))
+			b.Click(b.ByText("Hometown:"))
 		})
 
 		It("returns the first match when multiple elements share the same text", func() {
 			// both age-label and age-label-2 have text "Age:" — first is returned
-			Ω(b.WithText("Age:")).Should(b.HaveProperty("id", "age-label"))
+			Ω(b.ByText("Age:")).Should(b.HaveProperty("id", "age-label"))
 		})
 
 		It("does not match on a partial string", func() {
-			Ω(b.HasElement(b.WithText("ometow"))).Should(BeFalse())
+			Ω(b.HasElement(b.ByText("ometow"))).Should(BeFalse())
 		})
 
 		It("fails the spec when no element matches", func() {
-			b.Click(b.WithText("no such text"))
+			b.Click(b.ByText("no such text"))
 			ExpectFailures(ContainSubstring("no such text"))
 		})
 	})
 
-	Describe("b.WithTextContains", func() {
+	Describe("b.ByTextContains", func() {
 		It("selects an element whose text contains the substring", func() {
-			Ω(b.WithTextContains("ometow")).Should(b.HaveProperty("id", "hometown-label"))
+			Ω(b.ByTextContains("ometow")).Should(b.HaveProperty("id", "hometown-label"))
 		})
 
 		It("composes with matchers like Exist", func() {
-			Eventually(b.WithTextContains("ometow")).Should(b.Exist())
+			Eventually(b.ByTextContains("ometow")).Should(b.Exist())
 		})
 
 		It("does not match when the substring is absent", func() {
-			Ω(b.HasElement(b.WithTextContains("zzzzzz"))).Should(BeFalse())
+			Ω(b.HasElement(b.ByTextContains("zzzzzz"))).Should(BeFalse())
 		})
 
 		It("fails the spec when no element matches", func() {
-			b.Click(b.WithTextContains("no-such-substring"))
+			b.Click(b.ByTextContains("no-such-substring"))
 			ExpectFailures(ContainSubstring("no-such-substring"))
 		})
 	})

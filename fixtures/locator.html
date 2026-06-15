@@ -45,6 +45,35 @@
   <!-- Accessible name from placeholder -->
   <input id="phone" type="tel" placeholder="Phone number" />
 
+  <!-- alt text, title, test id -->
+  <img id="logo" src="logo.png" alt="Company logo" />
+  <span id="help" title="Tooltip help">?</span>
+  <button data-testid="submit-btn">Go</button>
+
+  <!-- And / Or: classed buttons -->
+  <button class="primary">Primary Action</button>
+  <button class="secondary">Secondary Action</button>
+
+  <!-- Containing / ContainingText: product rows, some with a remove button -->
+  <ul id="products">
+    <li>Product 1 <button class="del">Remove</button></li>
+    <li>Product 2</li>
+    <li>Product 3 <button class="del">Remove</button></li>
+  </ul>
+
+  <!-- heading level -->
+  <h3>Subsection</h3>
+
+  <!-- ARIA states -->
+  <input id="checked-box" type="checkbox" checked />
+  <button id="disabled-btn" disabled>Disabled</button>
+  <button id="menu-btn" aria-expanded="true">Menu</button>
+  <button id="toggle-btn" aria-pressed="true">Bold</button>
+  <ul role="listbox">
+    <li id="opt-1" role="option">Option 1</li>
+    <li id="opt-2" role="option" aria-selected="true">Option 2</li>
+  </ul>
+
   <!-- Open shadow root containing a button with an accessible name -->
   <shadow-card id="card"></shadow-card>
   <script>

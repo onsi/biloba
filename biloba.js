@@ -105,26 +105,71 @@ if (!window["_biloba"]) {
         return ""
     }
     let matchText = (actual, target, mode) => mode === "contains" ? actual.includes(target) : actual === target
+    let attrText = (el, attr) => { let v = el.getAttribute(attr); return v == null ? null : normText(v) }
+    let headingLevel = (el) => {
+        let lvl = el.getAttribute("aria-level")
+        if (lvl) { let n = parseInt(lvl, 10); if (!isNaN(n)) return n }
+        let m = /^h([1-6])$/.exec(el.tagName.toLowerCase())
+        return m ? parseInt(m[1], 10) : null
+    }
+    let stateHolds = (el, state) => {
+        if (state === "checked") return el.checked === true || el.getAttribute("aria-checked") === "true"
+        if (state === "disabled") return el.disabled === true || el.getAttribute("aria-disabled") === "true"
+        if (state === "expanded") return el.getAttribute("aria-expanded") === "true"
+        if (state === "pressed") return el.getAttribute("aria-pressed") === "true"
+        if (state === "selected") return el.selected === true || el.getAttribute("aria-selected") === "true"
+        return false
+    }
     let locate = (q) => {
-        // Resolve the candidate set, piercing open shadow roots. When `within` is set, scope to
-        // that element's subtree (and return [] if it can't be resolved).
-        let all
+        // 1. candidate pool, piercing open shadow roots. `within` scopes to descendants of the
+        // scope element(s); an unresolved scope matches nothing.
+        let pool
         if (q.within) {
-            let scope = sel(q.within)
-            if (!scope) return []
-            all = collectElements(scope).filter(el => el !== scope) // descendants only
+            let scopes = selEach(q.within)
+            if (!scopes.length) return []
+            pool = collectElements(document).filter(el => scopes.some(s => s !== el && s.contains(el)))
         } else {
-            all = collectElements(document)
+            pool = collectElements(document)
         }
-        let matched = []
-        if (q.by === "role") {
-            matched = all.filter(el => roleOf(el) === q.role && (!q.nameSet || matchText(accessibleName(el), q.name, q.nameMode)))
+        // 2. base match set. and/or intersect/union operand sets (preserving pool's document order);
+        // the leaf kinds filter the pool by their predicate.
+        let matched
+        if (q.by === "and") {
+            let sets = q.operands.map(op => new Set(selEach(op)))
+            matched = pool.filter(el => sets.every(s => s.has(el)))
+        } else if (q.by === "or") {
+            let sets = q.operands.map(op => new Set(selEach(op)))
+            matched = pool.filter(el => sets.some(s => s.has(el)))
+        } else if (q.by === "role") {
+            matched = pool.filter(el => roleOf(el) === q.role && (!q.nameSet || matchText(accessibleName(el), q.name, q.nameMode)))
         } else if (q.by === "label") {
-            matched = all.filter(el => el.matches("input,select,textarea,button,[contenteditable],[role]") && matchText(accessibleName(el), q.text, q.textMode))
+            matched = pool.filter(el => el.matches("input,select,textarea,button,[contenteditable],[role]") && matchText(accessibleName(el), q.value, q.valueMode))
         } else if (q.by === "text") {
-            let m = all.filter(el => matchText(normText(el.textContent), q.text, q.textMode))
+            let m = pool.filter(el => matchText(normText(el.textContent), q.value, q.valueMode))
             matched = m.filter(el => !m.some(other => other !== el && el.contains(other))) // smallest matching element
+        } else if (q.by === "placeholder") {
+            matched = pool.filter(el => (el.tagName === "INPUT" || el.tagName === "TEXTAREA") && attrText(el, "placeholder") != null && matchText(attrText(el, "placeholder"), q.value, q.valueMode))
+        } else if (q.by === "alttext") {
+            matched = pool.filter(el => attrText(el, "alt") != null && matchText(attrText(el, "alt"), q.value, q.valueMode))
+        } else if (q.by === "title") {
+            matched = pool.filter(el => attrText(el, "title") != null && matchText(attrText(el, "title"), q.value, q.valueMode))
+        } else if (q.by === "testid") {
+            matched = pool.filter(el => el.getAttribute(q.attr || "data-testid") === q.value)
+        } else {
+            matched = []
         }
+        // 3. filters: visible-text and has-descendant, each optionally negated.
+        if (q.filters) for (let f of q.filters) {
+            if (f.kind === "containsText") {
+                matched = matched.filter(el => matchText(normText(el.textContent), f.value, f.mode) !== f.negate)
+            } else if (f.kind === "contains") {
+                let targets = selEach(f.selector)
+                matched = matched.filter(el => targets.some(t => t !== el && el.contains(t)) !== f.negate)
+            }
+        }
+        // 4. heading level, 5. ARIA states, 6. ordinal.
+        if (q.level != null) matched = matched.filter(el => headingLevel(el) === q.level)
+        if (q.states) for (let st of q.states) matched = matched.filter(el => stateHolds(el, st))
         if (q.nthSet) {
             let i = q.nth === -1 ? matched.length - 1 : q.nth
             return (i >= 0 && i < matched.length) ? [matched[i]] : []
