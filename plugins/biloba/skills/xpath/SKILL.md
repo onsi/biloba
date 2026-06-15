@@ -1,11 +1,11 @@
 ---
 name: xpath
-description: Build XPath selectors with Biloba's b.XPath() mini-DSL — tag/id/class/text/attribute predicates, boolean logic with b.XPredicate(), tree navigation (Child/Descendant/Parent/Ancestor/siblings), WithChildMatching + b.RelativeXPath, indexing (Nth/First/Last), and the b.WithText shortcuts. Use when constructing or debugging an XPath selector for a Biloba action or matcher. Covers the common pitfalls (XPredicate, RelativeXPath, no shadow/iframe crossing).
+description: Build XPath selectors with Biloba's b.XPath() mini-DSL — tag/id/class/text/attribute predicates, boolean logic with b.XPredicate(), tree navigation (Child/Descendant/Parent/Ancestor/siblings), WithChildMatching + b.RelativeXPath, indexing (Nth/First/Last), and the XPath().WithText text predicates. Use when constructing or debugging an XPath selector for a Biloba action or matcher — the rare power tool after CSS and semantic locators. Covers the common pitfalls (XPredicate, RelativeXPath, no shadow/iframe crossing).
 ---
 
 # The Biloba XPath DSL
 
-XPath selects elements CSS can't (by text, by ancestor, by sibling). Biloba's DSL builds the gnarly query string for you. Any Biloba action/matcher takes the resulting `XPath` as its `selector`. Docs: <https://onsi.github.io/biloba/#the-xpath-dsl>.
+XPath is the **rare power tool**, reached for *after* CSS and semantic locators (see `biloba:write-tests`): use it for axis/relationship/ordinal queries those can't express (an *ancestor*, a *following-sibling*, "the `ul` that has a child `li` saying X") or exact `text()`-node matching. It's native and fast but verbose, and — unlike CSS (`>>>`) and locators — it does **not** pierce shadow roots or iframes. Biloba's DSL builds the gnarly query string for you; any Biloba action/matcher takes the resulting `XPath` as its `selector`. Docs: <https://onsi.github.io/biloba/#the-xpath-dsl>.
 
 `b.XPath()` returns a value of `type XPath string` — chainable, and printable for inspection: `fmt.Println(b.XPath("div").WithClass("c"))`.
 
@@ -77,9 +77,9 @@ b.XPath("ul").Nth(2).Descendant("li").Last()  // its last <li>
 someList.First()
 ```
 
-## Top-level text shortcuts
+## Prefer a locator for "the element that says X"
 
-For "the element that says X", prefer the locator engine (see the `biloba:write-tests` skill): `b.ByText("Submit")` / `b.ByTextContains("Welcome")` match *visible* text; `b.ByRole("button").WithName("Save")` and `b.ByLabel("Email")` cover role/label. `b.WithText`/`b.WithTextContains` are back-compat aliases for the text variants (they no longer return an `XPath`). Locators **compose** — `.Within(scope)` (scope to a container), `.Nth(i)`/`.First()`/`.Last()` (ordinal) — and **pierce open shadow roots** automatically, which XPath cannot. Refine with a tag via the XPath DSL when you need one: `b.XPath("button").WithText("Submit")`.
+Don't reach for XPath's `text()` predicates as a first move — prefer the locator engine (see `biloba:write-tests`): `b.ByText("Submit")` / `b.ByTextContains("Welcome")` match *visible* text; `b.ByRole("button").WithName("Save")` and `b.ByLabel("Email")` cover role/label. Locators **compose** — `.ContainingText`/`.Containing`/`.And`/`.Or`/`.Within`/`.Nth` (all accepting any selector) — and **pierce open shadow roots** automatically, which XPath cannot. Use the XPath DSL's `WithText` only to scope an exact `text()` match to a specific tag: `b.XPath("button").WithText("Submit")`.
 
 ## Reuse partial queries
 

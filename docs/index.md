@@ -702,35 +702,65 @@ Assuming you've read that section, we'll dive into problem number one: telling B
 
 ### Selecting DOM Elements
 
-Biloba supports three mechanisms for selecting DOM elements: **semantic locators** (by accessible role, text, or label - the modern default), **CSS selectors** (what you'd pass into `document.querySelector()`), and **XPath queries** (what you'd pass into `document.evaluate` - a power tool for the structural long tail).  Throughout this chapter you'll use the word `selector` in code snippets and examples.  If you pass a `string` in as `selector`, Biloba interprets that string as a CSS query.  For example:
+Biloba gives you **three** pathways for telling it which element you mean, and throughout this chapter you'll see the word `selector` stand in for any of them:
+
+- **CSS selectors** - a raw `string`, exactly what you'd pass to `document.querySelector()`.
+- **Semantic locators** - built with the `b.By*` constructors, matching the way a *user* (or the accessibility tree) perceives an element: by role, name, visible text, form label, and so on.
+- **XPath queries** - built with `b.XPath()`, for the structural/axis long tail CSS can't express.
+
+All three flow through every Biloba action and matcher (and through [realistic mode](#realistic-interactions)).  A `string` is interpreted as CSS; a `Locator` or an `XPath` is interpreted as itself.
+
+#### Which one should I use?
+
+- **CSS - the default.**  For an app you own, prefer CSS targeting a **stable, intentional hook**: an `#id` or a `[data-testid]` you put on the element *on purpose* as a test contract.  Avoid coupling tests to *styling* classes (`.btn-primary`, `.col-md-6`) - those exist for visual reasons, get renamed in redesigns, and reintroduce exactly the brittleness you're trying to avoid.  CSS is the fastest pathway, it's just a raw string (no builder to learn), it supports modern selectors like [`:has()`](https://developer.mozilla.org/en-US/docs/Web/CSS/:has), and it pierces shadow/iframe boundaries via the `>>>` combinator.
+- **Locators - reach for these second**, in two cases.  (a) When you *want* to assert the user-perceivable thing - a button's accessible name, a heading's level - which doubles as a free accessibility-regression guard.  (b) When adding a hook isn't worth it and the visible label or text is the natural, readable identifier (`b.ByText("Sign in")`, `b.ByLabel("Email")`).  Locators are the most resilient and readable for user-facing elements, at the cost of being the slowest engine.
+- **XPath - the rare power tool**, for axis/relationship/ordinal queries CSS can't express (an *ancestor*, a *following-sibling*, "the `ul` that has a child `li` saying X") or exact `text()`-node matching.  It's native and fast but verbose, and - unlike CSS and locators - it does **not** pierce shadow roots or iframes.
+
+| Pathway | Best for | Speed | Pierces open shadow? |
+|---|---|---|---|
+| **CSS** (string) | `#id` / `[data-testid]`, structure, `:has()` | fastest | yes, via `>>>` |
+| **Locator** (`b.By*`) | role / text / label / testid, a11y | slowest | yes, automatically |
+| **XPath** (`b.XPath`) | axes / relationships / ordinals | fast | no |
+
+**A note on performance.**  All three are a single atomic round-trip into the browser, so the only difference is in-page CPU: CSS ≳ XPath (both ride native browser engines) ≫ Locators (an interpreted full-document ARIA scan - `b.ByText`/`b.ByLabel` are the heaviest since they read every element's text).  This only matters on large DOMs under tight `Eventually` polling; for typical pages all three are effectively instant.  Don't let it drive your choice - pick the pathway that reads best and resists churn.
+
+#### Selecting by CSS
+
+A `string` selector is interpreted as a CSS query - exactly what you'd pass to `document.querySelector()`:
 
 ```go
-b.Click("button.submit")
+b.Click("button.submit")          // the first <button class="submit">
+b.Click("#go")                    // by id - a stable, intentional hook
+b.Click("[data-testid=save]")     // by a test-id you added on purpose
+Eventually("tr:has(td.overdue)").Should(b.Exist())  // modern :has()
 ```
 
-will select the **first** `<button>` DOM element with class `submit` and click on it.  If you'd like to learn more about CSS query selectors the [MDN docs](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors) are fantastic.
+`b.Click("button.submit")` selects the **first** `<button>` with class `submit` and clicks it.  Because Biloba only ever drives Chrome you have the whole modern CSS grammar available, including [`:has()`](https://developer.mozilla.org/en-US/docs/Web/CSS/:has) for "the element that *contains* X" - a structural query that historically required XPath.  If you'd like to learn more about CSS query selectors the [MDN docs](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors) are fantastic.
 
-To perform an XPath query you pass a Biloba `XPath()` object in as `selector.  `XPath` objects can be constructed using `b.XPath()`.  You can specify the XPath manually:
+Remember the recommendation above: lean on `#id` and `[data-testid]` hooks you place intentionally, not on styling classes that exist for looks and get renamed.
+
+##### Piercing Shadow DOM and iframes
+
+A plain `querySelector` can't see inside a web component's shadow DOM or inside an `<iframe>` - the DOM is encapsulated.  Biloba's CSS selectors understand a `>>>` combinator that crosses one such boundary:
 
 ```go
-b.Click(b.XPath("//button[contains(concat(' ',normalize-space(@class),' '),'submit')]"))
+// reach a button inside <my-widget>'s shadow root
+b.Click("my-widget >>> button.submit")
+
+// reach an element inside a same-origin iframe
+Eventually("#editor-frame >>> .toolbar .save").Should(b.Click())
+
+// chain it to descend through several boundaries
+b.HaveInnerText("app-shell >>> settings-panel >>> .title")
 ```
 
-or using Biloba's mini-XPath DSL:
+Each `>>>` steps across exactly one boundary: the element to its left is the host (a shadow host or an iframe) and the selector to its right is resolved inside that host's shadow root or document.  `>>>` works with every selector-based method (actions, matchers, and the `*Each`/count forms).
 
-```go
-b.Click(b.XPath("button").WithClass("submit"))
-```
+This pierces **open shadow roots** and **same-origin iframes**.  It cannot reach into **closed** shadow roots or **cross-origin** iframes - the browser does not expose their contents to JavaScript, so a selector targeting them simply won't match (drop down to chromedp's frame handling for cross-origin frames).  `>>>` is a CSS-only feature; XPath selectors do not cross boundaries.  (Locators pierce open shadow roots automatically - see below.)
 
-We'll dive into the XPath DSL in more details at the end of this chapter.  As you can see from this example, it can help generate some fairly complex XPath queries with a much simpler series of invocations.
+#### Selecting by Locator
 
-If you'd like to learn more about XPath queries the [MDN docs](https://developer.mozilla.org/en-US/docs/Web/XPath) will give you a good mental model while the [XPath Cheatsheet at devhints.io](https://devhints.io/xpath) is a fantastic, concise, reference.
-
-> **A note on XPath in 2024+.** XPath used to be the only way to select by visible text or to navigate *up* the tree ("the row that contains this cell").  Today, **semantic locators** (below) handle the text/role/label cases more robustly, and because Biloba only drives Chrome you always have CSS [`:has()`](https://developer.mozilla.org/en-US/docs/Web/CSS/:has) for the structural cases ("the `<tr>` that `:has(td:contains)`...").  So reach for locators and CSS first; XPath remains available as a power tool for the rare ordinal/axis query those can't express.
-
-#### Selecting by Role, Text, and Label
-
-The most robust selectors describe an element the way a *user* perceives it - by its accessible role and name, its visible text, or its form label - rather than by brittle CSS/XPath structure.  Build these with `b.ByRole`, `b.ByText`/`b.ByTextContains`, and `b.ByLabel`/`b.ByLabelContains`.  Like any selector they flow through every Biloba action and matcher (and through [realistic mode](#realistic-interactions)):
+The most robust, readable selectors for user-facing elements describe them the way a *user* perceives them - by accessible role and name, visible text, form label, placeholder, alt text, title, or test id - rather than by brittle structure.  Build a `Locator` with one of the `b.By*` constructors; like any selector it flows through every Biloba action and matcher (and through [realistic mode](#realistic-interactions)):
 
 ```go
 b.Click(b.ByRole("button").WithName("Save"))                  // accessible role + accessible name
@@ -740,25 +770,80 @@ Eventually(b.ByText("Welcome back, Jane")).Should(b.Exist())  // the smallest el
 b.Click(b.ByTextContains("Sign"))
 ```
 
-- **`b.ByRole(role)`** matches the element's [ARIA role](https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA/Roles) - explicit `role="..."` or the common implicit role of a tag (`button`, `link`, `heading`, `checkbox`, `radio`, `textbox`, `combobox`, `list`, ...).  Chain `.WithName("...")` / `.WithNameContains("...")` to also match the **accessible name** (computed from `aria-labelledby` → `aria-label` → associated `<label>` → `alt` → `placeholder` → `value` → text content → `<figcaption>`/`<caption>` → `title`).
-- **`b.ByText(text)`** / **`b.ByTextContains(text)`** match the *smallest* element whose visible text equals / contains `text`.  These are the modern replacement for `b.WithText`/`b.WithTextContains`.
-- **`b.ByLabel(text)`** / **`b.ByLabelContains(text)`** match the form control whose accessible label equals / contains `text`.
+##### The constructors
 
-Locators **compose**.  Chain any of these to narrow the match:
+- **`b.ByRole(role)`** matches the element's [ARIA role](https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA/Roles) - explicit `role="..."` or the common implicit role of a tag (`button`, `link`, `heading`, `checkbox`, `radio`, `textbox`, `combobox`, `list`, `listitem`, `option`, ...).  Refine a role locator with:
+  - **`.WithName(name)` / `.WithNameContains(name)`** - also match the **accessible name** (computed from `aria-labelledby` → `aria-label` → associated `<label>` → `alt` → `placeholder` → `value` → text content → `<figcaption>`/`<caption>` → `title`).
+  - **`.Level(n)`** - for `role="heading"`, the heading level (an `aria-level`, or the digit of an `<h1>`-`<h6>` tag): `b.ByRole("heading").Level(2).WithName("Getting Started")`.
+  - the **ARIA-state filters** **`.Checked()`**, **`.Disabled()`**, **`.Expanded()`**, **`.Pressed()`**, **`.Selected()`** - narrow to elements in that state (the corresponding property or `aria-*="true"`): `b.ByRole("checkbox").Checked()`, `b.ByRole("button").Disabled()`.
+- **`b.ByText(text)`** / **`b.ByTextContains(text)`** match the *smallest* element whose visible text equals / contains `text`.
+- **`b.ByLabel(text)`** / **`b.ByLabelContains(text)`** match the form control whose accessible label equals / contains `text`.
+- **`b.ByPlaceholder(text)`** / **`b.ByPlaceholderContains(text)`** match the `<input>`/`<textarea>` by its `placeholder`.
+- **`b.ByAltText(text)`** / **`b.ByAltTextContains(text)`** match an element (e.g. an `<img>`) by its `alt` text.
+- **`b.ByTitle(text)`** / **`b.ByTitleContains(text)`** match an element by its `title` attribute.
+- **`b.ByTestID(id)`** matches an element by its test-id attribute.  The attribute name is the package variable `biloba.TestIDAttribute`, which defaults to `"data-testid"` (Playwright's convention).  If your app uses a different convention set it once, e.g. in a `SynchronizedBeforeSuite`:
 
 ```go
-b.Click(b.ByRole("button").WithName("Delete").Within("#dialog"))  // only inside the matching scope
-b.Click(b.ByRole("listitem").Nth(2))                              // the third matching element (0-based)
-Expect(b.ByRole("listitem").First())...                          // first match (== .Nth(0))
-Expect(b.ByRole("listitem").Last())...                           // final match
+biloba.TestIDAttribute = "data-qa"
+b.Click(b.ByTestID("submit-button"))
 ```
 
-- **`.Within(scope)`** restricts matches to descendants of the element matching `scope` - any selector (a CSS string, an `XPath`, or another `Locator`).  If `scope` matches nothing the locator matches nothing.  This is the clean way to disambiguate "the Save button *in this dialog*".
-- **`.Nth(i)` / `.First()` / `.Last()`** select a single element by ordinal among the matches (out-of-range → no match).  `.Nth`/`.Last` are genuinely new power; `.First()` is mostly explicitness since single-element actions already use the first match.
+##### Composition
 
-Locators **pierce open shadow roots** - a `b.ByRole("button").WithName("Submit")` will find a button inside a custom element's open shadow DOM with no `>>>` ceremony (closed roots and cross-origin frames are skipped, matching the rest of Biloba).
+Locators are immutable - every method returns a new `Locator` - and they **compose**.  Crucially, the filters and combinators that take a selector accept **any** selector (a CSS string, an `XPath`, or another `Locator`), so the three pathways mix freely:
 
-Coverage is pragmatic rather than the full ARIA specification - it handles explicit roles plus the common implicit ones, and the common accessible-name sources.  For anything it can't express, CSS `:has()` and the XPath DSL are right there.  Between semantic locators, `Within`, the ordinal selectors, and CSS `:has()`, XPath is now a rarely-needed power tool for the ordinal/axis long tail.
+```go
+// visible-text filter: pick a container by some text inside it (Playwright's filter({hasText}))
+b.Click(b.ByRole("listitem").ContainingText("Product 2"))
+b.ByRole("listitem").Within("#products").NotContainingText("Remove")
+
+// descendant filter: "...that has a matching descendant" (Playwright's filter({has}))
+b.ByRole("listitem").Containing(".del")                                  // a CSS descendant
+b.ByRole("listitem").Containing(b.ByRole("button").WithName("Remove"))   // a Locator descendant
+b.ByRole("listitem").Within("#products").NotContaining(".del")
+
+// set combination: intersection / union, in document order
+b.Click(b.ByRole("button").And(".primary"))                             // matches BOTH (a CSS string!)
+b.ByRole("button").WithName("Save").Or(b.ByRole("button").WithName("Submit"))
+
+// scope: restrict to descendants of a matching container (any selector)
+b.Click(b.ByRole("button").WithName("Delete").Within("#dialog"))
+
+// ordinal: a single element by index among the matches
+b.ByRole("listitem").Within("#fruits").First()   // == .Nth(0)
+b.ByRole("listitem").Within("#fruits").Nth(2)    // the third match (0-based)
+b.ByRole("listitem").Within("#fruits").Last()    // the final match
+```
+
+- **`.ContainingText(t)` / `.NotContainingText(t)`** keep (or drop) elements whose visible text contains `t`.
+- **`.Containing(sel)` / `.NotContaining(sel)`** keep (or drop) elements that have a descendant matching `sel`.
+- **`.And(sel)` / `.Or(sel)`** intersect / union with another selector.
+- **`.Within(scope)`** restricts matches to descendants of an element matching `scope`.  If `scope` matches nothing the locator matches nothing - the clean way to disambiguate "the Save button *in this dialog*".
+- **`.Nth(i)` / `.First()` / `.Last()`** pick a single element by ordinal (out-of-range → no match).
+
+Because the combinators accept any pathway, you can write things like `b.ByRole("button").And(".primary")` or `b.ByRole("listitem").Containing(b.ByText("Delete")).Within("#cart")` - reaching for whichever pathway reads best at each step.
+
+Locators **pierce open shadow roots** - `b.ByRole("button").WithName("Submit")` will find a button inside a custom element's open shadow DOM with no `>>>` ceremony (closed roots and cross-origin frames are skipped, matching the rest of Biloba).
+
+Coverage is a pragmatic ARIA subset rather than the full specification - it handles explicit roles plus the common implicit ones, and the common accessible-name sources.  For anything it can't express, CSS `:has()` and the XPath DSL are right there.
+
+#### Selecting by XPath
+
+XPath is the power tool for the structural long tail - axis and relationship queries CSS can't express (an *ancestor*, a *following-sibling*, "the `ul` that has a child `li` saying X"), ordinals, and exact `text()`-node matching.  You pass a Biloba `XPath` object in as `selector`.  Specify the query manually:
+
+```go
+b.Click(b.XPath("//button[contains(concat(' ',normalize-space(@class),' '),'submit')]"))
+```
+
+or build it with Biloba's mini-XPath DSL:
+
+```go
+b.Click(b.XPath("button").WithClass("submit"))
+```
+
+The DSL is documented in detail in [The XPath DSL](#the-xpath-dsl) reference section at the end of this chapter - it generates fairly hairy XPath from a simple series of chained calls.  If you'd like to learn more about XPath queries the [MDN docs](https://developer.mozilla.org/en-US/docs/Web/XPath) will give you a good mental model while the [XPath Cheatsheet at devhints.io](https://devhints.io/xpath) is a fantastic, concise reference.
+
+Note that XPath does **not** cross shadow or iframe boundaries.  For "the element that says X" prefer a text locator (`b.ByText`); for "the element that contains X" CSS `:has()` and locator composition usually read better.  Reach for XPath when those genuinely can't express the relationship you need.
 
 Before we go further and explore the catalog of DOM interactions Biloba provides we should pause and point out an important design decision in Biloba.
 
@@ -779,25 +864,6 @@ b.Click(selector)
 This design decision helps reduce flakiness in your test suite.  It's possible that the concrete DOM element returned by a hypothetical `FindElement` function is gone (perhaps it was asynchronously re-rendered by your front-end view layer) by the time you attempt to `Click()` it.  Instead, Biloba runs a single synchronous snippet of JavaScript in the browser that fetches the element and then performs the action on it.
 
 Finally - some Biloba methods use the **first** element returned by the `selector` while others use **every** element returned by the selector.  The difference is usually clear based on the name of the method.
-
-#### Piercing Shadow DOM and iframes
-
-A plain `querySelector` can't see inside a web component's shadow DOM or inside an `<iframe>` - the DOM is encapsulated.  Biloba's CSS selectors understand a `>>>` combinator that crosses one such boundary:
-
-```go
-// reach a button inside <my-widget>'s shadow root
-b.Click("my-widget >>> button.submit")
-
-// reach an element inside a same-origin iframe
-Eventually("#editor-frame >>> .toolbar .save").Should(b.Click())
-
-// chain it to descend through several boundaries
-b.HaveInnerText("app-shell >>> settings-panel >>> .title")
-```
-
-Each `>>>` steps across exactly one boundary: the element to its left is the host (a shadow host or an iframe) and the selector to its right is resolved inside that host's shadow root or document.  `>>>` works with every selector-based method (actions, matchers, and the `*Each`/count forms).
-
-This pierces **open shadow roots** and **same-origin iframes**.  It cannot reach into **closed** shadow roots or **cross-origin** iframes - the browser does not expose their contents to JavaScript, so a selector targeting them simply won't match (drop down to chromedp's frame handling for cross-origin frames).  `>>>` is a CSS-only feature; XPath selectors do not cross boundaries.
 
 Now that we know how to `select` DOM elements - let's dig into what we can do with them.
 
@@ -1811,17 +1877,9 @@ b.XPath("ul").WithChildMatching(b.RelativeXPath("li").WithText("igloo"))
 b.XPath("ul").Nth(2).Descendant("li").Last()
 ```
 
-#### Text selectors
+#### Matching text with the XPath DSL
 
-A common need is to find "the element that says X" — for example, clicking the button labelled "Submit" or waiting for a confirmation message to appear.  Reach for the [text and label locators](#selecting-by-role-text-and-label) — `b.ByText`/`b.ByTextContains` — for this; they match on *visible* text (what the user actually perceives) rather than a raw XPath `text()` node:
-
-```go
-b.Click(b.ByText("Submit"))
-Eventually(b.ByText("Save changes")).Should(b.BeVisible())
-Eventually(b.ByTextContains("Welcome")).Should(b.Exist())
-```
-
-`b.WithText`/`b.WithTextContains` remain as back-compat aliases for `b.ByText`/`b.ByTextContains`.  (In earlier versions they returned an `XPath`; they now use the locator engine.)  When you need to scope text matching to a specific tag, use the XPath DSL:
+For "the element that says X" prefer a [text locator](#selecting-by-locator) - `b.ByText`/`b.ByTextContains` match on *visible* text (what the user actually perceives) rather than a raw XPath `text()` node.  Reach for the XPath DSL's text predicates only when you need to scope an exact `text()` match to a specific tag:
 
 ```go
 b.XPath("button").WithText("Submit")       // only <button> elements

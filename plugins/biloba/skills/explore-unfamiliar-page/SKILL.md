@@ -45,8 +45,8 @@ ginkgo --no-color --focus="scratch"
 
 Then **`Read` the screenshot file** (the path printed as `SCREENSHOT: ...`) so you *see* the rendered page — what's visible, what's above/below the fold — and cross-reference the two text outlines:
 
-- **`b.A11yOutline()`** is the role/name view, and your **primary** map: pick stable, human-meaningful anchors (a heading's text, a button's accessible name) and drive them with semantic locators — `b.ByRole("button").WithName("Save")`, `b.ByText("…")`, `b.ByLabel("Email")`. These are the modern default selector and survive markup churn far better than structural paths.
-- **`b.Outline()`** is the raw DOM: fall back to it for ids/`data-*`/CSS when a11y names don't pin the element, or to confirm structure.
+- **`b.Outline()`** is the raw DOM, and your **primary** map for an app you own: hunt for stable, intentional hooks — an `#id` or a `[data-testid]` — and target them with **CSS** (the default, fastest pathway). Avoid styling classes (`.btn-primary`) that get renamed in redesigns.
+- **`b.A11yOutline()`** is the role/name view: when there's no good hook, or when you *want* to assert the user-perceivable thing (so the spec doubles as an a11y guard), drive a **semantic locator** off it — `b.ByRole("button").WithName("Save")`, `b.ByText("…")`, `b.ByLabel("Email")`, `b.ByTestID("…")`. These read well and survive markup churn. XPath is the rare fallback for axis/ordinal structure neither expresses.
 
 > **You get this for free on failure too.** Under an AI agent or CI, Biloba auto-attaches a DOM outline of every tab and writes screenshots to disk on a failing spec (see `biloba:debug-failures`). So once you're iterating in Step 2, a failing readiness anchor already hands you the outline — `Read` it from the failure report instead of re-running the scratch spec.
 
@@ -72,7 +72,7 @@ var _ = Describe("<feature>", func() {
 A *good* draft:
 
 - **Readiness anchor** that's stable and meaningful — a heading or key container present once the page is interactive.
-- **Semantic locators for actions** the user names by role/text/label (`b.Click(b.ByRole("button").WithName("Submit"))`) over brittle `nth-child` paths; fall back to ids/`data-*`/CSS, and XPath only for structural queries.
+- **CSS targeting stable hooks** (`b.Click("#submit")`, `b.Click("[data-testid=submit]")`) as the default; reach for a **semantic locator** (`b.Click(b.ByRole("button").WithName("Submit"))`) to assert a11y or when the visible label is the natural identifier. Avoid brittle `nth-child`/styling-class paths; XPath only for axis/ordinal structure.
 - **Assert observable outcomes**: visible text, counts, URL/title, network effects — not implementation details.
 - **Leave `// TODO` markers** wherever you're guessing — a draft is a starting point for the human.
 - If the page hits a backend you don't want to depend on, stub it (`b.StubRequest(...)`) so the spec is fast and hermetic.

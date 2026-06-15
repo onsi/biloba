@@ -51,37 +51,44 @@ var _ = Describe("the search page", func() {
 - Pick a **stable, meaningful** anchor (a heading, a key container) — `b.Exist()` or `b.BeVisible()`.
 - **Assert on observable outcomes**, not implementation: visible text (`HaveInnerText`/`HaveText`), counts (`HaveCount`), URL/title (`HaveURL`/`HaveTitle`), or network effects (`HaveMadeRequest`).
 
-## Selecting elements — reach for semantic locators first
+## Selecting elements — three pathways, CSS first
 
-The most robust selector describes an element the way a *user* perceives it — by its accessible **role + name**, its visible **text**, or its form **label**. These are the modern default; CSS is the workhorse for the rest; XPath is now a rarely-needed power tool for ordinal/axis structural queries.
+A `selector` is a **CSS string**, a **semantic `Locator`** (`b.By*`), or an **`XPath`** value. Pick by this guide:
 
-A `selector` is a **semantic `Locator`**, a **CSS string**, or an **`XPath`** value:
-
-```go
-b.Click(b.ByRole("button").WithName("Save"))      // accessible role + name — preferred for controls
-b.Click(b.ByText("Submit"))                       // exact visible text (b.ByTextContains for substring)
-b.SetValue(b.ByLabel("Email"), "jane@acme.com")   // a form control by its label (b.ByLabelContains too)
-b.Click("button.submit")                          // CSS — first matching element
-b.Click(b.XPath("button").WithText("OK"))         // XPath DSL → biloba:xpath (structural fallback only)
-```
-
-Locators **compose**, and **pierce open shadow roots automatically** (no `>>>` needed):
+- **CSS — the default.** For an app you own, target **stable, intentional hooks**: an `#id` or a `[data-testid]` you add on purpose. *Don't* couple tests to styling classes (`.btn-primary`) — they get renamed in redesigns. Fastest pathway; supports `:has()`; pierces shadow/iframe via `>>>`.
+- **Locators — reach second**, in two cases: (a) you *want* to assert the user-perceivable thing (a button's accessible name, a heading's level) — a free a11y-regression guard; (b) a hook isn't worth it and the visible label/text is the natural identifier (`b.ByText("Sign in")`). Most resilient/readable for user-facing elements, slowest engine (full-document ARIA scan).
+- **XPath — rare power tool** (`biloba:xpath`) for axis/relationship/ordinal queries CSS can't express, or exact `text()` matching. Fast but verbose; does **not** pierce shadow/iframe.
 
 ```go
-b.ByRole("button").WithName("Delete").Within("#dialog")  // .Within(scope) — any selector
-b.ByText("Item").Nth(2)                                  // .Nth(i)/.First()/.Last() — ordinal
+b.Click("#go")                                    // CSS by id — stable hook (preferred default)
+b.Click("[data-testid=save]")                     // CSS by intentional test-id
+Eventually("tr:has(td.overdue)").Should(b.Exist())// CSS :has() — "the row that contains X"
+b.Click(b.ByRole("button").WithName("Save"))      // Locator — role + accessible name (a11y guard)
+b.Click(b.ByText("Submit"))                       // Locator — visible text (b.ByTextContains for substring)
+b.SetValue(b.ByLabel("Email"), "jane@acme.com")   // Locator — a form control by its label
+b.Click(b.XPath("li").WithText("OK").Ancestor("ul"))// XPath — axis query no CSS/locator expresses
 ```
 
-`b.WithText`/`b.WithTextContains` are back-compat aliases for `b.ByText`/`b.ByTextContains` (they return a `Locator`, not an XPath). Never fetch-then-act — always pass the selector *into* the action so find-and-act is one atomic JS snippet.
+**Locator constructors** (each text-valued one has a `*Contains` variant): `b.ByRole`, `b.ByText`, `b.ByLabel`, `b.ByPlaceholder`, `b.ByAltText`, `b.ByTitle`, `b.ByTestID` (attr = `biloba.TestIDAttribute`, default `data-testid`). Refine a role with `.WithName(n)`, `.Level(n)` (heading), or ARIA states `.Checked()`/`.Disabled()`/`.Expanded()`/`.Pressed()`/`.Selected()`.
 
-**CSS** handles most structural cases — including `:has()` (`button:has(.spinner)`). **Pierce shadow DOM / same-origin iframes** with the CSS-only `>>>` combinator (one boundary per `>>>`, open shadow roots only — locators pierce automatically, CSS needs `>>>`):
+Locators **compose** — and the filters/combinators accept **any** selector (CSS/XPath/Locator), so pathways mix:
+
+```go
+b.ByRole("listitem").ContainingText("Product 2")             // .ContainingText / .NotContainingText
+b.ByRole("listitem").Containing(b.ByText("Delete"))          // .Containing / .NotContaining (a descendant)
+b.ByRole("button").And(".primary")                           // .And / .Or — set intersection / union
+b.ByRole("button").WithName("Delete").Within("#dialog")      // .Within(scope)
+b.ByText("Item").Nth(2)                                      // .Nth(i)/.First()/.Last() — ordinal
+```
+
+Locators **pierce open shadow roots automatically** (no `>>>`); CSS needs the `>>>` combinator (one boundary each, open shadow / same-origin iframe only); XPath crosses neither.
 
 ```go
 b.Click("my-widget >>> button.submit")
 Eventually("#editor-frame >>> .toolbar .save").Should(b.Click())
 ```
 
-Reach for XPath (`biloba:xpath`) only when you need axis/ordinal queries no locator or CSS expresses.
+Never fetch-then-act — always pass the selector *into* the action so find-and-act is one atomic JS snippet.
 
 ## The interaction vocabulary
 

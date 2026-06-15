@@ -26,7 +26,7 @@ Read the canonical narrative docs at <https://onsi.github.io/biloba/> for the fu
 - **Biloba never polls.** Methods either act immediately *or* return a Gomega matcher that *you* wrap in `Eventually`/`Consistently`. This dual immediate/matcher API is the single most important pattern — learn it in `biloba:write-tests`.
 - `console.log` streams to the `GinkgoWriter`; a failing `console.assert` fails the spec.
 
-**Selectors are first-class.** Any action/matcher takes a CSS string, an `XPath`, or — the modern default — a **semantic `Locator`** that describes an element as a user perceives it: `b.ByRole("button").WithName("Save")`, `b.ByText(...)`, `b.ByLabel(...)`. Locators compose (`.Within`/`.Nth`/`.First`/`.Last`) and pierce open shadow roots. Reach for them and CSS first; XPath is a structural power tool. → `biloba:write-tests`, `biloba:xpath`.
+**Selectors are first-class — three pathways.** Any action/matcher takes a **CSS string** (the default — target stable `#id`/`[data-testid]` hooks, not styling classes), a **semantic `Locator`** that describes an element as a user perceives it (`b.ByRole("button").WithName("Save")`, `b.ByText(...)`, `b.ByLabel(...)`, `b.ByTestID(...)` — reach for these to assert a11y or when the visible label is the natural identifier), or an **`XPath`** (the rare power tool for axis/ordinal queries). Locators compose (`.ContainingText`/`.Containing`/`.And`/`.Or`/`.Within`/`.Nth`, accepting any selector) and pierce open shadow roots automatically. → `biloba:write-tests`, `biloba:xpath`.
 
 ## The escape hatch
 
