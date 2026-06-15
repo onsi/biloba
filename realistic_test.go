@@ -60,6 +60,18 @@ var _ = Describe("BeClickable and realistic interactions", func() {
 			Eventually("#scroll-result").Should(b.HaveInnerText("clicked"))
 		})
 
+		It("moves the pointer before pressing, so hover-gated clicks register", func() {
+			// #gated-btn only counts a click if a mouseover preceded it
+			b.Realistic().Click("#gated-btn")
+			Eventually("#gated-result").Should(b.HaveInnerText("clicked"))
+		})
+
+		It("does not register the hover-gated click via plain (synthetic) Click", func() {
+			// plain Click fires el.click() with no preceding pointer movement
+			b.Click("#gated-btn")
+			Expect("#gated-result").To(b.HaveInnerText("no"))
+		})
+
 		It("refuses to click through an occluding overlay - unlike plain Click", func() {
 			// plain Click fires el.click() directly and so clicks straight through the overlay
 			b.Click("#covered-btn")
@@ -91,6 +103,22 @@ var _ = Describe("BeClickable and realistic interactions", func() {
 			Eventually("#submenu-item").Should(b.BeVisible())
 			rb.Click("#submenu-item")
 			Eventually("#hover-result").Should(b.HaveInnerText("selected"))
+		})
+	})
+
+	Describe("realistic Click across a same-origin iframe boundary", func() {
+		BeforeEach(func() {
+			b.Navigate(fixtureServer + "/shadow.html")
+			Eventually("#hello").Should(b.Exist())
+		})
+
+		It("translates iframe-local coordinates to top-level viewport coordinates", func() {
+			// the button lives inside #inner (an iframe positioned well below the top-left),
+			// so its in-iframe coordinates must be translated by the iframe's offset or the
+			// real mouse click lands on the wrong spot
+			Eventually("#inner >>> #iframe-btn").Should(b.Exist())
+			b.Realistic().Click("#inner >>> #iframe-btn")
+			Eventually("#inner >>> #iframe-btn").Should(b.HaveInnerText("Iframe Clicked"))
 		})
 	})
 })

@@ -15,6 +15,10 @@
   <button id="plain-btn">Plain</button>
   <span id="plain-result">no</span>
 
+  <!-- only registers a click if a mouseover preceded it (gates on real pointer arrival) -->
+  <button id="gated-btn">Gated</button>
+  <span id="gated-result">no</span>
+
   <button id="disabled-btn" disabled>Disabled</button>
 
   <!-- a button fully covered by an overlay in its own stacking context -->
@@ -38,6 +42,10 @@
   <script>
     const set = (id, v) => (document.getElementById(id).textContent = v);
     document.getElementById('plain-btn').addEventListener('click', () => set('plain-result', 'clicked'));
+    let gatedHovered = false;
+    const gated = document.getElementById('gated-btn');
+    gated.addEventListener('mouseover', () => (gatedHovered = true));
+    gated.addEventListener('click', () => { if (gatedHovered) set('gated-result', 'clicked'); });
     document.getElementById('covered-btn').addEventListener('click', () => set('covered-result', 'clicked'));
     document.getElementById('submenu-item').addEventListener('click', () => set('hover-result', 'selected'));
     document.getElementById('below-btn').addEventListener('click', () => set('scroll-result', 'clicked'));

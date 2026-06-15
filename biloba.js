@@ -111,11 +111,27 @@ if (!window["_biloba"]) {
     // real mouse event at that point would actually land on the element.
     b.scrollToAndPoint = one(b.isVisible, n => {
         n.scrollIntoView({ block: "center", inline: "center" })
+        let doc = n.ownerDocument, view = doc.defaultView
         let rect = n.getBoundingClientRect()
-        let cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2
-        let inViewport = cx >= 0 && cy >= 0 && cx <= window.innerWidth && cy <= window.innerHeight
-        let top = inViewport ? document.elementFromPoint(cx, cy) : null
-        return rRes({ x: cx, y: cy, inViewport: inViewport, hittable: !!top && (n === top || n.contains(top)), enabled: !n.disabled })
+        // local coords within the element's OWN document (an iframe has its own viewport/coordinate space)
+        let lx = rect.left + rect.width / 2, ly = rect.top + rect.height / 2
+        // hit-test in the element's own document with its local coords
+        let inLocalViewport = lx >= 0 && ly >= 0 && lx <= view.innerWidth && ly <= view.innerHeight
+        let top = inLocalViewport ? doc.elementFromPoint(lx, ly) : null
+        let hittable = !!top && (n === top || n.contains(top))
+        // translate local coords to TOP-LEVEL viewport coords (where CDP mouse events live) by
+        // walking up through any same-origin iframe boundaries and adding each iframe's offset
+        let cx = lx, cy = ly, translatable = inLocalViewport
+        try {
+            while (view && view.frameElement) {
+                let fe = view.frameElement, fr = fe.getBoundingClientRect()
+                cx += fr.left + fe.clientLeft
+                cy += fr.top + fe.clientTop
+                view = view.parent
+            }
+        } catch (e) { translatable = false } // cross-origin frame: cannot translate
+        let inViewport = translatable && cx >= 0 && cy >= 0 && cx <= window.innerWidth && cy <= window.innerHeight
+        return rRes({ x: cx, y: cy, inViewport: inViewport, hittable: hittable, enabled: !n.disabled })
     })
     b.node = (s) => sel(s)
     b.clickEach = each(ns => {

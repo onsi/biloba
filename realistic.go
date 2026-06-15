@@ -73,7 +73,13 @@ func (b *Biloba) realisticClick(selector any) (bool, error) {
 	if !pt.enabled || !pt.inViewport || !pt.hittable {
 		return false, nil
 	}
-	if err := chromedp.Run(b.Context, chromedp.MouseClickXY(pt.x, pt.y)); err != nil {
+	// Move the real pointer to the element before pressing - so pointerover/pointermove/mousemove
+	// fire and hover state is set - then click.  This matches how a real user arrives at and clicks
+	// an element (Playwright does move->down->up) and makes hover-gated clicks behave correctly.
+	if err := chromedp.Run(b.Context,
+		chromedp.MouseEvent(input.MouseMoved, pt.x, pt.y),
+		chromedp.MouseClickXY(pt.x, pt.y),
+	); err != nil {
 		return false, err
 	}
 	return true, nil
