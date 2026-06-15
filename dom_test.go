@@ -1149,6 +1149,33 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 	})
 
+	Describe("Tap", func() {
+		Context("when called directly", func() {
+			It("fires a touchend event", func() {
+				b.Tap("#tap-btn")
+				Ω("#tap-result").Should(b.HaveInnerText("tapped"))
+			})
+
+			It("auto-fails if the element does not exist", func() {
+				b.Tap("#non-existing")
+				ExpectFailures("Failed to tap:\ncould not find DOM element matching selector: #non-existing")
+			})
+		})
+
+		Context("when used as a matcher", func() {
+			It("taps when polled", func() {
+				Eventually("#tap-btn").Should(b.Tap())
+				Ω("#tap-result").Should(b.HaveInnerText("tapped"))
+			})
+
+			It("returns an error when the element does not exist", func() {
+				match, err := b.Tap().Match("#non-existing")
+				Ω(match).Should(BeFalse())
+				Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
+			})
+		})
+	})
+
 	Describe("invokeOn and invokeOnEach", func() {
 		It("invokes the requested function on the selected dom element", func() {
 			b.InvokeOn("#increment", "click")

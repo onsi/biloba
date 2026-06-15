@@ -3,6 +3,7 @@ package biloba
 import (
 	"fmt"
 
+	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/chromedp"
 )
@@ -178,6 +179,29 @@ func (b *Biloba) realisticMiddleClick(selector any) (bool, error) {
 	if err := chromedp.Run(b.Context,
 		chromedp.MouseEvent(input.MouseMoved, pt.x, pt.y),
 		chromedp.MouseClickXY(pt.x, pt.y, chromedp.ButtonType(input.Middle)),
+	); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// realisticTap implements Tap for realistic mode.  Like realisticClick it scrolls the element to a
+// stable point and checks actionability, then dispatches a real CDP touch (touchStart/touchEnd) at
+// the element's centroid.  Chrome rejects DispatchTouchEvent unless touch input is enabled for the
+// target, so we enable touch emulation inline immediately before dispatching - keeping it local to
+// this call rather than leaving global state that could leak into other specs sharing the root tab.
+func (b *Biloba) realisticTap(selector any) (bool, error) {
+	pt, err := b.scrollToStablePoint(selector)
+	if err != nil {
+		return false, err
+	}
+	if !pt.enabled || !pt.inViewport || !pt.hittable {
+		return false, nil
+	}
+	if err := chromedp.Run(b.Context,
+		emulation.SetTouchEmulationEnabled(true),
+		input.DispatchTouchEvent(input.TouchStart, []*input.TouchPoint{{X: pt.x, Y: pt.y}}),
+		input.DispatchTouchEvent(input.TouchEnd, []*input.TouchPoint{}),
 	); err != nil {
 		return false, err
 	}

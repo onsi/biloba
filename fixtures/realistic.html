@@ -20,6 +20,8 @@
   <span id="aux-result">no</span>
   <button id="mod-btn">Modify me</button>
   <span id="mod-result">no</span>
+  <button id="tap-btn">Tap me</button>
+  <span id="tap-result">no</span>
 
   <!-- only registers a click if a mouseover preceded it (gates on real pointer arrival) -->
   <button id="gated-btn">Gated</button>
@@ -107,6 +109,7 @@
     document.getElementById('drop-zone').addEventListener('pointerup', () => { if (dragging) set('drop-result', 'dropped'); dragging = false; });
     document.getElementById('scroll-box').addEventListener('wheel', () => set('wheel-result', 'wheeled'));
     document.getElementById('aux-btn').addEventListener('auxclick', (e) => { if (e.button === 1) set('aux-result', 'middle'); });
+    document.getElementById('tap-btn').addEventListener('touchend', () => set('tap-result', 'tapped'));
     document.getElementById('mod-btn').addEventListener('click', (e) => {
       let mods = [];
       if (e.shiftKey) mods.push('shift');

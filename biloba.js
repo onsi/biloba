@@ -177,6 +177,17 @@ if (!window["_biloba"]) {
         n.dispatchEvent(new MouseEvent('auxclick', opts))
         return r()
     })
+    b.tap = one(b.isVisible, b.isEnabled, n => {
+        let box = n.getBoundingClientRect()
+        let clientX = box.left + box.width / 2, clientY = box.top + box.height / 2
+        let t = new Touch({ identifier: 0, target: n, clientX, clientY })
+        n.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, view: window, pointerType: 'touch', clientX, clientY }))
+        n.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true, view: window, touches: [t], targetTouches: [t], changedTouches: [t] }))
+        n.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, view: window, pointerType: 'touch', clientX, clientY }))
+        n.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true, view: window, touches: [], targetTouches: [], changedTouches: [t] }))
+        n.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window, clientX, clientY }))
+        return r()
+    })
     b.clickWith = one(b.isVisible, b.isEnabled, (n, mods) => {
         let opts = {
             bubbles: true, cancelable: true, view: window,

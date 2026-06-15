@@ -905,6 +905,47 @@ func (b *Biloba) MiddleClick(args ...any) types.GomegaMatcher {
 }
 
 /*
+Tap() taps (touches) the first element matching selector.
+
+	tab.Tap("#row")
+
+it immediately taps (fast mode dispatches synthetic touch and pointer events plus a click; realistic mode dispatches a real CDP touch).  It fails if no element is found, or if the element is hidden or disabled.
+
+When invoked with no arguments, tab.Tap() returns a Gomega matcher:
+
+	Eventually("#row").Should(tab.Tap())
+
+Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
+*/
+func (b *Biloba) Tap(args ...any) types.GomegaMatcher {
+	b.gt.Helper()
+	if len(args) > 0 {
+		if b.realistic {
+			ok, err := b.realisticTap(args[0])
+			if err != nil {
+				b.gt.Fatalf("Failed to tap:\n%s", err.Error())
+			} else if !ok {
+				b.gt.Fatalf("Failed to tap: element is not tappable (it is disabled, off-screen, or obscured by another element)")
+			}
+			return nil
+		}
+		r := b.runBilobaHandler("tap", args[0])
+		if r.Error() != nil {
+			b.gt.Fatalf("Failed to tap:\n%s", r.Error())
+		}
+		return nil
+	}
+	if b.realistic {
+		return gcustom.MakeMatcher(func(selector any) (bool, error) {
+			return b.realisticTap(selector)
+		}).WithMessage("be tappable (realistically)")
+	}
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return b.runBilobaHandler("tap", selector).MatcherResult()
+	}).WithMessage("be tappable")
+}
+
+/*
 DragTo() drags the first element matching source onto the first element matching target.
 
 	tab.DragTo("#card", "#column")

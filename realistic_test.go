@@ -159,6 +159,13 @@ var _ = Describe("BeClickable and realistic interactions", func() {
 		})
 	})
 
+	Describe("realistic Tap", func() {
+		It("dispatches a real touch that fires touchend", func() {
+			b.Realistic().Tap("#tap-btn")
+			Eventually("#tap-result").Should(b.HaveInnerText("tapped"))
+		})
+	})
+
 	Describe("realistic Type", func() {
 		It("scrolls an off-screen input into view before typing into it", func() {
 			b.Realistic().Type("#below-input", "typed")

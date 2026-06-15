@@ -1394,6 +1394,18 @@ The modifiers come from the `biloba.ModShift`, `biloba.ModControl`, `biloba.ModA
 
 Because the dual immediate/matcher API keys on argument count - which the modifier varargs would conflict with - `ClickWith` (like `DragTo` and `ScrollWheel`) always acts immediately and has **no matcher variant**.  If you need to wait for readiness first, poll `Eventually(sel).Should(b.Click())` and then `b.ClickWith`.
 
+#### Tapping (Touch)
+
+`b.Tap` taps (touches) an element, following the same dual immediate/matcher convention and visible+enabled checks as `Click`:
+
+```go
+b.Tap("#row")                       // dispatches a synthetic touch tap
+
+Eventually("#row").Should(b.Tap())  // matcher form polls until tappable
+```
+
+The fast version simulates a touch tap at the element's center: it dispatches `pointerdown`/`pointerup` (with `pointerType: 'touch'`) and `touchstart`/`touchend` `TouchEvent`s, then a culminating `click` (a tap normally ends in a click).  In [realistic mode](#realistic-interactions) it scrolls into view, waits for stability, checks for occlusion, and dispatches a real CDP touch (`touchStart`/`touchEnd`) - genuine trusted touch input.
+
 ### Hovering, Focusing, and Scrolling
 
 Alongside `Click`, Biloba provides a few more first-class interactions, all following the same dual immediate/matcher convention:
@@ -1435,6 +1447,7 @@ In realistic mode:
 - **`ScrollWheel`** scrolls the element into view, measures a stable, actionable point, then dispatches a real CDP wheel event there - genuine trusted input that actually scrolls the page (unlike the synthetic fast `ScrollWheel`, which dispatches a `wheel` event and then manually scrolls the nearest scrollable ancestor).
 - **`MiddleClick`** applies the same scroll/stability/occlusion machinery as `Click`, then dispatches a real middle-button click (firing the browser's native `auxclick`).
 - **`ClickWith`** applies the same scroll/stability/occlusion machinery as `Click`, then dispatches a real left-button click with the requested modifier keys (`ModShift`/`ModControl`/`ModAlt`/`ModMeta`) held down via a CDP modifier bitmask.
+- **`Tap`** applies the same scroll/stability/occlusion machinery as `Click`, then dispatches a real CDP touch (`touchStart`/`touchEnd`) at the element's center - genuine trusted touch input (unlike the synthetic fast `Tap`, which dispatches touch/pointer events plus a `click`).
 - **`Hover`** scrolls into view and moves the real mouse to the element's center, which - unlike the synthetic `Hover` - activates genuine CSS `:hover` (e.g. a menu that only appears via a `:hover` rule).
 - **`SetValue`** drives form controls with real input: a text input is focused with a real click, cleared, and typed with real key events (then blurred to fire `change`); a checkbox is toggled with a real click (and left alone if it's already in the desired state).  Native pickers - radio groups, `<select>`, and multi-selects - fall back to the fast JS path, because they can't be driven by a real pointer (Playwright's `selectOption` sets them programmatically too).
 - **`Type`** / **`SendKeys`** already use real CDP key events; in realistic mode they additionally scroll the element into view before typing.

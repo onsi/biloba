@@ -69,6 +69,7 @@ Terse lookup. **(dual)** = acts immediately when fully applied, returns a Gomega
 ## Clicking & interactions  (pragmatic simulations)
 - `b.Click(selector)` (dual) — visible+enabled, then `el.click()`.
 - `b.DblClick(selector)` (dual) — two clicks + `dblclick`. `b.RightClick(selector)` (dual) — `mousedown`/`mouseup`/`contextmenu`. `b.MiddleClick(selector)` (dual) — `mousedown`/`mouseup`/`auxclick`.
+- `b.Tap(selector)` (dual) — synthetic touch/pointer events + `click` (realistic: real CDP `touchStart`/`touchEnd`).
 - `b.ClickWith(selector, mods...)` — click with modifiers held (`biloba.ModShift`/`ModControl`/`ModAlt`/`ModMeta`; `ModMeta`=⌘/Win); realistic carries a CDP modifier bitmask (no matcher).
 - `b.DragTo(source, target)` — pointer-based drag (`pointerdown`/`move`/`up`); drives @dnd-kit-style DnD, not native HTML5 `draggable` (no matcher).
 - `b.ScrollWheel(selector, deltaX, deltaY)` — `wheel` event then scrolls nearest scrollable ancestor (realistic: real CDP wheel); +deltaY=down, +deltaX=right (no matcher).
