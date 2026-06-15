@@ -60,6 +60,13 @@ var _ = Describe("BeClickable and realistic interactions", func() {
 			Eventually("#scroll-result").Should(b.HaveInnerText("clicked"))
 		})
 
+		It("clicks an element larger than the viewport at a visible point", func() {
+			// #big is taller than the viewport, so its geometric center is off-screen; the click
+			// point is clamped to the visible intersection
+			b.Realistic().Click("#big")
+			Eventually("#big-result").Should(b.HaveInnerText("clicked"))
+		})
+
 		It("waits for a moving element to settle before clicking it", func() {
 			// #moving-btn transitions into place on load; the stability wait clicks its settled spot
 			b.Realistic().Click("#moving-btn")

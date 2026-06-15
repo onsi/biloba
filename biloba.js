@@ -113,8 +113,14 @@ if (!window["_biloba"]) {
     let measurePoint = (n) => {
         let doc = n.ownerDocument, view = doc.defaultView
         let rect = n.getBoundingClientRect()
-        let lx = rect.left + rect.width / 2, ly = rect.top + rect.height / 2 // local to the element's own document
-        let inLocalViewport = lx >= 0 && ly >= 0 && lx <= view.innerWidth && ly <= view.innerHeight
+        // clamp the click point to the part of the element that's inside the viewport, so an element
+        // larger than the viewport (whose geometric center is off-screen) is still clicked at a
+        // visible point.  For a fully-visible element this is just the element's center.
+        let vx0 = Math.max(rect.left, 0), vy0 = Math.max(rect.top, 0)
+        let vx1 = Math.min(rect.right, view.innerWidth), vy1 = Math.min(rect.bottom, view.innerHeight)
+        let inLocalViewport = vx1 > vx0 && vy1 > vy0
+        let lx = inLocalViewport ? (vx0 + vx1) / 2 : rect.left + rect.width / 2 // local to the element's own document
+        let ly = inLocalViewport ? (vy0 + vy1) / 2 : rect.top + rect.height / 2
         let top = inLocalViewport ? doc.elementFromPoint(lx, ly) : null
         let hittable = !!top && (n === top || n.contains(top))
         let cx = lx, cy = ly, translatable = inLocalViewport
