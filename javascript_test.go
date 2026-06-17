@@ -49,6 +49,20 @@ var _ = Describe("Javascript", func() {
 				ContainSubstring("SyntaxError: Unexpected end of input"),
 			))
 		})
+
+		It("hints toward RunAsync/IIFE when the script uses a top-level return", func() {
+			b.Run(`const x = 1; return x;`)
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Illegal return statement"),
+				ContainSubstring("b.RunAsync"),
+				ContainSubstring("IIFE"),
+			))
+		})
+
+		It("does not add the return hint for unrelated errors", func() {
+			b.Run(`1+`)
+			ExpectFailures(Not(ContainSubstring("b.RunAsync")))
+		})
 	})
 
 	Describe("RunErrAsync", func() {

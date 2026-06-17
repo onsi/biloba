@@ -52,6 +52,11 @@ func (b *Biloba) handleEventConsoleAPICalled(ev *runtime.EventConsoleAPICalled) 
 	if showStackTrace {
 		b.gt.Printf(b.gt.Fi(1, b.renderStackTrace(ev.StackTrace)))
 	}
+	if ev.Type == runtime.APITypeError || ev.Type == runtime.APITypeAssert {
+		b.lock.Lock()
+		b.consoleErrors = append(b.consoleErrors, strings.TrimSuffix(message, "\n"))
+		b.lock.Unlock()
+	}
 	if ev.Type == runtime.APITypeAssert {
 		defer func() { recover() }()
 		b.gt.Fatalf("Detected console.assert failure:\n%s", message)

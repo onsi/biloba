@@ -38,10 +38,18 @@ func (b *Biloba) XPath(path ...string) XPath {
 	if len(path) == 0 {
 		return XPath("//*")
 	}
-	if strings.HasPrefix(path[0], "/") || strings.HasPrefix(path[0], "./") {
+	if isRawXPath(path[0]) {
 		return XPath(path[0])
 	}
 	return XPath("//" + path[0])
+}
+
+// isRawXPath reports whether s is already a fully-formed XPath expression that XPath()/RelativeXPath()
+// should pass through verbatim rather than prepending an axis.  A leading "/" or "./" is an absolute or
+// relative location path; a leading "(" is a parenthesized/grouped expression (e.g. "(//ul)[3]"); a
+// leading "*" is the wildcard step.  Anything else is treated as a bare element name to be prefixed.
+func isRawXPath(s string) bool {
+	return strings.HasPrefix(s, "/") || strings.HasPrefix(s, "./") || strings.HasPrefix(s, "(") || strings.HasPrefix(s, "*")
 }
 
 /*
@@ -59,7 +67,7 @@ func (b *Biloba) RelativeXPath(path ...string) XPath {
 	if len(path) == 0 {
 		return XPath("./*")
 	}
-	if strings.HasPrefix(path[0], "/") || strings.HasPrefix(path[0], "./") {
+	if isRawXPath(path[0]) {
 		return XPath(path[0])
 	}
 	return XPath("./" + path[0])

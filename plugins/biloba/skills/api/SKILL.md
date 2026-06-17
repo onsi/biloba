@@ -1,6 +1,6 @@
 ---
 name: api
-description: One-line reference for every Biloba method and matcher, grouped by area — selectors/locators, lifecycle, navigation, cookies/storage, tabs, DOM existence/visibility/contents/properties/forms, clicking and interactions (incl. drag/scroll/tap/modifiers), realistic mode, keyboard, uploads, element JS, dialogs, downloads, arbitrary JS, network stubbing/aborting/modifying/observing, and screenshots/outline/window. Use to look up the exact method or matcher name and shape. Methods marked (dual) act immediately when fully applied and return a pollable matcher when under-applied.
+description: One-line reference for every Biloba method and matcher, grouped by area — selectors/locators, lifecycle, navigation, cookies/storage, tabs, DOM existence/visibility/contents/properties/forms, clicking and interactions (incl. drag/scroll/tap/modifiers/text-selection), realistic mode, keyboard, uploads, element JS, dialogs, downloads, arbitrary JS, network stubbing/aborting/modifying/observing, and screenshots/outline/window. Use to look up the exact method or matcher name and shape. Methods marked (dual) act immediately when fully applied and return a pollable matcher when under-applied.
 ---
 
 # Biloba API reference
@@ -84,6 +84,9 @@ Three pathways, all flow through every method/matcher. **CSS is the default** (t
 - `b.ScrollWheel(selector, deltaX, deltaY)` — `wheel` event then scrolls nearest scrollable ancestor (realistic: real CDP wheel); +deltaY=down, +deltaX=right (no matcher).
 - `b.ClickEach(selector)` — click all visible+enabled matches (no matcher).
 - `b.Focus(selector)` (dual) / `b.Hover(selector)` (dual; fires pointer/mouse events, not CSS `:hover`) / `b.ScrollIntoView(selector)` (dual).
+- `b.SelectText(selector)` (dual) — select all of the element's text as a real `window.getSelection()` range, dispatching `mouseup` (drives highlight→menu/annotation UIs).
+- `b.SelectRange(selector, start, end)` (dual; matcher form `b.SelectRange(start, end)`) — select chars `[start, end)` across the element's text nodes; same range+mouseup. Read back with `Eventually("window.getSelection().toString()").Should(b.EvaluateTo(…))`.
+- `b.ClearSelection()` — clear any active selection (no matcher).
 
 ## Realistic mode  (opt-in; real CDP input instead of fast JS simulation)
 - `b.Realistic()` → `*Biloba` — a view of the **same tab** whose interactions run through real Chrome DevTools Protocol input: scrolls into view, waits for stability, refuses to click through an occluding overlay, moves the real pointer (CSS `:hover` activates), dispatches genuine mouse/touch/key input. Per-spec opt-in (real round-trips, can reintroduce flake); the whole interaction vocabulary above works on it. No per-call decorator.
@@ -117,9 +120,9 @@ Three pathways, all flow through every method/matcher. **CSS is the default** (t
 - `Download`: `.URL`, `.Filename`, `.IsComplete()/.IsCancelled()/.IsActive()`, `.Content()` → []byte.
 
 ## Arbitrary JS  (runs on the global `window`; wrap object literals in parens)
-- `b.Run(script[, &ptr])` → any — synchronous expression.
-- `b.RunAsync(script[, &ptr])` / `b.RunErrAsync(...)` — body of an async fn; you `return` the awaited value.
-- `b.EvaluateTo(value|matcher)` (matcher) — assert a JS expression's result.
+- `b.Run(script[, &ptr])` → any — synchronous **expression**; returns the decoded value (no `return` allowed at top level — it errors with a hint pointing to `RunAsync`/IIFE).
+- `b.RunAsync(script[, &ptr])` / `b.RunErrAsync(...)` — body of an async fn; you `return` the awaited value (use this for `await`/`fetch`).
+- `b.EvaluateTo(value|matcher)` (matcher) — assert a JS expression's result. Numbers decode to `float64` — use `BeNumerically`, not `Equal(intLiteral)`.
 - `b.JSFunc(script)` → `.Invoke(...args)` string — JSON-encodes args into an invocable snippet.
 - `b.JSVar(nameOrExpr)` — reference a JS variable/expression as a `JSFunc` argument (don't quote it).
 

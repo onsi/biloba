@@ -7,6 +7,13 @@ description: Author good Biloba specs in your own Ginkgo/Gomega suite — the du
 
 Assumes Biloba is already wired into the suite (`biloba:setup`) and you know the principles (`biloba:overview`). For the full method list see `biloba:api`; for XPath see `biloba:xpath`. Docs: <https://onsi.github.io/biloba/#working-with-the-dom>.
 
+## RULE — two decisions to get right on the first draft
+
+1. **Selecting elements.** Interactions and user-facing things → a **Locator** by role/name/text (`b.ByRole("button").WithName("Save")`, `b.ByText("Sign in")`), which doubles as an a11y guard. Structural/state hooks you own → **CSS on a stable `#id`/`[data-testid]`**, never a styling class.
+2. **Assert observable outcomes** — visible text, counts, URL/title, network effects — not internal class/structure.
+
+**Smells** to catch in your own draft (the wrong-from-generic-automation-muscle-memory moves): positional/styling-class CSS (`:nth-of-type`, `.btn-primary`); text-matching XPath where `b.ByText`/`b.ByRole().WithName` fits; reinventing a matcher with `b.Run` (`querySelectorAll(...).length` instead of `b.HaveCount`); IIFE-wrapping a script for `return` (use `b.RunAsync`); `SetValue` when you meant keystrokes (use `b.Type`).
+
 ## The one pattern to internalize: dual immediate/matcher
 
 Most DOM methods have **two forms keyed on argument count**:
@@ -51,13 +58,24 @@ var _ = Describe("the search page", func() {
 - Pick a **stable, meaningful** anchor (a heading, a key container) — `b.Exist()` or `b.BeVisible()`.
 - **Assert on observable outcomes**, not implementation: visible text (`HaveInnerText`/`HaveText`), counts (`HaveCount`), URL/title (`HaveURL`/`HaveTitle`), or network effects (`HaveMadeRequest`).
 
-## Selecting elements — three pathways, CSS first
+**Pocket matcher cheat-sheet** — reach here before `b.Run`:
 
-A `selector` is a **CSS string**, a **semantic `Locator`** (`b.By*`), or an **`XPath`** value. Pick by this guide:
+| Want to assert… | Matcher |
+|---|---|
+| element is present / visible | `b.Exist()` / `b.BeVisible()` |
+| how many match | `b.HaveCount(BeNumerically(">", 0))` |
+| visible text | `b.HaveInnerText("…")` / `b.HaveText(…)` (textContent) |
+| a DOM/JS property | `b.HaveProperty("href", …)` / `b.HaveClass("active")` |
+| it's actually clickable (visible+enabled+topmost) | `b.BeClickable()` |
+| form value | `b.HaveValue(…)` (also `b.HaveSpawnedTab`, `b.HaveURL`, `b.HaveTitle`) |
+| a network request was made | `Eventually(b).Should(b.HaveMadeRequest(…))` |
+| an arbitrary JS expression | `Eventually(expr).Should(b.EvaluateTo(matcher))` |
 
-- **CSS — the default.** For an app you own, target **stable, intentional hooks**: an `#id` or a `[data-testid]` you add on purpose. *Don't* couple tests to styling classes (`.btn-primary`) — they get renamed in redesigns. Fastest pathway; supports `:has()`; pierces shadow/iframe via `>>>`.
-- **Locators — reach second**, in two cases: (a) you *want* to assert the user-perceivable thing (a button's accessible name, a heading's level) — a free a11y-regression guard; (b) a hook isn't worth it and the visible label/text is the natural identifier (`b.ByText("Sign in")`). Most resilient/readable for user-facing elements, slowest engine (full-document ARIA scan).
-- **XPath — rare power tool** (`biloba:xpath`) for axis/relationship/ordinal queries CSS can't express, or exact `text()` matching. Fast but verbose; does **not** pierce shadow/iframe.
+`EvaluateTo`/`Run` JSON-decode numbers to **float64** — assert with `BeNumerically("==", n)`, not `Equal(intLiteral)`.
+
+## Selecting elements — the vocabulary
+
+The *decision* is the RULE above; here are the mechanics. A `selector` is a **CSS string** (fastest; `:has()`; pierces shadow/iframe via `>>>`), a **semantic `Locator`** (`b.By*`; most resilient, slowest — full-document ARIA scan), or an **`XPath`** value (`biloba:xpath`; axis/ordinal/`text()` queries; pierces neither boundary).
 
 ```go
 b.Click("#go")                                    // CSS by id — stable hook (preferred default)
@@ -105,6 +123,20 @@ b.Type(sel, "abc"); b.SendKeys(biloba.Keys.Enter)            // real keystrokes 
 ```
 
 `b.At(x,y)` / `b.Shift()` / `b.Ctrl()` / `b.Alt()` / `b.Meta()` (⌘/Win) are **pointer options** accepted by `Click`/`DblClick`/`RightClick`/`MiddleClick`/`Tap` — after the selector (immediate) or in place of it (matcher: `Eventually(sel).Should(b.Click(b.At(x,y), b.Shift()))`). In fast mode any option switches a click off native `el.click()` to a synthetic event carrying the coords/flags. `ScrollWheel` is immediate-only.
+
+### Selecting text (highlight / annotation / editor UIs)
+
+For "highlight text → floating menu → Define"-style interactions, use the first-class selection primitives — no `Range`/`getSelection` archaeology needed. Each produces a genuine `window.getSelection()` range and dispatches a `mouseup` so selection-driven toolbars fire:
+
+```go
+b.SelectText("#passage")                          // select all of the element's text (dual)
+Eventually("#passage").Should(b.SelectText())     // matcher form
+b.SelectRange("#passage", 4, 9)                   // select chars 4..8 across text nodes (dual)
+Eventually("#passage").Should(b.SelectRange(4, 9))
+b.ClearSelection()                                // drop the selection
+```
+
+Assert on what's selected by reading it back: `Eventually("window.getSelection().toString()").Should(b.EvaluateTo("quick"))`.
 
 ## Realistic mode — for a handful of smoke tests
 
@@ -159,7 +191,7 @@ b.Run(`app.load(` + jsonFixture + `); app.redraw()`)
 Eventually("#doc-name").Should(b.HaveInnerText("My Fixture Data"))
 ```
 
-`b.Run` is synchronous; use `b.RunAsync` (which `return`s an awaited value) for `fetch`/`await`. `b.EvaluateTo` asserts on a JS expression directly.
+**`b.Run` returns the decoded value directly** — `n := b.Run("app.users.length")` feeds Gomega without a wrapper, and `b.Run("expr", &typed)` decodes into a pointer. Don't write `runInt`/`runStr` helpers. `b.Run` is a synchronous *expression*, so a top-level `return` is illegal — use `b.RunAsync` (which wraps a function body, so `return`/`await` work) for `fetch`/`await`. `b.EvaluateTo` asserts on a JS expression directly. Remember numbers decode to `float64` (use `BeNumerically`).
 
 ## Multi-tab flows
 

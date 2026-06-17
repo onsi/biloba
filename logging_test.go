@@ -31,4 +31,13 @@ var _ = Describe("Logging", func() {
 
 		ExpectFailures("Detected console.assert failure:\n\"hello assert\"\n")
 	})
+
+	It("captures console.error messages (not console.log) so they can be replayed at the top of the failure block", func() {
+		b.Run("console.log('just a log')")
+		b.Run("console.error('boom', 42)")
+		Eventually(b.SafeAllTabConsoleErrorsForTest).Should(ConsistOf(SatisfyAll(
+			ContainSubstring("boom"),
+			ContainSubstring("42"),
+		)))
+	})
 })

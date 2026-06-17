@@ -170,3 +170,27 @@ var _ = DescribeTable("Xpath DSL",
 			b.XPredicate().WithText("Germs"),
 		)), "all-microbiota"),
 )
+
+var _ = DescribeTable("XPath() passes already-formed expressions through verbatim (no auto-prepended axis)",
+	func(in string, expected string) {
+		Ω(b.XPath(in).String()).Should(Equal(expected))
+	},
+	// a bare element name gets the // axis prepended...
+	Entry("bare element name", "div", "//div"),
+	// ...but already-formed expressions are left untouched:
+	Entry("absolute path", "/html/body/div", "/html/body/div"),
+	Entry("descendant axis", "//div[@id='foo']", "//div[@id='foo']"),
+	Entry("relative path", "./span", "./span"),
+	Entry("wildcard step", "*[@id='foo']", "*[@id='foo']"),
+	// the regression: a parenthesized/grouped expression must not become //(...)[3]
+	Entry("parenthesized ordinal", "(//ul[@class='x'])[3]", "(//ul[@class='x'])[3]"),
+)
+
+var _ = DescribeTable("RelativeXPath() passes already-formed expressions through verbatim",
+	func(in string, expected string) {
+		Ω(b.RelativeXPath(in).String()).Should(Equal(expected))
+	},
+	Entry("bare element name", "li", "./li"),
+	Entry("relative path", "./li", "./li"),
+	Entry("parenthesized ordinal", "(./li)[1]", "(./li)[1]"),
+)

@@ -1592,6 +1592,34 @@ Eventually("#footer").Should(b.ScrollIntoView())
 
 `Hover` is, like `Click`, a pragmatic simulation: it synchronously dispatches the pointer/mouse events associated with hovering (`pointerover`, `mouseover`, `pointerenter`, `mouseenter`, `mousemove`).  This triggers JavaScript hover handlers - for example a menu that opens on `mouseenter` - but it does **not** activate CSS `:hover` styling, which only responds to a real pointer.  If you need to exercise CSS `:hover`, use [realistic interactions](#realistic-interactions) (or drop down to chromedp's input domain yourself).
 
+### Selecting Text
+
+A whole class of UIs - annotation tools, rich-text editors, "highlight a phrase → floating menu → Define" affordances - key off the user *selecting text*.  Biloba gives you first-class primitives for this so you don't have to hand-roll `document.createRange()` + `window.getSelection()`:
+
+```go
+b.SelectText("#passage")         // selects all of the element's text
+b.SelectRange("#passage", 4, 9)  // selects characters [4, 9) - across the element's text nodes
+b.ClearSelection()               // clears the active selection
+```
+
+Both `SelectText` and `SelectRange` produce a genuine `window.getSelection()` range - the same object the browser builds when a user drags across text - and then dispatch a `mouseup` on the element, since selection-driven toolbars typically open on `mouseup`.  `SelectRange`'s offsets count characters into the element's text content (start inclusive, end exclusive) and are mapped across nested text nodes, so selecting across a `<strong>` in the middle of a paragraph works as you'd expect.  It fails the spec if the range is out of bounds.
+
+Like the other interactions they follow the dual immediate/matcher convention (`SelectRange`'s matcher form drops the selector):
+
+```go
+Eventually("#passage").Should(b.SelectText())
+Eventually("#passage").Should(b.SelectRange(4, 9))
+```
+
+To assert on *what* ended up selected, read the selection back as a plain expression:
+
+```go
+b.SelectRange("#passage", 4, 9)
+Eventually("window.getSelection().toString()").Should(b.EvaluateTo("quick"))
+```
+
+These are pragmatic simulations on both tracks (they build the range directly rather than dragging a real pointer); for a genuine pointer-drag selection drop to chromedp via `b.Context`.
+
 ### Realistic Interactions
 
 Biloba's interactions are fast, atomic [pragmatic simulations](#pragmatism-how-biloba-interacts-with-the-dom) by default - and for the overwhelming majority of your specs that is exactly what you want.  But the realism Biloba trades away (occlusion, scroll-into-view, genuine CSS `:hover`) is occasionally the very thing you want to guard against regressing.  Rather than make you hand-roll chromedp for those cases, `b.Realistic()` gives you a view of the tab whose interactions are performed with **real Chrome DevTools Protocol input**:
@@ -2295,6 +2323,8 @@ Expect(result).To(Equal([]float64{3.0, 4.0}) // fails - type mismatch
 Expect(result).To(HaveExactElements(3.0, 4.0)) // works
 ```
 
+Because the result is JSON-decoded, **numbers always come back as `float64`** - even a scalar.  So `b.Run("1+3")` returns `float64(4)`, and `Eventually("count").Should(b.EvaluateTo(4))` (an `int`) will *not* match.  Either assert with a numeric matcher - `b.EvaluateTo(BeNumerically("==", 4))` - or decode into a typed pointer as shown below.
+
 or you can provide a typed pointer for Biloba to decode the result into:
 
 ```go
@@ -2434,7 +2464,7 @@ b.RunAsync(`return await app.load()`, &users)
 
 ...and a non-promise value works just fine too (`b.RunAsync("return 1 + 2")` returns `3`).
 
-The key difference from `b.Run` is the `return`.  Because your script is the body of a function (not a bare expression) you must `return` the value you want out of it - a script that forgets to `return` will resolve to `undefined`.
+The key difference from `b.Run` is the `return`.  Because your script is the body of a function (not a bare expression) you must `return` the value you want out of it - a script that forgets to `return` will resolve to `undefined`.  The flip side: a top-level `return` in `b.Run` is a syntax error (`Illegal return statement`), because `b.Run` evaluates a bare expression.  When you hit that, reach for `b.RunAsync` (which wraps your script in a function body) rather than wrapping it in an IIFE yourself - Biloba's failure message points you here.
 
 If the script throws, or the promise you `await` (or `return`) rejects, the spec fails (use `RunErrAsync` if you'd like to handle the error yourself):
 
@@ -2735,6 +2765,8 @@ might produce something like:
 `Outline()` automatically prunes the content of `<script>`, `<style>`, and `<svg>` elements (keeping the tags, replacing bodies with `…`) to keep the output compact even on complex SPAs. Runs of whitespace inside text nodes are collapsed to a single space. Output is capped at ~32 KB; if truncated, a `... [truncated]` marker is appended.
 
 **Attachment on failure.** Biloba can attach a DOM Outline for every open tab when a spec fails.  This gives you a readable, text-based view of the page state, which is especially useful in environments that cannot render images.  It is **off for an interactive human** (the screenshot is the more useful artifact) but **on automatically under CI or an AI agent**; force it either way with `BilobaConfigFailureOutlines()` / `BilobaConfigFailureOutlines(false)` (see [Failure artifacts](#failure-artifacts)).  When enabled, the entry appears under "DOM Outline for: '<title>'" in the Ginkgo report.
+
+**Console errors on failure.** Biloba streams the page's `console` output to the `GinkgoWriter` as it happens, but on a failure the originating `console.error` (say, the exception behind a React error boundary) is easily lost in the timeline.  So whenever a spec fails Biloba *also* replays every `console.error`/`console.assert` the page logged during the spec, gathered across all tabs, under **"Console errors logged before this failure"** at the **top** of the failure block - usually the fastest path to the root cause.  (This requires no configuration and rides along with the failure-artifact hook.)
 
 You can also call `b.Outline()` directly in a spec to capture a snapshot at any point:
 

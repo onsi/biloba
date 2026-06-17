@@ -70,6 +70,12 @@ func SetAutomationDetectedForTest(fn func() bool) func() {
 	return func() { automationDetected = prev }
 }
 
+// SafeAllTabConsoleErrorsForTest exposes safeAllTabConsoleErrors for logging_test.go - the captured
+// console.error/console.assert messages Biloba replays at the top of the failure block.
+func (b *Biloba) SafeAllTabConsoleErrorsForTest() []string {
+	return b.safeAllTabConsoleErrors()
+}
+
 // TabScreenshotForTest is a test-accessible view of tabScreenshot.
 type TabScreenshotForTest struct {
 	Title            string

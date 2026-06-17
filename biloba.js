@@ -345,6 +345,38 @@ if (!window["_biloba"]) {
         return r()
     })
     b.scrollIntoView = one(n => r(n.scrollIntoView()))
+    // dispatchSelection points window.getSelection() at range and fires mouseup on n so
+    // selection-driven UIs (floating "highlight → menu" toolbars and the like) react.  selectionchange
+    // fires automatically off the getSelection() mutation; the mouseup is the pragmatic touch that
+    // wakes the common mouseup-gated menus.
+    let dispatchSelection = (n, range) => {
+        let selection = window.getSelection()
+        selection.removeAllRanges()
+        selection.addRange(range)
+        n.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }))
+        return r()
+    }
+    b.selectText = one(b.isVisible, (n) => {
+        let range = document.createRange()
+        range.selectNodeContents(n)
+        return dispatchSelection(n, range)
+    })
+    b.selectRange = one(b.isVisible, (n, start, end) => {
+        let total = n.textContent.length
+        if (start < 0 || end < start || end > total) return rErr(`selection range [${start}, ${end}] is out of bounds (the element's text is ${total} character(s) long)`)
+        // walk the element's text nodes, mapping the flat character offsets onto (node, offset) pairs
+        let walker = document.createTreeWalker(n, NodeFilter.SHOW_TEXT), pos = 0, sNode = null, sOff = 0, eNode = null, eOff = 0, node
+        while (node = walker.nextNode()) {
+            let len = node.textContent.length
+            if (sNode === null && start <= pos + len) { sNode = node; sOff = start - pos }
+            if (eNode === null && end <= pos + len) { eNode = node; eOff = end - pos; break }
+            pos += len
+        }
+        let range = document.createRange()
+        if (sNode === null) { range.selectNodeContents(n) } // empty element: [0,0] collapses onto it
+        else { range.setStart(sNode, sOff); range.setEnd(eNode, eOff) }
+        return dispatchSelection(n, range)
+    })
     // hitTest pierces open shadow roots: doc.elementFromPoint retargets to the shadow host, so we
     // descend through each host's shadowRoot to find the element actually painted at (x, y). Without
     // this the topmost check below would see the host (not the inner target) and call every element

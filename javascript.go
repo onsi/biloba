@@ -19,6 +19,8 @@ EvaluateTo is a matcher that asserts that the result of running the script passe
 
 EvaluateTo can be passed a Gomega matcher to assert against the returned value from the script.  Or it can be passed an arbitrary value in which case Equal() is used.
 
+Note: the returned value is JSON-decoded, so JavaScript numbers come back as float64.  b.EvaluateTo(1) (an int) will therefore fail against a returned float64(1) - prefer a numeric matcher like BeNumerically("==", 1).
+
 Read https://onsi.github.io/biloba/#running-arbitrary-javascript to learn more about running JavaScript in Biloba
 */
 func (b *Biloba) EvaluateTo(expected any) types.GomegaMatcher {
@@ -100,6 +102,8 @@ You can also pass a single pointer argument if you would like Biloba to decode t
 	var result int
 	tab.Run("1+3", &result) // result is now 4
 
+Note: the result is JSON-decoded, so a returned number comes back as a float64 when you don't pass a typed pointer.  tab.Run("1+3") returns float64(4), which will not Equal(4) (an int) - use BeNumerically("==", 4) or decode into a typed pointer as above.
+
 # If an error occurs Run() will fail the spec
 
 Read https://onsi.github.io/biloba/#running-arbitrary-javascript to learn more about running JavaScript in Biloba
@@ -108,9 +112,19 @@ func (b *Biloba) Run(script string, args ...any) any {
 	b.gt.Helper()
 	res, err := b.RunErr(script, args...)
 	if err != nil {
-		b.gt.Fatalf("Failed to run script:\n%s\n\n%s", script, err.Error())
+		b.gt.Fatalf("Failed to run script:\n%s\n\n%s%s", script, err.Error(), illegalReturnHint(err))
 	}
 	return res
+}
+
+// illegalReturnHint returns a hint to append to a Run failure when the script used a top-level return.
+// Run evaluates a synchronous expression (Runtime.evaluate), so a top-level `return` is a syntax error;
+// RunAsync wraps the script in a function body where `return` is allowed.
+func illegalReturnHint(err error) string {
+	if err == nil || !strings.Contains(err.Error(), "Illegal return statement") {
+		return ""
+	}
+	return "\n\nHint: Run evaluates a synchronous expression, so a top-level `return` is not allowed.  Use b.RunAsync (which wraps your script in a function body) or wrap the script in an IIFE: `(() => { ... })()`."
 }
 
 /*

@@ -131,3 +131,7 @@ You can mix per-process browsers with fresh-tab-per-spec.
 ginkgo -r -p              # parallel — Biloba is built for this
 ginkgo -r -p -randomize-all
 ```
+
+## Next: read `biloba:write-tests` before authoring a spec
+
+This skill only wired Chrome in. **Before you write a single spec, load `biloba:write-tests`** — the most consequential authoring decision (selecting elements: CSS hook vs. locator vs. XPath) lives there, and generic-automation muscle memory gets it wrong. Reach for `biloba:api` for exact method/matcher names.

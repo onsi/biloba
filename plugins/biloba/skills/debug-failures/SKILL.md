@@ -27,6 +27,7 @@ Point the directory elsewhere (e.g. a CI artifact path) with `BILOBA_SCREENSHOTS
 
 ## Reading the artifacts as an agent
 
+- **Console errors** — if the page logged any `console.error`/`console.assert` before the failure, Biloba replays them under "Console errors logged before this failure" at the **top** of the failure block. On a JS crash (e.g. a React error boundary) this is usually the root cause — read it first, before the outline.
 - **Screenshot files** — `Read` the printed PNG path to see the rendered page at failure.
 - **DOM outline** — attached under "DOM Outline for: '<title>'" in the Ginkgo report. This is the primary tool for *why a selector didn't match*: it's the indented DOM (`<script>/<style>/<svg>` bodies pruned, whitespace collapsed, capped ~32 KB).
 

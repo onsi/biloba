@@ -621,6 +621,11 @@ type Biloba struct {
 	dialogHandlers []*DialogHandler
 	dialogs        []*Dialog
 
+	// consoleErrors accumulates rendered console.error / console.assert messages seen on this tab so
+	// attachFailureArtifactsIfFailed can replay them at the top of the failure block - the originating
+	// error is usually the root cause and is otherwise buried in the streamed timeline.  Reset by Prepare().
+	consoleErrors []string
+
 	requests         []*Request
 	inflightRequests map[network.RequestID]bool
 	requestHandlers  []*requestHandler       // ordered, first-match-wins: stub / abort / modify-request
@@ -724,6 +729,7 @@ func (b *Biloba) Prepare() {
 	b.downloadHistory = map[string]time.Time{}
 	b.dialogHandlers = []*DialogHandler{}
 	b.dialogs = Dialogs{}
+	b.consoleErrors = nil
 	b.requests = nil
 	b.inflightRequests = map[network.RequestID]bool{}
 	b.requestHandlers = nil
@@ -902,8 +908,23 @@ func (b *Biloba) waitUntilTargetsGone(targetIDs []target.ID) {
 	}
 }
 
+// safeAllTabConsoleErrors gathers the console.error/console.assert messages captured across every tab
+// so attachFailureArtifactsIfFailed can replay them at the top of the failure block.
+func (b *Biloba) safeAllTabConsoleErrors() []string {
+	out := []string{}
+	for _, tab := range b.AllTabs() {
+		tab.lock.Lock()
+		out = append(out, tab.consoleErrors...)
+		tab.lock.Unlock()
+	}
+	return out
+}
+
 func (b *Biloba) attachFailureArtifactsIfFailed() {
 	if b.gt.Failed() {
+		if consoleErrors := b.safeAllTabConsoleErrors(); len(consoleErrors) > 0 {
+			b.gt.AddReportEntryVisibilityFailureOrVerbose("Console errors logged before this failure", strings.Join(consoleErrors, "\n"))
+		}
 		if b.failureOutlines {
 			for _, outline := range b.safeAllTabOutlines() {
 				if outline.failure != "" {

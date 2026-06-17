@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Selection Testpage</title>
+    <style>
+        #menu { display: none; }
+        #menu.open { display: block; }
+    </style>
+</head>
+<body>
+    <h1 id="hello">Selection Testpage</h1>
+
+    <p id="passage">The quick brown fox</p>
+    <p id="rich">Hello <strong>brave</strong> world</p>
+    <p id="empty"></p>
+
+    <!-- a "highlight -> menu" toolbar that opens on mouseup, the way an annotation UI would -->
+    <div id="menu">Define</div>
+
+    <script>
+        window._lastMouseUpTarget = null
+        document.addEventListener('mouseup', function (e) {
+            window._lastMouseUpTarget = e.target.id
+            document.getElementById('menu').classList.add('open')
+        })
+    </script>
+</body>
+</html>

@@ -1039,6 +1039,83 @@ func (b *Biloba) ScrollIntoView(args ...any) types.GomegaMatcher {
 }
 
 /*
+SelectText() selects all of the text inside the first element matching selector - the equivalent of dragging the cursor across it - and produces a genuine window.getSelection() range, then dispatches a mouseup so selection-driven UIs (a "highlight → menu" toolbar, an annotation layer) react.
+
+When invoked with a selector, tab.SelectText("#passage") acts immediately and fails the spec if no element is found, or if the element is hidden.
+
+When invoked with no arguments, tab.SelectText() returns a Gomega matcher so you can poll until an element is present to select:
+
+	Eventually("#passage").Should(tab.SelectText())
+
+To assert on what's selected, read the selection back with tab.EvaluateTo: Eventually("window.getSelection().toString()").Should(tab.EvaluateTo("the highlighted words")).  Clear it with tab.ClearSelection.
+
+Read https://onsi.github.io/biloba/#selecting-text to learn more about selecting text
+*/
+func (b *Biloba) SelectText(args ...any) types.GomegaMatcher {
+	b.gt.Helper()
+	if len(args) > 0 {
+		r := b.runBilobaHandler("selectText", args[0])
+		if r.Error() != nil {
+			b.gt.Fatalf("Failed to select text:\n%s", r.Error())
+		}
+		return nil
+	}
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return b.runBilobaHandler("selectText", selector).MatcherResult()
+	}).WithMessage("be selectable")
+}
+
+/*
+SelectRange() selects a sub-range of the text inside the first element matching selector, by character offset, across the element's text nodes.  Like SelectText it produces a genuine window.getSelection() range and dispatches a mouseup.
+
+The offsets count characters into the element's text content (start inclusive, end exclusive):
+
+	tab.SelectRange("#passage", 5, 12) // selects characters 5..11
+
+When invoked with a selector, start, and end it acts immediately and fails the spec if no element is found, if the element is hidden, or if [start, end] is out of bounds.
+
+When invoked with just start and end, tab.SelectRange(start, end) returns a Gomega matcher whose subject is the selector:
+
+	Eventually("#passage").Should(tab.SelectRange(5, 12))
+
+Read https://onsi.github.io/biloba/#selecting-text to learn more about selecting text
+*/
+func (b *Biloba) SelectRange(args ...any) types.GomegaMatcher {
+	b.gt.Helper()
+	if len(args) == 3 {
+		r := b.runBilobaHandler("selectRange", args[0], args[1], args[2])
+		if r.Error() != nil {
+			b.gt.Fatalf("Failed to select range:\n%s", r.Error())
+		}
+		return nil
+	}
+	if len(args) != 2 {
+		b.gt.Fatalf("SelectRange requires either (selector, start, end) to act immediately or (start, end) to return a matcher")
+		return nil
+	}
+	start, end := args[0], args[1]
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return b.runBilobaHandler("selectRange", selector, start, end).MatcherResult()
+	}).WithMessage("be selectable")
+}
+
+/*
+ClearSelection() clears any active text selection on the tab (window.getSelection().removeAllRanges()):
+
+	tab.ClearSelection()
+
+It is the counterpart to SelectText/SelectRange and never fails for "nothing selected".
+
+Read https://onsi.github.io/biloba/#selecting-text to learn more about selecting text
+*/
+func (b *Biloba) ClearSelection() {
+	b.gt.Helper()
+	if _, err := b.RunErr("window.getSelection().removeAllRanges()"); err != nil {
+		b.gt.Fatalf("Failed to clear selection:\n%s", err.Error())
+	}
+}
+
+/*
 InvokeOn() takes a selector, a method name, and optional arguments.  It will find the first element matching selector and invoke method on that option, passing in any arguments provided.  That is:
 
 	tab.InvokeOn("input.login", "scrollIntoView")
