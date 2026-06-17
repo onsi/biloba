@@ -224,6 +224,12 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...SpinUpOption) ChromeConne
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.WindowSize(1024, 768),
 		chromedp.UserDataDir(tmp),
+		// chromedp gives Chrome 20s to print its DevTools websocket URL before giving up with
+		// "websocket url timeout reached". A cold full ("new") headless google-chrome on a loaded
+		// CI runner intermittently needs longer than that to come up, which flaked the high-fidelity
+		// lane at suite bring-up. The lightweight chrome-headless-shell starts well within 20s, so a
+		// roomier ceiling only ever buys slow launches headroom - it never slows a fast one.
+		chromedp.WSURLReadTimeout(60*time.Second),
 	)
 	opts = append(opts, cfg.execAllocatorOptions...)
 	if interactive {

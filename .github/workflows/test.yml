@@ -49,6 +49,7 @@ jobs:
     # sandbox intact (rather than weakening Biloba's defaults with --no-sandbox).
     # https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md
     - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-    # Runs in parallel like the default lane; the suite staggers each process's ConnectToChrome on
-    # CI+high-fidelity so the concurrent remote-allocator attaches don't wedge full google-chrome.
+    # Runs in parallel like the default lane. Concurrent remote-allocator attaches are handled by
+    # ConnectToChrome's retry/backoff; the one-time full google-chrome launch gets a roomier
+    # WSURLReadTimeout (see SpinUpChrome) since a cold runner can take >20s to expose DevTools.
     - run: go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --fail-on-pending --keep-going --race -procs=2 --poll-progress-after=30s --timeout=8m
