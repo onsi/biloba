@@ -1,3 +1,19 @@
+## 0.4.0
+
+### Features
+- **First-class text selection.** `b.SelectText(selector)` selects all of an element's text and `b.SelectRange(selector, start, end)` selects a character sub-range across the element's text nodes — each producing a genuine `window.getSelection()` range and dispatching a `mouseup` so selection-driven UIs (highlight→menu toolbars, annotation layers, editors) react. Both follow the dual immediate/matcher convention (`Eventually("#p").Should(b.SelectText())`, `b.SelectRange(start, end)` as the matcher form); `b.ClearSelection()` drops the selection. Closes the gap that previously forced users into hand-rolled `document.createRange()`/`getSelection()` scripts.
+
+### Fixes
+- **`b.XPath()` / `b.RelativeXPath()` no longer double-prefix already-formed expressions.** A parenthesized/grouped expression like `(//ul[...])[3]` (or a leading `*` wildcard step) was being turned into `//(//ul[...])[3]`, an invalid XPath. They now pass any expression beginning with `/`, `./`, `(`, or `*` through verbatim, only prepending an axis to a bare element name.
+- **`b.Run` now hints toward `RunAsync` when a script uses a top-level `return`.** `b.Run` evaluates a synchronous expression, so a top-level `return` is an `Illegal return statement` syntax error; the failure message now points you at `b.RunAsync` (which wraps your script in a function body) or an IIFE instead of leaving the raw V8 error.
+
+### Debugging
+- **Console errors are replayed at the top of the failure block.** Whenever a spec fails, Biloba now gathers every `console.error`/`console.assert` the page logged during the spec (across all tabs) and attaches them under "Console errors logged before this failure" — the originating error (e.g. the exception behind a React error boundary) is usually the root cause and was otherwise buried in the streamed timeline. No configuration required.
+
+### Docs
+- Documented text selection, the `Run` top-level-`return` rule, and the `float64`-for-numbers gotcha (`EvaluateTo`/`Run` JSON-decode numbers, so use `BeNumerically` not `Equal(intLiteral)`).
+- `biloba:*` skills: `setup` now hands off loudly to `biloba:write-tests`; `write-tests` leads with a selector RULE, a "common smells" list, and a pocket matcher cheat-sheet; `debug-failures` documents the console-error surfacing; `api`/`write-tests` document the new selection primitives.
+
 ## 0.3.1
 
 New performance comparisons with Playwright now online at [biloba-comparison](https://github.com/onsi/biloba-comparison).  tl;dr Biloba is 2.5-3x faster.
