@@ -37,6 +37,24 @@ var _ = Describe("Javascript", func() {
 				Ω(b.RunErr(`["a","b","c","d"].map((c, i) => c + (i+1))`, &s)).Error().ShouldNot(HaveOccurred())
 				Ω(s).Should(Equal([]string{"a1", "b2", "c3", "d4"}))
 			})
+
+			It("treats a nil argument as 'discard the result' instead of failing", func() {
+				result, err := b.RunErr(`1+2`, nil)
+				Ω(err).ShouldNot(HaveOccurred())
+				Ω(result).Should(Equal(3.0))
+			})
+
+			It("discards the result of a side-effect-only script passed a nil argument", func() {
+				_, err := b.RunErr(`window.__sideEffect = true; undefined`, nil)
+				Ω(err).ShouldNot(HaveOccurred())
+				Ω(b.Run(`window.__sideEffect`)).Should(BeTrue())
+			})
+
+			It("returns a directive error when an undefined result is decoded into a non-nil pointer", func() {
+				var s string
+				_, err := b.RunErr(`undefined`, &s)
+				Ω(err).Should(MatchError(ContainSubstring("the script returned undefined")))
+			})
 		})
 	})
 

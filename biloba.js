@@ -556,8 +556,23 @@ if (!window["_biloba"]) {
         return rRes(n.value)
     })
     b.setValue = one(b.isVisible, b.isEnabled, (n, v) => {
-        if (n.type == "select-one" && !n.querySelector(`[value="${v}"]`)) {
-            return rErr(`Select input does not have option with value "${v}"`)
+        // a ValueLabel argument arrives as {__biloba_value_label: "..."}; labelOf unwraps it (or returns null)
+        let labelOf = (val) => (val && typeof val == "object" && "__biloba_value_label" in val) ? val.__biloba_value_label : null
+        if (labelOf(v) !== null && n.type != "select-one") {
+            return rErr(`ValueLabel is only supported for <select> elements`)
+        }
+        if (n.type == "select-one") {
+            let label = labelOf(v)
+            if (label !== null) {
+                let o = [...n.options].find(o => o.text == label)
+                if (!o) return rErr(`Select input does not have option with label "${label}"`)
+                v = o.value
+            } else if (!n.querySelector(`[value="${v}"]`)) {
+                return rErr(`Select input does not have option with value "${v}"`)
+            }
+            n.focus()
+            n.value = v
+            n.blur()
         } else if (n.type == "checkbox") {
             if (typeof v != "boolean") return rErr("Checkboxes only accept boolean values")
             n.focus()
@@ -578,9 +593,10 @@ if (!window["_biloba"]) {
             let options = [...n.options]
             let optionsToSelect = []
             for (value of v) {
-                let o = options.find(o => o.value == value)
-                if (!o) return rErr(`The "${value}" option does not exist`)
-                if (!b.isEnabled(o).success) return rErr(`The "${value}" option is not enabled`)
+                let label = labelOf(value)
+                let o = label !== null ? options.find(o => o.text == label) : options.find(o => o.value == value)
+                if (!o) return rErr(`The "${label !== null ? label : value}" option does not exist`)
+                if (!b.isEnabled(o).success) return rErr(`The "${label !== null ? label : value}" option is not enabled`)
                 optionsToSelect.push(o)
             }
             options.forEach(o => o.selected = false)

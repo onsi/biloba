@@ -1350,6 +1350,14 @@ Not quite.  And this is where `GetValue`, `SetValue`, and `HaveValue` do some ex
 
 In general, most input types take and return strings (e.g. `text`, `numeric`, `color`, `date`, `email`, etc... inputs).  `textarea`s do as well.  As do `select` elements that don't have `multiple` set.  For all these you can `GetValue`, `SetValue`, and `HaveValue` with strings.  (Recall that the value of a `select` element is `value` attribute on the selected `option`).
 
+Because the value of a `<select>` is the `value` attribute of the selected `<option>` - and **not** its visible label - `b.SetValue("#model", "claude-sonnet-4-6")` matches on the option value.  When it's more natural to pick by the label the user sees, wrap the argument in `b.ValueLabel`:
+
+```go
+b.SetValue("#model", b.ValueLabel("Sonnet")) // selects the <option> whose visible text is "Sonnet"
+```
+
+`ValueLabel` works for single- and multi-select elements (for a `<select multiple>` pass a slice whose entries are `ValueLabel`s; you may mix labels and raw values).  To read a label back, assert on the option's `textContent`; to read the selection, assert on the `<select>`'s `value` property.
+
 But `checkboxes`, `radio` buttons, and `<select multiple>` elements all behavior differently.  Biloba rationalizes all these differences for you through `GetValue`/`SetValue`/`HaveValue`
 
 When Biloba sets a value it does the following:
@@ -2338,6 +2346,14 @@ You can also save a step by using Biloba's `EvaluateTo` matcher:
 ```go
 Expect("[1+2], 4]").To(b.EvaluateTo(HaveExactElements(3.0, 4.0)))
 ```
+
+When you run a script purely for its side effects you don't need a decode target at all - just omit it:
+
+```go
+b.Run("app.redraw()") // the return value is discarded
+```
+
+(passing `nil` explicitly - `b.Run("app.redraw()", nil)` - does the same thing.)  If you *do* pass a non-nil pointer the script must return a JSON-serializable value; a script that evaluates to `undefined` will fail with a directive error reminding you to either drop the decode target or `return` a value.  This is a common stumble with side-effect-only snippets - a bare `(() => { installObserver() })()` evaluates to `undefined` - make sure toomit the target for these.
 
 That covers how we get values _out_ of a JavaScript invocation.  What if you want to _provide_ arguments to a JavaScript function?  Biloba has a nifty little helper for that: `b.JSFunc()`.
 

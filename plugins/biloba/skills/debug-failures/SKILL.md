@@ -41,6 +41,8 @@ AddReportEntry("DOM before click", b.Outline(), ReportEntryVisibilityFailureOrVe
 
 `b.A11yOutline()` (the role/name view a screen reader works from) is often *more* useful than raw HTML for reasoning about what a page *means*; it's not auto-attached — call it explicitly.
 
+**Page-side `console.log` for live debugging.** All page `console.*` output is forwarded to the `GinkgoWriter` (each argument rendered, space-separated). Objects are rendered from CDP's **shallow** preview, so a nested/large object logs lossily (deep fields collapse). When you're logging a state object to chase a DOM/React timing bug, build one string yourself — `console.log('state ' + JSON.stringify(obj))` — to get the full value instead of the truncated preview. Same idea for a quick count probe: `b.Run("document.querySelectorAll('.card').length")` returns the number directly (no need to reach into the outline).
+
 ## Inline images (interactive terminals)
 
 Biloba emits inline images only when the terminal supports them — Kitty, iTerm2, or Sixel (VS Code's terminal), auto-detected. Control it with `BILOBA_INLINE_SCREENSHOTS=iterm|kitty|sixel|none`:

@@ -67,10 +67,20 @@ func (b *Biloba) runErr(script string, awaitPromise bool, args ...any) (any, err
 		return nil, err
 	}
 
-	if len(args) == 0 {
+	// A nil decode target means "discard the result" - decode into a throwaway any
+	// and return it, just as the no-arg form does.  This lets `b.Run(script, nil)`
+	// work for side-effect-only scripts instead of failing with `json: Unmarshal(nil)`.
+	if len(args) == 0 || args[0] == nil {
 		var result any
 		json.Unmarshal(encodedResult, &result)
 		return result, nil
+	}
+
+	// An undefined JS result decodes to empty bytes; unmarshaling that into a real
+	// pointer yields a cryptic `unexpected end of JSON input`.  Give a directive error
+	// instead - the usual cause is a side-effect-only script that forgot to `return`.
+	if len(encodedResult) == 0 {
+		return nil, fmt.Errorf("the script returned undefined, so there is nothing to decode into the pointer you provided.\nIf this script runs purely for its side effects, omit the decode target (or pass nil).\nOtherwise make sure the script returns a JSON-serializable value (e.g. `return true`).")
 	}
 
 	err = json.Unmarshal(encodedResult, args[0])
@@ -103,6 +113,8 @@ You can also pass a single pointer argument if you would like Biloba to decode t
 	tab.Run("1+3", &result) // result is now 4
 
 Note: the result is JSON-decoded, so a returned number comes back as a float64 when you don't pass a typed pointer.  tab.Run("1+3") returns float64(4), which will not Equal(4) (an int) - use BeNumerically("==", 4) or decode into a typed pointer as above.
+
+For a side-effect-only script you don't need a decode target at all - just omit it (or pass nil): tab.Run("app.redraw()").  If you do pass a non-nil pointer the script must return a JSON-serializable value, otherwise Run fails with a directive error.
 
 # If an error occurs Run() will fail the spec
 

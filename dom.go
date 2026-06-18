@@ -1,6 +1,7 @@
 package biloba
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -605,6 +606,26 @@ func (b *Biloba) SetValue(args ...any) types.GomegaMatcher {
 	return gcustom.MakeMatcher(func(selector any) (bool, error) {
 		return b.runBilobaHandler("setValue", selector, args[0]).MatcherResult()
 	}).WithMessage("be value-settable")
+}
+
+/*
+ValueLabel wraps a string so that SetValue targets a <select> option by its visible label (its displayed text) instead of its underlying value:
+
+	tab.SetValue("#model", tab.ValueLabel("Sonnet"))            // selects the <option> whose text is "Sonnet"
+	Eventually("#model").Should(tab.SetValue(tab.ValueLabel("Sonnet")))
+
+By default SetValue matches a <select> option by its value attribute; wrap the argument in ValueLabel to match by label instead.  For a multi-select, pass a slice whose entries are ValueLabels (you may mix labels and raw values).  ValueLabel is only meaningful for <select> elements.
+
+Read https://onsi.github.io/biloba/#form-elements to learn more about working with form elements
+*/
+func (b *Biloba) ValueLabel(label string) ValueLabel {
+	return ValueLabel(label)
+}
+
+type ValueLabel string
+
+func (v ValueLabel) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]string{"__biloba_value_label": string(v)})
 }
 
 /*

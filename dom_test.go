@@ -383,6 +383,31 @@ var _ = Describe("DOM manipulators and matchers", func() {
 					Ω(err).Should(MatchError("Select input does not have option with value \"grogu\": #droid"))
 				})
 			})
+
+			Context("when passed a ValueLabel", func() {
+				It("selects a single-select option by its visible label", func() {
+					b.SetValue("#droid", b.ValueLabel("BB-8"))
+					Ω("#droid").Should(b.HaveValue("bb8"))
+
+					Ω("#droid").Should(b.SetValue(b.ValueLabel("C-3PO")))
+					Ω("#droid").Should(b.HaveValue("c3po"))
+				})
+
+				It("selects multi-select options by label, mixing labels and raw values", func() {
+					b.SetValue("#party", []any{b.ValueLabel("Obi-Wan"), "han", b.ValueLabel("The Emperor")})
+					Ω(b.GetValue("#party")).Should(ConsistOf("obi-wan", "han", "emperor"))
+				})
+
+				It("fails when no option has the given label", func() {
+					b.SetValue("#droid", b.ValueLabel("Grogu"))
+					ExpectFailures("Failed to set value:\nSelect input does not have option with label \"Grogu\": #droid")
+				})
+
+				It("fails when used on a non-select element", func() {
+					b.SetValue("#text-input", b.ValueLabel("nope"))
+					ExpectFailures("Failed to set value:\nValueLabel is only supported for <select> elements: #text-input")
+				})
+			})
 		})
 	})
 

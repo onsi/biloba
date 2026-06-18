@@ -72,7 +72,8 @@ Three pathways, all flow through every method/matcher. **CSS is the default** (t
 
 ## Form values  (rationalizes text/checkbox/radio/multi-select)
 - `b.GetValue(selector)` → any (first; bool for checkbox, checked radio's `value`, `[]string` for multi-select).
-- `b.SetValue(selector, value)` (dual) — requires visible+enabled; focuses, sets, blurs, fires `input`+`change`. Does **not** type real keys.
+- `b.SetValue(selector, value)` (dual) — requires visible+enabled; focuses, sets, blurs, fires `input`+`change`. Does **not** type real keys. For a `<select>` the value is matched against the **option `value`**, not its visible label (assert labels via `option.textContent`).
+- `b.ValueLabel(label)` — wrap a `SetValue` arg to target a `<select>` option by its **visible label** instead of its value: `b.SetValue(sel, b.ValueLabel("Sonnet"))`. Multi-select: pass a slice whose entries are `ValueLabel`s (labels and raw values may be mixed). `<select>` only.
 - `b.HaveValue(value|matcher)` (matcher).
 
 ## Clicking & interactions  (pragmatic simulations)
@@ -140,4 +141,4 @@ Three pathways, all flow through every method/matcher. **CSS is the default** (t
 - `b.A11yOutline()` → string — accessibility tree (role + name).
 - `b.CaptureScreenshot()` → []byte (PNG) / `b.CaptureImgcatScreenshot()` → string / `b.CaptureScreenshotToFile(path)` → abs path.
 - `b.CaptureScreenshotOf(selector)` → []byte / `b.CaptureImgcatScreenshotOf(selector)` → string / `b.CaptureScreenshotOfToFile(selector, path)` → abs path — clipped to the first matching element (any selector; works below the fold and across `>>>` boundaries).
-- `b.SetWindowSize(w, h, ...opt)` (auto-resets via DeferCleanup) / `b.WindowSize()`.
+- `b.SetWindowSize(w, h, ...opt)` (auto-resets via DeferCleanup) / `b.WindowSize()`. Because it registers its own `DeferCleanup` to restore the prior size, you don't need a manual restore — and you must **not** call it from inside another `DeferCleanup` (Ginkgo forbids nesting), so call it bare in `BeforeEach`/`BeforeAll`.

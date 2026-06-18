@@ -124,6 +124,8 @@ b.Type(sel, "abc"); b.SendKeys(biloba.Keys.Enter)            // real keystrokes 
 
 `b.At(x,y)` / `b.Shift()` / `b.Ctrl()` / `b.Alt()` / `b.Meta()` (⌘/Win) are **pointer options** accepted by `Click`/`DblClick`/`RightClick`/`MiddleClick`/`Tap` — after the selector (immediate) or in place of it (matcher: `Eventually(sel).Should(b.Click(b.At(x,y), b.Shift()))`). In fast mode any option switches a click off native `el.click()` to a synthetic event carrying the coords/flags. `ScrollWheel` is immediate-only.
 
+**`<select>` form values.** `b.SetValue(sel, v)` matches `v` against the option's underlying **`value`**, not its visible label: `b.SetValue("#model", "claude-sonnet-4-6")` (and `b.SetValue` on a native `<select>` already fires `input`+`change` with `bubbles:true`, so React `onChange` runs — no realistic mode needed). To pick by the label the user sees, wrap it: `b.SetValue("#model", b.ValueLabel("Sonnet"))`. Assert labels via `option.textContent` and the selection via the `<select>`'s `value` (`b.HaveProperty("value", id)`).
+
 ### Selecting text (highlight / annotation / editor UIs)
 
 For "highlight text → floating menu → Define"-style interactions, use the first-class selection primitives — no `Range`/`getSelection` archaeology needed. Each produces a genuine `window.getSelection()` range and dispatches a `mouseup` so selection-driven toolbars fire:
@@ -137,6 +139,8 @@ b.ClearSelection()                                // drop the selection
 ```
 
 Assert on what's selected by reading it back: `Eventually("window.getSelection().toString()").Should(b.EvaluateTo("quick"))`.
+
+**`b.SelectText` does not poll** (like every immediate form — Biloba never polls itself). Against content that appears asynchronously or nondeterministically (e.g. streamed/agent output) a bare `b.SelectText(".blocks p")` matches zero elements on the runs where it lost the race. Gate on a guaranteed-present anchor first — `Eventually(<selector>).Should(b.Exist())` — *then* select, or use the matcher form inside `Eventually`.
 
 ## Realistic mode — for a handful of smoke tests
 
