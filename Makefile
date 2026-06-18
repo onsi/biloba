@@ -5,7 +5,7 @@
 
 GINKGO := go run github.com/onsi/ginkgo/v2/ginkgo
 
-.PHONY: test test-all stress-test
+.PHONY: test test-all stress-test update-chrome
 
 ## test: standard headless (chrome-headless-shell) suite - parallel + randomized. Your default.
 test:
@@ -16,6 +16,15 @@ test:
 test-all:
 	$(GINKGO) -r -p --randomize-all
 	BILOBA_TEST_HIGH_FIDELITY=true $(GINKGO) -r -p --randomize-all
+
+## update-chrome: pull the latest stable chrome-headless-shell into the puppeteer cache Biloba
+## searches first (~/.cache/puppeteer), so `make test` exercises the same Chrome CI auto-installs.
+## Biloba reuses any cached binary rather than phoning home each run (offline-friendly + fast), so a
+## stale local cache can hide a breakage that CI - which always tracks latest - catches. Run this
+## periodically (or when CI goes red on a Chrome bump) to resync. The chrome-tracking workflow is
+## the canonical "latest is green" signal.
+update-chrome:
+	npx -y @puppeteer/browsers install chrome-headless-shell@stable --path "$$HOME/.cache/puppeteer"
 
 ## stress-test: flake hunt - 6 procs under moderate CPU/IO load, 41 repeats, generous total budget
 ## so a wedge surfaces as a TIMEDOUT (with a goroutine dump) rather than a false budget-exhaustion.

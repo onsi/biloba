@@ -68,3 +68,23 @@ var _ = Describe("chrome-headless-shell acquisition helpers", Label("no-browser"
 		Expect(msg).To(ContainSubstring("HighFidelityHeadless"))
 	})
 })
+
+var _ = Describe("parsing the Chrome version", Label("no-browser"), func() {
+	DescribeTable("extracting the major version from a Browser.getVersion product string",
+		func(product string, expected int) {
+			Expect(biloba.ChromeMajorVersionForTest(product)).To(Equal(expected))
+		},
+		Entry("headless shell", "HeadlessChrome/150.0.7871.24", 150),
+		Entry("full chrome", "Chrome/150.0.7871.24", 150),
+		Entry("a two-digit major", "Chrome/99.0.4844.51", 99),
+		Entry("an empty string", "", 0),
+		Entry("no slash", "Chrome", 0),
+		Entry("a trailing slash with no version", "Chrome/", 0),
+		Entry("a non-numeric version", "Chrome/abc.0.0", 0),
+	)
+
+	It("uses a minimum supported major that is a sane, non-zero floor", func() {
+		// guards against the constant accidentally going to zero (which would disable the warning)
+		Expect(biloba.MinimumSupportedChromeMajorForTest()).To(BeNumerically(">=", 100))
+	})
+})

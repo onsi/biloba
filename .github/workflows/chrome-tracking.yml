@@ -1,0 +1,93 @@
+name: chrome-tracking
+
+# Biloba tracks the latest stable Chrome.  The default (pragmatic) lane auto-installs the latest
+# chrome-headless-shell from Chrome for Testing on every run, and the high-fidelity lane drives the
+# runner's pre-installed google-chrome (which GitHub keeps current) - so a daily scheduled run
+# naturally exercises whatever Chrome just shipped.  This catches a scrollIntoView-style breaking
+# change proactively (before a user, or a release, hits it).  When a scheduled run fails we open (or
+# comment on) a tracking issue so the regression surfaces without anyone watching the Actions tab.
+
+on:
+  schedule:
+    # daily at 13:17 UTC - off the top of the hour to dodge cron congestion
+    - cron: '17 13 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default chrome-headless-shell
+            high_fidelity: ""
+          - name: high-fidelity headless
+            high_fidelity: "true"
+    name: Test (${{ matrix.name }})
+    env:
+      BILOBA_TEST_HIGH_FIDELITY: ${{ matrix.high_fidelity }}
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/setup-go@v6
+      with:
+        go-version-file: 'go.mod'
+    # Record the Chrome versions this run exercised, so the build log captures exactly what shipped
+    # (the default lane auto-installs the Chrome for Testing Stable below; the high-fidelity lane
+    # uses the google-chrome printed here).
+    - name: Report Chrome versions
+      run: |
+        echo "Runner google-chrome: $(google-chrome --version 2>/dev/null || echo 'n/a')"
+        echo "Chrome for Testing Stable: $(curl -s https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json | python3 -c 'import sys,json;print(json.load(sys.stdin)["channels"]["Stable"]["version"])')"
+    # Ubuntu 23.10+ (the ubuntu-latest runner) restricts unprivileged user namespaces via AppArmor,
+    # which Chrome's sandbox needs to start. Relax it so Chrome can launch with the sandbox intact.
+    # https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md
+    - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+    - run: go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --fail-on-pending --keep-going --race -procs=2 --poll-progress-after=30s --timeout=8m
+
+  notify:
+    needs: test
+    # only file an issue when a *scheduled* run breaks - manual (workflow_dispatch) debugging runs
+    # shouldn't open issues
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+    - uses: actions/github-script@v7
+      with:
+        script: |
+          const marker = 'chrome-tracking CI is failing';
+          const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+          const body = [
+            `The daily chrome-tracking run failed: ${runUrl}`,
+            ``,
+            `Biloba tracks the latest stable Chrome, so a new Chrome release may have changed behavior`,
+            `Biloba relies on. Check the run log for the Chrome version it exercised and the failing specs.`,
+          ].join('\n');
+          // find an existing open tracking issue by title marker (no label dependency)
+          const { data: issues } = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'open',
+            per_page: 100,
+          });
+          const existing = issues.find(i => !i.pull_request && i.title.includes(marker));
+          if (existing) {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: existing.number,
+              body,
+            });
+          } else {
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🔴 chrome-tracking CI is failing`,
+              body,
+            });
+          }

@@ -31,6 +31,16 @@ func HeadlessShellInstructionsForTest() string {
 	return headlessShellInstructions()
 }
 
+// ChromeMajorVersionForTest exposes chromeMajorVersion for headless_shell_test.go.
+func ChromeMajorVersionForTest(product string) int {
+	return chromeMajorVersion(product)
+}
+
+// MinimumSupportedChromeMajorForTest exposes minimumSupportedChromeMajor for headless_shell_test.go.
+func MinimumSupportedChromeMajorForTest() int {
+	return minimumSupportedChromeMajor
+}
+
 // ChromeForTestingPlatformForTest exposes chromeForTestingPlatform for headless_shell_test.go.
 func ChromeForTestingPlatformForTest() (string, error) {
 	return chromeForTestingPlatform()

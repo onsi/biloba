@@ -18,6 +18,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/jehiah/agentdetection"
 
+	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/fetch"
@@ -36,6 +38,61 @@ import (
 )
 
 const BILOBA_VERSION = "0.5.0"
+
+// minimumSupportedChromeMajor is the oldest Chrome major version Biloba's behavior is known to
+// assume.  Biloba tracks (and CI continuously validates against) the latest stable Chrome, so this
+// is a conservative *floor*, not a ceiling: we warn when the connected browser is older than this,
+// but never when it is newer.  A newer Chrome breaking Biloba is our bug to fix, not the user's to
+// work around - and warning on "newer than tested" would fire constantly given Chrome's ~4-week
+// cadence.  Bump this only if a future change relies on a browser feature older Chromes lack.
+const minimumSupportedChromeMajor = 120
+
+// chromeMajorVersion parses the major version out of a Browser.getVersion product string such as
+// "HeadlessChrome/150.0.7871.24" or "Chrome/150.0.7871.24".  Returns 0 when it can't (so callers
+// treat an unparseable version as "don't warn" rather than guessing).
+func chromeMajorVersion(product string) int {
+	slash := strings.LastIndex(product, "/")
+	if slash < 0 || slash == len(product)-1 {
+		return 0
+	}
+	version := product[slash+1:]
+	if dot := strings.Index(version, "."); dot >= 0 {
+		version = version[:dot]
+	}
+	major, err := strconv.Atoi(version)
+	if err != nil {
+		return 0
+	}
+	return major
+}
+
+// warnIfChromeUnsupported reads the connected browser's version and, if it is older than
+// minimumSupportedChromeMajor, prints a one-time warning with upgrade instructions.  It is
+// best-effort: any probe/parse failure is silently ignored so a version check never breaks startup.
+func warnIfChromeUnsupported(ginkgoT GinkgoTInterface, browserCtx context.Context, highFidelity bool) {
+	var product string
+	err := chromedp.Run(browserCtx, chromedp.ActionFunc(func(ctx context.Context) error {
+		_, p, _, _, _, err := browser.GetVersion().Do(ctx)
+		product = p
+		return err
+	}))
+	if err != nil {
+		return
+	}
+	major := chromeMajorVersion(product)
+	if major == 0 || major >= minimumSupportedChromeMajor {
+		return
+	}
+	upgrade := "npx @puppeteer/browsers install chrome-headless-shell@stable"
+	if highFidelity {
+		upgrade = "update the google-chrome on your PATH to the latest stable release"
+	}
+	ginkgoT.Printf("Biloba: detected Chrome %d, which is older than the minimum supported version (%d).\n"+
+		"  Biloba tracks the latest stable Chrome; older versions may behave unexpectedly.\n"+
+		"  Upgrade with: %s\n"+
+		"  (or unset BILOBA_CHROME_HEADLESS_SHELL / clear a stale cached version, then retry).\n",
+		major, minimumSupportedChromeMajor, upgrade)
+}
 
 /*
 GinkgoTInterface is the interface by which Biloba receives GinkgoT()
@@ -274,6 +331,9 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...SpinUpOption) ChromeConne
 		ginkgoT.Fatalf("failed to spin up chrome: %w", err)
 		return ChromeConnection{}
 	}
+
+	// We're connected; warn (once, here on the spin-up process) if this Chrome is too old.
+	warnIfChromeUnsupported(ginkgoT, browserCtx, cfg.highFidelity)
 
 	bs, err := os.ReadFile(filepath.Join(tmp, "DevToolsActivePort"))
 	if err != nil {
