@@ -344,7 +344,7 @@ if (!window["_biloba"]) {
         n.dispatchEvent(new MouseEvent('mousemove', opts))
         return r()
     })
-    b.scrollIntoView = one(n => r(n.scrollIntoView()))
+    b.scrollIntoView = one(n => { n.scrollIntoView(); return r() })
     // dispatchSelection points window.getSelection() at range and fires mouseup on n so
     // selection-driven UIs (floating "highlight → menu" toolbars and the like) react.  selectionchange
     // fires automatically off the getSelection() mutation; the mouseup is the pragmatic touch that
