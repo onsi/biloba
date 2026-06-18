@@ -1,3 +1,11 @@
+## 0.5.1
+
+### Features
+- Biloba now warns once at spin-up if the connected Chrome is older than the minimum supported major version, with upgrade instructions. It tracks the latest stable Chrome and never warns on newer versions.
+
+### Fixes
+- Fix `ScrollIntoView` (and realistic-mode scroll-before-type) on Chrome 150+, where `Element.scrollIntoView()` now returns a Promise instead of `undefined` and was being shoved into the JS bridge's `success` field.
+
 ## 0.5.0
 
 ### Features
