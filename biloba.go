@@ -35,7 +35,7 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-const BILOBA_VERSION = "0.4.0"
+const BILOBA_VERSION = "0.5.0"
 
 /*
 GinkgoTInterface is the interface by which Biloba receives GinkgoT()

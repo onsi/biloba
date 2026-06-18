@@ -1,3 +1,12 @@
+## 0.5.0
+
+### Features
+- `b.ValueLabel(label)` lets `SetValue` target a `<select>` option by its visible label instead of its `value` (works for single- and multi-select; labels and raw values can be mixed in a multi-select slice).
+
+### Fixes
+- `b.Run(script, nil)` now treats a nil decode target as "discard the result" instead of failing with `json: Unmarshal(nil)`.
+- Decoding an `undefined` JS result into a non-nil pointer now fails with a directive error (omit the decode target for side-effect-only scripts, or return a value) instead of a cryptic JSON error.
+
 ## 0.4.0
 
 ### Features
