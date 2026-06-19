@@ -1,3 +1,14 @@
+## 0.5.2
+
+### Features
+- `SetValue` now writes through the native value setter, so it drives controlled React/Vue/Solid inputs (state-bound values are no longer reconciled away).
+- New `Blur()` action + matcher (`b.Blur(sel)` / `Eventually(sel).Should(b.Blur())`) — fire commit-on-blur handlers after a `SetValue`.
+- New `TextContent`/`HaveTextContent`/`TextContentForEach`/`EachHaveTextContent` family — layout-independent text reads, robust for dynamic content in headless.
+- Occurrence-aware `SelectText`: `b.SelectText(sel, substring, b.Occurrence(n))` selects the Nth (1-based) occurrence of a word.
+
+### Fixes
+- **Behavior change:** `SetValue` no longer blurs text inputs — an `onBlur` handler no longer fires as a side effect of `SetValue` (use `b.Blur` to fire it).
+
 ## 0.5.1
 
 ### Features
