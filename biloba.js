@@ -361,7 +361,9 @@ if (!window["_biloba"]) {
         range.selectNodeContents(n)
         return dispatchSelection(n, range)
     })
-    b.selectRange = one(b.isVisible, (n, start, end) => {
+    // selectFlatRange maps flat character offsets [start, end) onto the element's text nodes, builds a
+    // Range, and dispatches the selection.  shared by selectRange (offsets) and selectOccurrence (substring).
+    let selectFlatRange = (n, start, end) => {
         let total = n.textContent.length
         if (start < 0 || end < start || end > total) return rErr(`selection range [${start}, ${end}] is out of bounds (the element's text is ${total} character(s) long)`)
         // walk the element's text nodes, mapping the flat character offsets onto (node, offset) pairs
@@ -376,6 +378,23 @@ if (!window["_biloba"]) {
         if (sNode === null) { range.selectNodeContents(n) } // empty element: [0,0] collapses onto it
         else { range.setStart(sNode, sOff); range.setEnd(eNode, eOff) }
         return dispatchSelection(n, range)
+    }
+    b.selectRange = one(b.isVisible, (n, start, end) => selectFlatRange(n, start, end))
+    b.selectOccurrence = one(b.isVisible, (n, substring, occurrence) => {
+        // find the occurrence-th (1-based) appearance of substring in the element's flat textContent,
+        // then select exactly that span via the shared flat-offset mapping.
+        if (typeof substring != "string" || substring.length == 0) return rErr("substring must be a non-empty string")
+        if (typeof occurrence != "number" || occurrence < 1) return rErr("occurrence must be a positive integer")
+        let text = n.textContent, start = -1, count = 0, from = 0
+        while (true) {
+            let idx = text.indexOf(substring, from)
+            if (idx < 0) break
+            count++
+            if (count == occurrence) { start = idx; break }
+            from = idx + 1
+        }
+        if (start < 0) return rErr(`could not find occurrence ${occurrence} of "${substring}" (found ${count} occurrence(s))`)
+        return selectFlatRange(n, start, start + substring.length)
     })
     // hitTest pierces open shadow roots: doc.elementFromPoint retargets to the shadow host, so we
     // descend through each host's shadowRoot to find the element actually painted at (x, y). Without
@@ -602,9 +621,17 @@ if (!window["_biloba"]) {
             options.forEach(o => o.selected = false)
             optionsToSelect.forEach(o => o.selected = true)
         } else {
+            // set via the native prototype value setter so React/Vue/Solid *controlled* inputs update.
+            // these frameworks install a value tracker that shadows the element's own value setter and
+            // gates onChange on it; a raw `n.value = v` updates the tracker's cache too, so the dispatched
+            // input event looks like a no-op and the framework reconciles the DOM back to its bound state.
+            // calling the original prototype setter bypasses the tracker so the change is seen as genuine.
+            // we deliberately do NOT blur() here: input+change are dispatched explicitly below, so blurring
+            // adds no event semantics for text inputs and would fire onBlur handlers (commit-on-blur, inline
+            // edit unmount, ...) as a surprising side effect mid-call.
             n.focus()
-            n.value = v
-            n.blur()
+            let proto = n instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+            Object.getOwnPropertyDescriptor(proto, 'value').set.call(n, v)
         }
         n.dispatchEvent(new Event('input', { bubbles: true }))
         n.dispatchEvent(new Event('change', { bubbles: true }))

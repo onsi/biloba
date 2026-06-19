@@ -1030,6 +1030,16 @@ Eventually(selector).Should(b.HaveText(ContainSubstring("there Biloba"))) //pass
 
 Like `HaveInnerText`, `HaveText` accepts either a string (for an exact, post-normalization match) or a Gomega matcher, and operates on the **first** element matching `selector`.
 
+`innerText` reflects the _rendered_ text - it depends on layout and CSS - which is exactly what you want when you're asserting on what the user actually sees.  But it has a sharp edge in headless Chrome: because it's computed from layout, freshly-added or just-changed dynamic content can come back stale or partial before a paint settles - and an `Eventually(...).Should(b.HaveInnerText(...))` can then spin until it times out even though the content is plainly in the DOM.  For those cases reach for `TextContent()`/`HaveTextContent()` (and `TextContentForEach()`/`EachHaveTextContent()`), which read the element's `textContent` instead - computed straight from the DOM tree, so it's layout-independent and robust against that timing:
+
+```go
+text := b.TextContent(selector) //returns string
+Eventually(selector).Should(b.HaveTextContent("Expected text goes here"))
+Eventually(selector).Should(b.HaveTextContent(ContainSubstring("text")))
+```
+
+The tradeoff: `textContent` is _not_ the rendered text.  It includes the text of hidden elements and of `<script>`/`<style>` tags, does not collapse whitespace, and does not reflect CSS `text-transform`.  So reach for `InnerText`/`HaveInnerText` (or `HaveText`) when you specifically want the visible, normalized text, and reach for `TextContent`/`HaveTextContent` (or a plain existence assertion) when you want a robust check on dynamic content.  The whole `TextContent` family mirrors the `InnerText` family exactly, including the `ForEach`/`Each` variants below.
+
 You can fetch the content for a bunch of elements simultaneously with `InnerTextForEach()/EachHaveInnerText()`:
 
 ```go
@@ -1363,9 +1373,12 @@ But `checkboxes`, `radio` buttons, and `<select multiple>` elements all behavior
 When Biloba sets a value it does the following:
 - focus the element
 - update its value (either by setting `el.value` or `el.checked` or `el.selected` etc.)
-- blur the element
 - dispatch an `input` event
 - dispatch a `change` event
+
+`SetValue` updates `value` through the element's _native_ prototype setter rather than a plain `el.value = v`.  That matters for **controlled** React/Vue/Solid inputs, whose `value` is bound to component state: a raw assignment gets reconciled away by the framework's value tracker (the change looks fake), whereas the native setter makes it look genuine so `onChange` fires and state updates.  You don't need to make an input uncontrolled for Biloba's sake.
+
+For text inputs `SetValue` focuses the element and dispatches `input`/`change`, but it does **not** blur the element afterwards.  So an `onBlur` handler - commit-on-blur, an inline editor that unmounts on blur - will **not** fire as a side effect of `SetValue`.  When you _do_ want that, pair it with [`b.Blur`](#hovering-focusing-and-scrolling): `b.SetValue("#name", "New"); b.Blur("#name")` (the text input is left focused, so the blur fires).  (The `<select>` path still blurs - that's load-bearing for its `change` semantics.)
 
 That should get _most_ web applications to realize that a form input has been set.  Some applications, though, are wired up to real keyboard events (search-as-you-type fields, rich-text editors, hotkeys).  `SetValue` does **not** fire `keydown`/`keypress`/`keyup` - it sets the value directly.  For those cases reach for [Keyboard Input](#keyboard-input) (`b.Type` and `b.SendKeys`), which dispatch genuine key events.
 
@@ -1586,6 +1599,7 @@ Alongside `Click`, Biloba provides a few more first-class interactions, all foll
 
 ```go
 b.Focus("input.search")          // focuses the first matching element (must be visible and enabled)
+b.Blur("input.search")           // blurs the first matching element (fires its blur/onBlur handler)
 b.Hover(".menu")                 // fires hover events at the first matching element (must be visible)
 b.ScrollIntoView("#footer")      // scrolls the first matching element into view
 ```
@@ -1594,9 +1608,12 @@ Each also returns a matcher when called with no arguments, so you can poll:
 
 ```go
 Eventually("input.search").Should(b.Focus())
+Eventually("input.search").Should(b.Blur())
 Eventually(".menu").Should(b.Hover())
 Eventually("#footer").Should(b.ScrollIntoView())
 ```
+
+`b.Blur` is handy for firing commit-on-blur handlers after a `SetValue` - `b.SetValue("#name", "New"); b.Blur("#name")` - since `SetValue` no longer blurs text inputs for you.  A blur event only fires if the element is actually focused; `SetValue` leaves the text input focused, so that pairing works.
 
 `Hover` is, like `Click`, a pragmatic simulation: it synchronously dispatches the pointer/mouse events associated with hovering (`pointerover`, `mouseover`, `pointerenter`, `mouseenter`, `mousemove`).  This triggers JavaScript hover handlers - for example a menu that opens on `mouseenter` - but it does **not** activate CSS `:hover` styling, which only responds to a real pointer.  If you need to exercise CSS `:hover`, use [realistic interactions](#realistic-interactions) (or drop down to chromedp's input domain yourself).
 
@@ -1611,6 +1628,19 @@ b.ClearSelection()               // clears the active selection
 ```
 
 Both `SelectText` and `SelectRange` produce a genuine `window.getSelection()` range - the same object the browser builds when a user drags across text - and then dispatch a `mouseup` on the element, since selection-driven toolbars typically open on `mouseup`.  `SelectRange`'s offsets count characters into the element's text content (start inclusive, end exclusive) and are mapped across nested text nodes, so selecting across a `<strong>` in the middle of a paragraph works as you'd expect.  It fails the spec if the range is out of bounds.
+
+`SelectRange` covers offset-based selection; when you'd rather select a _word_ - say, to drive a "highlight a phrase → floating menu → Define" affordance - hand `SelectText` the substring instead.  It selects the first occurrence by default, and a `b.Occurrence(n)` option (1-based) disambiguates a word that repeats:
+
+```go
+b.SelectText("#passage", "fox")                    // selects the first "fox"
+b.SelectText("#passage", "fox", b.Occurrence(2))   // selects the second "fox"
+```
+
+This saves you the hand-rolled `TreeWalker`/`Range` dance for "select the Nth occurrence of a word and fire the selection menu".  The matcher form **requires** an explicit `b.Occurrence(n)` so it can't be confused with the existing select-all immediate form (`b.SelectText("#passage")`):
+
+```go
+Eventually("#passage").Should(b.SelectText("fox", b.Occurrence(2)))
+```
 
 Like the other interactions they follow the dual immediate/matcher convention (`SelectRange`'s matcher form drops the selector):
 

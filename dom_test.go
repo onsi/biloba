@@ -244,6 +244,64 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 	})
 
+	Describe("TextContent", func() {
+		It("returns the textContent of the element - including hidden content", func() {
+			Ω(b.TextContent("#hello")).Should(Equal("Hello Biloba!"))
+			// textContent reads straight from the DOM tree, so it sees hidden elements just the same
+			Ω(b.TextContent("#hidden-child")).Should(Equal("Can't see me!"))
+			// unlike innerText, textContent does not collapse block layout into newlines - it returns
+			// the raw template whitespace, so #list comes back with each <li> on its own indented line
+			Ω(b.TextContent("#list")).Should(ContainSubstring("First Things"))
+			Ω(b.TextContent("#list")).Should(ContainSubstring("Second Things"))
+			Ω(b.TextContent("#list")).Should(ContainSubstring("Third Things"))
+		})
+
+		It("auto-fails if the element does not exist", func() {
+			Ω(b.TextContent("#non-existing")).Should(Equal(""))
+			ExpectFailures("Failed to get property \"textContent\":\ncould not find DOM element matching selector: #non-existing")
+		})
+	})
+
+	Describe("TextContentForEach", func() {
+		It("returns the textContent of each element", func() {
+			Ω(b.TextContentForEach(b.XPath().WithID("party").Descendant("optgroup").WithAttr("label", "Heros").Descendant("option"))).Should(HaveExactElements("Luke", "Leia", "Han", "Obi-Wan"))
+
+			Ω(b.TextContentForEach("#list li")).Should(HaveExactElements("First Things", "Second Things", "Third Things"))
+		})
+
+		It("returns an empty slice if no elements exist", func() {
+			Ω(b.TextContentForEach(".non-existing")).Should(BeEmpty())
+		})
+	})
+
+	Describe("HaveTextContent", func() {
+		It("matches if the element in question has the specified text content", func() {
+			Ω("#hello").Should(b.HaveTextContent("Hello Biloba!"))
+			Ω("#hidden-child").Should(b.HaveTextContent("Can't see me!"))
+			Ω("#hello").ShouldNot(b.HaveTextContent("nope"))
+		})
+
+		It("works with matchers", func() {
+			Ω("#list").Should(b.HaveTextContent(ContainSubstring("Second Things")))
+		})
+
+		It("errors if the element does not exist", func() {
+			match, err := b.HaveTextContent("").Match("#non-existing")
+			Ω(match).Should(BeFalse())
+			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
+		})
+	})
+
+	Describe("EachHaveTextContent", func() {
+		It("matches if the elements in question have the specified text content", func() {
+			Ω(b.XPath().WithID("party").Descendant("optgroup").WithAttr("label", "Heros").Descendant("option")).Should(b.EachHaveTextContent("Luke", "Leia", "Han", "Obi-Wan"))
+
+			Ω("#list li").Should(b.EachHaveTextContent(ConsistOf("Second Things", "First Things", "Third Things")))
+			Ω("#list li").Should(b.EachHaveTextContent(ContainElement("Second Things")))
+			Ω("#non-existing").Should(b.EachHaveTextContent())
+		})
+	})
+
 	Describe("Working with inputs that honor value", func() {
 		Describe("GetValue", func() {
 			It("returns the value associated with the input", func() {
@@ -406,6 +464,27 @@ var _ = Describe("DOM manipulators and matchers", func() {
 				It("fails when used on a non-select element", func() {
 					b.SetValue("#text-input", b.ValueLabel("nope"))
 					ExpectFailures("Failed to set value:\nValueLabel is only supported for <select> elements: #text-input")
+				})
+			})
+
+			Context("when the input is a controlled (React/Vue-style) input", func() {
+				It("drives the value past the framework's value tracker", func() {
+					// #react-controlled installs a value tracker that shadows the element's own value setter
+					// and only commits when the change is seen via the native prototype setter. A raw
+					// `n.value = v` would leave window._reactCommitted at "".
+					Ω(b.Run("window._reactCommitted")).Should(Equal(""))
+					b.SetValue("#react-controlled", "chloroplast")
+					Ω("#react-controlled").Should(b.HaveValue("chloroplast"))
+					Eventually("window._reactCommitted").Should(b.EvaluateTo("chloroplast"))
+				})
+			})
+
+			Context("when setting a text input", func() {
+				It("does not blur the input (so onBlur handlers do not fire)", func() {
+					Ω(b.Run("window._blurFired")).Should(BeFalse())
+					b.SetValue("#blur-tracker", "hi")
+					Ω("#blur-tracker").Should(b.HaveValue("hi"))
+					Consistently("window._blurFired").Should(b.EvaluateTo(false))
 				})
 			})
 		})
@@ -763,6 +842,38 @@ var _ = Describe("DOM manipulators and matchers", func() {
 
 		It("returns an error when the element does not exist", func() {
 			match, err := b.BeFocused().Match("#non-existing")
+			Ω(match).Should(BeFalse())
+			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
+		})
+	})
+
+	Describe("Blur", func() {
+		It("fires the element's onBlur handler when called directly", func() {
+			// blur only emits a blur event if the element is actually focused, so focus it first
+			b.Focus("#blur-tracker")
+			Eventually("#blur-tracker").Should(b.BeFocused())
+			Ω(b.Run("window._blurFired")).Should(BeFalse())
+			b.Blur("#blur-tracker")
+			Eventually("window._blurFired").Should(b.EvaluateTo(true))
+			Ω("#blur-tracker").ShouldNot(b.BeFocused())
+		})
+
+		It("works in the matcher form", func() {
+			b.Run("window._blurFired = false")
+			b.Focus("#blur-tracker")
+			Eventually("#blur-tracker").Should(b.BeFocused())
+			Ω(b.Run("window._blurFired")).Should(BeFalse())
+			Eventually("#blur-tracker").Should(b.Blur())
+			Eventually("window._blurFired").Should(b.EvaluateTo(true))
+		})
+
+		It("auto-fails if the element does not exist", func() {
+			b.Blur("#non-existing")
+			ExpectFailures("Failed to blur:\ncould not find DOM element matching selector: #non-existing")
+		})
+
+		It("returns an error when the element does not exist in the matcher form", func() {
+			match, err := b.Blur().Match("#non-existing")
 			Ω(match).Should(BeFalse())
 			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
 		})

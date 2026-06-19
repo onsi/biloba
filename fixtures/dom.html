@@ -163,6 +163,8 @@
         <div id="disabled-text-input-mirror"></div>
         <input type="text" id="text-input" value="initial value" onchange="changeTextInput()"></input>
         <div id="text-input-mirror"></div>
+        <input id="react-controlled" type="text">
+        <input id="blur-tracker" type="text">
     </div>
 
     <script>
@@ -265,6 +267,30 @@
         document.getElementById("tap-btn").addEventListener("touchend", () => {
             document.getElementById("tap-result").innerText = "tapped"
         })
+    </script>
+
+    <script>
+        // #react-controlled mimics a React/Vue "controlled" input: it installs a value tracker that
+        // shadows the element's own value setter.  Only a write via the *native* prototype setter (which
+        // bypasses the tracker) makes the input event look like a genuine change and get "committed".
+        (function () {
+            var el = document.getElementById('react-controlled')
+            var tracked = ''
+            window._reactCommitted = ''
+            var proto = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')
+            Object.defineProperty(el, 'value', {
+                configurable: true,
+                get: function () { return proto.get.call(this) },
+                set: function (v) { tracked = v; proto.set.call(this, v) }
+            })
+            el.addEventListener('input', function () {
+                if (proto.get.call(el) !== tracked) { tracked = proto.get.call(el); window._reactCommitted = proto.get.call(el) }
+            })
+        })()
+
+        // #blur-tracker records whether its onblur handler ever fired; SetValue must NOT trigger it.
+        window._blurFired = false
+        document.getElementById('blur-tracker').addEventListener('blur', function () { window._blurFired = true })
     </script>
 
 </body>

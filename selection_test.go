@@ -36,6 +36,58 @@ var _ = Describe("Selecting text", func() {
 		})
 	})
 
+	Describe("SelectText with a substring occurrence", func() {
+		// #repeated is "the cell divides and the cell grows and the cell thrives"
+		startOffset := func() float64 {
+			return b.Run(`window.getSelection().getRangeAt(0).startOffset`).(float64)
+		}
+
+		It("selects the 1st occurrence of the substring by default", func() {
+			b.SelectText("#repeated", "cell")
+			Eventually("window.getSelection().toString()").Should(b.EvaluateTo("cell"))
+			Ω(b.Run(`window._lastMouseUpTarget`)).Should(Equal("repeated"))
+			Ω("#menu").Should(b.HaveClass("open"))
+			// "the cell divides..." -> 1st "cell" starts at offset 4
+			Ω(startOffset()).Should(Equal(4.0))
+		})
+
+		It("selects the nth occurrence when given an Occurrence", func() {
+			b.SelectText("#repeated", "cell", b.Occurrence(2))
+			Eventually("window.getSelection().toString()").Should(b.EvaluateTo("cell"))
+			// the 2nd "cell" sits further along the passage than the 1st, so the range's start offset differs
+			Ω(startOffset()).Should(Equal(25.0))
+		})
+
+		It("proves Occurrence(2) selects a different span than Occurrence(1)", func() {
+			b.SelectText("#repeated", "cell", b.Occurrence(1))
+			first := startOffset()
+			b.SelectText("#repeated", "cell", b.Occurrence(2))
+			second := startOffset()
+			Ω(second).Should(BeNumerically(">", first))
+		})
+
+		It("works in the matcher form (which requires an Occurrence)", func() {
+			Eventually("#repeated").Should(b.SelectText("cell", b.Occurrence(2)))
+			Eventually("window.getSelection().toString()").Should(b.EvaluateTo("cell"))
+			Ω(startOffset()).Should(Equal(25.0))
+		})
+
+		It("fails the spec when the substring is not found", func() {
+			b.SelectText("#repeated", "zzz")
+			ExpectFailures(ContainSubstring(`could not find occurrence 1 of "zzz" (found 0 occurrence(s))`))
+		})
+
+		It("fails the spec when there are not enough occurrences", func() {
+			b.SelectText("#repeated", "cell", b.Occurrence(4))
+			ExpectFailures(ContainSubstring(`could not find occurrence 4 of "cell" (found 3 occurrence(s))`))
+		})
+
+		It("fails the spec when no element matches", func() {
+			b.SelectText("#non-existing", "cell")
+			ExpectFailures(ContainSubstring("Failed to select text"))
+		})
+	})
+
 	Describe("SelectRange", func() {
 		It("selects a sub-range by character offset", func() {
 			b.SelectRange("#passage", 4, 9)

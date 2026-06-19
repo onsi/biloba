@@ -43,6 +43,8 @@ AddReportEntry("DOM before click", b.Outline(), ReportEntryVisibilityFailureOrVe
 
 **Page-side `console.log` for live debugging.** All page `console.*` output is forwarded to the `GinkgoWriter` (each argument rendered, space-separated). Objects are rendered from CDP's **shallow** preview, so a nested/large object logs lossily (deep fields collapse). When you're logging a state object to chase a DOM/React timing bug, build one string yourself — `console.log('state ' + JSON.stringify(obj))` — to get the full value instead of the truncated preview. Same idea for a quick count probe: `b.Run("document.querySelectorAll('.card').length")` returns the number directly (no need to reach into the outline).
 
+**`HaveInnerText`/`InnerText` timing out on content that's clearly there.** If an `InnerText`/`HaveInnerText` assertion on freshly-changed or dynamically-added content spins until timeout in headless even though the text is plainly in the DOM (and in the outline), it's almost certainly `innerText` returning a stale/partial value — it's computed from layout, which can lag a DOM change before a paint settles. Switch to the layout-independent `HaveTextContent`/`TextContent` (reads `textContent` straight off the tree) or to a plain existence assertion.
+
 ## Inline images (interactive terminals)
 
 Biloba emits inline images only when the terminal supports them — Kitty, iTerm2, or Sixel (VS Code's terminal), auto-detected. Control it with `BILOBA_INLINE_SCREENSHOTS=iterm|kitty|sixel|none`:

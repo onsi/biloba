@@ -292,6 +292,62 @@ func (b *Biloba) EachHaveInnerText(args ...any) types.GomegaMatcher {
 }
 
 /*
+TextContent(selector) returns the textContent of the first element matching selector.
+
+Unlike [Biloba.InnerText], textContent is computed straight from the DOM tree and does not depend on layout - which makes it reliable in headless Chrome for content that has just been added or changed (innerText can return a stale or partial value before a paint pass).  Note that textContent includes the text of hidden elements and of <script>/<style> children, and does not reflect CSS text-transform; reach for InnerText when you specifically need the rendered, visible text.
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+*/
+func (b *Biloba) TextContent(selector any) string {
+	b.gt.Helper()
+	return toString(b.GetProperty(selector, "textContent"))
+}
+
+/*
+HaveTextContent(expected) is a Gomega matcher that passes if the first element returned by selector has textContent matching expected.  expected can be a string, or a Gomega matcher.
+
+Prefer HaveTextContent over [Biloba.HaveInnerText] when asserting on dynamic content: textContent is layout-independent and so does not flake in headless Chrome the way innerText can.  See [Biloba.TextContent] for the semantic differences between the two.
+
+Use it like this:
+
+	Eventually("div.comment").Should(tab.HaveTextContent("hello world"))
+	Eventually("div.comment").Should(tab.HaveTextContent(ContainSubstring("world")))
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+*/
+func (b *Biloba) HaveTextContent(expected any) types.GomegaMatcher {
+	return b.HaveProperty("textContent", expected)
+}
+
+/*
+TextContentForEach(selector) returns a slice []string of textContent for each element matching selector.
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+*/
+func (b *Biloba) TextContentForEach(selector any) []string {
+	b.gt.Helper()
+	return toStringSlice(b.GetPropertyForEach(selector, "textContent"))
+}
+
+/*
+EachHaveTextContent(expected) is a Gomega matcher that passes if the []string slice of textContents for all matching elements returned by selector matches expected.  expected can be a []string, but you'll probably want to use a Gomega matcher.
+
+Use it like this:
+
+	Eventually("div.comment").Should(tab.EachHaveTextContent(ContainElement("new comment")))
+	//equivalent to, but tidier than
+	Eventually(tab.TextContentForEach).WithArgument("div.comment").Should(ContainElement("new comment"))
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+*/
+func (b *Biloba) EachHaveTextContent(args ...any) types.GomegaMatcher {
+	if len(args) == 0 {
+		args = []any{gomega.BeEmpty()}
+	}
+	return b.EachHaveProperty("textContent", args...)
+}
+
+/*
 GetProperty(selector, property) returns the named javascript property from the first element matching selector
 
 GetProperty will fail if no element is found.  It returns nil if property is not defined on the element.  Otherwise it returns the value of the property as type any - you'll need to do type assertions yourself.  Or just use a Gomega matcher to handle the types for you.
@@ -1017,6 +1073,38 @@ func (b *Biloba) Focus(args ...any) types.GomegaMatcher {
 }
 
 /*
+Blur() blurs (removes focus from) the first element matching selector.
+
+This is useful when you want to explicitly trigger a blur handler - for example an input that commits its value or validates onBlur.  Note that [Biloba.SetValue] does not blur text inputs, so reach for Blur() when you need that behavior:
+
+	tab.SetValue("input.name", "New Name")
+	tab.Blur("input.name") // fires the onBlur commit handler
+
+Note that a blur event only fires if the element is actually focused; [Biloba.SetValue] leaves the text input it sets focused, so the example above works.
+
+When invoked with a selector, tab.Blur("input.search") acts immediately and fails the spec if no element is found.
+
+When invoked with no arguments, tab.Blur() returns a Gomega matcher so you can poll until an element is present to blur:
+
+	Eventually("input.search").Should(tab.Blur())
+
+Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
+*/
+func (b *Biloba) Blur(args ...any) types.GomegaMatcher {
+	b.gt.Helper()
+	if len(args) > 0 {
+		r := b.runBilobaHandler("blur", args[0])
+		if r.Error() != nil {
+			b.gt.Fatalf("Failed to blur:\n%s", r.Error())
+		}
+		return nil
+	}
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return b.runBilobaHandler("blur", selector).MatcherResult()
+	}).WithMessage("be blurrable")
+}
+
+/*
 Hover() dispatches the pointer/mouse events associated with hovering (pointerover, mouseover, pointerenter, mouseenter, mousemove) at the first element matching selector.
 
 Like all of Biloba's interactions this is a pragmatic simulation, not a real pointer: it fires synthetic events synchronously and atomically in the browser.  That means it triggers JavaScript hover handlers (e.g. a menu that opens on mouseenter) but does not activate CSS :hover styling - for that you'll need to drop down to chromedp's input domain.
@@ -1068,22 +1156,82 @@ When invoked with no arguments, tab.SelectText() returns a Gomega matcher so you
 
 	Eventually("#passage").Should(tab.SelectText())
 
+To select just a substring of the element's text - useful for text-anchoring UIs where a word repeats - pass the substring, and optionally a [Biloba.Occurrence] to pick which appearance (1-based, defaults to the first):
+
+	tab.SelectText("#passage", "chloroplast")                   // selects the 1st "chloroplast"
+	tab.SelectText("#passage", "chloroplast", tab.Occurrence(2)) // selects the 2nd "chloroplast"
+
+The substring form also has a matcher variant - note it requires an explicit tab.Occurrence so it is unambiguous with the select-all immediate form above:
+
+	Eventually("#passage").Should(tab.SelectText("chloroplast", tab.Occurrence(2)))
+
 To assert on what's selected, read the selection back with tab.EvaluateTo: Eventually("window.getSelection().toString()").Should(tab.EvaluateTo("the highlighted words")).  Clear it with tab.ClearSelection.
 
 Read https://onsi.github.io/biloba/#selecting-text to learn more about selecting text
 */
 func (b *Biloba) SelectText(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
-	if len(args) > 0 {
-		r := b.runBilobaHandler("selectText", args[0])
+	var positional []any
+	cfg := selectTextConfig{occurrence: 1}
+	for _, arg := range args {
+		if opt, ok := arg.(SelectTextOption); ok {
+			opt(&cfg)
+		} else {
+			positional = append(positional, arg)
+		}
+	}
+	hasOpts := len(positional) != len(args)
+
+	switch {
+	case len(positional) == 0 && !hasOpts:
+		// matcher form, select all of the element's text; selector supplied by Eventually
+		return gcustom.MakeMatcher(func(selector any) (bool, error) {
+			return b.runBilobaHandler("selectText", selector).MatcherResult()
+		}).WithMessage("be selectable")
+	case len(positional) == 1 && !hasOpts:
+		// immediate form, select all of the element's text
+		r := b.runBilobaHandler("selectText", positional[0])
 		if r.Error() != nil {
 			b.gt.Fatalf("Failed to select text:\n%s", r.Error())
 		}
 		return nil
+	case len(positional) == 1 && hasOpts:
+		// matcher form, select an occurrence of substring; selector supplied by Eventually
+		substring := positional[0]
+		return gcustom.MakeMatcher(func(selector any) (bool, error) {
+			return b.runBilobaHandler("selectOccurrence", selector, substring, cfg.occurrence).MatcherResult()
+		}).WithMessage("be selectable")
+	case len(positional) == 2:
+		// immediate form, select an occurrence of substring
+		r := b.runBilobaHandler("selectOccurrence", positional[0], positional[1], cfg.occurrence)
+		if r.Error() != nil {
+			b.gt.Fatalf("Failed to select text:\n%s", r.Error())
+		}
+		return nil
+	default:
+		b.gt.Fatalf("SelectText: unsupported arguments.  Use SelectText(selector), SelectText(selector, substring), or SelectText(selector, substring, tab.Occurrence(n)) to act immediately; or SelectText() and SelectText(substring, tab.Occurrence(n)) to return a matcher.")
+		return nil
 	}
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
-		return b.runBilobaHandler("selectText", selector).MatcherResult()
-	}).WithMessage("be selectable")
+}
+
+type selectTextConfig struct {
+	occurrence int
+}
+
+/*
+SelectTextOption configures a [Biloba.SelectText] call.  Build one with [Biloba.Occurrence].
+*/
+type SelectTextOption func(*selectTextConfig)
+
+/*
+Occurrence(n) tells [Biloba.SelectText] which appearance of the substring to select (1-based) when a word repeats within the element:
+
+	tab.SelectText("#passage", "chloroplast", tab.Occurrence(2)) // selects the 2nd "chloroplast"
+
+Read https://onsi.github.io/biloba/#selecting-text to learn more about selecting text
+*/
+func (b *Biloba) Occurrence(n int) SelectTextOption {
+	return func(c *selectTextConfig) { c.occurrence = n }
 }
 
 /*

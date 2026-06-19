@@ -124,6 +124,8 @@ b.Type(sel, "abc"); b.SendKeys(biloba.Keys.Enter)            // real keystrokes 
 
 `b.At(x,y)` / `b.Shift()` / `b.Ctrl()` / `b.Alt()` / `b.Meta()` (⌘/Win) are **pointer options** accepted by `Click`/`DblClick`/`RightClick`/`MiddleClick`/`Tap` — after the selector (immediate) or in place of it (matcher: `Eventually(sel).Should(b.Click(b.At(x,y), b.Shift()))`). In fast mode any option switches a click off native `el.click()` to a synthetic event carrying the coords/flags. `ScrollWheel` is immediate-only.
 
+**`b.SetValue` and frameworks.** `SetValue` writes through the input's native value setter, so it drives **controlled** React/Vue/Solid inputs (whose `value` is bound to state) — `onChange` fires and state updates; no need to make an input uncontrolled for Biloba's sake. For text inputs it focuses + dispatches `input`/`change` but does **not** blur — an `onBlur` commit/inline-edit-unmount handler won't fire from `SetValue`; pair with `b.Blur(sel)` when you want it (`b.SetValue("#name","New"); b.Blur("#name")`).
+
 **`<select>` form values.** `b.SetValue(sel, v)` matches `v` against the option's underlying **`value`**, not its visible label: `b.SetValue("#model", "claude-sonnet-4-6")` (and `b.SetValue` on a native `<select>` already fires `input`+`change` with `bubbles:true`, so React `onChange` runs — no realistic mode needed). To pick by the label the user sees, wrap it: `b.SetValue("#model", b.ValueLabel("Sonnet"))`. Assert labels via `option.textContent` and the selection via the `<select>`'s `value` (`b.HaveProperty("value", id)`).
 
 ### Selecting text (highlight / annotation / editor UIs)
