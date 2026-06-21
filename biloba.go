@@ -254,6 +254,18 @@ func (b *Biloba) reassertViewportForCompositor() {
 	_ = chromedp.Run(b.Context, chromedp.EmulateViewport(dims[0], dims[1], emulateViewportMatchingScreen))
 }
 
+// applyFocusEmulation makes this tab behave as though its page always holds the system focus.  An
+// automated, headless Chrome window never actually has OS focus, and full ("new") headless Chrome - the
+// high-fidelity lane, and what Chrome is steadily moving the default toward - gates focus/blur *event*
+// dispatch on the page being focused: element.focus() still sets document.activeElement, but the focus
+// and blur events never fire, so onBlur commit/validate handlers (the entire reason Blur exists) silently
+// never run.  setFocusEmulationEnabled removes that gate.  It is a per-target setting, so every tab (root
+// and spawned) must opt in; it is harmless in the chrome-headless-shell lane, which already treats its
+// page as focused.
+func (b *Biloba) applyFocusEmulation() error {
+	return chromedp.Run(b.Context, emulation.SetFocusEmulationEnabled(true))
+}
+
 func gooseConfigPath(process int) string {
 	return fmt.Sprintf("./.biloba-config-%d", process)
 }
@@ -573,6 +585,13 @@ func ConnectToChrome(ginkgoT GinkgoTInterface, options ...BilobaConfigOption) *B
 	// in the default chrome-headless-shell lane.
 	if err := b.applyHighFidelityViewport(); err != nil {
 		ginkgoT.Fatalf("failed to set initial window size: %w", err)
+		return nil
+	}
+
+	// Make focus/blur events fire even though this headless tab never holds OS focus (see
+	// applyFocusEmulation).
+	if err := b.applyFocusEmulation(); err != nil {
+		ginkgoT.Fatalf("failed to enable focus emulation: %w", err)
 		return nil
 	}
 
@@ -1111,6 +1130,10 @@ func (b *Biloba) registerTabFor(c context.Context, cancel context.CancelFunc) *B
 	}
 
 	newG.browserContextID = browserContextID
+	// Match the root tab: make focus/blur events fire on this tab too (see applyFocusEmulation).
+	if err := newG.applyFocusEmulation(); err != nil {
+		b.gt.Fatalf("Failed to register new tab: %s", err.Error())
+	}
 	newG.setUpListeners()
 
 	b.root.lock.Lock()
