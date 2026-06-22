@@ -82,5 +82,54 @@ var _ = Describe("Keyboard input", func() {
 			b.SendKeys()
 			ExpectFailures(ContainSubstring("SendKeys requires at least one key"))
 		})
+
+		It("fails the spec when only modifiers (no key) are provided", func() {
+			b.SendKeys(b.Shift())
+			ExpectFailures(ContainSubstring("SendKeys requires at least one key"))
+		})
+
+		It("supports the expanded set of named keys", func() {
+			b.SendKeys("#editor", biloba.Keys.F2)
+			Ω("#last-combo").Should(b.HaveInnerText("F2"))
+			b.SendKeys("#editor", biloba.Keys.Insert)
+			Ω("#last-combo").Should(b.HaveInnerText("Insert"))
+			// Space is printable, so assert it types into the textarea (innerText collapses whitespace)
+			b.SendKeys("#editor", biloba.Keys.Space)
+			Ω("#editor").Should(b.HaveValue(" "))
+		})
+	})
+
+	Describe("Modifiers", func() {
+		It("holds a single modifier down while sending a key", func() {
+			b.SendKeys("#editor", biloba.Keys.Enter, b.Shift())
+			Ω("#last-combo").Should(b.HaveInnerText("Shift+Enter"))
+		})
+
+		It("holds multiple modifiers down at once", func() {
+			b.SendKeys("#editor", biloba.Keys.Enter, b.Meta(), b.Shift())
+			// the fixture renders flags in Shift,Ctrl,Alt,Meta order regardless of how they're passed
+			Ω("#last-combo").Should(b.HaveInnerText("Shift+Meta+Enter"))
+		})
+
+		It("accepts a modifier in any position", func() {
+			b.SendKeys("#editor", b.Ctrl(), biloba.Keys.Enter)
+			Ω("#last-combo").Should(b.HaveInnerText("Ctrl+Enter"))
+		})
+
+		It("holds modifiers down for the focused element when no selector is given", func() {
+			b.Type("#editor", "x") // focuses the editor
+			b.SendKeys(biloba.Keys.Enter, b.Meta())
+			Ω("#last-combo").Should(b.HaveInnerText("Meta+Enter"))
+		})
+
+		It("holds modifiers down while Typing (e.g. select-all)", func() {
+			b.Type("#editor", "a", b.Meta())
+			Ω("#last-combo").Should(b.HaveInnerText("Meta+a"))
+		})
+
+		It("works through the Type matcher form", func() {
+			Eventually("#editor").Should(b.Type("a", b.Meta()))
+			Ω("#last-combo").Should(b.HaveInnerText("Meta+a"))
+		})
 	})
 })

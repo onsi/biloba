@@ -6,8 +6,9 @@ import (
 )
 
 // clickModifier is a keyboard modifier held down during a pointer interaction (shift-click,
-// ctrl-click, ...).  It is internal: users build modifier options with b.Shift/Ctrl/Alt/Meta.  The
-// string values double as the keys the biloba.js pointer handlers read (see pointerConfig.encode).
+// ctrl-click, ...) or keyboard input (Shift-Enter, ...).  It is internal: users build modifiers with
+// b.Shift/Ctrl/Alt/Meta.  The string values double as the keys the biloba.js pointer handlers read
+// (see pointerConfig.encode).
 type clickModifier string
 
 const (
@@ -41,9 +42,9 @@ func (cfg pointerConfig) encode() map[string]any {
 }
 
 /*
-PointerOption configures a pointer interaction.  Build them with [Biloba.At], [Biloba.Shift],
-[Biloba.Ctrl], [Biloba.Alt], and [Biloba.Meta] and pass them after the selector (or, in the
-matcher form, in place of it):
+PointerOption configures a pointer interaction.  Build positional options with [Biloba.At] and
+modifier options with [Biloba.Shift], [Biloba.Ctrl], [Biloba.Alt], and [Biloba.Meta], then pass
+them after the selector (or, in the matcher form, in place of it):
 
 	b.Click("#canvas", b.At(30, 40), b.Shift())
 	Eventually("#canvas").Should(b.Click(b.At(30, 40), b.Shift()))
@@ -54,6 +55,19 @@ modifiers, which don't apply to touch).
 Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
 */
 type PointerOption func(*pointerConfig)
+
+/*
+Modifier is a held keyboard modifier - Shift, Ctrl, Alt, or Meta - shared by pointer interactions
+(shift-click) and keyboard input (Shift-Enter).  Build them with [Biloba.Shift], [Biloba.Ctrl],
+[Biloba.Alt], and [Biloba.Meta] and pass them to a pointer method ([Biloba.Click] and friends) or a
+keyboard method ([Biloba.Type], [Biloba.SendKeys]):
+
+	b.Click("#row", b.Shift())                     // shift-click
+	b.SendKeys("textarea", biloba.Keys.Enter, b.Shift()) // Shift-Enter
+
+Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
+*/
+type Modifier struct{ modifier clickModifier }
 
 /*
 At(offsetX, offsetY) targets a point measured in CSS pixels from the element's top-left corner
@@ -72,64 +86,80 @@ func (b *Biloba) At(offsetX, offsetY float64) PointerOption {
 }
 
 /*
-Shift() holds the Shift key down during a pointer interaction (e.g. shift-click):
+Shift() holds the Shift key down during a pointer interaction or keyboard input:
 
-	b.Click("#row", b.Shift())
+	b.Click("#row", b.Shift())                           // shift-click
+	b.SendKeys("textarea", biloba.Keys.Enter, b.Shift()) // Shift-Enter
 
 Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
 */
-func (b *Biloba) Shift() PointerOption {
-	return func(c *pointerConfig) { c.modifiers = append(c.modifiers, modShift) }
-}
+func (b *Biloba) Shift() Modifier { return Modifier{modShift} }
 
 /*
-Ctrl() holds the Control key down during a pointer interaction (e.g. ctrl-click).
+Ctrl() holds the Control key down during a pointer interaction (e.g. ctrl-click) or keyboard input.
 
 Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
 */
-func (b *Biloba) Ctrl() PointerOption {
-	return func(c *pointerConfig) { c.modifiers = append(c.modifiers, modControl) }
-}
+func (b *Biloba) Ctrl() Modifier { return Modifier{modControl} }
 
 /*
-Alt() holds the Alt/Option key down during a pointer interaction (e.g. alt-click).
+Alt() holds the Alt/Option key down during a pointer interaction (e.g. alt-click) or keyboard input.
 
 Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
 */
-func (b *Biloba) Alt() PointerOption {
-	return func(c *pointerConfig) { c.modifiers = append(c.modifiers, modAlt) }
-}
+func (b *Biloba) Alt() Modifier { return Modifier{modAlt} }
 
 /*
-Meta() holds the Meta key down during a pointer interaction - Command on macOS, the Windows key
-elsewhere (e.g. cmd-click).
+Meta() holds the Meta key down during a pointer interaction (e.g. cmd-click) or keyboard input -
+Command on macOS, the Windows key elsewhere.
 
 Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
 */
-func (b *Biloba) Meta() PointerOption {
-	return func(c *pointerConfig) { c.modifiers = append(c.modifiers, modMeta) }
+func (b *Biloba) Meta() Modifier { return Modifier{modMeta} }
+
+// applyPointerOption applies a positional option (b.At, a PointerOption) or a shared modifier
+// (b.Shift/b.Ctrl/..., a Modifier) to cfg, reporting whether a was one of those option types
+// (false => it's a selector or an invalid argument).
+func applyPointerOption(a any, cfg *pointerConfig) bool {
+	switch o := a.(type) {
+	case PointerOption:
+		o(cfg)
+	case Modifier:
+		cfg.modifiers = append(cfg.modifiers, o.modifier)
+	default:
+		return false
+	}
+	return true
+}
+
+// isPointerOption reports whether a is a pointer option (b.At) or a shared modifier (b.Shift/...) -
+// i.e. not a selector.  It mirrors applyPointerOption's recognized types without mutating a config.
+func isPointerOption(a any) bool {
+	switch a.(type) {
+	case PointerOption, Modifier:
+		return true
+	}
+	return false
 }
 
 // parsePointerArgs splits a pointer method's variadic args into (selector, config, immediate).
-// Selectors and PointerOptions are disjoint types, so the leading argument disambiguates the two
-// API forms: a selector first => immediate (the rest are options); an option first, or no args at
-// all => matcher form (the selector is supplied later by Eventually/Expect).
+// Selectors and options (PointerOption/Modifier) are disjoint types, so the leading argument
+// disambiguates the two API forms: a selector first => immediate (the rest are options); an option
+// first, or no args at all => matcher form (the selector is supplied later by Eventually/Expect).
 func (b *Biloba) parsePointerArgs(verb string, args []any) (selector any, cfg pointerConfig, immediate bool) {
 	b.gt.Helper()
 	if len(args) == 0 {
 		return nil, cfg, false
 	}
 	start := 0
-	if _, isOption := args[0].(PointerOption); !isOption {
+	if !isPointerOption(args[0]) {
 		selector, immediate, start = args[0], true, 1
 	}
 	for _, a := range args[start:] {
-		option, ok := a.(PointerOption)
-		if !ok {
+		if !applyPointerOption(a, &cfg) {
 			b.gt.Fatalf("Failed to %s: expected a selector or a biloba pointer option (b.At/b.Shift/...), got %T", verb, a)
 			return selector, cfg, immediate
 		}
-		option(&cfg)
 	}
 	return selector, cfg, immediate
 }

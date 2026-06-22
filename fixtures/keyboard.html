@@ -28,6 +28,10 @@
     </form>
     <div id="submitted">not submitted</div>
 
+    <!-- records the modifier flags + key of the most recent keydown, so we can assert hotkey combos -->
+    <textarea id="editor"></textarea>
+    <div id="last-combo">none</div>
+
     <script>
         const log = document.getElementById("key-log")
         const typewriter = document.getElementById("typewriter")
@@ -36,6 +40,17 @@
             li.className = "key-event"
             li.innerText = e.key
             log.appendChild(li)
+        })
+
+        const editor = document.getElementById("editor")
+        const lastCombo = document.getElementById("last-combo")
+        editor.addEventListener("keydown", (e) => {
+            const mods = []
+            if (e.shiftKey) mods.push("Shift")
+            if (e.ctrlKey) mods.push("Ctrl")
+            if (e.altKey) mods.push("Alt")
+            if (e.metaKey) mods.push("Meta")
+            lastCombo.innerText = [...mods, e.key].join("+")
         })
 
         const form = document.getElementById("search-form")

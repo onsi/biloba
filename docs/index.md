@@ -1512,7 +1512,7 @@ b.Click("#row", b.Ctrl(), b.Meta())         // ctrl+meta-click
 b.Click("#canvas", b.At(30, 40), b.Shift()) // both at once
 ```
 
-`b.At(offsetX, offsetY)` targets a point measured in CSS pixels from the element's **top-left corner** (matching Playwright's `position` option), instead of the center.  `b.Shift()`, `b.Ctrl()`, `b.Alt()`, and `b.Meta()` hold a keyboard modifier down during the click (`Meta` is Command on macOS and the Windows key elsewhere).
+`b.At(offsetX, offsetY)` targets a point measured in CSS pixels from the element's **top-left corner** (matching Playwright's `position` option), instead of the center.  `b.Shift()`, `b.Ctrl()`, `b.Alt()`, and `b.Meta()` hold a keyboard modifier down during the click (`Meta` is Command on macOS and the Windows key elsewhere) - these are the same modifier options you can hold during [keyboard input](#holding-modifiers-shift-enter-cmd-a).
 
 Because options are a distinct type from selectors, they work in the **matcher form** too - just drop the selector, and `Eventually`/`Expect` supplies it:
 
@@ -1793,7 +1793,20 @@ Eventually("#editor").Should(b.Click()) // focuses the editor
 b.SendKeys(biloba.Keys.Escape)          // sent to the focused editor
 ```
 
-The available keys are exposed on `biloba.Keys` (`Backspace`, `Tab`, `Enter`, `Escape`, `Delete`, `ArrowUp`, `ArrowDown`, `ArrowLeft`, `ArrowRight`, `Home`, `End`, `PageUp`, `PageDown`).  Each is a `biloba.Key` - if you need a key that isn't listed you can drop down to `chromedp` via `b.Context` and the [chromedp/kb](https://pkg.go.dev/github.com/chromedp/chromedp/kb) package.
+The available keys are exposed on `biloba.Keys`.  These cover the editing, navigation, lock, and function keys you reach for in a browser test: `Backspace`, `Tab`, `Enter`, `Escape`, `Space`, `Delete`, `Insert`; the navigation cluster `ArrowUp`/`ArrowDown`/`ArrowLeft`/`ArrowRight`, `Home`, `End`, `PageUp`, `PageDown`; the locks `CapsLock`, `NumLock`, `ScrollLock`; the misc control keys `ContextMenu`, `PrintScreen`, `Pause`, `Help`, `Clear`; and the function keys `F1` through `F24`.  Each is a `biloba.Key` - for an exotic key that isn't listed (media, IME, launch keys) you can drop down to `chromedp` via `b.Context` and the [chromedp/kb](https://pkg.go.dev/github.com/chromedp/chromedp/kb) package.
+
+#### Holding modifiers (Shift-Enter, Cmd-A)
+
+To hold a keyboard modifier down while typing or sending keys, pass `b.Shift()`, `b.Ctrl()`, `b.Alt()`, or `b.Meta()` alongside the keys (in any position).  These are the **same** modifier options you hold during a [pointer interaction](#pointer-options-offsets-and-modifiers) (`Meta` is Command on macOS and the Windows key elsewhere):
+
+```go
+b.SendKeys("textarea", biloba.Keys.Enter, b.Shift()) // Shift-Enter (e.g. soft newline)
+b.SendKeys(biloba.Keys.Enter, b.Meta())              // Cmd-Enter to the focused element (e.g. submit)
+b.Type("input", "a", b.Meta())                       // Cmd-A (select all)
+Eventually("textarea").Should(b.Type("a", b.Meta())) // the matcher form takes modifiers too
+```
+
+The modifier flags ride on every dispatched key event, so an app reading `e.shiftKey`/`e.metaKey`/`e.ctrlKey`/`e.altKey` in a `keydown` handler sees exactly the combo you sent.  This is the path to reach for when your app is wired to hotkeys; before this you had to drop down to `chromedp` via `b.Context` to send a modifier combo.
 
 ### Invoking JavaScript on and with selected elements
 
