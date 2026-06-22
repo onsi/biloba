@@ -1,3 +1,12 @@
+## 0.6.0
+
+### Features
+- Keyboard modifier combos: hold `b.Shift()`/`b.Ctrl()`/`b.Alt()`/`b.Meta()` during `Type`/`SendKeys` for hotkeys like Shift-Enter, Cmd-Enter, and Cmd-A (`b.SendKeys("textarea", biloba.Keys.Enter, b.Shift())`). These are the same shared modifier options you already hold during a click — no more dropping to chromedp for a modifier combo.
+- `biloba.Keys` now covers the full editing/navigation/lock/function keyboard: added `Space`, `Insert`, `CapsLock`, `NumLock`, `ScrollLock`, `ContextMenu`, `PrintScreen`, `Pause`, `Help`, `Clear`, and `F1`–`F24`.
+
+### Fixes
+- Focus/blur events now fire reliably in full ("new") headless Chrome (e.g. driving `google-chrome`) — Biloba enables focus emulation on every tab, so `Focus`/`Blur` and your `onBlur` handlers work even though the headless window never holds OS focus.
+
 ## 0.5.2
 
 ### Features
