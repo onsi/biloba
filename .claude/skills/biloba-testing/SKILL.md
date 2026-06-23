@@ -74,6 +74,25 @@ match, err := b.BeVisible().Match("#non-existing")
 
 You can also assert exact failure-message text for matchers via `matcher.FailureMessage(actual)` (see `HaveCount` specs).
 
+## Spec-authoring idioms (reach for these before `b.Run`)
+
+`b.Run` is the escape hatch; most things people reinvent with it already exist as a matcher that polls cleanly under `Eventually`. Keep `b.Run` for genuinely app-specific state.
+
+- **Counting:** `Eventually(sel).Should(b.HaveCount(7))` (or `b.HaveCount(BeNumerically(">", 10))`) — not `b.Run("...querySelectorAll(sel).length", &n)`.
+- **Attributes/properties:** `b.GetAttribute`/`b.GetProperty` (or the `b.HaveAttribute`/`b.HaveProperty` matchers) — not `getAttribute`/property reads in JS.
+- **Text:** `b.HaveInnerText`/`b.HaveTextContent`; the ordered text of a group is `Expect(".step").To(b.EachHaveInnerText("Pick", "Pay", "Done"))`. For **negation** ("nothing here says X"), use a text locator + `ShouldNot(b.Exist())`: `Eventually(b.ByTextContains("Draft").Within("#published-list")).ShouldNot(b.Exist())` — not a JS text scan.
+- **Dismissing a popover/menu (click-away):** `b.Click(sel, b.At(x, y))` is the blessed idiom — target a background region and offset onto the backdrop: `b.Click("body", b.At(5, 5))`.
+
+**Never put a side effect in an `Eventually`/`Consistently` body** — the body re-runs every poll, so a `b.Click` inside it rapid-fires clicks before state settles (a real footgun for cycling controls like a 3-way toggle). The body must be idempotent. To drive a cycling control to a target state, click *once* then wait for the change before reconsidering:
+
+```go
+for b.GetAttribute("html", "data-theme") != "dark" {
+    before := b.GetAttribute("html", "data-theme")
+    b.Click("#theme-toggle")
+    Eventually(func() any { return b.GetAttribute("html", "data-theme") }).ShouldNot(Equal(before))
+}
+```
+
 ## Other conventions
 
 - Label a spec `no-browser` to skip the `b.Prepare()` in `BeforeEach` (used for specs that don't drive the browser).
