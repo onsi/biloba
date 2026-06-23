@@ -3,21 +3,45 @@ package biloba
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/chromedp/chromedp"
 )
 
-const outlineMaxBytes = 32768 // 32 KB hard cap
+const outlineMaxBytes = 32768 // 32 KB hard cap (default; override with BILOBA_OUTLINE_MAX)
 const outlineTruncationMarker = "\n... [truncated]"
+
+// outlineCap resolves the byte cap for Outline() output.  By default it is outlineMaxBytes, but
+// BILOBA_OUTLINE_MAX lets you raise it (when a failing spec's DOM is truncated right where you need
+// it) or disable truncation entirely: set it to a byte count (e.g. "131072") to raise the cap, or to
+// "0"/"off"/"none"/"unlimited" to emit the whole outline.  An unparseable value falls back to the
+// default.
+func outlineCap() int {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("BILOBA_OUTLINE_MAX")))
+	if v == "" {
+		return outlineMaxBytes
+	}
+	switch v {
+	case "0", "off", "none", "unlimited":
+		return -1 // no cap
+	}
+	if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		return n
+	}
+	return outlineMaxBytes
+}
 
 /*
 Outline() returns the current page DOM as indented text suitable for reading or logging.
 Script, style, and SVG element bodies are pruned (replaced with "…") to keep the output
 compact; the surrounding tags are preserved. Runs of whitespace in text nodes are
 collapsed to a single space. The total output is capped at ~32 KB; if truncated a
-"... [truncated]" marker is appended.
+"... [truncated]" marker is appended. Set BILOBA_OUTLINE_MAX to a byte count to raise
+the cap (when a failing spec's DOM is truncated right where you need it) or to
+"0"/"off" to disable truncation entirely.
 
 Outline() is automatically attached as a report entry on spec failure so that the DOM
 state at failure time is always readable — even in terminals or agents that cannot render
@@ -80,11 +104,11 @@ func (b *Biloba) safeAllTabOutlines() []tabOutline {
 }
 
 func capOutline(s string) string {
-	return capOutlineWithCap(s, outlineMaxBytes)
+	return capOutlineWithCap(s, outlineCap())
 }
 
 func capOutlineWithCap(s string, maxBytes int) string {
-	if len(s) <= maxBytes {
+	if maxBytes < 0 || len(s) <= maxBytes {
 		return s
 	}
 	// Find a newline boundary near the cap so we don't cut mid-line.

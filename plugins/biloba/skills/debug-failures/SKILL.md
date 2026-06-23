@@ -1,11 +1,11 @@
 ---
 name: debug-failures
-description: See why a Biloba spec failed — the on-failure artifacts (DOM outline + screenshots), how Biloba auto-adapts to humans vs CI vs AI agents, the env vars and config knobs that surface them (BILOBA_SCREENSHOTS_DIR, BILOBA_INLINE_SCREENSHOTS, BILOBA_INTERACTIVE, BilobaConfig*), and using b.Outline()/b.A11yOutline() to understand why a selector didn't match. Use when a browser spec is failing and you need visibility, or to configure failure output for CI/agents.
+description: See why a Biloba spec failed or flaked — the on-failure artifacts (DOM outline + screenshots), how Biloba auto-adapts to humans vs CI vs AI agents, the env vars and config knobs that surface them (BILOBA_SCREENSHOTS_DIR, BILOBA_INLINE_SCREENSHOTS, BILOBA_OUTLINE_MAX, BILOBA_INTERACTIVE, BilobaConfig*), attaching app/store state to a failure, and using b.Outline()/b.A11yOutline() to understand why a selector didn't match. Use when a browser spec is failing or flaky and you need visibility, or to configure failure output for CI/agents. For *preventing* flakes (single-shot reads, racing interactions, optimistic-UI) see biloba:flaky-specs.
 ---
 
 # Debugging Biloba failures
 
-Biloba adapts failure output to *who's looking* and lets you override any piece. Docs: <https://onsi.github.io/biloba/#failure-artifacts>.
+Biloba adapts failure output to *who's looking* and lets you override any piece. Docs: <https://onsi.github.io/biloba/#failure-artifacts>. This skill is about *seeing why a spec failed*; if a spec is **flaky** (passes locally, fails under `-p`/CI, fails intermittently) the cause is usually a single-shot read or a racing interaction — fix those with `biloba:flaky-specs`, then come back here to read the artifacts.
 
 ## What you get on failure, by environment
 
@@ -29,7 +29,7 @@ Point the directory elsewhere (e.g. a CI artifact path) with `BILOBA_SCREENSHOTS
 
 - **Console errors** — if the page logged any `console.error`/`console.assert` before the failure, Biloba replays them under "Console errors logged before this failure" at the **top** of the failure block. On a JS crash (e.g. a React error boundary) this is usually the root cause — read it first, before the outline.
 - **Screenshot files** — `Read` the printed PNG path to see the rendered page at failure.
-- **DOM outline** — attached under "DOM Outline for: '<title>'" in the Ginkgo report. This is the primary tool for *why a selector didn't match*: it's the indented DOM (`<script>/<style>/<svg>` bodies pruned, whitespace collapsed, capped ~32 KB).
+- **DOM outline** — attached under "DOM Outline for: '<title>'" in the Ginkgo report. This is the primary tool for *why a selector didn't match*: it's the indented DOM (`<script>/<style>/<svg>` bodies pruned, whitespace collapsed, capped ~32 KB). If the region you need is past the cap (`... [truncated]`), raise or remove it with **`BILOBA_OUTLINE_MAX`**: a byte count (e.g. `BILOBA_OUTLINE_MAX=131072`) raises the cap; `0`/`off` disables truncation and dumps the whole DOM.
 
 Call them yourself at any point, not just on failure:
 
@@ -40,6 +40,17 @@ AddReportEntry("DOM before click", b.Outline(), ReportEntryVisibilityFailureOrVe
 ```
 
 `b.A11yOutline()` (the role/name view a screen reader works from) is often *more* useful than raw HTML for reasoning about what a page *means*; it's not auto-attached — call it explicitly.
+
+**Attach app/store state to a failure.** For an optimistic-UI or state-heavy app the *store* is far more diagnostic than the DOM (the DOM may be the pre-confirmation copy — see `biloba:flaky-specs`). Snapshot it on every failure with a `ReportAfterEach` that introspects via `b.Run`:
+
+```go
+ReportAfterEach(func(report SpecReport) {
+    if !report.Failed() { return }
+    AddReportEntry("app state", b.Run(`JSON.stringify(window.__APP_STATE__ ?? null)`))
+})
+```
+
+Guard the read (`?? null`) so a crashed/half-loaded page doesn't turn the snapshot itself into a failure.
 
 **Page-side `console.log` for live debugging.** All page `console.*` output is forwarded to the `GinkgoWriter` (each argument rendered, space-separated). Objects are rendered from CDP's **shallow** preview, so a nested/large object logs lossily (deep fields collapse). When you're logging a state object to chase a DOM/React timing bug, build one string yourself — `console.log('state ' + JSON.stringify(obj))` — to get the full value instead of the truncated preview. Same idea for a quick count probe: `b.Run("document.querySelectorAll('.card').length")` returns the number directly (no need to reach into the outline).
 

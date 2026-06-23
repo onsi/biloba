@@ -94,9 +94,10 @@ Three pathways, all flow through every method/matcher. **CSS is the default** (t
 - Compose inline (`b.Realistic().Click(sel)`), per-spec (`rb := b.Realistic()`), or per-suite (`Label("realistic")` + `BeforeEach{ rb = b.Realistic() }`, then `ginkgo --label-filter='realistic'`/`'!realistic'`). Fast-vs-realistic capability matrix: <https://onsi.github.io/biloba/#realistic-interactions>.
 
 ## Keyboard  (real key events, via chromedp)
-- `b.Type(selector, text)` (dual) — focus, then genuine keystrokes; **appends**.
+- `b.Type(selector, text)` (dual) — focus, then genuine keystrokes; **appends**. Focusing scrolls the element into view.
 - `b.SendKeys([selector,] ...parts)` — send text + named keys; selector optional (else focused element).
 - `biloba.Keys.{Enter,Tab,Escape,Backspace,Delete,Arrow{Up,Down,Left,Right},Home,End,PageUp,PageDown}`.
+- **Modifiers** `b.Shift()`/`b.Ctrl()`/`b.Alt()`/`b.Meta()` work here too (same values as the pointer modifiers): pass them in any position to `Type`/`SendKeys` for Shift-Enter, ⌘-A, etc. — `b.SendKeys("textarea", biloba.Keys.Enter, b.Shift())`.
 
 ## Uploads
 - `b.SetUpload(selector, ...paths)` — set `<input type=file>` files via CDP (paths must exist on Chrome's machine); fires `change`.
@@ -121,7 +122,7 @@ Three pathways, all flow through every method/matcher. **CSS is the default** (t
 - `Download`: `.URL`, `.Filename`, `.IsComplete()/.IsCancelled()/.IsActive()`, `.Content()` → []byte.
 
 ## Arbitrary JS  (runs on the global `window`; wrap object literals in parens)
-- `b.Run(script[, &ptr])` → any — synchronous **expression**; returns the decoded value (no `return` allowed at top level — it errors with a hint pointing to `RunAsync`/IIFE).
+- `b.Run(script[, &ptr])` → any — synchronous **expression**; returns the decoded value (no `return` allowed at top level — it errors with a hint pointing to `RunAsync`/IIFE). Pollable: `Eventually(b.Run).WithArguments(expr).Should(matcher)` (it's a `func(string,...any) any`) — the fix for a single-shot read that races an async settle (`biloba:flaky-specs`).
 - `b.RunAsync(script[, &ptr])` / `b.RunErrAsync(...)` — body of an async fn; you `return` the awaited value (use this for `await`/`fetch`).
 - `b.EvaluateTo(value|matcher)` (matcher) — assert a JS expression's result. Numbers decode to `float64` — use `BeNumerically`, not `Equal(intLiteral)`.
 - `b.JSFunc(script)` → `.Invoke(...args)` string — JSON-encodes args into an invocable snippet.
@@ -134,7 +135,7 @@ Three pathways, all flow through every method/matcher. **CSS is the default** (t
 - `b.ModifyResponse(url string|matcher)` → builder `.WithStatus(s).WithHeader(n,v).WithBody(b)` or `.Using(func(biloba.InterceptedResponse) biloba.StubResponse)` — rewrite the real response (reads real status/headers/body; heavier: pauses twice).
 - `b.HaveMadeRequest(url string|matcher)` (matcher) — chain `.WithMethod(m)`.
 - `b.AllRequests()` → `Requests` (each `*Request` has `.URL/.Method/.Headers/.ResourceType`); `b.RequestMatching(...)` predicate for `.Find/.Filter`.
-- `b.BeNetworkIdle()` (matcher) — zero in-flight requests.
+- `b.BeNetworkIdle()` (matcher) — zero in-flight requests. Tracks **HTTP** requests only (keyed on `Network.requestWillBeSent`/`loadingFinished` request IDs); a long-lived **WebSocket** does not keep it busy, so it won't wait for WS frames.
 
 ## Screenshots, outline, window  (details in biloba:debug-failures)
 - `b.Outline()` → string — indented DOM text.

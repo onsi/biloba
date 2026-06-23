@@ -2714,6 +2714,8 @@ Eventually(b).Should(b.BeNetworkIdle())
 
 In keeping with Biloba's pragmatism, "idle" means the in-flight count has reached zero - Biloba does not wait for a quiet period (à la `networkidle0`).  If you need to wait for one specific request to complete, assert on its effect directly instead.
 
+`BeNetworkIdle` tracks **HTTP** requests only - its in-flight count is keyed on the `Network.requestWillBeSent`/`Network.loadingFinished` request IDs Chrome reports.  A long-lived **WebSocket** does not register as an in-flight request, so it will not keep `BeNetworkIdle` perpetually busy (nor will `BeNetworkIdle` wait for a particular WS frame to arrive - wait on that frame's observable effect instead).
+
 ## Window Size, Screenshots, Configuration, and Debugging
 
 There are a few other odds and ends to cover, let's dive in
@@ -2868,6 +2870,8 @@ might produce something like:
 ```
 
 `Outline()` automatically prunes the content of `<script>`, `<style>`, and `<svg>` elements (keeping the tags, replacing bodies with `…`) to keep the output compact even on complex SPAs. Runs of whitespace inside text nodes are collapsed to a single space. Output is capped at ~32 KB; if truncated, a `... [truncated]` marker is appended.
+
+When you're debugging a failure whose interesting DOM lands past the cap, override it with the `BILOBA_OUTLINE_MAX` environment variable: set it to a byte count (e.g. `BILOBA_OUTLINE_MAX=131072`) to raise the cap, or to `0`/`off` to disable truncation entirely and emit the whole DOM.
 
 **Attachment on failure.** Biloba can attach a DOM Outline for every open tab when a spec fails.  This gives you a readable, text-based view of the page state, which is especially useful in environments that cannot render images.  It is **off for an interactive human** (the screenshot is the more useful artifact) but **on automatically under CI or an AI agent**; force it either way with `BilobaConfigFailureOutlines()` / `BilobaConfigFailureOutlines(false)` (see [Failure artifacts](#failure-artifacts)).  When enabled, the entry appears under "DOM Outline for: '<title>'" in the Ginkgo report.
 

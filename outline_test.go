@@ -74,4 +74,10 @@ var _ = Describe("Outline", func() {
 		Ω(truncated).Should(HaveSuffix("\n... [truncated]"))
 		Ω(truncated).ShouldNot(ContainSubstring("f"))
 	})
+
+	It("does not truncate when the cap is negative (BILOBA_OUTLINE_MAX=0/off)", func() {
+		full := biloba.CapOutlineForTest("a\nb\nc\nd\ne\nf", -1)
+		Ω(full).Should(Equal("a\nb\nc\nd\ne\nf"))
+		Ω(full).ShouldNot(ContainSubstring("[truncated]"))
+	})
 })

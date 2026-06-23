@@ -26,6 +26,16 @@ Read the canonical narrative docs at <https://onsi.github.io/biloba/> for the fu
 - **Biloba never polls.** Methods either act immediately *or* return a Gomega matcher that *you* wrap in `Eventually`/`Consistently`. This dual immediate/matcher API is the single most important pattern — learn it in `biloba:write-tests`.
 - `console.log` streams to the `GinkgoWriter`; a failing `console.assert` fails the spec.
 
+## The one habit that keeps suites non-flaky
+
+**Never assert on a value you read exactly once.** A browser is a pile of async settles (a WS frame, a layout/measure pass, an rAF-injected node, an optimistic→server reconciliation); any single read can land before the thing you care about settles. This is the root of almost every Biloba flake. Three reflexes follow:
+
+- **Poll reads, don't snapshot them.** `b.Run(expr, &x); Expect(x)` is a single-shot read — wrap it: `Eventually(b.Run).WithArguments(expr).Should(matcher)` (numbers decode to `float64` → `BeNumerically`). Geometry / `getBoundingClientRect` / computed-style reads settle *after* an element exists, so they must be polled even once it's there.
+- **Immediate interactions race silently and fail *later*.** A fully-applied `b.Click(sel)`/`b.Tap(sel)` fired a frame too early no-ops — and the spec fails downstream at the dependent assertion, not at the interaction. Gate on a readiness anchor or use the matcher form `Eventually(sel).Should(b.Click())`.
+- **If your app renders optimistically, the DOM lies.** It shows the pre-confirmation state, and `Eventually` on it just re-reads the optimistic copy — wait on a server-authoritative signal instead.
+
+When a spec is flaky, order-dependent, or only fails under `-p`/CI, go straight to `biloba:flaky-specs`.
+
 **Selectors are first-class — three pathways.** Any action/matcher takes a **CSS string** (the default — target stable `#id`/`[data-testid]` hooks, not styling classes), a **semantic `Locator`** that describes an element as a user perceives it (`b.ByRole("button").WithName("Save")`, `b.ByText(...)`, `b.ByLabel(...)`, `b.ByTestID(...)` — reach for these to assert a11y or when the visible label is the natural identifier), or an **`XPath`** (the rare power tool for axis/ordinal queries). Locators compose (`.ContainingText`/`.Containing`/`.And`/`.Or`/`.Within`/`.Nth`, accepting any selector) and pierce open shadow roots automatically. → `biloba:write-tests`, `biloba:xpath`.
 
 ## The escape hatch
@@ -49,3 +59,4 @@ Reach for it for geolocation, cross-origin frames, or any CDP feature without a 
 - **Looking up a method or matcher** → `biloba:api`
 - **Testing a page/app you haven't seen** → `biloba:explore-unfamiliar-page`
 - **A spec failed and you want to see why** → `biloba:debug-failures`
+- **A spec is flaky / order-dependent / only fails under `-p` or CI** → `biloba:flaky-specs`

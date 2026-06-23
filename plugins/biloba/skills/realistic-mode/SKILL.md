@@ -52,6 +52,8 @@ Selection is track-agnostic (`b.ByRole`/`ByText`/`ByLabel`, CSS, `>>>`, XPath wo
 
 The whole vocabulary (`DblClick`, `RightClick`, `MiddleClick`, pointer options `b.At`/`b.Shift`/`b.Ctrl`/`b.Alt`/`b.Meta`, `DragTo`, `ScrollWheel`, `Tap`, `Type`/`SendKeys`) is in `biloba:write-tests` and `biloba:api`.
 
+**Scroll-into-view lives only on this track** (plus the focus-bearing `SetValue`/`Type`/`SendKeys`, whose `.focus()` scrolls). A *fast* `Click`/`Tap` never moves the page — so if a scroll/layout spec needs the viewport held still, stay on the fast track; and if a scroll position shifts around a fast click, the cause is app-side, not Biloba (a real diagnosis trap — see `biloba:flaky-specs`).
+
 ## The three composition patterns
 
 There is deliberately **no per-call decorator** (Biloba's dual API keys on argument count; a realism flag would muddy that). The `b.Realistic()` handle is the one seam, and because it's just a `*Biloba` view it flows through helpers and `Eventually` exactly like `b`:

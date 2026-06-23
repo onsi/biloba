@@ -12,7 +12,7 @@ Assumes Biloba is already wired into the suite (`biloba:setup`) and you know the
 1. **Selecting elements.** Interactions and user-facing things → a **Locator** by role/name/text (`b.ByRole("button").WithName("Save")`, `b.ByText("Sign in")`), which doubles as an a11y guard. Structural/state hooks you own → **CSS on a stable `#id`/`[data-testid]`**, never a styling class.
 2. **Assert observable outcomes** — visible text, counts, URL/title, network effects — not internal class/structure.
 
-**Smells** to catch in your own draft (the wrong-from-generic-automation-muscle-memory moves): positional/styling-class CSS (`:nth-of-type`, `.btn-primary`); text-matching XPath where `b.ByText`/`b.ByRole().WithName` fits; reinventing a matcher with `b.Run` (`querySelectorAll(...).length` instead of `b.HaveCount`); IIFE-wrapping a script for `return` (use `b.RunAsync`); `SetValue` when you meant keystrokes (use `b.Type`).
+**Smells** to catch in your own draft (the wrong-from-generic-automation-muscle-memory moves): positional/styling-class CSS (`:nth-of-type`, `.btn-primary`); text-matching XPath where `b.ByText`/`b.ByRole().WithName` fits; reinventing a matcher with `b.Run` (`querySelectorAll(...).length` instead of `b.HaveCount`); IIFE-wrapping a script for `return` (use `b.RunAsync`); `SetValue` when you meant keystrokes (use `b.Type`); a **single-shot read** — `b.Run(expr, &x)` immediately followed by `Expect(x)` — which races any async settle (poll it: `Eventually(b.Run).WithArguments(expr)`; see flaky-specs below).
 
 ## The one pattern to internalize: dual immediate/matcher
 
@@ -32,6 +32,8 @@ Most DOM methods have **two forms keyed on argument count**:
   ```
 
 The matcher form lets you fold readiness-waiting into the action — no separate "is it there yet" poll. `b.Click("#login")` right after `b.Navigate` may race the page load; `Eventually("#login").Should(b.Click())` won't.
+
+**Immediate forms never poll — and they fail *later*, not where they raced.** This is the single most common way a Biloba spec goes flaky. A fully-applied `b.Click(sel)`/`b.Tap(sel)`/`b.SetValue(...)`/`b.SelectText(...)` acts *now*; fired a frame too early (right after a re-render, a list load, an injected node) it no-ops or hits a stale element — and the spec **does not fail at the interaction**. It fails downstream, at the `Eventually(...)` that depended on it, with nothing pointing back. Gate every immediate interaction on a readiness anchor (`Eventually(sel).Should(b.BeClickable())`) or use the matcher form. Don't put a *toggle* action inside `Eventually` (`Eventually(sel).Should(b.Tap())` re-taps each poll and oscillates) — gate, act once, then poll the end state. Full catalog of flake smells + fixes: `biloba:flaky-specs`.
 
 **First-vs-all naming.** A bare method acts on the **first** match; the `ForEach`/`Each` sibling acts on **all** matches (returning/asserting slices, empty when nothing matches): `InnerText` vs `InnerTextForEach`/`EachHaveInnerText`; `GetProperty` vs `GetPropertyForEach`/`EachHaveProperty`; `Click` vs `ClickEach`. The name tells you which.
 
@@ -120,9 +122,12 @@ b.DragTo(source, target)                                     // pointer-based dr
 b.ScrollWheel(sel, deltaX, deltaY)                           // wheel/scroll, +Y down +X right (immediate-only)
 b.Tap(sel)                                                   // touch tap (dual); takes b.At(...), ignores modifiers
 b.Type(sel, "abc"); b.SendKeys(biloba.Keys.Enter)            // real keystrokes (SetValue does NOT type)
+b.SendKeys("textarea", biloba.Keys.Enter, b.Shift())         // Shift-Enter — modifiers work on the keyboard too
 ```
 
-`b.At(x,y)` / `b.Shift()` / `b.Ctrl()` / `b.Alt()` / `b.Meta()` (⌘/Win) are **pointer options** accepted by `Click`/`DblClick`/`RightClick`/`MiddleClick`/`Tap` — after the selector (immediate) or in place of it (matcher: `Eventually(sel).Should(b.Click(b.At(x,y), b.Shift()))`). In fast mode any option switches a click off native `el.click()` to a synthetic event carrying the coords/flags. `ScrollWheel` is immediate-only.
+`b.At(x,y)` / `b.Shift()` / `b.Ctrl()` / `b.Alt()` / `b.Meta()` (⌘/Win) are **pointer options** accepted by `Click`/`DblClick`/`RightClick`/`MiddleClick`/`Tap` — after the selector (immediate) or in place of it (matcher: `Eventually(sel).Should(b.Click(b.At(x,y), b.Shift()))`). In fast mode any option switches a click off native `el.click()` to a synthetic event carrying the coords/flags. `ScrollWheel` is immediate-only. The **modifiers double as keyboard modifiers**: pass `b.Shift()`/`b.Ctrl()`/`b.Alt()`/`b.Meta()` to `b.Type`/`b.SendKeys` (in any position) for Shift-Enter, ⌘-A, etc.
+
+**Fast interactions act in place — no scroll, no focus move.** A fast `b.Click`/`b.Tap` is `element.click()` after a visibility check; it does **not** `scrollIntoView` and does **not** move focus, so it never shifts the page out from under a scroll/layout assertion. Scroll-into-view comes only from `b.Realistic()` (deliberately) and from **focus-bearing ops** — `b.Focus`/`b.SetValue`/`b.Type`/`b.SendKeys` — because the browser's `.focus()` scrolls its target into view. If a scroll position moves around a fast click, the cause is app-side, not Biloba.
 
 **`b.SetValue` and frameworks.** `SetValue` writes through the input's native value setter, so it drives **controlled** React/Vue/Solid inputs (whose `value` is bound to state) — `onChange` fires and state updates; no need to make an input uncontrolled for Biloba's sake. For text inputs it focuses + dispatches `input`/`change` but does **not** blur — an `onBlur` commit/inline-edit-unmount handler won't fire from `SetValue`; pair with `b.Blur(sel)` when you want it (`b.SetValue("#name","New"); b.Blur("#name")`).
 
@@ -198,6 +203,16 @@ Eventually("#doc-name").Should(b.HaveInnerText("My Fixture Data"))
 ```
 
 **`b.Run` returns the decoded value directly** — `n := b.Run("app.users.length")` feeds Gomega without a wrapper, and `b.Run("expr", &typed)` decodes into a pointer. Don't write `runInt`/`runStr` helpers. `b.Run` is a synchronous *expression*, so a top-level `return` is illegal — use `b.RunAsync` (which wraps a function body, so `return`/`await` work) for `fetch`/`await`. `b.EvaluateTo` asserts on a JS expression directly. Remember numbers decode to `float64` (use `BeNumerically`).
+
+**Poll a `b.Run` read instead of snapshotting it.** `b.Run` is a plain `func(string, ...any) any`, so it drops straight into `Eventually` — this is the antidote to the single most common flake (a one-shot read that races an async settle), and it needs no wrapper closure for a scalar expr:
+
+```go
+Eventually(b.Run).WithArguments(`isReady()`).Should(BeTrue())                         // bool
+Eventually(b.Run).WithArguments(`document.querySelectorAll(".card").length`).Should(BeNumerically("==", 3)) // float64!
+Eventually(b.Run).WithArguments(`document.title`).Should(Equal("Done"))               // string
+```
+
+For an interpolated/multi-line expr, pre-build the string (`expr := fmt.Sprintf(...)`; `Eventually(b.Run).WithArguments(expr)…`) or poll a closure that returns the decoded value. See `biloba:flaky-specs` for why single-shot reads flake.
 
 ## Multi-tab flows
 

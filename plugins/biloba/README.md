@@ -20,10 +20,12 @@ All skills are namespaced under `biloba:` and activate when you're working in a 
 | `biloba:overview` | You want the mental model — the three principles and how they change the way you write specs (read me first). |
 | `biloba:setup` | You're wiring Biloba into a project: `go get`, the bootstrap file, installing `chrome-headless-shell`, the bootstrap variations. |
 | `biloba:write-tests` | You're authoring specs: the dual immediate/matcher API, selecting elements, hermetic tests with stubs, multi-tab flows. |
+| `biloba:realistic-mode` | You need realistic interactions — occlusion, CSS `:hover`, drag, scroll, touch — via the `b.Realistic()` track. |
 | `biloba:xpath` | You're building an XPath selector with Biloba's `b.XPath()` DSL. |
 | `biloba:api` | You need a one-line reference for a Biloba method or matcher. |
 | `biloba:explore-unfamiliar-page` | You're writing tests against a page or app you haven't seen — orient first, then draft a spec. |
 | `biloba:debug-failures` | A spec failed and you want the DOM outline, a11y tree, and screenshots — and the env knobs that surface them. |
+| `biloba:flaky-specs` | A spec is flaky, order-dependent, or only fails under `-p`/CI — the single-shot-read and racing-interaction smells, and their polling fixes. |
 
 ## Versioning
 
