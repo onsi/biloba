@@ -1,3 +1,13 @@
+## 0.7.2
+
+### Features
+
+- `BILOBA_OUTLINE_MAX` overrides the ~32 KB cap on `Outline()` output: set it to a byte count to raise the cap when a failing spec's DOM is truncated right where you need it, or to `0`/`off` to disable truncation and dump the whole DOM.
+
+### Fixes
+
+- `Navigate`/`NavigateWithStatus` are now bounded by a 30s timeout. Previously a wedged navigation (real Chrome occasionally never acknowledges `chromedp.Navigate` under parallel/CI load) could hang on the tab context until the entire Ginkgo suite timeout elapsed; it now fails fast with a clear "timed out navigating" message.
+
 ## 0.7.1
 
 Update plugin skills to reflect most recent changes and feedback.
