@@ -384,6 +384,40 @@ func (b *Biloba) GetPropertyForEach(selector any, property string) []any {
 }
 
 /*
+GetAttribute(selector, name) returns the named HTML attribute of the first element matching selector.  It returns the raw attribute string, or nil when the attribute is not present.
+
+GetAttribute is the immediate sibling of the [Biloba.HaveAttribute] matcher - reach for it when you want an attribute value in a Go variable for control-flow rather than to assert on.  Unlike [Biloba.GetProperty], it reads the raw markup attribute (e.g. the literal href="/about") rather than the resolved DOM property (the absolute URL).
+
+	tab.GetAttribute("#link", "href") // "/about"
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+Read https://onsi.github.io/biloba/#properties to learn more about working with properties and attributes
+*/
+func (b *Biloba) GetAttribute(selector any, name string) any {
+	b.gt.Helper()
+	r := b.runBilobaHandler("getAttribute", selector, name)
+	if r.Error() != nil {
+		b.gt.Fatalf("Failed to get attribute \"%s\":\n%s", name, r.Error())
+	}
+	return r.Result
+}
+
+/*
+GetAttributeForEach(selector, name) returns the named HTML attribute for all elements matching selector.  It returns []any and follows the rules of [Biloba.GetAttribute] - nil entries stand in for elements that lack the attribute.  If no elements are found an empty slice is returned.
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+Read https://onsi.github.io/biloba/#properties to learn more about working with properties and attributes
+*/
+func (b *Biloba) GetAttributeForEach(selector any, name string) []any {
+	b.gt.Helper()
+	r := b.runBilobaHandler("getAttributeForEach", selector, name)
+	if r.Error() != nil {
+		b.gt.Fatalf("Failed to get attribute \"%s\" for each:\n%s", name, r.Error())
+	}
+	return r.ResultAnySlice()
+}
+
+/*
 HaveProperty() is a Gomega matcher with two modes of operation:
 
 When invoked with only one argument, it passes only if the first element matching selector has the requested javascript property defined on it:

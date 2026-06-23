@@ -229,11 +229,13 @@ func (b *Biloba) applyHighFidelityViewport() error {
 	if !b.ChromeConnection.HighFidelity || b.ChromeConnection.WindowWidth <= 0 || b.ChromeConnection.WindowHeight <= 0 {
 		return nil
 	}
-	return chromedp.Run(b.Context, chromedp.EmulateViewport(
-		int64(b.ChromeConnection.WindowWidth),
-		int64(b.ChromeConnection.WindowHeight),
-		emulateViewportMatchingScreen,
-	))
+	return retryTransientCDP(func() error {
+		return chromedp.Run(b.Context, chromedp.EmulateViewport(
+			int64(b.ChromeConnection.WindowWidth),
+			int64(b.ChromeConnection.WindowHeight),
+			emulateViewportMatchingScreen,
+		))
+	})
 }
 
 // reassertViewportForCompositor re-applies the viewport emulation at this tab's *current* size after a
@@ -263,7 +265,9 @@ func (b *Biloba) reassertViewportForCompositor() {
 // and spawned) must opt in; it is harmless in the chrome-headless-shell lane, which already treats its
 // page as focused.
 func (b *Biloba) applyFocusEmulation() error {
-	return chromedp.Run(b.Context, emulation.SetFocusEmulationEnabled(true))
+	return retryTransientCDP(func() error {
+		return chromedp.Run(b.Context, emulation.SetFocusEmulationEnabled(true))
+	})
 }
 
 func gooseConfigPath(process int) string {
@@ -664,6 +668,27 @@ func (b *Biloba) bootstrapIsolatedTab(allocatorContext context.Context, bootstra
 	return lastErr
 }
 
+// retryTransientCDP retries an idempotent setup round-trip against the single shared Chrome using the
+// same full-jitter backoff as bootstrapIsolatedTab.  These steps (viewport emulation, focus emulation,
+// target-info lookup) are each a single CDP call that normally succeeds instantly, but under heavy
+// parallel load any one can transiently fail - and because they sit *outside* the bootstrap retry, an
+// un-retried failure surfaces as a spurious connect/tab-setup failure (and, in the failure-capturing
+// test harness, a nil tab).  Returns nil on the first success, or the last error after exhausting
+// attempts.
+func retryTransientCDP(fn func() error) error {
+	var lastErr error
+	for attempt := range connectAttempts {
+		if attempt > 0 {
+			ceiling := connectBackoffBase << (attempt - 1)
+			time.Sleep(time.Duration(rand.Int64N(int64(ceiling))))
+		}
+		if lastErr = fn(); lastErr == nil {
+			return nil
+		}
+	}
+	return lastErr
+}
+
 /*
 Biloba is the main object provided by Biloba for interacting with Chrome.  You get an instance of Biloba when you [ConnectToChrome].  This instance is the reusable root tab and cannot be closed.
 
@@ -855,12 +880,23 @@ NewTab() creates a new browser tab and returns a Biloba instance pointing to it
 Read https://onsi.github.io/biloba/#managing-tabs to learn more about managing tabs
 */
 func (b *Biloba) NewTab() *Biloba {
-	_, tabTargetID, err := newIsolatedBrowserContextAndTarget(b.root.Context)
-	if err != nil {
-		b.gt.Fatalf("failed to create new tab: %s", err.Error())
-		return nil
+	b.gt.Helper()
+	// registerTabFor returns nil if the freshly-created target can't be attached to.  A nil here is a
+	// footgun - callers write b.NewTab().Navigate(...) - so retry with a brand-new target and, only if
+	// every attempt fails, fail the spec with a clear message rather than return a nil tab that panics
+	// on first use.
+	for range newTabAttempts {
+		_, tabTargetID, err := newIsolatedBrowserContextAndTarget(b.root.Context)
+		if err != nil {
+			b.gt.Fatalf("failed to create new tab: %s", err.Error())
+			return nil
+		}
+		if tab := b.registerTabFor(chromedp.NewContext(b.root.Context, chromedp.WithTargetID(tabTargetID))); tab != nil {
+			return tab
+		}
 	}
-	return b.registerTabFor(chromedp.NewContext(b.root.Context, chromedp.WithTargetID(tabTargetID)))
+	b.gt.Fatalf("failed to create new tab: the new target could not be attached to after %d attempts", newTabAttempts)
+	return nil
 }
 
 /*
@@ -950,6 +986,18 @@ func (b *Biloba) Close() error {
 // generous - these operations normally complete in tens of milliseconds - and only ever elapses for
 // a target that is, in fact, going away.
 const targetOpTimeout = 5 * time.Second
+
+// A freshly created or app-spawned target can transiently fail (not wedge) its first attach under
+// heavy parallel load.  registerTabFor retries the probe this many times - on the same context, so a
+// healthy target is never cancelled/closed mid-recovery - before giving up.
+const (
+	tabProbeAttempts     = 3
+	tabProbeRetryBackoff = 50 * time.Millisecond
+)
+
+// NewTab re-creates the target from scratch this many times if registration can't attach to it, so it
+// never hands the caller a nil tab (which b.NewTab().Navigate(...) would panic on).
+const newTabAttempts = 3
 
 // waitUntilTargetGone polls Chrome until targetID is no longer reported by Target.getTargets,
 // bounded by a generous deadline.  See Close() for why the post-close teardown window matters.
@@ -1092,22 +1140,37 @@ func (b *Biloba) registerTabFor(c context.Context, cancel context.CancelFunc) *B
 	newG.root = b.root
 	newG.close = cancel
 
-	//spin up the tab.  This first call is what attaches chromedp to the target, and attaching to a
-	//target that is mid-teardown - e.g. a tab the browser is still closing that Target.getTargets
-	//momentarily still reports - can wedge forever on Runtime.Enable.  We can't bound it with a
-	//context timeout: chromedp binds the target's listener to the first Run's context, so a timeout
-	//there would tear the tab (and per chromedp's own docs, potentially the browser) down.  Instead we
-	//watchdog it on the tab's real context and, on timeout, cancel() the tab - which unblocks the
-	//wedged Run and discards the dying target.  AllTabs() already skips a nil tab.
-	probeDone := make(chan error, 1)
-	go func() { _, err := newG.RunErr("1"); probeDone <- err }()
-	select {
-	case err := <-probeDone:
-		if err != nil {
+	// Probe the target to force chromedp to attach (Runtime.Enable et al.).  Two failure modes need
+	// different handling:
+	//   - The attach *wedges*: this only happens for a target that is mid-teardown, and a context
+	//     timeout can't unblock it (chromedp binds the target listener to the first Run's context), so
+	//     we watchdog it and, on timeout, cancel() to unblock the wedged Run and discard the target.
+	//     Attach never completed, so the tab has no chromedp Target and cancel() closes nothing - it
+	//     just abandons the dead attach.
+	//   - The attach *errors* quickly: under heavy parallel load a healthy, live target can transiently
+	//     fail the probe.  Retrying on the same context recovers it.  Crucially we do NOT cancel()
+	//     between attempts: once attach has succeeded, cancel() *closes* the (healthy) target out from
+	//     under the caller - which is exactly how a slow-but-live spawned tab would silently vanish from
+	//     AllTabs().  We only cancel() after exhausting the retries (a target that truly won't attach).
+	var probeErr error
+	for attempt := range tabProbeAttempts {
+		if attempt > 0 {
+			time.Sleep(tabProbeRetryBackoff)
+		}
+		probeDone := make(chan error, 1)
+		go func() { _, err := newG.RunErr("1"); probeDone <- err }()
+		select {
+		case probeErr = <-probeDone:
+			// got a result: nil => attached; non-nil => transient, retry on the same context
+		case <-time.After(targetOpTimeout):
 			cancel()
 			return nil
 		}
-	case <-time.After(targetOpTimeout):
+		if probeErr == nil {
+			break
+		}
+	}
+	if probeErr != nil {
 		cancel()
 		return nil
 	}
@@ -1118,21 +1181,27 @@ func (b *Biloba) registerTabFor(c context.Context, cancel context.CancelFunc) *B
 	newG.targetID = chromedp.FromContext(newG.Context).Target.TargetID
 
 	var browserContextID cdp.BrowserContextID
-	err := chromedp.Run(c,
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			info, err := target.GetTargetInfo().Do(ctx)
-			browserContextID = info.BrowserContextID
-			return err
-		}),
-	)
+	err := retryTransientCDP(func() error {
+		return chromedp.Run(c,
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				info, err := target.GetTargetInfo().Do(ctx)
+				browserContextID = info.BrowserContextID
+				return err
+			}),
+		)
+	})
 	if err != nil {
-		b.gt.Fatalf("Failed to register new tab: %s", err.Error())
+		cancel()
+		return nil
 	}
 
 	newG.browserContextID = browserContextID
-	// Match the root tab: make focus/blur events fire on this tab too (see applyFocusEmulation).
+	// Match the root tab: make focus/blur events fire on this tab too (see applyFocusEmulation).  On a
+	// persistent failure discard the tab rather than register a half-configured one - NewTab retries
+	// with a fresh target and AllTabs re-polls, so the caller still converges (or fails cleanly).
 	if err := newG.applyFocusEmulation(); err != nil {
-		b.gt.Fatalf("Failed to register new tab: %s", err.Error())
+		cancel()
+		return nil
 	}
 	newG.setUpListeners()
 

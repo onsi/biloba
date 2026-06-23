@@ -20,6 +20,11 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
+// screenshotCaptureTimeout bounds a single tab's screenshot capture so a wedged tab can't hang the
+// suite, while staying generous enough that a healthy full-page PNG capture doesn't spuriously time
+// out under heavy parallel/CI load.
+const screenshotCaptureTimeout = 5 * time.Second
+
 // inlineImageProtocol identifies which terminal inline-image escape sequence a
 // screenshot should be encoded with.
 type inlineImageProtocol int
@@ -307,7 +312,11 @@ func sanitizeForFilename(s string) string {
 func (b *Biloba) safeAllTabScreenshots(width int, height int) []tabScreenshot {
 	out := []tabScreenshot{}
 	for idx, tab := range b.AllTabs() {
-		ctx, cancel := context.WithTimeout(tab.Context, time.Second)
+		// Bound the capture so a wedged tab can't hang screenshot collection, but keep it generous:
+		// FullScreenshot encodes a PNG of the whole page and, under heavy parallel/CI load, legitimately
+		// takes well over a second.  A 1s bound here spuriously timed out healthy captures - surfacing as
+		// "Timed out attempting to fetch screenshot" noise and flaking the inline-encoding specs.
+		ctx, cancel := context.WithTimeout(tab.Context, screenshotCaptureTimeout)
 		defer cancel()
 
 		var originalWidth, originalHeight int

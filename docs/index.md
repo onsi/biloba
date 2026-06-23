@@ -1062,6 +1062,15 @@ Expect(selector).To(b.EachHaveInnerText(ContainElement("B")) //passes the entire
 Expect("#non-existing").To(b.EachHaveInnerText()) // this will succeed - an empty slice is returned when there is no selector match and `b.EachHaveInnerText() will assert that the slice is empty
 ```
 
+**Two text-assertion recipes worth knowing** (both replace common `b.Run` text-scanning crutches):
+
+- *The ordered collection of an element group's text* - assert the visible text of every match, in document order - is exactly `EachHaveInnerText` with a slice (or `EachHaveTextContent` for the layout-independent variant): `Expect(".step").To(b.EachHaveInnerText("Pick", "Pay", "Done"))`.
+- *Negation - "no element (in this scope) says X"* - is cleanest as a [text locator](#selecting-by-locator) + `ShouldNot(b.Exist())`, rather than a JS scan.  Scope it with `.Within` when you only care about a region:
+
+  ```go
+  Eventually(b.ByTextContains("Draft").Within("#published-list")).ShouldNot(b.Exist())
+  ```
+
 ---
 
 You can assert that an element has a given set of CSS classes using the `HaveClass()` matcher.  You can either pass `HaveClass` a Gomega matcher or a string.  The matcher will receive the entire list of classes associated with the object as a slice of strings.  That means you can do things like:
@@ -1102,6 +1111,21 @@ Eventually(selector).Should(b.HaveAttribute("href")) //the attribute is present
 Eventually(selector).Should(b.HaveAttribute("href", "/about")) //exact value
 Eventually(selector).Should(b.HaveAttribute("href", HaveSuffix("about"))) //matcher
 ```
+
+When you want an attribute value in a Go variable for *control-flow* (rather than to assert on) use the immediate getter `b.GetAttribute(selector, name)` - the attribute sibling of [`b.GetProperty`](#properties).  It returns the raw markup attribute as type `any`, or `nil` when the attribute is absent:
+
+```go
+href := b.GetAttribute("#link", "href") // "/about" - the raw attribute, not the resolved property
+theme := b.GetAttribute("html", "data-theme")
+```
+
+`b.GetAttributeForEach(selector, name)` returns a `[]any` with the attribute for every matching element (`nil` entries where the attribute is absent, an empty slice when nothing matches) - mirroring `b.GetPropertyForEach`:
+
+```go
+Expect(b.GetAttributeForEach(".notice", "data-name")).To(HaveExactElements("henry", "bob", BeNil()))
+```
+
+Both fail the spec if `selector`'s engine errors; like the rest of the immediate getters they read the DOM exactly once, so wrap them in `Eventually` (or use `b.HaveAttribute`) when you need to poll.
 
 `BeChecked()` asserts that a checkbox or radio button is checked (it's sugar for `b.HaveProperty("checked", true)`):
 
@@ -1493,6 +1517,19 @@ Eventually("#login").Should(b.Click())
 
 you don't need a separate `Eventually` poll to wait for the page to load or the element to appear.
 
+> **Driving a *cycling* control to a target state? Don't click inside an `Eventually` body.**  It's tempting to write `Eventually(func(g Gomega) { if state != want { b.Click("#toggle") }; g.Expect(state).To(Equal(want)) })` to push a multi-state toggle (a 3-way theme switch, a sort-direction cycler) into a particular state.  This is a footgun: `Eventually` re-runs its body every polling interval, so it **rapid-fires a click each poll** before the state has settled - bursting extra clicks that sail past your target and can land on unrelated UI mid-rerender.  The body of an `Eventually`/`Consistently` must be **idempotent**; a side effect that fires every poll is a bug.  The correct shape is *click once, then wait for the change before reconsidering*:
+>
+> ```go
+> // click-until-condition: one effect, one wait, repeat
+> for b.GetAttribute("html", "data-theme") != "dark" {
+>     before := b.GetAttribute("html", "data-theme")
+>     b.Click("#theme-toggle")
+>     Eventually(func() any { return b.GetAttribute("html", "data-theme") }).ShouldNot(Equal(before))
+> }
+> ```
+>
+> Each iteration clicks exactly once and then blocks until the control actually advances, so you never burst clicks past your target.
+
 You can also click on every element matching `selector` using:
 
 ```go
@@ -1518,6 +1555,13 @@ Because options are a distinct type from selectors, they work in the **matcher f
 
 ```go
 Eventually("#canvas").Should(b.Click(b.At(30, 40), b.Shift()))
+```
+
+**Clicking away (dismissing popovers/menus).**  To dismiss an open popover, dropdown, or menu the way a user does - by clicking empty space - `b.Click(sel, b.At(x, y))` *is* the blessed idiom: target a large background region (a layout gutter, the `<body>`, a backdrop) and click an offset that lands on the backdrop rather than on any interactive child.  This replaces the `b.Run("...dispatchEvent(new MouseEvent('click'))...")` reach-arounds:
+
+```go
+b.Click("body", b.At(5, 5))      // click the top-left gutter to close an open menu
+Eventually("#menu").ShouldNot(b.BeVisible())
 ```
 
 **A fidelity note.**  A plain `b.Click(sel)` calls `element.click()` - the most faithful path, because it fires the browser's native default actions (form submit, `<label>` association, and the like).  But `element.click()` carries no coordinates and no modifier state, so the moment you add *any* option the fast path switches to dispatching a synthetic `mousedown`/`mouseup`/`click` sequence carrying the real `clientX`/`clientY` and the modifier flags - so an app reading `e.clientX`/`e.shiftKey` (a `<canvas>` painter, a map, a custom slider) sees exactly what you targeted.  That's a deliberate fidelity-for-control trade: if you need a maximally-faithful click, pass no options (or use [realistic mode](#realistic-interactions), which always uses real CDP input and honors the options natively).  `Tap` ignores keyboard modifiers - they don't apply to touch - but honors `b.At`.
@@ -2337,6 +2381,8 @@ There are a couple of gotchas that exist in Chrome that Biloba tries to paper ov
 ## Running Arbitrary Javascript
 
 We covered running JavaScript that's scoped to a particular element using `b.InvokeOn/b.InvokeWith` - but Biloba will also happily allow you to run arbitrary JavaScript on the page for any tab.  This can often be a convenient shortcut to make a more complex assertion in JavaScript, or to make assertions on the state of your web application that may be overly difficult/complex to make simply by interrogating the DOM alone.
+
+> **Before you reach for `b.Run`, check for a first-class matcher.**  `b.Run` is the escape hatch - but the things people reinvent with it usually already exist, and the matcher version polls cleanly under `Eventually` where a raw `b.Run` does not.  The single most-reinvented one is **counting elements**: if you're writing `b.Run("document.querySelectorAll(sel).length", &n)`, you want [`b.HaveCount`](#existence-counting-visibility-and-interactibility) - `Eventually(sel).Should(b.HaveCount(7))` (or `b.HaveCount(BeNumerically(">", 10))`).  Likewise, reach for [`b.GetAttribute`](#contents-and-classes)/[`b.GetProperty`](#properties) instead of `getAttribute`/property reads, [`b.HaveInnerText`/`b.HaveTextContent`](#contents-and-classes) instead of reading `innerText`/`textContent`, and a [text locator](#selecting-by-locator) + `ShouldNot(b.Exist())` instead of scanning text in JS.  Keep `b.Run` for genuinely app-specific state.
 
 To run JavaScript:
 

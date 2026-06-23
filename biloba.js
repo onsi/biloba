@@ -638,6 +638,7 @@ if (!window["_biloba"]) {
         return r()
     })
     b.getAttribute = one((n, a) => rRes(n.getAttribute(a)))
+    b.getAttributeForEach = each((ns, a) => rRes(ns.map(n => n.getAttribute(a))))
     b.hasAttribute = one((n, a) => r(n.hasAttribute(a)))
     b.isFocused = one(n => r(n === document.activeElement, "DOM element is not focused"))
     b.getComputedStyle = one((n, p) => rRes(window.getComputedStyle(n)[p]))

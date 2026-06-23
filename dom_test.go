@@ -923,6 +923,28 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 	})
 
+	Describe("GetAttribute", func() {
+		It("returns the raw attribute defined on the element", func() {
+			Ω(b.GetAttribute("#link", "href")).Should(Equal("/about"))
+			Ω(b.GetAttribute("#link", "data-role")).Should(Equal("nav"))
+		})
+
+		It("returns nil when the attribute is not present", func() {
+			Ω(b.GetAttribute("#link", "data-missing")).Should(BeNil())
+		})
+
+		It("reads the raw attribute, not the resolved property", func() {
+			//the href property is resolved to an absolute URL; the attribute is the raw value
+			Ω(b.GetAttribute("#link", "href")).Should(Equal("/about"))
+			Ω(b.GetProperty("#link", "href")).Should(HaveSuffix("/about"))
+		})
+
+		It("returns an error when the element does not exist", func() {
+			b.GetAttribute("#non-existing", "href")
+			ExpectFailures("Failed to get attribute \"href\":\ncould not find DOM element matching selector: #non-existing")
+		})
+	})
+
 	Describe("HaveProperty", func() {
 		It("checks property existence when not passed a second argument", func() {
 			Ω(".notice").Should(b.HaveProperty("count"))
@@ -1010,6 +1032,26 @@ var _ = Describe("DOM manipulators and matchers", func() {
 
 		It("returns nil values for elements that are found but don't have the property", func() {
 			values := b.GetPropertyForEach("input[type='radio'][name='appliances']", "href")
+			Expect(values).To(HaveExactElements(BeNil(), BeNil(), BeNil()))
+		})
+	})
+
+	Describe("GetAttributeForEach", func() {
+		It("fetches the requested attribute from all elements matching the selector", func() {
+			values := b.GetAttributeForEach(".notice", "magic")
+			Expect(values).To(HaveExactElements("on", "on", "off"))
+
+			values = b.GetAttributeForEach(".notice", "data-name")
+			Expect(values).To(HaveExactElements("henry", "bob", BeNil()))
+		})
+
+		It("returns an empty array when no elements are found", func() {
+			values := b.GetAttributeForEach("#non-existing", "href")
+			Expect(values).To(BeEmpty())
+		})
+
+		It("returns nil values for elements that are found but don't have the attribute", func() {
+			values := b.GetAttributeForEach("input[type='radio'][name='appliances']", "data-missing")
 			Expect(values).To(HaveExactElements(BeNil(), BeNil(), BeNil()))
 		})
 	})
