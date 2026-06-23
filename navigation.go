@@ -2,14 +2,24 @@ package biloba
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 	"github.com/onsi/gomega/gcustom"
 	"github.com/onsi/gomega/types"
 )
+
+// navigationTimeout bounds a single navigation so a wedged target can't hang the whole suite.  Real
+// Chrome occasionally never acknowledges chromedp.Navigate under parallel/CI load, leaving the call
+// blocked on b.Context (which has no deadline) until the entire Ginkgo suite timeout elapses - one
+// stuck navigation in a BeforeEach then reads as a multi-minute suite failure.  The bound is generous
+// enough that a healthy navigation (even a slow real-network page load) never trips it.  It is a var
+// (not a const) only so navigation_test.go can shrink it via SetNavigationTimeoutForTest.
+var navigationTimeout = 30 * time.Second
 
 /*
 Navigate() causes this tab to navigate to the provided URL.  The spec fails if the response does not have status code 200
@@ -42,8 +52,15 @@ func (b *Biloba) NavigateWithStatus(url string, status int) *Biloba {
 		}
 	})
 
-	err := chromedp.Run(b.Context, chromedp.Navigate(url))
+	nctx, ncancel := context.WithTimeout(b.Context, navigationTimeout)
+	defer ncancel()
+	err := chromedp.Run(nctx, chromedp.Navigate(url))
 	isHTTPError := err != nil && strings.Contains(err.Error(), "ERR_HTTP_RESPONSE_CODE_FAILURE")
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		b.gt.Fatalf("timed out after %s navigating to %s: the navigation never completed (Chrome may have wedged)", navigationTimeout, url)
+		return b
+	}
 
 	if err != nil && !isHTTPError {
 		b.gt.Fatalf("failed to navigate to %s: %s", url, err.Error())

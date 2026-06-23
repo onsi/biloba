@@ -1,5 +1,7 @@
 package biloba
 
+import "time"
+
 // CapOutlineForTest exposes capOutlineWithCap so that outline_test.go can
 // exercise the truncation path with a small byte cap.
 func CapOutlineForTest(s string, maxBytes int) string {
@@ -78,6 +80,14 @@ func SetAutomationDetectedForTest(fn func() bool) func() {
 	prev := automationDetected
 	automationDetected = fn
 	return func() { automationDetected = prev }
+}
+
+// SetNavigationTimeoutForTest overrides navigationTimeout so navigation_test.go can exercise the
+// wedged-navigation path without waiting the full production bound.  Returns a restore func.
+func SetNavigationTimeoutForTest(d time.Duration) func() {
+	prev := navigationTimeout
+	navigationTimeout = d
+	return func() { navigationTimeout = prev }
 }
 
 // SafeAllTabConsoleErrorsForTest exposes safeAllTabConsoleErrors for logging_test.go - the captured

@@ -3,7 +3,10 @@ package biloba_test
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"time"
 
+	"github.com/onsi/biloba"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -31,6 +34,28 @@ var _ = Describe("Navigation", func() {
 
 		It("succeeds when navigating to about:blank", func() {
 			b.Navigate("about:blank")
+		})
+
+		It("fails fast when a navigation wedges instead of hanging the whole suite", func() {
+			// A server that accepts the connection but never responds leaves chromedp.Navigate blocked on
+			// the load event - the exact wedge that used to consume the entire Ginkgo suite timeout. With a
+			// bounded navigation it should instead fail promptly with a legible message.
+			block := make(chan struct{})
+			hang := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				select {
+				case <-block:
+				case <-r.Context().Done():
+				}
+			}))
+			DeferCleanup(func() {
+				close(block)
+				hang.Close()
+			})
+
+			defer biloba.SetNavigationTimeoutForTest(500 * time.Millisecond)()
+
+			b.Navigate(hang.URL)
+			ExpectFailures(ContainSubstring(fmt.Sprintf("timed out after 500ms navigating to %s: the navigation never completed", hang.URL)))
 		})
 	})
 
