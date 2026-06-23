@@ -1,3 +1,7 @@
+## 0.7.1
+
+Update plugin skills to reflect most recent changes and feedback.
+
 ## 0.7.0
 
 ### Features
