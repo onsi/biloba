@@ -1,3 +1,14 @@
+## 0.7.0
+
+### Features
+
+- Add `b.GetAttribute(selector, name)` and `b.GetAttributeForEach(selector, name)` immediate getters - the attribute siblings of `b.GetProperty`/`b.GetPropertyForEach`, for reading raw HTML attributes into a Go variable.
+
+### Fixes
+
+- Harden tab and connection setup against transient failures under heavy parallel load: `NewTab` retries (and fails cleanly instead of returning a nil tab that panics on first use), tab registration retries the attach probe without closing a healthy spawned tab mid-recovery, and the idempotent connect-time setup round-trips (viewport/focus emulation, target info) retry with jittered backoff.
+- Give full-page screenshot capture a generous (5s) per-tab timeout instead of a tight 1s, so a slow capture under load no longer spuriously reports "Timed out attempting to fetch screenshot".
+
 ## 0.6.0
 
 ### Features
