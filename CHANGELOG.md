@@ -1,3 +1,14 @@
+## 0.7.3
+
+### Features
+
+- `ScrollWheel` is now a dual method: `Eventually(sel).Should(b.ScrollWheel(dx, dy))` polls until the element is present before scrolling (the immediate `b.ScrollWheel(sel, dx, dy)` form is unchanged).
+- `SetUpload` is now a dual method: `Eventually(sel).Should(b.SetUpload(path))` polls until the file input is present before attaching files (the immediate `b.SetUpload(sel, ...paths)` form is unchanged). In the matcher form, multiple files are passed as a single `[]string`.
+
+### Fixes
+
+- Skills/docs: corrected the flaky-spec guidance on the matcher form. `Eventually(sel).Should(b.Click())` (and the other dual verbs) dispatches exactly one atomic action on the first success and then stops — it does **not** re-fire on later polls and is safe on toggles. The matcher form is now documented as the default for interactions, with the immediate form framed as the gated exception. Added explicit gate-then-act guidance for the remaining non-dual interactions (`SendKeys`, `ClickEach`, `SetPropertyForEach`) and added the (already-dual) `Blur` to the API reference.
+
 ## 0.7.2
 
 ### Features
