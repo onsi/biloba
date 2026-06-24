@@ -539,6 +539,8 @@ func (b *Biloba) SetProperty(args ...any) types.GomegaMatcher {
 /*
 SetPropertyForEach() sets the specified property to the specified value on all DOM elements matching selector. It does nothing if no elements match.
 
+Like the rest of the *Each family it acts immediately and has no matcher form - it does not poll.  Gate it on the matches being present first (e.g. Eventually(selector).Should(b.HaveCount(n))) when they appear asynchronously.
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#properties to learn more about working with properties
 */
@@ -916,6 +918,8 @@ ClickEach() clicks on every DOM element matching selector that is visible and en
 
 If no elements match, nothing happens.
 
+Like the rest of the *Each family it acts immediately and has no matcher form - it does not poll.  Gate it on the matches being present first (e.g. Eventually(selector).Should(b.HaveCount(n))) when they appear asynchronously.
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
 func (b *Biloba) ClickEach(selector any) {
@@ -1063,22 +1067,54 @@ ScrollWheel() scrolls the mouse wheel over the first element matching selector.
 
 it immediately dispatches a wheel event at the element's center and scrolls the nearest scrollable ancestor (realistic mode dispatches a real CDP wheel event that scrolls via genuine trusted input).  It fails if the element is not found or is hidden.
 
-Unlike Click, ScrollWheel has no matcher variant.
+When invoked with just the deltas (no selector), tab.ScrollWheel() returns a Gomega matcher so you can poll until an element is present to scroll:
+
+	Eventually("#scroll-box").Should(tab.ScrollWheel(0, 200))
 
 Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
 */
-func (b *Biloba) ScrollWheel(selector any, deltaX, deltaY float64) {
+func (b *Biloba) ScrollWheel(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
+	switch len(args) {
+	case 3:
+		dx, okX := asFloat64(args[1])
+		dy, okY := asFloat64(args[2])
+		if !okX || !okY {
+			b.gt.Fatalf("ScrollWheel requires numeric deltaX and deltaY")
+			return nil
+		}
+		success, err := b.performScrollWheel(args[0], dx, dy)
+		if err != nil {
+			b.gt.Fatalf("Failed to scroll wheel:\n%s", err.Error())
+		} else if !success {
+			b.gt.Fatalf("Failed to scroll wheel: element is not visible")
+		}
+		return nil
+	case 2:
+		dx, okX := asFloat64(args[0])
+		dy, okY := asFloat64(args[1])
+		if !okX || !okY {
+			b.gt.Fatalf("ScrollWheel requires numeric deltaX and deltaY")
+			return nil
+		}
+		return gcustom.MakeMatcher(func(selector any) (bool, error) {
+			return b.performScrollWheel(selector, dx, dy)
+		}).WithMessage("be scrollable with the mouse wheel")
+	default:
+		b.gt.Fatalf("ScrollWheel requires a deltaX and deltaY (preceded by a selector when used immediately)")
+		return nil
+	}
+}
+
+// performScrollWheel is the fast/realistic fork shared by ScrollWheel's immediate and matcher forms.
+func (b *Biloba) performScrollWheel(selector any, deltaX, deltaY float64) (bool, error) {
 	if b.realistic {
 		if err := b.realisticScrollWheel(selector, deltaX, deltaY); err != nil {
-			b.gt.Fatalf("Failed to scroll wheel:\n%s", err.Error())
+			return false, err
 		}
-		return
+		return true, nil
 	}
-	r := b.runBilobaHandler("scrollWheel", selector, deltaX, deltaY)
-	if r.Error() != nil {
-		b.gt.Fatalf("Failed to scroll wheel:\n%s", r.Error())
-	}
+	return b.runBilobaHandler("scrollWheel", selector, deltaX, deltaY).MatcherResult()
 }
 
 /*

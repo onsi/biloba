@@ -149,6 +149,39 @@ func toFloat64(input any) float64 {
 	}
 	return input.(float64)
 }
+
+// asFloat64 coerces a numeric value supplied through a variadic any argument (where untyped int
+// literals arrive as int, not float64) to a float64, reporting whether the value was numeric at all.
+func asFloat64(input any) (float64, bool) {
+	switch n := input.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int8:
+		return float64(n), true
+	case int16:
+		return float64(n), true
+	case int32:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case uint:
+		return float64(n), true
+	case uint8:
+		return float64(n), true
+	case uint16:
+		return float64(n), true
+	case uint32:
+		return float64(n), true
+	case uint64:
+		return float64(n), true
+	default:
+		return 0, false
+	}
+}
 func toAnySlice(input any) []any {
 	if input == nil {
 		return []any{}

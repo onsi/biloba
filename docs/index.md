@@ -1609,7 +1609,13 @@ b.ScrollWheel("#scroll-box", 50, 0)      // scrolls right 50px
 
 Positive `deltaY` scrolls down and positive `deltaX` scrolls right (the standard wheel convention).  The fast version dispatches a synthetic `wheel` event at the element's center (so the app's `wheel` handlers fire) and then - because synthetic wheel events don't actually move the page - manually scrolls the nearest scrollable ancestor, *unless* a handler called `preventDefault()` (mirroring how a real browser suppresses scrolling).  In [realistic mode](#realistic-interactions) it scrolls the element into view and dispatches a real CDP wheel event, which is genuine trusted input and so scrolls the page itself.
 
-Like `DragTo`, `ScrollWheel` always acts immediately and has **no matcher variant**; it fails the spec if the element can't be found (or, in realistic mode, isn't actionable).
+`ScrollWheel` is a dual method: when you drop the selector it returns a matcher you can poll, so you can fold readiness-waiting into the scroll:
+
+```go
+Eventually("#scroll-box").Should(b.ScrollWheel(0, 200))
+```
+
+It fails the spec if the element can't be found (or, in realistic mode, isn't actionable).
 
 #### Middle-Clicking
 
@@ -1794,6 +1800,13 @@ Eventually("#preview").Should(b.HaveAttribute("src", ContainSubstring("blob:")))
 ```
 
 `SetUpload` fails the spec if no element matches the selector.  The paths are resolved by the Chrome process, so they must exist on the machine running Chrome.
+
+`SetUpload` is a dual method: drop the selector and it returns a matcher you can poll, so you can wait for the file input to mount before attaching files.  In the matcher form a single file is just a path; multiple files are passed as a `[]string` (bare variadic paths would be indistinguishable from the immediate selector+paths form):
+
+```go
+Eventually("#avatar").Should(b.SetUpload(avatarPath))
+Eventually("#attachments").Should(b.SetUpload([]string{aPath, bPath}))
+```
 
 ### Keyboard Input
 

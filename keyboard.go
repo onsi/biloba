@@ -258,6 +258,11 @@ Hold keyboard modifiers ([Biloba.Shift], [Biloba.Ctrl], [Biloba.Alt], [Biloba.Me
 
 SendKeys fails the spec if a selector is provided but no matching element is found, or if the element is hidden or disabled.
 
+SendKeys has no matcher form (the keys-only form is reserved for sending to the focused element, so there is no free shape for it to return a matcher).  Because it acts immediately and never polls, gate it on a readiness anchor when the target appears asynchronously:
+
+	Eventually("input.search").Should(b.BeEnabled())   // wait until it's really there & actionable
+	b.SendKeys("input.search", biloba.Keys.Enter)      // then send once
+
 Read https://onsi.github.io/biloba/#keyboard-input to learn more about keyboard input
 */
 func (b *Biloba) SendKeys(args ...any) {

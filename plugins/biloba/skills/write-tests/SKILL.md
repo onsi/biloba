@@ -18,22 +18,22 @@ Assumes Biloba is already wired into the suite (`biloba:setup`) and you know the
 
 Most DOM methods have **two forms keyed on argument count**:
 
-- **Fully-applied → acts immediately, fails the spec on error.**
+- **Under-applied → returns a Gomega matcher that *you* poll. This is the default — use it for essentially every interaction.** Biloba never polls itself; `Eventually` does.
+  ```go
+  Eventually("#go").Should(b.Click())            // poll until clickable, click once, stop
+  Eventually("#name").Should(b.SetValue("Jane")) // poll until settable, set once
+  Eventually("#title").Should(b.HaveInnerText("Welcome"))
+  ```
+- **Fully-applied → acts immediately, fails the spec on error.** Acts *now*, never polls.
   ```go
   b.Click("#go")
   b.SetValue("#name", "Jane")
-  text := b.InnerText("#title")
-  ```
-- **Under-applied → returns a Gomega matcher that *you* poll.** Biloba never polls itself.
-  ```go
-  Eventually("#go").Should(b.Click())            // poll until clickable, then click once
-  Eventually("#name").Should(b.SetValue("Jane")) // poll until settable
-  Eventually("#title").Should(b.HaveInnerText("Welcome"))
+  text := b.InnerText("#title")   // reads, of course, are always immediate
   ```
 
-The matcher form lets you fold readiness-waiting into the action — no separate "is it there yet" poll. `b.Click("#login")` right after `b.Navigate` may race the page load; `Eventually("#login").Should(b.Click())` won't.
+**Default to the matcher form for every interaction.** `Eventually(sel).Should(b.Click())` folds readiness-waiting into the action: it **polls until the element exists and is clickable (visible + enabled), dispatches exactly one atomic click on the first success, then succeeds and stops.** It does *not* re-click on later polls, so it is **safe even on a toggle** — there is no oscillation, because the successful dispatch is what ends the poll. The matcher form has no downside; the immediate form does.
 
-**Immediate forms never poll — and they fail *later*, not where they raced.** This is the single most common way a Biloba spec goes flaky. A fully-applied `b.Click(sel)`/`b.Tap(sel)`/`b.SetValue(...)`/`b.SelectText(...)` acts *now*; fired a frame too early (right after a re-render, a list load, an injected node) it no-ops or hits a stale element — and the spec **does not fail at the interaction**. It fails downstream, at the `Eventually(...)` that depended on it, with nothing pointing back. Gate every immediate interaction on a readiness anchor (`Eventually(sel).Should(b.BeClickable())`) or use the matcher form. Don't put a *toggle* action inside `Eventually` (`Eventually(sel).Should(b.Tap())` re-taps each poll and oscillates) — gate, act once, then poll the end state. Full catalog of flake smells + fixes: `biloba:flaky-specs`.
+**The immediate form is a silent foot-gun — reach for it only when you've *just* proven readiness on the line above.** A fully-applied `b.Click(sel)`/`b.Tap(sel)`/`b.SetValue(...)`/`b.SelectText(...)` acts *now*; fired a frame too early (right after a re-render, a list load, an injected node) it no-ops or hits a stale element — and the spec **does not fail at the interaction**. It fails downstream, at the `Eventually(...)` that depended on it, with nothing pointing back. So even when you go immediate, gate first (`Eventually(sel).Should(b.BeClickable())` then `b.Click(sel)`) — and when in doubt, the matcher form is strictly safer. Full catalog of flake smells + fixes: `biloba:flaky-specs`.
 
 **First-vs-all naming.** A bare method acts on the **first** match; the `ForEach`/`Each` sibling acts on **all** matches (returning/asserting slices, empty when nothing matches): `InnerText` vs `InnerTextForEach`/`EachHaveInnerText`; `GetProperty` vs `GetPropertyForEach`/`EachHaveProperty`; `Click` vs `ClickEach`. The name tells you which.
 
@@ -49,7 +49,7 @@ var _ = Describe("the search page", func() {
 	})
 
 	It("finds matches", func() {
-		b.SetValue("#q", "biloba")
+		Eventually("#q").Should(b.SetValue("biloba"))                    // matcher form — the default
 		Eventually(b.ByRole("button").WithName("Search")).Should(b.Click())
 		Eventually(".result").Should(b.HaveCount(BeNumerically(">", 0)))
 	})
@@ -119,13 +119,19 @@ b.DblClick(sel); b.RightClick(sel); b.MiddleClick(sel)       // dual
 b.Click(sel, b.At(x, y))                                     // click at top-left-origin offset; canvas/map/slider
 b.Click(sel, b.Shift(), b.Meta())                            // modifiers held; composes with b.At(...)
 b.DragTo(source, target)                                     // pointer-based drag; dual — Eventually(src).Should(b.DragTo(tgt))
-b.ScrollWheel(sel, deltaX, deltaY)                           // wheel/scroll, +Y down +X right (immediate-only)
+b.ScrollWheel(sel, deltaX, deltaY)                           // wheel/scroll, +Y down +X right; dual — Eventually(sel).Should(b.ScrollWheel(dx, dy))
 b.Tap(sel)                                                   // touch tap (dual); takes b.At(...), ignores modifiers
 b.Type(sel, "abc"); b.SendKeys(biloba.Keys.Enter)            // real keystrokes (SetValue does NOT type)
 b.SendKeys("textarea", biloba.Keys.Enter, b.Shift())         // Shift-Enter — modifiers work on the keyboard too
 ```
 
-`b.At(x,y)` / `b.Shift()` / `b.Ctrl()` / `b.Alt()` / `b.Meta()` (⌘/Win) are **pointer options** accepted by `Click`/`DblClick`/`RightClick`/`MiddleClick`/`Tap` — after the selector (immediate) or in place of it (matcher: `Eventually(sel).Should(b.Click(b.At(x,y), b.Shift()))`). In fast mode any option switches a click off native `el.click()` to a synthetic event carrying the coords/flags. `ScrollWheel` is immediate-only. The **modifiers double as keyboard modifiers**: pass `b.Shift()`/`b.Ctrl()`/`b.Alt()`/`b.Meta()` to `b.Type`/`b.SendKeys` (in any position) for Shift-Enter, ⌘-A, etc.
+**A few interactions have no matcher form — gate them by hand.** `SendKeys` and the `*Each` verbs (`ClickEach`, `SetPropertyForEach`) act immediately with nothing to fold readiness into (`SendKeys`'s keys-only form is reserved for the focused element). When their target appears asynchronously, put an explicit gate on the line above — `Eventually(sel).Should(b.BeEnabled() /* or b.Exist()/b.BeVisible() */)` then act:
+
+```go
+Eventually("input.search").Should(b.BeEnabled());          b.SendKeys("input.search", biloba.Keys.Enter)
+```
+
+`b.At(x,y)` / `b.Shift()` / `b.Ctrl()` / `b.Alt()` / `b.Meta()` (⌘/Win) are **pointer options** accepted by `Click`/`DblClick`/`RightClick`/`MiddleClick`/`Tap` — after the selector (immediate) or in place of it (matcher: `Eventually(sel).Should(b.Click(b.At(x,y), b.Shift()))`). In fast mode any option switches a click off native `el.click()` to a synthetic event carrying the coords/flags. The **modifiers double as keyboard modifiers**: pass `b.Shift()`/`b.Ctrl()`/`b.Alt()`/`b.Meta()` to `b.Type`/`b.SendKeys` (in any position) for Shift-Enter, ⌘-A, etc.
 
 **Fast interactions act in place — no scroll, no focus move.** A fast `b.Click`/`b.Tap` is `element.click()` after a visibility check; it does **not** `scrollIntoView` and does **not** move focus, so it never shifts the page out from under a scroll/layout assertion. Scroll-into-view comes only from `b.Realistic()` (deliberately) and from **focus-bearing ops** — `b.Focus`/`b.SetValue`/`b.Type`/`b.SendKeys` — because the browser's `.focus()` scrolls its target into view. If a scroll position moves around a fast click, the cause is app-side, not Biloba.
 

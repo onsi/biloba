@@ -66,7 +66,7 @@ Three pathways, all flow through every method/matcher. **CSS is the default** (t
 
 ## Properties  (`.` paths like `dataset.name`; JS types preserved — numbers are `float64`)
 - `b.GetProperty(selector, name)` → any (first) / `b.SetProperty(selector, name, value)` (dual) / `b.HaveProperty(name[, value|matcher])` (matcher).
-- `b.GetPropertyForEach(selector, name)` → []any / `b.SetPropertyForEach(selector, name, value)` (no matcher) / `b.EachHaveProperty(name[, ...])` (matcher).
+- `b.GetPropertyForEach(selector, name)` → []any / `b.SetPropertyForEach(selector, name, value)` (no matcher; gate on the matches being present first) / `b.EachHaveProperty(name[, ...])` (matcher).
 - `b.GetProperties(selector, ...names)` → `Properties` (first); getters `GetString/GetInt/GetFloat64/GetBool/GetStringSlice`.
 - `b.GetPropertiesForEach(selector, ...names)` → `SliceOfProperties` (each); same getters return slices; `.Get(key)`, `.Find(key, val|matcher)`, `.Filter(key, val|matcher)`.
 
@@ -82,9 +82,9 @@ Three pathways, all flow through every method/matcher. **CSS is the default** (t
 - `b.Tap(selector)` (dual) — synthetic touch/pointer events + `click` (realistic: real CDP `touchStart`/`touchEnd`); accepts `b.At(...)`, ignores modifiers.
 - **Pointer options** — `b.At(x,y)` (offset from top-left, à la canvas/map/slider), `b.Shift()`/`b.Ctrl()`/`b.Alt()`/`b.Meta()` (⌘/Win) — accepted by `Click`/`DblClick`/`RightClick`/`MiddleClick`/`Tap`, after the selector or in place of it (matcher form). They compose: `b.Click(sel, b.At(30,40), b.Shift())`. In fast mode any option switches a click off native `el.click()` to a synthetic event carrying coords+flags; realistic uses real CDP input natively.
 - `b.DragTo(source, target)` (dual) — pointer-based drag (`pointerdown`/`move`/`up`); drives @dnd-kit-style DnD, not native HTML5 `draggable`. Matcher subject is the source: `Eventually(src).Should(b.DragTo(tgt))`.
-- `b.ScrollWheel(selector, deltaX, deltaY)` — `wheel` event then scrolls nearest scrollable ancestor (realistic: real CDP wheel); +deltaY=down, +deltaX=right (no matcher).
-- `b.ClickEach(selector)` — click all visible+enabled matches (no matcher).
-- `b.Focus(selector)` (dual) / `b.Hover(selector)` (dual; fires pointer/mouse events, not CSS `:hover`) / `b.ScrollIntoView(selector)` (dual).
+- `b.ScrollWheel(selector, deltaX, deltaY)` (dual; matcher form `b.ScrollWheel(deltaX, deltaY)`) — `wheel` event then scrolls nearest scrollable ancestor (realistic: real CDP wheel); +deltaY=down, +deltaX=right.
+- `b.ClickEach(selector)` — click all visible+enabled matches (no matcher; gate on the matches being present first).
+- `b.Focus(selector)` (dual) / `b.Blur(selector)` (dual) / `b.Hover(selector)` (dual; fires pointer/mouse events, not CSS `:hover`) / `b.ScrollIntoView(selector)` (dual).
 - `b.SelectText(selector)` (dual) — select all of the element's text as a real `window.getSelection()` range, dispatching `mouseup` (drives highlight→menu/annotation UIs).
 - `b.SelectRange(selector, start, end)` (dual; matcher form `b.SelectRange(start, end)`) — select chars `[start, end)` across the element's text nodes; same range+mouseup. Read back with `Eventually("window.getSelection().toString()").Should(b.EvaluateTo(…))`.
 - `b.ClearSelection()` — clear any active selection (no matcher).
@@ -95,12 +95,12 @@ Three pathways, all flow through every method/matcher. **CSS is the default** (t
 
 ## Keyboard  (real key events, via chromedp)
 - `b.Type(selector, text)` (dual) — focus, then genuine keystrokes; **appends**. Focusing scrolls the element into view.
-- `b.SendKeys([selector,] ...parts)` — send text + named keys; selector optional (else focused element).
+- `b.SendKeys([selector,] ...parts)` — send text + named keys; selector optional (else focused element). No matcher form (the keys-only shape is reserved for the focused element); gate on readiness first (`Eventually(sel).Should(b.BeEnabled())`) when the target appears asynchronously.
 - `biloba.Keys.{Enter,Tab,Escape,Backspace,Delete,Arrow{Up,Down,Left,Right},Home,End,PageUp,PageDown}`.
 - **Modifiers** `b.Shift()`/`b.Ctrl()`/`b.Alt()`/`b.Meta()` work here too (same values as the pointer modifiers): pass them in any position to `Type`/`SendKeys` for Shift-Enter, ⌘-A, etc. — `b.SendKeys("textarea", biloba.Keys.Enter, b.Shift())`.
 
 ## Uploads
-- `b.SetUpload(selector, ...paths)` — set `<input type=file>` files via CDP (paths must exist on Chrome's machine); fires `change`.
+- `b.SetUpload(selector, ...paths)` (dual; matcher form `b.SetUpload(path)` or, for multiple files, `b.SetUpload([]string{...})`) — set `<input type=file>` files via CDP (paths must exist on Chrome's machine); fires `change`. In the matcher form multiple files must be a single `[]string` (bare variadic paths would be ambiguous with the immediate selector+paths form).
 
 ## Run JS on selected elements
 - `b.InvokeOn(selector, method, ...args)` → any (first) — `el[method](...args)`.

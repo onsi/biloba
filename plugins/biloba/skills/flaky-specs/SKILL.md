@@ -56,25 +56,30 @@ rg ', &(\w+)\)' -n          # every "…, &x)" — incl. the orphan close-line o
 
 `b.Click(sel)`, `b.Tap(sel)`, `b.SelectText(sel)`, `b.SetValue(sel, …)`, a raw `b.Run(…click())` — every **immediate** (fully-applied) form acts *now* and **does not poll** (Biloba never polls itself). Fire one a frame too early — right after a re-render, a list load, a hero/card injection — and it no-ops or hits a stale element. The cruel part: **the spec doesn't fail at the interaction.** It fails later, at the assertion that depended on it — a downstream `Eventually(...class…)` that times out, or a `null is not an object` from the app's own handler — with nothing pointing back at the racing interaction.
 
-**Fix: gate the interaction on a readiness anchor, then act once, then assert the outcome.**
+**The fix is the matcher form — and it should be your default for every interaction.** `Eventually(sel).Should(b.Click())` **polls until the element exists and is clickable (visible + enabled), dispatches exactly one atomic click on the first success, then succeeds and stops.** It does *not* re-click on later polls — the successful dispatch *is* the matcher's success condition, so `Eventually` stops the instant the click lands. That makes it the safe default everywhere — including on a **toggle**: it never oscillates, because it fires once and the poll ends.
 
 ```go
-Eventually(sel).Should(b.BeClickable())   // 1. wait until it's really there & actionable
-b.Click(sel)                              // 2. act once
-Eventually(out).Should(b.HaveClass("open")) // 3. assert the observable outcome
+Eventually(sel).Should(b.Click())           // poll until clickable, click once, stop — then…
+Eventually(out).Should(b.HaveClass("open")) // …assert the observable outcome
 ```
 
-The matcher form folds steps 1–2 together — `Eventually(sel).Should(b.Click())` polls until clickable, *then clicks once*. Prefer it for a plain action.
+This generalizes across the whole dual vocabulary — `Click/DblClick/RightClick/MiddleClick`, `Tap`, `SetValue`, `SelectText`, `SelectRange`, `Type`, `Focus`, `Blur`, `Hover`, `ScrollIntoView`, `ScrollWheel`, `SetUpload`, `DragTo`. Selector-only verbs become `Eventually(sel).Should(b.Verb())`; verbs with trailing args move the selector into `Eventually` and keep the rest in the matcher (`b.SetValue(sel, v)` → `Eventually(sel).Should(b.SetValue(v))`; `b.ScrollWheel(sel, dx, dy)` → `Eventually(sel).Should(b.ScrollWheel(dx, dy))`; `b.SetUpload(sel, path)` → `Eventually(sel).Should(b.SetUpload(path))`, with multiple files passed as a `[]string`).
 
-**Toggles need care — don't put a toggle action inside `Eventually`.** `Eventually(sel).Should(b.Tap())` re-taps every poll, so against a *toggle* it oscillates (open/close/open) and "passes" or "fails" by luck. Drive a toggle to a **target state idempotently** instead: gate, tap once, then poll the end state —
+**Reach for the immediate `b.Click(sel)` only when you've *just* proven readiness on the line above** — and even then the matcher form is never wrong, so when in doubt use it. If you do go immediate, gate first:
 
 ```go
-Eventually(sel).Should(b.Exist())
-b.Tap(sel)                                  // single toggle
-Eventually(sel).Should(b.HaveClass("collapsed"))
+Eventually(sel).Should(b.BeClickable())     // prove it's there & actionable…
+b.Click(sel)                                // …then act once
 ```
 
-— or, when a transient re-render can swallow the tap, do an atomic "tap only if not already in the target state" in one `b.Run` eval so the check and the act can't be split by a round-trip.
+(When does the action genuinely re-fire? Only if you wrap it in `Consistently` instead of `Eventually`, or `.And()` it with a condition that never settles so the surrounding poll never terminates. Neither is the normal form — `Eventually(sel).Should(b.Click())` is single-shot and safe.)
+
+**A few interactions have no matcher form — gate them by hand.** `SendKeys` (its keys-only shape is reserved for the focused element) and the `*Each` verbs (`ClickEach`, `SetPropertyForEach`) act immediately with no matcher to fold readiness into, so they carry the same race. Put an explicit readiness gate on the line above:
+
+```go
+Eventually("input.search").Should(b.BeEnabled())   // gate…
+b.SendKeys("input.search", biloba.Keys.Enter)      // …then send once
+```
 
 ## Smell 3 — optimistic UI + server reconciliation (the DOM lies)
 

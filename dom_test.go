@@ -1351,6 +1351,18 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			b.ScrollWheel("#non-existing", 0, 200)
 			ExpectFailures("Failed to scroll wheel:\ncould not find DOM element matching selector: #non-existing")
 		})
+
+		It("returns a matcher when under-applied, polling until the element is present", func() {
+			Ω(b.GetProperty("#scroll-box", "scrollTop")).Should(BeEquivalentTo(0))
+			Eventually("#scroll-box").Should(b.ScrollWheel(0, 200))
+			Ω("#wheel-result").Should(b.HaveInnerText("wheeled"))
+			Ω(b.GetProperty("#scroll-box", "scrollTop")).Should(BeEquivalentTo(200))
+		})
+
+		It("fails the matcher when the deltas are not numeric", func() {
+			b.ScrollWheel("not-a-delta", "nope")
+			ExpectFailures("ScrollWheel requires numeric deltaX and deltaY")
+		})
 	})
 
 	Describe("MiddleClick", func() {

@@ -83,5 +83,23 @@ var _ = Describe("First-class interactions", func() {
 			b.SetUpload("#non-existing", "/tmp/whatever.txt")
 			ExpectFailures(ContainSubstring("could not find DOM element matching selector: #non-existing"))
 		})
+
+		It("returns a matcher when under-applied, polling until the input is present", func() {
+			path, err := filepath.Abs("./fixtures/upload-sample.txt")
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually("#file").Should(b.SetUpload(path))
+			Eventually("#filenames").Should(b.HaveInnerText("upload-sample.txt"))
+			Expect(b.GetProperty("#file", "files.length")).To(Equal(1.0))
+		})
+
+		It("attaches multiple files in the matcher form when given a []string", func() {
+			a, _ := filepath.Abs("./fixtures/upload-sample.txt")
+			c, _ := filepath.Abs("./fixtures/upload-other.txt")
+
+			Eventually("#files").Should(b.SetUpload([]string{a, c}))
+			Eventually("#multi-filenames").Should(b.HaveInnerText(ContainSubstring("upload-sample.txt")))
+			Expect("#multi-filenames").To(b.HaveInnerText(ContainSubstring("upload-other.txt")))
+		})
 	})
 })
