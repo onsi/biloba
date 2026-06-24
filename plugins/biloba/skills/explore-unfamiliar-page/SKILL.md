@@ -62,7 +62,7 @@ var _ = Describe("<feature>", func() {
 	})
 
 	It("<does the obvious thing>", func() {
-		// b.SetValue(b.ByLabel("Search"), "biloba")
+		// Eventually(b.ByLabel("Search")).Should(b.SetValue("biloba"))      // matcher form — the default
 		// Eventually(b.ByRole("button").WithName("Search")).Should(b.Click())
 		// Eventually(".result").Should(b.HaveCount(BeNumerically(">", 0)))
 	})
@@ -72,7 +72,7 @@ var _ = Describe("<feature>", func() {
 A *good* draft:
 
 - **Readiness anchor** that's stable and meaningful — a heading or key container present once the page is interactive.
-- **CSS targeting stable hooks** (`b.Click("#submit")`, `b.Click("[data-testid=submit]")`) as the default; reach for a **semantic locator** (`b.Click(b.ByRole("button").WithName("Submit"))`) to assert a11y or when the visible label is the natural identifier. Avoid brittle `nth-child`/styling-class paths; XPath only for axis/ordinal structure.
+- **CSS targeting stable hooks** (`#submit`, `[data-testid=submit]`) as the default; reach for a **semantic locator** (`b.ByRole("button").WithName("Submit")`) to assert a11y or when the visible label is the natural identifier. Avoid brittle `nth-child`/styling-class paths; XPath only for axis/ordinal structure. (Drive interactions through the matcher form — `Eventually(sel).Should(b.Click())` — per `biloba:write-tests`.)
 - **Assert observable outcomes**: visible text, counts, URL/title, network effects — not implementation details.
 - **Leave `// TODO` markers** wherever you're guessing — a draft is a starting point for the human.
 - If the page hits a backend you don't want to depend on, stub it (`b.StubRequest(...)`) so the spec is fast and hermetic.

@@ -74,6 +74,19 @@ b.Click(sel)                                // …then act once
 
 (When does the action genuinely re-fire? Only if you wrap it in `Consistently` instead of `Eventually`, or `.And()` it with a condition that never settles so the surrounding poll never terminates. Neither is the normal form — `Eventually(sel).Should(b.Click())` is single-shot and safe.)
 
+**The one sanctioned use of immediate mode inside a poll: "set-and-confirm-it-stuck".** When you act on an *optimistic* field that can silently revert (Smell 3), put the immediate action *and* its confirmation inside one `Eventually(func(g Gomega){...})` closure — the closure is the poll, so the action re-fires each iteration until the value is observed to have stuck:
+
+```go
+Eventually(func(g Gomega) {
+    b.SetValue("#qty", 3)                       // immediate — re-runs each poll…
+    g.Expect("#qty").To(b.HaveValue("3"))       // …until the value actually sticks
+}).Should(Succeed())
+```
+
+This is correct and deliberate — don't "convert" these immediates to the matcher form. The matcher form acts *once*; here you want to keep re-asserting against a value that may reconcile away.
+
+**The action matcher does not check occlusion — keep an explicit `BeClickable` gate when an overlay may cover the target.** `Eventually(sel).Should(b.Click())` gates on visible + enabled, but a fast click is `element.click()`; it does **not** verify the element is the topmost thing at its center, so it will happily "click" through a modal/overlay sitting on top. When occlusion is possible, gate with `Eventually(sel).Should(b.BeClickable())` (which adds the topmost-at-center check) before acting, or use `b.Realistic()` (which refuses to click through an overlay). The matcher form alone won't catch it.
+
 **A few interactions have no matcher form — gate them by hand.** `SendKeys` (its keys-only shape is reserved for the focused element) and the `*Each` verbs (`ClickEach`, `SetPropertyForEach`) act immediately with no matcher to fold readiness into, so they carry the same race. Put an explicit readiness gate on the line above:
 
 ```go

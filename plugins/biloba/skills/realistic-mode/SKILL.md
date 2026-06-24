@@ -65,9 +65,9 @@ b.Realistic().DragTo("#card", "#done-column")
 // 2. Per-spec — grab one handle, use it throughout
 It("opens the hover menu", func() {
     rb := b.Realistic()
-    rb.Hover(".nav-item")
+    Eventually(".nav-item").Should(rb.Hover())
     Eventually(".nav-item .submenu").Should(b.BeVisible())
-    rb.Click(b.ByRole("menuitem").WithName("Settings"))
+    Eventually(b.ByRole("menuitem").WithName("Settings")).Should(rb.Click())
 })
 
 // 3. Per-suite — swap the tab in a BeforeEach, gated on a Ginkgo Label
