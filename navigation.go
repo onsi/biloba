@@ -24,18 +24,33 @@ var navigationTimeout = 30 * time.Second
 /*
 Navigate() causes this tab to navigate to the provided URL.  The spec fails if the response does not have status code 200
 
+Navigate is a waiting command: it keeps its own generous default deadline (~30s), which you can override with [Biloba.WithTimeout] or abort with [Biloba.WithContext].  WithPolling and Immediate are not supported.
+
 Read https://onsi.github.io/biloba/#navigation to learn more about navigation
 */
 func (b *Biloba) Navigate(url string) *Biloba {
-	return b.NavigateWithStatus(url, http.StatusOK)
+	b.gt.Helper()
+	b.guardConfig("Navigate", knobTimeout, knobContext)
+	return b.navigateWithStatus(url, http.StatusOK)
 }
 
 /*
 NavigateWithStatus() causes this tab to navigate to the provided URL and asserts that the response has the provided status code.
 
+Like [Biloba.Navigate] it is a waiting command: override its default deadline with [Biloba.WithTimeout] or abort it with [Biloba.WithContext]; WithPolling and Immediate are not supported.
+
 Read https://onsi.github.io/biloba/#navigation to learn more about navigation
 */
 func (b *Biloba) NavigateWithStatus(url string, status int) *Biloba {
+	b.gt.Helper()
+	b.guardConfig("NavigateWithStatus", knobTimeout, knobContext)
+	return b.navigateWithStatus(url, status)
+}
+
+// navigateWithStatus is the unguarded substrate behind Navigate/NavigateWithStatus.  It honors the
+// WithTimeout/WithContext knobs the four-bucket model allows a waiting command (via waitingContext)
+// while keeping navigationTimeout as its default deadline when WithTimeout is unset.
+func (b *Biloba) navigateWithStatus(url string, status int) *Biloba {
 	b.gt.Helper()
 
 	// Chrome 149+ fires Network.loadingFailed (ERR_HTTP_RESPONSE_CODE_FAILURE) for 4xx/5xx
@@ -52,13 +67,17 @@ func (b *Biloba) NavigateWithStatus(url string, status int) *Biloba {
 		}
 	})
 
-	nctx, ncancel := context.WithTimeout(b.Context, navigationTimeout)
+	timeout := navigationTimeout
+	if b.timeout != nil {
+		timeout = *b.timeout
+	}
+	nctx, ncancel := b.waitingContext(navigationTimeout)
 	defer ncancel()
 	err := chromedp.Run(nctx, chromedp.Navigate(url))
 	isHTTPError := err != nil && strings.Contains(err.Error(), "ERR_HTTP_RESPONSE_CODE_FAILURE")
 
 	if errors.Is(err, context.DeadlineExceeded) {
-		b.gt.Fatalf("timed out after %s navigating to %s: the navigation never completed (Chrome may have wedged)", navigationTimeout, url)
+		b.gt.Fatalf("timed out after %s navigating to %s: the navigation never completed (Chrome may have wedged)", timeout, url)
 		return b
 	}
 
@@ -91,6 +110,8 @@ func (b *Biloba) NavigateWithStatus(url string, status int) *Biloba {
 Location() returns the location (i.e. url) of the current tab.
 */
 func (b *Biloba) Location() string {
+	b.gt.Helper()
+	b.guardConfig("Location")
 	var location string
 	err := chromedp.Run(b.Context, chromedp.Location(&location))
 	if err != nil {
@@ -122,6 +143,8 @@ func (b *Biloba) HaveURL(expected any) types.GomegaMatcher {
 Title() returns the window title of the current tab.
 */
 func (b *Biloba) Title() string {
+	b.gt.Helper()
+	b.guardConfig("Title")
 	var title string
 	err := chromedp.Run(b.Context, chromedp.Title(&title))
 	if err != nil {

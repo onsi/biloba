@@ -24,6 +24,7 @@ Read https://onsi.github.io/biloba/#accessibility-outline for details.
 */
 func (b *Biloba) A11yOutline() string {
 	b.gt.Helper()
+	b.guardConfig("A11yOutline")
 	text, err := b.a11yOutline()
 	if err != nil {
 		b.gt.Fatalf("Failed to capture accessibility outline:\n%s", err.Error())

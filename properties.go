@@ -31,7 +31,7 @@ func (p Properties) GetStringSlice(k string) []string { return toStringSlice(p[k
 func (p Properties) GetAnySlice(k string) []any       { return toAnySlice(p[k]) }
 
 /*
-SliceOfProperties has underlying type []Properties and is returned by [GetPropertiesForEach].  SliceOfProperties provides getters that perform type assertions and nil-conversions for you.
+SliceOfProperties has underlying type []Properties and is returned by [CurrentPropertiesForEach].  SliceOfProperties provides getters that perform type assertions and nil-conversions for you.
 
 For each of the Get* methods the return value is a slice of appropriate type. The slice will have the same length as the SliceOfProperties instance and will be filled with the values returned by each Properties invocation of Get* (i.e. nil and missing types will return the zero value.)
 

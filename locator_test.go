@@ -16,7 +16,7 @@ var _ = Describe("Role / text / label locators", func() {
 	Describe("ByRole", func() {
 		It("matches an element by role and accessible name", func() {
 			Expect(b.ByRole("button").WithName("Save")).To(b.Exist())
-			Expect(b.InnerText(b.ByRole("button").WithName("Save"))).To(Equal("Save"))
+			Expect(b.GetInnerText(b.ByRole("button").WithName("Save"))).To(Equal("Save"))
 		})
 
 		It("matches a heading by name", func() {
@@ -98,15 +98,15 @@ var _ = Describe("Role / text / label locators", func() {
 
 	Describe("Nth / First / Last", func() {
 		It("selects the first match", func() {
-			Expect(b.InnerText(b.ByRole("listitem").Within("#fruits").First())).To(Equal("Apple"))
+			Expect(b.GetInnerText(b.ByRole("listitem").Within("#fruits").First())).To(Equal("Apple"))
 		})
 
 		It("selects the nth match", func() {
-			Expect(b.InnerText(b.ByRole("listitem").Within("#fruits").Nth(2))).To(Equal("Cherry"))
+			Expect(b.GetInnerText(b.ByRole("listitem").Within("#fruits").Nth(2))).To(Equal("Cherry"))
 		})
 
 		It("selects the last match", func() {
-			Expect(b.InnerText(b.ByRole("listitem").Within("#fruits").Last())).To(Equal("Date"))
+			Expect(b.GetInnerText(b.ByRole("listitem").Within("#fruits").Last())).To(Equal("Date"))
 		})
 
 		It("matches nothing for an out-of-range index", func() {
@@ -115,7 +115,7 @@ var _ = Describe("Role / text / label locators", func() {
 		})
 
 		It("composes with Within", func() {
-			Expect(b.InnerText(b.ByRole("listitem").Within("#fruits").Last())).To(Equal("Date"))
+			Expect(b.GetInnerText(b.ByRole("listitem").Within("#fruits").Last())).To(Equal("Date"))
 		})
 	})
 
@@ -145,7 +145,7 @@ var _ = Describe("Role / text / label locators", func() {
 		})
 
 		It("matches an element by test id", func() {
-			Expect(b.InnerText(b.ByTestID("submit-btn"))).To(Equal("Go"))
+			Expect(b.GetInnerText(b.ByTestID("submit-btn"))).To(Equal("Go"))
 		})
 
 		It("honors a custom TestIDAttribute", func() {
@@ -159,7 +159,7 @@ var _ = Describe("Role / text / label locators", func() {
 	Describe("ContainingText / NotContainingText", func() {
 		It("filters a role to elements whose visible text contains a string", func() {
 			Expect(b.ByRole("listitem").ContainingText("Product 2")).To(b.HaveCount(1))
-			Expect(b.InnerText(b.ByRole("listitem").ContainingText("Product 2"))).To(ContainSubstring("Product 2"))
+			Expect(b.GetInnerText(b.ByRole("listitem").ContainingText("Product 2"))).To(ContainSubstring("Product 2"))
 		})
 
 		It("filters out elements containing a string", func() {
@@ -178,14 +178,14 @@ var _ = Describe("Role / text / label locators", func() {
 		})
 
 		It("filters out elements that have a matching descendant", func() {
-			Expect(b.InnerText(b.ByRole("listitem").Within("#products").NotContaining(".del"))).To(ContainSubstring("Product 2"))
+			Expect(b.GetInnerText(b.ByRole("listitem").Within("#products").NotContaining(".del"))).To(ContainSubstring("Product 2"))
 		})
 	})
 
 	Describe("And / Or", func() {
 		It("intersects with another selector", func() {
 			Expect(b.ByRole("button").And(".primary")).To(b.HaveCount(1))
-			Expect(b.InnerText(b.ByRole("button").And(".primary"))).To(Equal("Primary Action"))
+			Expect(b.GetInnerText(b.ByRole("button").And(".primary"))).To(Equal("Primary Action"))
 		})
 
 		It("unions with another selector", func() {
@@ -195,15 +195,15 @@ var _ = Describe("Role / text / label locators", func() {
 
 		It("unions in document order regardless of operand order", func() {
 			both := b.ByRole("button").WithName("Secondary Action").Or(b.ByRole("button").WithName("Primary Action"))
-			Expect(b.InnerText(both.First())).To(Equal("Primary Action")) // primary precedes secondary in the DOM
+			Expect(b.GetInnerText(both.First())).To(Equal("Primary Action")) // primary precedes secondary in the DOM
 		})
 	})
 
 	Describe("Level (heading level)", func() {
 		It("matches a heading at a given level", func() {
-			Expect(b.InnerText(b.ByRole("heading").Level(1))).To(Equal("Locators"))
-			Expect(b.InnerText(b.ByRole("heading").Level(2))).To(Equal("Getting Started"))
-			Expect(b.InnerText(b.ByRole("heading").Level(3))).To(Equal("Subsection"))
+			Expect(b.GetInnerText(b.ByRole("heading").Level(1))).To(Equal("Locators"))
+			Expect(b.GetInnerText(b.ByRole("heading").Level(2))).To(Equal("Getting Started"))
+			Expect(b.GetInnerText(b.ByRole("heading").Level(3))).To(Equal("Subsection"))
 		})
 
 		It("composes with a name filter", func() {

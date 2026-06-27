@@ -2,6 +2,7 @@ package biloba_test
 
 import (
 	"path/filepath"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -24,9 +25,22 @@ var _ = Describe("First-class interactions", func() {
 			Expect("#focusable").To(b.BeFocused())
 		})
 
-		It("fails if the element does not exist", func() {
-			b.Focus("#non-existing")
+		It("times out (poll-by-default) if the element never exists", func() {
+			b.WithTimeout(time.Millisecond * 60).Focus("#non-existing")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("could not find DOM element matching selector: #non-existing"),
+			))
+		})
+
+		It("fails fast under Immediate() if the element does not exist", func() {
+			b.Immediate().Focus("#non-existing")
 			ExpectFailures(ContainSubstring("could not find DOM element matching selector: #non-existing"))
+		})
+
+		It("is a hard error to configure the bare-matcher form", func() {
+			b.WithTimeout(time.Second).Focus()
+			ExpectFailures(ContainSubstring("Focus(...) returns a matcher"))
 		})
 	})
 
@@ -42,8 +56,16 @@ var _ = Describe("First-class interactions", func() {
 			Eventually("#menu").Should(b.BeVisible())
 		})
 
-		It("fails if the element does not exist", func() {
-			b.Hover("#non-existing")
+		It("times out if the element never exists (poll-by-default)", func() {
+			b.WithTimeout(time.Millisecond * 60).Hover("#non-existing")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("could not find DOM element matching selector: #non-existing"),
+			))
+		})
+
+		It("fails fast under Immediate() if the element does not exist", func() {
+			b.Immediate().Hover("#non-existing")
 			ExpectFailures(ContainSubstring("could not find DOM element matching selector: #non-existing"))
 		})
 	})
@@ -57,6 +79,24 @@ var _ = Describe("First-class interactions", func() {
 
 		It("can be used as a matcher", func() {
 			Eventually("#footer").Should(b.ScrollIntoView())
+		})
+
+		It("times out (poll-by-default) if the element never exists", func() {
+			b.WithTimeout(time.Millisecond * 60).ScrollIntoView("#non-existing")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("could not find DOM element matching selector: #non-existing"),
+			))
+		})
+
+		It("fails fast under Immediate() if the element does not exist", func() {
+			b.Immediate().ScrollIntoView("#non-existing")
+			ExpectFailures(ContainSubstring("could not find DOM element matching selector: #non-existing"))
+		})
+
+		It("is a hard error to configure the bare-matcher form", func() {
+			b.WithTimeout(time.Second).ScrollIntoView()
+			ExpectFailures(ContainSubstring("ScrollIntoView(...) returns a matcher"))
 		})
 	})
 
@@ -79,9 +119,22 @@ var _ = Describe("First-class interactions", func() {
 			Expect("#multi-filenames").To(b.HaveInnerText(ContainSubstring("upload-other.txt")))
 		})
 
-		It("fails if the element does not exist", func() {
-			b.SetUpload("#non-existing", "/tmp/whatever.txt")
-			ExpectFailures(ContainSubstring("could not find DOM element matching selector: #non-existing"))
+		It("times out (poll-by-default) if the element never exists", func() {
+			b.WithTimeout(time.Millisecond * 60).SetUpload("#non-existing", "/tmp/whatever.txt")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("be uploadable to"),
+			))
+		})
+
+		It("fails fast under Immediate() if the element does not exist", func() {
+			b.Immediate().SetUpload("#non-existing", "/tmp/whatever.txt")
+			ExpectFailures(ContainSubstring("be uploadable to"))
+		})
+
+		It("is a hard error to configure the bare-matcher form", func() {
+			b.WithTimeout(time.Second).SetUpload("/tmp/whatever.txt")
+			ExpectFailures(ContainSubstring("SetUpload(...) returns a matcher"))
 		})
 
 		It("returns a matcher when under-applied, polling until the input is present", func() {

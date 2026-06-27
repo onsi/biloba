@@ -119,10 +119,24 @@ func inlineImagesSupported() bool {
 
 /*
 CaptureScreenshot() returns a full screenshot of the current tab as a []byte array (you can decode it with the image package)
+
+Like all the screenshot captures it is a waiting command bounded by its own ~5s default deadline; override that with [Biloba.WithTimeout] or abort it with [Biloba.WithContext] (WithPolling and Immediate are not supported).
 */
 func (b *Biloba) CaptureScreenshot() []byte {
+	b.gt.Helper()
+	b.guardConfig("CaptureScreenshot", knobTimeout, knobContext)
+	return b.captureScreenshot()
+}
+
+// captureScreenshot is the unguarded substrate behind CaptureScreenshot and its imgcat/to-file
+// wrappers.  It runs under a bounded context (default screenshotCaptureTimeout) that honors the
+// WithTimeout/WithContext knobs a waiting command is allowed.
+func (b *Biloba) captureScreenshot() []byte {
+	b.gt.Helper()
+	ctx, cancel := b.waitingContext(screenshotCaptureTimeout)
+	defer cancel()
 	var img []byte
-	err := chromedp.Run(b.Context, chromedp.FullScreenshot(&img, 100))
+	err := chromedp.Run(ctx, chromedp.FullScreenshot(&img, 100))
 	if err != nil {
 		b.gt.Fatalf("Failed to capture screenshot:\n%s", err.Error())
 	}
@@ -131,9 +145,13 @@ func (b *Biloba) CaptureScreenshot() []byte {
 
 /*
 CaptureImgCatScreenshot() returns a full screenshot of the current tab as an iTerm2 imgcat-compatible string.  Simply print it out to see images on your terminal.
+
+It is a waiting command: see [Biloba.CaptureScreenshot] for the WithTimeout/WithContext knobs it honors.
 */
 func (b *Biloba) CaptureImgcatScreenshot() string {
-	return b.asImgCat(b.CaptureScreenshot())
+	b.gt.Helper()
+	b.guardConfig("CaptureImgcatScreenshot", knobTimeout, knobContext)
+	return b.asImgCat(b.captureScreenshot())
 }
 
 /*
@@ -141,11 +159,14 @@ CaptureScreenshotToFile writes a full screenshot of the current tab as a PNG fil
 The directory is created if it does not already exist.
 The absolute path is printed to the test output so it appears in failure output and is readable by tools that can render PNG files.
 
+It is a waiting command: see [Biloba.CaptureScreenshot] for the WithTimeout/WithContext knobs it honors.
+
 Read https://onsi.github.io/biloba/#capturing-screenshots for details.
 */
 func (b *Biloba) CaptureScreenshotToFile(path string) string {
 	b.gt.Helper()
-	return b.writeScreenshotToFile(b.CaptureScreenshot(), path)
+	b.guardConfig("CaptureScreenshotToFile", knobTimeout, knobContext)
+	return b.writeScreenshotToFile(b.captureScreenshot(), path)
 }
 
 // writeScreenshotToFile resolves path to an absolute path, creates any missing intermediate
@@ -174,9 +195,20 @@ func (b *Biloba) writeScreenshotToFile(img []byte, path string) string {
 /*
 CaptureScreenshotOf(selector) returns a screenshot of the first element matching selector as a []byte array (you can decode it with the image package).  The screenshot is clipped to the element's bounding box and can capture an element below the fold without scrolling.  Same-origin >>>-pierced iframe elements are translated to top-level page coordinates.
 
+It is a waiting command: see [Biloba.CaptureScreenshot] for the WithTimeout/WithContext knobs it honors.
+
 Read https://onsi.github.io/biloba/#capturing-screenshots for details.
 */
 func (b *Biloba) CaptureScreenshotOf(selector any) []byte {
+	b.gt.Helper()
+	b.guardConfig("CaptureScreenshotOf", knobTimeout, knobContext)
+	return b.captureScreenshotOf(selector)
+}
+
+// captureScreenshotOf is the unguarded substrate behind CaptureScreenshotOf and its imgcat/to-file
+// wrappers.  The element capture runs under a bounded context (default screenshotCaptureTimeout) that
+// honors the WithTimeout/WithContext knobs a waiting command is allowed.
+func (b *Biloba) captureScreenshotOf(selector any) []byte {
 	b.gt.Helper()
 	r := b.runBilobaHandler("boundingBox", selector)
 	if r.Error() != nil {
@@ -196,8 +228,10 @@ func (b *Biloba) CaptureScreenshotOf(selector any) []byte {
 		Scale:  1,
 	}
 	// TODO: roadmap §7 masking (cover other selectors before capturing) is not yet supported.
+	cctx, cancel := b.waitingContext(screenshotCaptureTimeout)
+	defer cancel()
 	var img []byte
-	err := chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
+	err := chromedp.Run(cctx, chromedp.ActionFunc(func(ctx context.Context) error {
 		var captureErr error
 		img, captureErr = page.CaptureScreenshot().
 			WithClip(clip).
@@ -216,11 +250,14 @@ func (b *Biloba) CaptureScreenshotOf(selector any) []byte {
 /*
 CaptureImgcatScreenshotOf(selector) returns a screenshot of the first element matching selector as an iTerm2 imgcat-compatible string.  Simply print it out to see the image on your terminal.
 
+It is a waiting command: see [Biloba.CaptureScreenshot] for the WithTimeout/WithContext knobs it honors.
+
 Read https://onsi.github.io/biloba/#capturing-screenshots for details.
 */
 func (b *Biloba) CaptureImgcatScreenshotOf(selector any) string {
 	b.gt.Helper()
-	return b.asImgCat(b.CaptureScreenshotOf(selector))
+	b.guardConfig("CaptureImgcatScreenshotOf", knobTimeout, knobContext)
+	return b.asImgCat(b.captureScreenshotOf(selector))
 }
 
 /*
@@ -228,11 +265,14 @@ CaptureScreenshotOfToFile writes a screenshot of the first element matching sele
 The directory is created if it does not already exist.
 The absolute path is printed to the test output so it appears in failure output and is readable by tools that can render PNG files.
 
+It is a waiting command: see [Biloba.CaptureScreenshot] for the WithTimeout/WithContext knobs it honors.
+
 Read https://onsi.github.io/biloba/#capturing-screenshots for details.
 */
 func (b *Biloba) CaptureScreenshotOfToFile(selector any, path string) string {
 	b.gt.Helper()
-	return b.writeScreenshotToFile(b.CaptureScreenshotOf(selector), path)
+	b.guardConfig("CaptureScreenshotOfToFile", knobTimeout, knobContext)
+	return b.writeScreenshotToFile(b.captureScreenshotOf(selector), path)
 }
 
 func (b *Biloba) asImgCat(img []byte) string {

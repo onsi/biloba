@@ -56,13 +56,14 @@ Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cook
 */
 func (s *Storage) Set(key string, value any) {
 	s.b.gt.Helper()
+	s.b.guardConfig(s.name + ".Set")
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		s.b.gt.Fatalf("Failed to encode value for %s key %q:\n%s", s.name, key, err.Error())
 		return
 	}
 	setter := s.b.JSFunc(fmt.Sprintf("(k, v) => window.%s.setItem(k, v)", s.name))
-	s.b.Run(setter.Invoke(key, string(encoded)))
+	s.b.run(setter.Invoke(key, string(encoded)))
 }
 
 /*
@@ -81,7 +82,7 @@ func (s *Storage) Get(key string, args ...any) any {
 	s.b.gt.Helper()
 	getter := s.b.JSFunc(fmt.Sprintf("(k) => window.%s.getItem(k)", s.name))
 	var raw any
-	s.b.Run(getter.Invoke(key), &raw)
+	s.b.run(getter.Invoke(key), &raw)
 	if raw == nil {
 		return nil
 	}
@@ -112,8 +113,9 @@ Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cook
 */
 func (s *Storage) GetAll() map[string]any {
 	s.b.gt.Helper()
+	s.b.guardConfig(s.name + ".GetAll")
 	var rawMap map[string]string
-	s.b.Run(fmt.Sprintf("({...window.%s})", s.name), &rawMap)
+	s.b.run(fmt.Sprintf("({...window.%s})", s.name), &rawMap)
 	out := map[string]any{}
 	for k, rawString := range rawMap {
 		var decoded any
@@ -132,8 +134,9 @@ Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cook
 */
 func (s *Storage) Remove(key string) {
 	s.b.gt.Helper()
+	s.b.guardConfig(s.name + ".Remove")
 	remover := s.b.JSFunc(fmt.Sprintf("(k) => window.%s.removeItem(k)", s.name))
-	s.b.Run(remover.Invoke(key))
+	s.b.run(remover.Invoke(key))
 }
 
 /*
@@ -143,7 +146,8 @@ Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cook
 */
 func (s *Storage) Clear() {
 	s.b.gt.Helper()
-	s.b.Run(fmt.Sprintf("window.%s.clear()", s.name))
+	s.b.guardConfig(s.name + ".Clear")
+	s.b.run(fmt.Sprintf("window.%s.clear()", s.name))
 }
 
 /*
@@ -153,8 +157,9 @@ Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cook
 */
 func (s *Storage) Length() int {
 	s.b.gt.Helper()
+	s.b.guardConfig(s.name + ".Length")
 	var length int
-	s.b.Run(fmt.Sprintf("window.%s.length", s.name), &length)
+	s.b.run(fmt.Sprintf("window.%s.length", s.name), &length)
 	return length
 }
 

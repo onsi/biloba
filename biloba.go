@@ -718,6 +718,14 @@ type Biloba struct {
 	// fast atomic JS simulations.  Set on the lightweight view returned by Realistic().
 	realistic bool
 
+	// poll-config knobs set by Immediate()/WithTimeout()/WithPolling()/WithContext().  They ride the
+	// shallow clone those return (like realistic) and are NOT reset by Prepare().  A nil pointer / false
+	// means "unset" - polling methods then inherit Gomega's global Eventually defaults.
+	immediate       bool
+	timeout         *time.Duration
+	pollingInterval *time.Duration
+	pollingCtx      context.Context
+
 	downloadDir     string
 	downloads       map[string]*Download
 	downloadHistory map[string]time.Time
@@ -794,6 +802,7 @@ The Chrome DevTools BrowserContextID() associated with this Biloba tab.
 BrowserContextID is an isolation mechanism provided by Chrome DevTools - you may need to pass this in explicitly if you intend to make some low-level calls to chromedp.
 */
 func (b *Biloba) BrowserContextID() cdp.BrowserContextID {
+	b.guardConfig("BrowserContextID")
 	return b.browserContextID
 }
 
@@ -805,6 +814,7 @@ Read https://onsi.github.io/biloba/#bootstrapping-biloba for details on how to s
 Read https://onsi.github.io/biloba/#parallelization-how-biloba-manages-browsers-and-tabs to build a mental model of how Biloba manages tabs
 */
 func (b *Biloba) Prepare() {
+	b.guardConfig("Prepare")
 	if !b.isRootTab() {
 		return
 	}
@@ -881,6 +891,7 @@ Read https://onsi.github.io/biloba/#managing-tabs to learn more about managing t
 */
 func (b *Biloba) NewTab() *Biloba {
 	b.gt.Helper()
+	b.guardConfig("NewTab")
 	// registerTabFor returns nil if the freshly-created target can't be attached to.  A nil here is a
 	// footgun - callers write b.NewTab().Navigate(...) - so retry with a brand-new target and, only if
 	// every attempt fails, fail the spec with a clear message rather than return a nil tab that panics
@@ -905,6 +916,7 @@ AllTabs() returns all Biloba tabs currently associated with the current spec
 Read https://onsi.github.io/biloba/#managing-tabs to learn more about managing tabs
 */
 func (b *Biloba) AllTabs() Tabs {
+	b.guardConfig("AllTabs")
 	targets, err := chromedp.Targets(b.root.Context)
 	if err != nil {
 		b.gt.Fatalf("Failed to list tabs:\n%s", err.Error())
@@ -1232,7 +1244,7 @@ func (b *Biloba) ensureBiloba() {
 }
 
 func (b *Biloba) reloadBiloba() {
-	b.Run(bilobaJS)
+	b.run(bilobaJS)
 	b.lock.Lock()
 	b.bilobaIsInstalled = true
 	b.lock.Unlock()

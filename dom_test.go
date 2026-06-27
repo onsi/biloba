@@ -131,8 +131,10 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(".each-vis").ShouldNot(b.EachBeVisible())
 		})
 
-		It("matches vacuously when no elements match the selector", func() {
-			Ω(".non-existing").Should(b.EachBeVisible())
+		It("fails (does not pass vacuously) when no elements match the selector", func() {
+			m := b.EachBeVisible()
+			Ω(".non-existing").ShouldNot(m)
+			Ω(m.FailureMessage(".non-existing")).Should(ContainSubstring("Expected at least one element to match .non-existing, but none did"))
 		})
 
 		It("fails the spec via the immediate-failure path of a captured failure", func() {
@@ -156,8 +158,10 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(".each-vis").Should(b.EachBeEnabled())
 		})
 
-		It("matches vacuously when no elements match the selector", func() {
-			Ω(".non-existing").Should(b.EachBeEnabled())
+		It("fails (does not pass vacuously) when no elements match the selector", func() {
+			m := b.EachBeEnabled()
+			Ω(".non-existing").ShouldNot(m)
+			Ω(m.FailureMessage(".non-existing")).Should(ContainSubstring("Expected at least one element to match .non-existing, but none did"))
 		})
 	})
 
@@ -171,33 +175,40 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω("#each-group > *").ShouldNot(b.EachHaveClass("tagged"))
 		})
 
-		It("matches vacuously when no elements match the selector", func() {
-			Ω(".non-existing").Should(b.EachHaveClass("tagged"))
+		It("fails (does not pass vacuously) when no elements match the selector", func() {
+			m := b.EachHaveClass("tagged")
+			Ω(".non-existing").ShouldNot(m)
+			Ω(m.FailureMessage(".non-existing")).Should(ContainSubstring("Expected at least one element to match .non-existing, but none did"))
 		})
 	})
 
-	Describe("InnerText", func() {
+	Describe("GetInnerText", func() {
 		It("returns the InnerText of the element", func() {
-			Ω(b.InnerText("#hello")).Should(Equal("Hello Biloba!"))
-			Ω(b.InnerText("#hidden-child")).Should(Equal("Can't see me!"))
-			Ω(b.InnerText("#list")).Should(Equal("First Things\nSecond Things\nThird Things"))
+			Ω(b.GetInnerText("#hello")).Should(Equal("Hello Biloba!"))
+			Ω(b.GetInnerText("#hidden-child")).Should(Equal("Can't see me!"))
+			Ω(b.GetInnerText("#list")).Should(Equal("First Things\nSecond Things\nThird Things"))
 		})
 
-		It("auto-fails if the element does not exist", func() {
-			Ω(b.InnerText("#non-existing")).Should(Equal(""))
-			ExpectFailures("Failed to get property \"innerText\":\ncould not find DOM element matching selector: #non-existing")
+		It("times out (poll-by-default) if the element never exists", func() {
+			b.WithTimeout(time.Millisecond * 60).GetInnerText("#non-existing")
+			ExpectFailures(ContainSubstring("Timed out after"))
+		})
+
+		It("fails fast under Immediate() if the element does not exist", func() {
+			Ω(b.Immediate().GetInnerText("#non-existing")).Should(Equal(""))
+			ExpectFailures(ContainSubstring("have property \"innerText\""))
 		})
 	})
 
-	Describe("InnerTextForEach", func() {
+	Describe("CurrentInnerTextForEach", func() {
 		It("returns the InnerText of the element", func() {
-			Ω(b.InnerTextForEach(b.XPath().WithID("party").Descendant("optgroup").WithAttr("label", "Heros").Descendant("option"))).Should(HaveExactElements("Luke", "Leia", "Han", "Obi-Wan"))
+			Ω(b.CurrentInnerTextForEach(b.XPath().WithID("party").Descendant("optgroup").WithAttr("label", "Heros").Descendant("option"))).Should(HaveExactElements("Luke", "Leia", "Han", "Obi-Wan"))
 
-			Ω(b.InnerTextForEach("#list li")).Should(HaveExactElements("First Things", "Second Things", "Third Things"))
+			Ω(b.CurrentInnerTextForEach("#list li")).Should(HaveExactElements("First Things", "Second Things", "Third Things"))
 		})
 
 		It("returns an empty slice if no elements exist", func() {
-			Ω(b.InnerTextForEach(".non-existing")).Should(BeEmpty())
+			Ω(b.CurrentInnerTextForEach(".non-existing")).Should(BeEmpty())
 		})
 	})
 
@@ -240,37 +251,49 @@ var _ = Describe("DOM manipulators and matchers", func() {
 
 			Ω("#list li").Should(b.EachHaveInnerText(ConsistOf("Second Things", "First Things", "Third Things")))
 			Ω("#list li").Should(b.EachHaveInnerText(ContainElement("Second Things")))
-			Ω("#non-existing").Should(b.EachHaveInnerText())
+		})
+
+		It("fails (does not pass vacuously) when no elements match the selector", func() {
+			m := b.EachHaveInnerText("anything")
+			Ω("#non-existing").ShouldNot(m)
+			Ω(m.FailureMessage("#non-existing")).Should(ContainSubstring("Expected at least one element to match #non-existing, but none did"))
+			// to assert that nothing matches, use HaveCount(0) instead
+			Ω("#non-existing").Should(b.HaveCount(0))
 		})
 	})
 
-	Describe("TextContent", func() {
+	Describe("GetTextContent", func() {
 		It("returns the textContent of the element - including hidden content", func() {
-			Ω(b.TextContent("#hello")).Should(Equal("Hello Biloba!"))
+			Ω(b.GetTextContent("#hello")).Should(Equal("Hello Biloba!"))
 			// textContent reads straight from the DOM tree, so it sees hidden elements just the same
-			Ω(b.TextContent("#hidden-child")).Should(Equal("Can't see me!"))
+			Ω(b.GetTextContent("#hidden-child")).Should(Equal("Can't see me!"))
 			// unlike innerText, textContent does not collapse block layout into newlines - it returns
 			// the raw template whitespace, so #list comes back with each <li> on its own indented line
-			Ω(b.TextContent("#list")).Should(ContainSubstring("First Things"))
-			Ω(b.TextContent("#list")).Should(ContainSubstring("Second Things"))
-			Ω(b.TextContent("#list")).Should(ContainSubstring("Third Things"))
+			Ω(b.GetTextContent("#list")).Should(ContainSubstring("First Things"))
+			Ω(b.GetTextContent("#list")).Should(ContainSubstring("Second Things"))
+			Ω(b.GetTextContent("#list")).Should(ContainSubstring("Third Things"))
 		})
 
-		It("auto-fails if the element does not exist", func() {
-			Ω(b.TextContent("#non-existing")).Should(Equal(""))
-			ExpectFailures("Failed to get property \"textContent\":\ncould not find DOM element matching selector: #non-existing")
+		It("times out (poll-by-default) if the element never exists", func() {
+			b.WithTimeout(time.Millisecond * 60).GetTextContent("#non-existing")
+			ExpectFailures(ContainSubstring("Timed out after"))
+		})
+
+		It("fails fast under Immediate() if the element does not exist", func() {
+			Ω(b.Immediate().GetTextContent("#non-existing")).Should(Equal(""))
+			ExpectFailures(ContainSubstring("have property \"textContent\""))
 		})
 	})
 
-	Describe("TextContentForEach", func() {
+	Describe("CurrentTextContentForEach", func() {
 		It("returns the textContent of each element", func() {
-			Ω(b.TextContentForEach(b.XPath().WithID("party").Descendant("optgroup").WithAttr("label", "Heros").Descendant("option"))).Should(HaveExactElements("Luke", "Leia", "Han", "Obi-Wan"))
+			Ω(b.CurrentTextContentForEach(b.XPath().WithID("party").Descendant("optgroup").WithAttr("label", "Heros").Descendant("option"))).Should(HaveExactElements("Luke", "Leia", "Han", "Obi-Wan"))
 
-			Ω(b.TextContentForEach("#list li")).Should(HaveExactElements("First Things", "Second Things", "Third Things"))
+			Ω(b.CurrentTextContentForEach("#list li")).Should(HaveExactElements("First Things", "Second Things", "Third Things"))
 		})
 
 		It("returns an empty slice if no elements exist", func() {
-			Ω(b.TextContentForEach(".non-existing")).Should(BeEmpty())
+			Ω(b.CurrentTextContentForEach(".non-existing")).Should(BeEmpty())
 		})
 	})
 
@@ -298,7 +321,14 @@ var _ = Describe("DOM manipulators and matchers", func() {
 
 			Ω("#list li").Should(b.EachHaveTextContent(ConsistOf("Second Things", "First Things", "Third Things")))
 			Ω("#list li").Should(b.EachHaveTextContent(ContainElement("Second Things")))
-			Ω("#non-existing").Should(b.EachHaveTextContent())
+		})
+
+		It("fails (does not pass vacuously) when no elements match the selector", func() {
+			m := b.EachHaveTextContent("anything")
+			Ω("#non-existing").ShouldNot(m)
+			Ω(m.FailureMessage("#non-existing")).Should(ContainSubstring("Expected at least one element to match #non-existing, but none did"))
+			// to assert that nothing matches, use HaveCount(0) instead
+			Ω("#non-existing").Should(b.HaveCount(0))
 		})
 	})
 
@@ -312,9 +342,44 @@ var _ = Describe("DOM manipulators and matchers", func() {
 				Ω(b.GetValue("#droid")).Should(Equal("r2d2"))
 			})
 
-			It("auto-fails if the element does not exist", func() {
-				Ω(b.GetValue("#non-existing")).Should(BeNil())
-				ExpectFailures("Failed to get value:\ncould not find DOM element matching selector: #non-existing")
+			It("polls until the element appears, then returns its value", func() {
+				go func() {
+					defer GinkgoRecover()
+					<-time.After(time.Millisecond * 100)
+					b.Run(`document.querySelector("#text-area").id = "delayed-text-area"`)
+				}()
+				Ω(b.GetValue("#delayed-text-area")).Should(Equal("Something long"))
+			})
+
+			It("treats an empty value as valid (does not wait for it to be non-empty)", func() {
+				b.SetValue("#text-input", "")
+				Ω(b.GetValue("#text-input")).Should(Equal(""))
+			})
+
+			It("times out (poll-by-default) if the element never exists", func() {
+				b.WithTimeout(time.Millisecond * 60).GetValue("#non-existing")
+				ExpectFailures(SatisfyAll(
+					ContainSubstring("Timed out after"),
+					ContainSubstring("have a value"),
+				))
+			})
+
+			It("fails fast under Immediate() if the element does not exist", func() {
+				Ω(b.Immediate().GetValue("#non-existing")).Should(BeNil())
+				ExpectFailures(ContainSubstring("have a value"))
+			})
+		})
+
+		Describe("CurrentValueForEach", func() {
+			It("returns a snapshot of the rationalized value for all matching elements", func() {
+				Ω(b.CurrentValueForEach("#check-boxes input[type='checkbox']")).Should(HaveExactElements(true, false, false, false))
+
+				b.SetPropertyForEachImmediately("#check-boxes input[type='checkbox']", "checked", true)
+				Ω(b.CurrentValueForEach("#check-boxes input[type='checkbox']")).Should(HaveExactElements(true, true, true, true))
+			})
+
+			It("returns an empty slice when no elements are found (it does not poll)", func() {
+				Ω(b.CurrentValueForEach("#non-existing")).Should(BeEmpty())
 			})
 		})
 
@@ -365,26 +430,39 @@ var _ = Describe("DOM manipulators and matchers", func() {
 					Ω(b.XPath("option").WithAttr("value", "bb8")).Should(b.HaveProperty("selected", BeTrue()))
 				})
 
-				It("auto-fails if the element does not exist", func() {
-					b.SetValue("#non-existing", "foo")
-					ExpectFailures("Failed to set value:\ncould not find DOM element matching selector: #non-existing")
+				It("times out (poll-by-default) if the element never exists", func() {
+					b.WithTimeout(time.Millisecond*60).SetValue("#non-existing", "foo")
+					ExpectFailures(SatisfyAll(
+						ContainSubstring("Timed out after"),
+						ContainSubstring("could not find DOM element matching selector: #non-existing"),
+					))
 				})
 
-				It("auto-fails if the element is not visible", func() {
-					b.SetValue("#hidden-text-input", "foo")
-					ExpectFailures("Failed to set value:\nDOM element is not visible: #hidden-text-input")
+				It("fails fast under Immediate() if the element does not exist", func() {
+					b.Immediate().SetValue("#non-existing", "foo")
+					ExpectFailures(ContainSubstring("could not find DOM element matching selector: #non-existing"))
+				})
+
+				It("fails fast under Immediate() if the element is not visible", func() {
+					b.Immediate().SetValue("#hidden-text-input", "foo")
+					ExpectFailures(ContainSubstring("DOM element is not visible: #hidden-text-input"))
 					Ω("#hidden-text-input").Should(b.HaveValue("my-hidden-value"))
 				})
 
-				It("auto-fails if the element is not enabled", func() {
-					b.SetValue("#disabled-text-input", "foo")
-					ExpectFailures("Failed to set value:\nDOM element is not enabled: #disabled-text-input")
+				It("fails fast under Immediate() if the element is not enabled", func() {
+					b.Immediate().SetValue("#disabled-text-input", "foo")
+					ExpectFailures(ContainSubstring("DOM element is not enabled: #disabled-text-input"))
 					Ω("#disabled-text-input").Should(b.HaveValue("i'm off"))
 				})
 
 				It("fails if attempting to set the value of a select input to an option that does not exist", func() {
-					b.SetValue("#droid", "grogu")
-					ExpectFailures("Failed to set value:\nSelect input does not have option with value \"grogu\": #droid")
+					b.Immediate().SetValue("#droid", "grogu")
+					ExpectFailures(ContainSubstring("Select input does not have option with value \"grogu\": #droid"))
+				})
+
+				It("is a hard error to configure the bare-matcher form", func() {
+					b.WithTimeout(time.Second).SetValue("foo")
+					ExpectFailures(ContainSubstring("SetValue(...) returns a matcher"))
 				})
 			})
 
@@ -457,13 +535,13 @@ var _ = Describe("DOM manipulators and matchers", func() {
 				})
 
 				It("fails when no option has the given label", func() {
-					b.SetValue("#droid", b.ValueLabel("Grogu"))
-					ExpectFailures("Failed to set value:\nSelect input does not have option with label \"Grogu\": #droid")
+					b.Immediate().SetValue("#droid", b.ValueLabel("Grogu"))
+					ExpectFailures(ContainSubstring("Select input does not have option with label \"Grogu\": #droid"))
 				})
 
 				It("fails when used on a non-select element", func() {
-					b.SetValue("#text-input", b.ValueLabel("nope"))
-					ExpectFailures("Failed to set value:\nValueLabel is only supported for <select> elements: #text-input")
+					b.Immediate().SetValue("#text-input", b.ValueLabel("nope"))
+					ExpectFailures(ContainSubstring("ValueLabel is only supported for <select> elements: #text-input"))
 				})
 			})
 
@@ -519,21 +597,21 @@ var _ = Describe("DOM manipulators and matchers", func() {
 				Ω("#checked-color").Should(b.HaveInnerText("purple"))
 			})
 
-			It("auto-fails if the element is not visible", func() {
-				b.SetValue("#green", true)
-				ExpectFailures("Failed to set value:\nDOM element is not visible: #green")
+			It("fails fast under Immediate() if the element is not visible", func() {
+				b.Immediate().SetValue("#green", true)
+				ExpectFailures(ContainSubstring("DOM element is not visible: #green"))
 				Ω("#checked-color").Should(b.HaveInnerText("red"))
 			})
 
-			It("auto-fails if the element is not enabled", func() {
-				b.SetValue("#yellow", true)
-				ExpectFailures("Failed to set value:\nDOM element is not enabled: #yellow")
+			It("fails fast under Immediate() if the element is not enabled", func() {
+				b.Immediate().SetValue("#yellow", true)
+				ExpectFailures(ContainSubstring("DOM element is not enabled: #yellow"))
 				Ω("#checked-color").Should(b.HaveInnerText("red"))
 			})
 
 			It("fails if not provided a boolean value", func() {
-				b.SetValue("#red", "true")
-				ExpectFailures("Failed to set value:\nCheckboxes only accept boolean values: #red")
+				b.Immediate().SetValue("#red", "true")
+				ExpectFailures(ContainSubstring("Checkboxes only accept boolean values: #red"))
 			})
 		})
 
@@ -615,26 +693,26 @@ var _ = Describe("DOM manipulators and matchers", func() {
 				Ω("input[name='transportation'][value='car']").Should(b.HaveProperty("checked", true))
 			})
 
-			It("auto-fails if the element is not visible", func() {
-				b.SetValue("input[name='appliances']", "microwave")
-				ExpectFailures("Failed to set value:\nThe \"microwave\" option is not visible: input[name='appliances']")
+			It("fails fast under Immediate() if the element is not visible", func() {
+				b.Immediate().SetValue("input[name='appliances']", "microwave")
+				ExpectFailures(ContainSubstring("The \"microwave\" option is not visible: input[name='appliances']"))
 				Ω("input[name='appliances']").Should(b.HaveValue("toaster"))
 			})
 
-			It("auto-fails if the element is not enabled", func() {
-				b.SetValue("input[name='transportation']", "bike")
-				ExpectFailures("Failed to set value:\nThe \"bike\" option is not enabled: input[name='transportation']")
+			It("fails fast under Immediate() if the element is not enabled", func() {
+				b.Immediate().SetValue("input[name='transportation']", "bike")
+				ExpectFailures(ContainSubstring("The \"bike\" option is not enabled: input[name='transportation']"))
 				Ω("input[name='transportation']").Should(b.HaveValue("hovercraft"))
 			})
 
 			It("fails if provided an invalid value", func() {
-				b.SetValue("input[name='turtle']", "splinter")
-				ExpectFailures("Failed to set value:\nRadio input does not have option with value \"splinter\": input[name='turtle']")
+				b.Immediate().SetValue("input[name='turtle']", "splinter")
+				ExpectFailures(ContainSubstring("Radio input does not have option with value \"splinter\": input[name='turtle']"))
 			})
 
 			It("fails if provided a boolean value", func() {
-				b.SetValue("input[name='appliances'][value='stove']", true)
-				ExpectFailures("Failed to set value:\nRadio inputs only accept string values: input[name='appliances'][value='stove']")
+				b.Immediate().SetValue("input[name='appliances'][value='stove']", true)
+				ExpectFailures(ContainSubstring("Radio inputs only accept string values: input[name='appliances'][value='stove']"))
 			})
 		})
 
@@ -700,19 +778,19 @@ var _ = Describe("DOM manipulators and matchers", func() {
 				Ω(b.GetValue("#party")).Should(BeEmpty())
 			})
 
-			It("auto-fails if one of the options is not enabled", func() {
-				b.SetValue("#party", []string{"obi-wan", "han", "leia", "tarkin"})
-				ExpectFailures("Failed to set value:\nThe \"leia\" option is not enabled: #party")
+			It("fails fast under Immediate() if one of the options is not enabled", func() {
+				b.Immediate().SetValue("#party", []string{"obi-wan", "han", "leia", "tarkin"})
+				ExpectFailures(ContainSubstring("The \"leia\" option is not enabled: #party"))
 			})
 
 			It("fails if provided an invalid value", func() {
-				b.SetValue("#party", []string{"obi-wan", "han", "chewie", "tarkin"})
-				ExpectFailures("Failed to set value:\nThe \"chewie\" option does not exist: #party")
+				b.Immediate().SetValue("#party", []string{"obi-wan", "han", "chewie", "tarkin"})
+				ExpectFailures(ContainSubstring("The \"chewie\" option does not exist: #party"))
 			})
 
 			It("fails if provided a non-slice value", func() {
-				b.SetValue("#party", "han")
-				ExpectFailures("Failed to set value:\nMulti-select inputs only accept []string values: #party")
+				b.Immediate().SetValue("#party", "han")
+				ExpectFailures(ContainSubstring("Multi-select inputs only accept []string values: #party"))
 			})
 		})
 
@@ -867,9 +945,22 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Eventually("window._blurFired").Should(b.EvaluateTo(true))
 		})
 
-		It("auto-fails if the element does not exist", func() {
-			b.Blur("#non-existing")
-			ExpectFailures("Failed to blur:\ncould not find DOM element matching selector: #non-existing")
+		It("times out (poll-by-default) if the element never exists", func() {
+			b.WithTimeout(time.Millisecond * 60).Blur("#non-existing")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("could not find DOM element matching selector: #non-existing"),
+			))
+		})
+
+		It("fails fast under Immediate() if the element does not exist", func() {
+			b.Immediate().Blur("#non-existing")
+			ExpectFailures(ContainSubstring("could not find DOM element matching selector: #non-existing"))
+		})
+
+		It("is a hard error to configure the bare-matcher form", func() {
+			b.WithTimeout(time.Second).Blur()
+			ExpectFailures(ContainSubstring("Blur(...) returns a matcher"))
 		})
 
 		It("returns an error when the element does not exist in the matcher form", func() {
@@ -906,7 +997,6 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(b.GetProperty(".notice", "hidden")).Should(Equal(false))
 			Ω(b.GetProperty(".notice", "dataset.name")).Should(Equal("henry"))
 			Ω(b.GetProperty("#hidden-text-input", "value")).Should(Equal("my-hidden-value"))
-			Ω(b.GetProperty(".notice", "floop")).Should(BeNil())
 		})
 
 		It("converts iterables into arrays", func() {
@@ -917,9 +1007,39 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(b.GetProperty(".notice", "dataset")).Should(HaveKeyWithValue("name", "henry"))
 		})
 
-		It("returns an error when the element does not exist", func() {
-			b.GetProperty("#non-existing", "tagName")
-			ExpectFailures("Failed to get property \"tagName\":\ncould not find DOM element matching selector: #non-existing")
+		It("polls until the property is defined, then returns it", func() {
+			go func() {
+				defer GinkgoRecover()
+				<-time.After(time.Millisecond * 100)
+				b.Run(`document.querySelector(".notice").late = "here"`)
+			}()
+			Ω(b.GetProperty(".notice", "late")).Should(Equal("here"))
+		})
+
+		It("returns nil for an undefined property wrapped in AllowMissing (no waiting)", func() {
+			Ω(b.GetProperty(".notice", b.AllowMissing("floop"))).Should(BeNil())
+			Ω(b.GetProperty(".notice", b.AllowMissing("dataset.name"))).Should(Equal("henry"))
+		})
+
+		It("times out for a required-but-undefined property", func() {
+			b.WithTimeout(time.Millisecond*60).GetProperty(".notice", "floop")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("have property \"floop\""),
+			))
+		})
+
+		It("times out (poll-by-default) when the element never exists", func() {
+			b.WithTimeout(time.Millisecond*60).GetProperty("#non-existing", "tagName")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("have property \"tagName\""),
+			))
+		})
+
+		It("fails fast under Immediate() when the element does not exist", func() {
+			Ω(b.Immediate().GetProperty("#non-existing", "tagName")).Should(BeNil())
+			ExpectFailures(ContainSubstring("have property \"tagName\""))
 		})
 	})
 
@@ -929,8 +1049,9 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(b.GetAttribute("#link", "data-role")).Should(Equal("nav"))
 		})
 
-		It("returns nil when the attribute is not present", func() {
-			Ω(b.GetAttribute("#link", "data-missing")).Should(BeNil())
+		It("returns nil for an absent attribute wrapped in AllowMissing (no waiting)", func() {
+			Ω(b.GetAttribute("#link", b.AllowMissing("data-missing"))).Should(BeNil())
+			Ω(b.GetAttribute("#link", b.AllowMissing("href"))).Should(Equal("/about"))
 		})
 
 		It("reads the raw attribute, not the resolved property", func() {
@@ -939,9 +1060,62 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(b.GetProperty("#link", "href")).Should(HaveSuffix("/about"))
 		})
 
-		It("returns an error when the element does not exist", func() {
-			b.GetAttribute("#non-existing", "href")
-			ExpectFailures("Failed to get attribute \"href\":\ncould not find DOM element matching selector: #non-existing")
+		It("times out for a required-but-absent attribute", func() {
+			b.WithTimeout(time.Millisecond*60).GetAttribute("#link", "data-missing")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("have attribute \"data-missing\""),
+			))
+		})
+
+		It("times out (poll-by-default) when the element never exists", func() {
+			b.WithTimeout(time.Millisecond*60).GetAttribute("#non-existing", "href")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("have attribute \"href\""),
+			))
+		})
+
+		It("fails fast under Immediate() when the element does not exist", func() {
+			Ω(b.Immediate().GetAttribute("#non-existing", "href")).Should(BeNil())
+			ExpectFailures(ContainSubstring("have attribute \"href\""))
+		})
+	})
+
+	Describe("GetAttributes", func() {
+		It("returns the requested raw attributes defined on the element", func() {
+			a := b.GetAttributes("#link", "href", "data-role")
+			Ω(a.GetString("href")).Should(Equal("/about"))
+			Ω(a.GetString("data-role")).Should(Equal("nav"))
+		})
+
+		It("returns nil for absent attributes wrapped in AllowMissing", func() {
+			a := b.GetAttributes("#link", "href", b.AllowMissing("data-missing"))
+			Ω(a.GetString("href")).Should(Equal("/about"))
+			Ω(a.Get("data-missing")).Should(BeNil())
+		})
+
+		It("fails if no attributes are requested", func() {
+			b.GetAttributes("#link")
+			ExpectFailures("GetAttributes requires at least one attribute to fetch")
+		})
+
+		It("times out for a required-but-absent attribute", func() {
+			b.WithTimeout(time.Millisecond*60).GetAttributes("#link", "href", "data-missing")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("have attributes href, data-missing"),
+			))
+		})
+
+		It("times out (poll-by-default) when the element never exists", func() {
+			b.WithTimeout(time.Millisecond*60).GetAttributes("#non-existing", "href")
+			ExpectFailures(ContainSubstring("Timed out after"))
+		})
+
+		It("fails fast under Immediate() when the element does not exist", func() {
+			Ω(b.Immediate().GetAttributes("#non-existing", "href")).Should(BeNil())
+			ExpectFailures(ContainSubstring("have attributes href"))
 		})
 	})
 
@@ -999,80 +1173,95 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 
 		It("returns an error when the property chain can't be traversed", func() {
-			b.SetProperty(".notice", "foo.bar", "baz")
-			ExpectFailures("Failed to set property \"foo.bar\":\ncould not resolve property component \".foo\": .notice")
+			b.Immediate().SetProperty(".notice", "foo.bar", "baz")
+			ExpectFailures(ContainSubstring("could not resolve property component \".foo\": .notice"))
 		})
 
-		It("returns an error when the element does not exist", func() {
+		It("times out (poll-by-default) when the element never exists", func() {
+			b.WithTimeout(time.Millisecond*60).SetProperty("#non-existing", "foo", "bar")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("could not find DOM element matching selector: #non-existing"),
+			))
+		})
+
+		It("fails fast under Immediate() when the element does not exist", func() {
+			b.Immediate().SetProperty("#non-existing", "foo", "bar")
+			ExpectFailures(ContainSubstring("could not find DOM element matching selector: #non-existing"))
+		})
+
+		It("is a hard error to configure the bare-matcher form", func() {
+			b.WithTimeout(time.Second).SetProperty("foo", "bar")
+			ExpectFailures(ContainSubstring("SetProperty(...) returns a matcher"))
+		})
+
+		It("returns an error when the element does not exist in the matcher form", func() {
 			match, err := b.SetProperty("tagName", "any").Match("#non-existing")
 			Ω(match).Should(BeFalse())
 			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
-
-			b.SetProperty("#non-existing", "foo", "bar")
-			ExpectFailures("Failed to set property \"foo\":\ncould not find DOM element matching selector: #non-existing")
 		})
 	})
 
-	Describe("GetPropertyForEach", func() {
+	Describe("CurrentPropertyForEach", func() {
 		It("fetches the requested property from all elements matching the selector", func() {
-			values := b.GetPropertyForEach("input[type='radio'][name='appliances']", "value")
+			values := b.CurrentPropertyForEach("input[type='radio'][name='appliances']", "value")
 			Expect(values).To(HaveExactElements("toaster", "stove", "microwave"))
 
-			values = b.GetPropertyForEach(b.XPath("div").WithID("check-boxes").Descendant("input").WithAttr("type", "checkbox"), "id")
+			values = b.CurrentPropertyForEach(b.XPath("div").WithID("check-boxes").Descendant("input").WithAttr("type", "checkbox"), "id")
 			Expect(values).To(HaveExactElements("red", "blue", "yellow", "green"))
 
-			values = b.GetPropertyForEach(".notice", "dataset.name")
+			values = b.CurrentPropertyForEach(".notice", "dataset.name")
 			Expect(values).To(HaveExactElements("henry", "bob", BeNil()))
 		})
 
 		It("returns an empty array when no elements are found", func() {
-			values := b.GetPropertyForEach("#non-existing", "href")
+			values := b.CurrentPropertyForEach("#non-existing", "href")
 			Expect(values).To(BeEmpty())
 		})
 
 		It("returns nil values for elements that are found but don't have the property", func() {
-			values := b.GetPropertyForEach("input[type='radio'][name='appliances']", "href")
+			values := b.CurrentPropertyForEach("input[type='radio'][name='appliances']", "href")
 			Expect(values).To(HaveExactElements(BeNil(), BeNil(), BeNil()))
 		})
 	})
 
-	Describe("GetAttributeForEach", func() {
+	Describe("CurrentAttributeForEach", func() {
 		It("fetches the requested attribute from all elements matching the selector", func() {
-			values := b.GetAttributeForEach(".notice", "magic")
+			values := b.CurrentAttributeForEach(".notice", "magic")
 			Expect(values).To(HaveExactElements("on", "on", "off"))
 
-			values = b.GetAttributeForEach(".notice", "data-name")
+			values = b.CurrentAttributeForEach(".notice", "data-name")
 			Expect(values).To(HaveExactElements("henry", "bob", BeNil()))
 		})
 
 		It("returns an empty array when no elements are found", func() {
-			values := b.GetAttributeForEach("#non-existing", "href")
+			values := b.CurrentAttributeForEach("#non-existing", "href")
 			Expect(values).To(BeEmpty())
 		})
 
 		It("returns nil values for elements that are found but don't have the attribute", func() {
-			values := b.GetAttributeForEach("input[type='radio'][name='appliances']", "data-missing")
+			values := b.CurrentAttributeForEach("input[type='radio'][name='appliances']", "data-missing")
 			Expect(values).To(HaveExactElements(BeNil(), BeNil(), BeNil()))
 		})
 	})
 
-	Describe("SetPropertyForEach", func() {
+	Describe("SetPropertyForEachImmediately", func() {
 		It("sets the specified property to the same value on any matching elements", func() {
 			Expect("#check-boxes input[type='checkbox']").To(b.EachHaveProperty("checked", true, false, false, false))
-			b.SetPropertyForEach("#check-boxes input[type='checkbox']", "checked", true)
+			b.SetPropertyForEachImmediately("#check-boxes input[type='checkbox']", "checked", true)
 			Expect("#check-boxes input[type='checkbox']").To(b.EachHaveProperty("checked", true, true, true, true))
 
 			Expect(".notice").To(b.EachHaveProperty("dataset.name", "henry", "bob", nil))
-			b.SetPropertyForEach(".notice", "dataset.name", "John")
+			b.SetPropertyForEachImmediately(".notice", "dataset.name", "John")
 			Expect(".notice").To(b.EachHaveProperty("dataset.name", HaveEach("John")))
 		})
 
 		It("does nothing if no elements match", func() {
-			b.SetPropertyForEach(".non-existing", "href", "http://example.com")
+			b.SetPropertyForEachImmediately(".non-existing", "href", "http://example.com")
 		})
 
 		It("fails if a property can't be set because of delimiter issues", func() {
-			b.SetPropertyForEach("li", "foo.bar", 3)
+			b.SetPropertyForEachImmediately("li", "foo.bar", 3)
 			ExpectFailures("Failed to set property \"foo.bar\" for each:\ncould not resolve property component \".foo\": li")
 		})
 	})
@@ -1095,15 +1284,23 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Expect("input").To(b.EachHaveProperty("tagName", HaveEach("INPUT")))
 		})
 
-		It("returns empty if no elements are found", func() {
-			Expect(".non-existing").NotTo(b.EachHaveProperty("href"))
-			Expect(".non-existing").To(b.EachHaveProperty("href", BeEmpty()))
+		It("fails (does not pass vacuously) when no elements match the selector", func() {
+			// the defined-form fails on empty...
+			mDefined := b.EachHaveProperty("href")
+			Expect(".non-existing").NotTo(mDefined)
+			Expect(mDefined.FailureMessage(".non-existing")).To(ContainSubstring("Expected at least one element to match .non-existing, but none did"))
+			// ...and so does the value-matcher form, even when the value matcher would itself accept an empty slice
+			mValue := b.EachHaveProperty("href", BeEmpty())
+			Expect(".non-existing").NotTo(mValue)
+			Expect(mValue.FailureMessage(".non-existing")).To(ContainSubstring("Expected at least one element to match .non-existing, but none did"))
 		})
 	})
 
 	Describe("GetProperties", func() {
 		It("returns the requested properties defined on the element", func() {
-			p := b.GetProperties(".notice", "count", "disabled", "tagName", "flavor", "dataset.name", "classList", "innerText", "dataset", "nonExisting", "foo.bar.baz")
+			// disabled is not a property of a <div>, so it must be AllowMissing (it comes back nil) - a
+			// plain required "disabled" would block the two-axis poll forever
+			p := b.GetProperties(".notice", "count", b.AllowMissing("disabled"), "tagName", "flavor", "dataset.name", "classList", "innerText", "dataset", b.AllowMissing("nonExisting"), b.AllowMissing("foo.bar.baz"))
 			Expect(p["count"]).To(Equal(3.0))
 			Expect(p.GetInt("count")).To(Equal(3))
 			Expect(p.GetBool("disabled")).To(Equal(false))
@@ -1118,20 +1315,47 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Expect(p.Get("blah")).To(BeNil())
 		})
 
-		It("fails if no properties are requested when the element does not exist", func() {
+		It("polls until every required property is defined, then returns them all", func() {
+			go func() {
+				defer GinkgoRecover()
+				<-time.After(time.Millisecond * 100)
+				b.Run(`document.querySelector(".notice").late = "here"`)
+			}()
+			p := b.GetProperties(".notice", "count", "late")
+			Expect(p["count"]).To(Equal(3.0))
+			Expect(p["late"]).To(Equal("here"))
+		})
+
+		It("times out for a required-but-undefined property", func() {
+			b.WithTimeout(time.Millisecond*60).GetProperties(".notice", "count", "floop")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("have properties count, floop"),
+			))
+		})
+
+		It("fails if no properties are requested", func() {
 			b.GetProperties(".notice")
 			ExpectFailures("GetProperties requires at least one property to fetch")
 		})
 
-		It("fails when the element does not exist", func() {
-			b.GetProperties("#non-existing", "tagName", "classList")
-			ExpectFailures("Failed to get properties tagName, classList:\ncould not find DOM element matching selector: #non-existing")
+		It("times out (poll-by-default) when the element does not exist", func() {
+			b.WithTimeout(time.Millisecond*60).GetProperties("#non-existing", "tagName", "classList")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("have properties tagName, classList"),
+			))
+		})
+
+		It("fails fast under Immediate() when the element does not exist", func() {
+			Ω(b.Immediate().GetProperties("#non-existing", "tagName", "classList")).Should(BeNil())
+			ExpectFailures(ContainSubstring("have properties tagName, classList"))
 		})
 	})
 
-	Describe("GetPropertiesForEach", func() {
+	Describe("CurrentPropertiesForEach", func() {
 		It("returns all the requested properties defined on all matched elements", func() {
-			p := b.GetPropertiesForEach(".notice", "count", "disabled", "tagName", "flavor", "dataset.name", "classList", "innerText", "dataset", "nonExisting", "foo.bar.baz")
+			p := b.CurrentPropertiesForEach(".notice", "count", "disabled", "tagName", "flavor", "dataset.name", "classList", "innerText", "dataset", "nonExisting", "foo.bar.baz")
 			Expect(p).To(HaveLen(3))
 			Expect(p[0]["count"]).To(Equal(3.0))
 			Expect(p[0].GetInt("count")).To(Equal(3))
@@ -1157,17 +1381,38 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 
 		It("fails if no properties are requested when the element does not exist", func() {
-			b.GetPropertiesForEach(".notice")
-			ExpectFailures("GetPropertiesForEach requires at least one property to fetch")
+			b.CurrentPropertiesForEach(".notice")
+			ExpectFailures("CurrentPropertiesForEach requires at least one property to fetch")
 		})
 
 		It("returns an empty slice if no element is found", func() {
-			Ω(b.GetPropertiesForEach("#non-existing", "tagName", "classList")).Should(HaveLen(0))
+			Ω(b.CurrentPropertiesForEach("#non-existing", "tagName", "classList")).Should(HaveLen(0))
+		})
+	})
+
+	Describe("CurrentAttributesForEach", func() {
+		It("returns a snapshot of all the requested raw attributes for all matched elements", func() {
+			p := b.CurrentAttributesForEach(".notice", "magic", "data-name", "data-missing")
+			Expect(p).To(HaveLen(3))
+			Ω(p.GetString("magic")).Should(Equal([]string{"on", "on", "off"}))
+			// absent attributes come back as nil for that element (no AllowMissing axis, no poll)
+			Ω(p.Get("data-name")).Should(HaveExactElements("henry", "bob", BeNil()))
+			Ω(p.GetString("data-name")).Should(Equal([]string{"henry", "bob", ""}))
+			Ω(p.Get("data-missing")).Should(HaveExactElements(BeNil(), BeNil(), BeNil()))
+		})
+
+		It("fails if no attributes are requested", func() {
+			b.CurrentAttributesForEach(".notice")
+			ExpectFailures("CurrentAttributesForEach requires at least one attribute to fetch")
+		})
+
+		It("returns an empty slice if no element is found (it does not poll)", func() {
+			Ω(b.CurrentAttributesForEach("#non-existing", "href", "data-role")).Should(HaveLen(0))
 		})
 	})
 
 	Describe("Click", func() {
-		Context("when called directly", func() {
+		Context("when called directly (poll-by-default)", func() {
 			It("...clicks things", func() {
 				b.Click("#increment")
 				Ω("#counter-input").Should(b.HaveValue("1"))
@@ -1180,19 +1425,72 @@ var _ = Describe("DOM manipulators and matchers", func() {
 				Ω("#checked-color").Should(b.HaveInnerText("purple"))
 			})
 
-			It("auto-fails if the element does not exist", func() {
-				b.Click("#non-existing")
-				ExpectFailures("Failed to click:\ncould not find DOM element matching selector: #non-existing")
+			It("polls until the element appears, then clicks it", func() {
+				go func() {
+					defer GinkgoRecover()
+					<-time.After(time.Millisecond * 200)
+					b.Run(`document.querySelector("#increment").id = "delayed-increment"`)
+				}()
+				b.Click("#delayed-increment")
+				Ω("#counter-input").Should(b.HaveValue("1"))
 			})
 
-			It("auto-fails if the element is not visible", func() {
-				b.Click("#hidden-button")
-				ExpectFailures("Failed to click:\nDOM element is not visible: #hidden-button")
+			It("times out (rather than failing immediately) if the element never exists", func() {
+				b.WithTimeout(time.Millisecond * 60).Click("#non-existing")
+				ExpectFailures(SatisfyAll(
+					ContainSubstring("Timed out after"),
+					ContainSubstring("could not find DOM element matching selector: #non-existing"),
+				))
 			})
 
-			It("auto-fails if the element is not enabled", func() {
-				b.Click("#decrement")
-				ExpectFailures("Failed to click:\nDOM element is not enabled: #decrement")
+			It("times out if the element stays invisible", func() {
+				b.WithTimeout(time.Millisecond * 60).Click("#hidden-button")
+				ExpectFailures(SatisfyAll(
+					ContainSubstring("Timed out after"),
+					ContainSubstring("DOM element is not visible: #hidden-button"),
+				))
+			})
+
+			It("times out if the element stays disabled", func() {
+				b.WithTimeout(time.Millisecond * 60).Click("#decrement")
+				ExpectFailures(SatisfyAll(
+					ContainSubstring("Timed out after"),
+					ContainSubstring("DOM element is not enabled: #decrement"),
+				))
+			})
+		})
+
+		Context("when made Immediate() (the fail-fast escape hatch)", func() {
+			It("clicks an actionable element once", func() {
+				b.Immediate().Click("#increment")
+				Ω("#counter-input").Should(b.HaveValue("1"))
+			})
+
+			It("fails fast if the element does not exist", func() {
+				b.Immediate().Click("#non-existing")
+				ExpectFailures(ContainSubstring("could not find DOM element matching selector: #non-existing"))
+			})
+
+			It("fails fast if the element is not visible", func() {
+				b.Immediate().Click("#hidden-button")
+				ExpectFailures(ContainSubstring("DOM element is not visible: #hidden-button"))
+			})
+
+			It("fails fast if the element is not enabled", func() {
+				b.Immediate().Click("#decrement")
+				ExpectFailures(ContainSubstring("DOM element is not enabled: #decrement"))
+			})
+		})
+
+		Context("when configured but resolving to the bare-matcher form", func() {
+			It("is a hard error to configure the matcher", func() {
+				b.WithTimeout(time.Second).Click()
+				ExpectFailures(ContainSubstring("click(...) returns a matcher"))
+			})
+
+			It("rejects Immediate() on the matcher form too", func() {
+				b.Immediate().Click()
+				ExpectFailures(ContainSubstring("click(...) returns a matcher"))
 			})
 		})
 
@@ -1232,13 +1530,13 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 	})
 
-	Describe("ClickEach", func() {
+	Describe("ClickEachImmediately", func() {
 		It("clicks on all matching elements - but only if they turn out to be clickable", func() {
 			Ω("#red").Should(b.HaveValue(true))
 			Ω("#blue").Should(b.HaveValue(false))
 			Ω("#yellow").Should(b.HaveValue(false))
 			Ω("#green").Should(b.HaveValue(false))
-			b.ClickEach("[type='checkbox']")
+			b.ClickEachImmediately("[type='checkbox']")
 			Ω("#red").Should(b.HaveValue(false))
 			Ω("#blue").Should(b.HaveValue(true))
 			Ω("#yellow").Should(b.HaveValue(false)) //disabled
@@ -1254,14 +1552,17 @@ var _ = Describe("DOM manipulators and matchers", func() {
 				Ω("#dbl-dblclicks").Should(b.HaveInnerText("1"))
 			})
 
-			It("auto-fails if the element does not exist", func() {
-				b.DblClick("#non-existing")
-				ExpectFailures("Failed to double-click:\ncould not find DOM element matching selector: #non-existing")
+			It("times out if the element never exists", func() {
+				b.WithTimeout(time.Millisecond * 60).DblClick("#non-existing")
+				ExpectFailures(SatisfyAll(
+					ContainSubstring("Timed out after"),
+					ContainSubstring("could not find DOM element matching selector: #non-existing"),
+				))
 			})
 
-			It("auto-fails if the element is not enabled", func() {
-				b.DblClick("#disabled-dbl-btn")
-				ExpectFailures("Failed to double-click:\nDOM element is not enabled: #disabled-dbl-btn")
+			It("fails fast when Immediate() if the element is not enabled", func() {
+				b.Immediate().DblClick("#disabled-dbl-btn")
+				ExpectFailures(ContainSubstring("DOM element is not enabled: #disabled-dbl-btn"))
 			})
 		})
 
@@ -1286,9 +1587,12 @@ var _ = Describe("DOM manipulators and matchers", func() {
 				Ω("#ctx-result").Should(b.HaveInnerText("menu"))
 			})
 
-			It("auto-fails if the element does not exist", func() {
-				b.RightClick("#non-existing")
-				ExpectFailures("Failed to right-click:\ncould not find DOM element matching selector: #non-existing")
+			It("times out if the element never exists", func() {
+				b.WithTimeout(time.Millisecond * 60).RightClick("#non-existing")
+				ExpectFailures(SatisfyAll(
+					ContainSubstring("Timed out after"),
+					ContainSubstring("could not find DOM element matching selector: #non-existing"),
+				))
 			})
 		})
 
@@ -1311,14 +1615,45 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω("#drop-result").Should(b.HaveInnerText("dropped"))
 		})
 
-		It("auto-fails if the source element does not exist", func() {
-			b.DragTo("#non-existing", "#drop-zone")
-			ExpectFailures("Failed to drag:\ncould not find DOM element matching selector: #non-existing")
+		It("polls both sides: waits for a late-arriving target", func() {
+			go func() {
+				defer GinkgoRecover()
+				<-time.After(time.Millisecond * 200)
+				b.Run(`document.querySelector("#drop-zone").id = "late-drop-zone"`)
+			}()
+			b.DragTo("#drag-src", "#late-drop-zone")
+			Ω("#drop-result").Should(b.HaveInnerText("dropped"))
 		})
 
-		It("auto-fails if the target element does not exist", func() {
-			b.DragTo("#drag-src", "#non-existing")
-			ExpectFailures("Failed to drag:\ncould not find DOM element matching target selector: #drag-src")
+		It("times out (poll-by-default) if the source never exists", func() {
+			b.WithTimeout(time.Millisecond*60).DragTo("#non-existing", "#drop-zone")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("could not find DOM element matching selector: #non-existing"),
+			))
+		})
+
+		It("times out (poll-by-default) if the target never exists", func() {
+			b.WithTimeout(time.Millisecond*60).DragTo("#drag-src", "#non-existing")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("could not find DOM element matching target selector: #drag-src"),
+			))
+		})
+
+		It("fails fast under Immediate() if the source element does not exist", func() {
+			b.Immediate().DragTo("#non-existing", "#drop-zone")
+			ExpectFailures(ContainSubstring("could not find DOM element matching selector: #non-existing"))
+		})
+
+		It("fails fast under Immediate() if the target element does not exist", func() {
+			b.Immediate().DragTo("#drag-src", "#non-existing")
+			ExpectFailures(ContainSubstring("could not find DOM element matching target selector: #drag-src"))
+		})
+
+		It("is a hard error to configure the bare-matcher form", func() {
+			b.WithTimeout(time.Second).DragTo("#drop-zone")
+			ExpectFailures(ContainSubstring("DragTo(...) returns a matcher"))
 		})
 	})
 
@@ -1333,9 +1668,12 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω("#click-pad-result").Should(b.HaveInnerText("30,40"))
 		})
 
-		It("auto-fails if the element does not exist", func() {
-			b.Click("#non-existing", b.At(30, 40))
-			ExpectFailures("Failed to click:\ncould not find DOM element matching selector: #non-existing")
+		It("times out if the element never exists", func() {
+			b.WithTimeout(time.Millisecond*60).Click("#non-existing", b.At(30, 40))
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("could not find DOM element matching selector: #non-existing"),
+			))
 		})
 	})
 
@@ -1347,9 +1685,22 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(b.GetProperty("#scroll-box", "scrollTop")).Should(BeEquivalentTo(200))
 		})
 
-		It("auto-fails if the element does not exist", func() {
-			b.ScrollWheel("#non-existing", 0, 200)
-			ExpectFailures("Failed to scroll wheel:\ncould not find DOM element matching selector: #non-existing")
+		It("times out (poll-by-default) if the element never exists", func() {
+			b.WithTimeout(time.Millisecond*60).ScrollWheel("#non-existing", 0, 200)
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("could not find DOM element matching selector: #non-existing"),
+			))
+		})
+
+		It("fails fast under Immediate() if the element does not exist", func() {
+			b.Immediate().ScrollWheel("#non-existing", 0, 200)
+			ExpectFailures(ContainSubstring("could not find DOM element matching selector: #non-existing"))
+		})
+
+		It("is a hard error to configure the bare-matcher form", func() {
+			b.WithTimeout(time.Second).ScrollWheel(0, 200)
+			ExpectFailures(ContainSubstring("ScrollWheel(...) returns a matcher"))
 		})
 
 		It("returns a matcher when under-applied, polling until the element is present", func() {
@@ -1372,9 +1723,12 @@ var _ = Describe("DOM manipulators and matchers", func() {
 				Ω("#aux-result").Should(b.HaveInnerText("middle"))
 			})
 
-			It("auto-fails if the element does not exist", func() {
-				b.MiddleClick("#non-existing")
-				ExpectFailures("Failed to middle-click:\ncould not find DOM element matching selector: #non-existing")
+			It("times out if the element never exists", func() {
+				b.WithTimeout(time.Millisecond * 60).MiddleClick("#non-existing")
+				ExpectFailures(SatisfyAll(
+					ContainSubstring("Timed out after"),
+					ContainSubstring("could not find DOM element matching selector: #non-existing"),
+				))
 			})
 		})
 
@@ -1418,9 +1772,12 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω("#mod-result").Should(b.HaveInnerText("shift"))
 		})
 
-		It("auto-fails if the element does not exist", func() {
-			b.Click("#non-existing", b.Shift())
-			ExpectFailures("Failed to click:\ncould not find DOM element matching selector: #non-existing")
+		It("times out if the element never exists", func() {
+			b.WithTimeout(time.Millisecond*60).Click("#non-existing", b.Shift())
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("could not find DOM element matching selector: #non-existing"),
+			))
 		})
 
 		It("auto-fails when handed a non-option in the option position", func() {
@@ -1436,9 +1793,12 @@ var _ = Describe("DOM manipulators and matchers", func() {
 				Ω("#tap-result").Should(b.HaveInnerText("tapped"))
 			})
 
-			It("auto-fails if the element does not exist", func() {
-				b.Tap("#non-existing")
-				ExpectFailures("Failed to tap:\ncould not find DOM element matching selector: #non-existing")
+			It("times out if the element never exists", func() {
+				b.WithTimeout(time.Millisecond * 60).Tap("#non-existing")
+				ExpectFailures(SatisfyAll(
+					ContainSubstring("Timed out after"),
+					ContainSubstring("could not find DOM element matching selector: #non-existing"),
+				))
 			})
 		})
 
@@ -1461,9 +1821,9 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			b.InvokeOn("#increment", "click")
 			Ω("#counter-input").Should(b.HaveValue("1"))
 
-			checked := b.GetPropertiesForEach(".clickable[type='checkbox']", "checked").GetBool("checked")
-			b.InvokeOnEach(".clickable[type='checkbox']", "click")
-			newChecked := b.GetPropertiesForEach(".clickable[type='checkbox']", "checked").GetBool("checked")
+			checked := b.CurrentPropertiesForEach(".clickable[type='checkbox']", "checked").GetBool("checked")
+			b.InvokeOnEachImmediately(".clickable[type='checkbox']", "click")
+			newChecked := b.CurrentPropertiesForEach(".clickable[type='checkbox']", "checked").GetBool("checked")
 			for i := range checked {
 				Ω(newChecked[i]).Should(Equal(!checked[i]))
 			}
@@ -1471,9 +1831,9 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			b.InvokeOn(".notice", "append", " I Can Add To")
 			Ω(".notice").Should(b.HaveInnerText("Some Text I Can Add To"))
 
-			texts := b.InnerTextForEach("li")
-			b.InvokeOnEach("li", "append", "!")
-			newTexts := b.InnerTextForEach("li")
+			texts := b.CurrentInnerTextForEach("li")
+			b.InvokeOnEachImmediately("li", "append", "!")
+			newTexts := b.CurrentInnerTextForEach("li")
 			for i := range texts {
 				Ω(newTexts[i]).Should(Equal(texts[i] + "!"))
 			}
@@ -1481,25 +1841,38 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			result := b.InvokeOn(".notice", "getAttributeNames")
 			Ω(result).Should(ConsistOf("class", "magic", "data-name"))
 
-			initial := b.InvokeOnEach(".notice", "getAttribute", "magic")
+			initial := b.InvokeOnEachImmediately(".notice", "getAttribute", "magic")
 			Ω(initial).Should(HaveExactElements("on", "on", "off"))
-			b.InvokeOnEach(".notice", "setAttribute", "magic", "on")
-			subsequent := b.InvokeOnEach(".notice", "getAttribute", "magic")
+			b.InvokeOnEachImmediately(".notice", "setAttribute", "magic", "on")
+			subsequent := b.InvokeOnEachImmediately(".notice", "getAttribute", "magic")
 			Ω(subsequent).Should(HaveExactElements("on", "on", "on"))
 		})
 
-		It("fails if the dom element does not exist", func() {
-			b.InvokeOn("#non-existing", "click")
-			ExpectFailures("Failed to invoke \"click\":\ncould not find DOM element matching selector: #non-existing")
-
-			b.InvokeOnEach("#non-existing", "click") // does nothing
+		It("polls until the element appears, then invokes on it", func() {
+			go func() {
+				defer GinkgoRecover()
+				<-time.After(time.Millisecond * 100)
+				b.Run(`document.querySelector("#increment").id = "delayed-increment"`)
+			}()
+			b.InvokeOn("#delayed-increment", "click")
+			Ω("#counter-input").Should(b.HaveValue("1"))
 		})
 
-		It("fails if the function does not exist", func() {
-			b.InvokeOn(".notice", "encabulate")
-			ExpectFailures("Failed to invoke \"encabulate\":\nelement does not implement \"encabulate\": .notice")
+		It("times out (poll-by-default) if the dom element does not exist", func() {
+			b.WithTimeout(time.Millisecond*60).InvokeOn("#non-existing", "click")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("respond to \"click\""),
+			))
 
-			b.InvokeOnEach(".notice", "encabulate") // does nothing
+			b.InvokeOnEachImmediately("#non-existing", "click") // does nothing
+		})
+
+		It("fails fast (does not poll) if the function does not exist", func() {
+			b.Immediate().InvokeOn(".notice", "encabulate")
+			ExpectFailures(ContainSubstring("element does not implement \"encabulate\": .notice"))
+
+			b.InvokeOnEachImmediately(".notice", "encabulate") // does nothing
 		})
 	})
 
@@ -1514,19 +1887,22 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(b.Count("ol li")).Should(Equal(count + 2))
 			Ω(b.XPath("ol").Descendant("li").Last()).Should(b.HaveInnerText("yet another"))
 
-			r = b.InvokeWithEach(".notice", "(n) => n.dataset.name ? n.dataset.name + '!' : 'who?'")
+			r = b.InvokeWithEachImmediately(".notice", "(n) => n.dataset.name ? n.dataset.name + '!' : 'who?'")
 			Ω(r).Should(ConsistOf("henry!", "bob!", "who?"))
 
-			Ω(b.GetPropertiesForEach(".notice", "count").GetInt("count")).Should(HaveExactElements(3, 0, 0))
-			b.InvokeWithEach(".notice", "(n, count) => n.count = n.count || count", 17)
-			Ω(b.GetPropertiesForEach(".notice", "count").GetInt("count")).Should(HaveExactElements(3, 17, 17))
+			Ω(b.CurrentPropertiesForEach(".notice", "count").GetInt("count")).Should(HaveExactElements(3, 0, 0))
+			b.InvokeWithEachImmediately(".notice", "(n, count) => n.count = n.count || count", 17)
+			Ω(b.CurrentPropertiesForEach(".notice", "count").GetInt("count")).Should(HaveExactElements(3, 17, 17))
 		})
 
-		It("fails if the dom element does not exist", func() {
-			b.InvokeWith("#non-existing", "(n) => 1")
-			ExpectFailures("Failed to InvokeWith:\ncould not find DOM element matching selector: #non-existing")
+		It("times out (poll-by-default) if the dom element does not exist", func() {
+			b.WithTimeout(time.Millisecond*60).InvokeWith("#non-existing", "(n) => 1")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("be invokable"),
+			))
 
-			r := b.InvokeOnEach("#non-existing", "(n) => 1") // does nothing
+			r := b.InvokeOnEachImmediately("#non-existing", "(n) => 1") // does nothing
 			Ω(r).Should(BeEmpty())
 		})
 	})
@@ -1542,8 +1918,8 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 
 		It("errors when the element does not exist", func() {
-			b.Click(b.XPath("button").WithText("nope"))
-			ExpectFailures("Failed to click:\ncould not find DOM element matching selector: //button[text()=\"nope\"]")
+			b.Immediate().Click(b.XPath("button").WithText("nope"))
+			ExpectFailures("\ncould not find DOM element matching selector: //button[text()=\"nope\"]")
 		})
 	})
 

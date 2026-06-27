@@ -8,8 +8,9 @@ import (
 SetWindowSize() sets the window size for this tab.  A DeferCleanup is automatically registered to reset the window size after the spec ends
 */
 func (b *Biloba) SetWindowSize(width, height int, opts ...chromedp.EmulateViewportOption) {
-	originalWidth, originalHeight := b.WindowSize()
 	b.gt.Helper()
+	b.guardConfig("SetWindowSize")
+	originalWidth, originalHeight := b.windowSize()
 	// In high-fidelity mode the compositor's real input surface is clamped to a small virtual screen,
 	// so we grow the emulated screen to match the viewport (see emulateViewportMatchingScreen) - this
 	// keeps realistic-mode wheel/scroll input working all the way to the bottom of the resized
@@ -40,7 +41,15 @@ WindowSize() returns the current window size of this tab.
 */
 func (b *Biloba) WindowSize() (int, int) {
 	b.gt.Helper()
+	b.guardConfig("WindowSize")
+	return b.windowSize()
+}
+
+// windowSize is the unguarded substrate behind WindowSize, used internally (e.g. by SetWindowSize)
+// so the public config guard fires only for a user who misconfigures a WindowSize call directly.
+func (b *Biloba) windowSize() (int, int) {
+	b.gt.Helper()
 	var dimensions []int
-	b.Run(`[window.innerWidth, window.innerHeight]`, &dimensions)
+	b.run(`[window.innerWidth, window.innerHeight]`, &dimensions)
 	return dimensions[0], dimensions[1]
 }

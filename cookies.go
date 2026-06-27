@@ -45,6 +45,7 @@ Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cook
 */
 func (b *Biloba) SetCookie(cookies ...Cookie) {
 	b.gt.Helper()
+	b.guardConfig("SetCookie")
 	location := b.Location()
 	params := make([]*network.CookieParam, len(cookies))
 	for i, cookie := range cookies {
@@ -141,6 +142,7 @@ Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cook
 */
 func (b *Biloba) GetCookies() Cookies {
 	b.gt.Helper()
+	b.guardConfig("GetCookies")
 	var networkCookies []*network.Cookie
 	err := b.runWithBrowserExecutor(func(ctx context.Context) error {
 		var err error
@@ -180,6 +182,7 @@ Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cook
 */
 func (b *Biloba) ClearCookies() {
 	b.gt.Helper()
+	b.guardConfig("ClearCookies")
 	err := b.runWithBrowserExecutor(func(ctx context.Context) error {
 		return storage.ClearCookies().WithBrowserContextID(b.browserContextID).Do(ctx)
 	})

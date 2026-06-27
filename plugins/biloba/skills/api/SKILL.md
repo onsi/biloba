@@ -1,11 +1,13 @@
 ---
 name: api
-description: One-line reference for every Biloba method and matcher, grouped by area — selectors/locators, lifecycle, navigation, cookies/storage, tabs, DOM existence/visibility/contents/properties/forms, clicking and interactions (incl. drag/scroll/tap/modifiers/text-selection), realistic mode, keyboard, uploads, element JS, dialogs, downloads, arbitrary JS, network stubbing/aborting/modifying/observing, and screenshots/outline/window. Use to look up the exact method or matcher name and shape. Methods marked (dual) act immediately when fully applied and return a pollable matcher when under-applied.
+description: One-line reference for every Biloba method and matcher, grouped by area — selectors/locators, lifecycle, poll-config (WithTimeout/WithPolling/WithContext/Immediate), navigation, cookies/storage, tabs, DOM existence/visibility/contents/properties/forms, clicking and interactions (incl. drag/scroll/tap/modifiers/text-selection), realistic mode, keyboard, uploads, element JS, dialogs, downloads, arbitrary JS, network stubbing/aborting/modifying/observing, and screenshots/outline/window. Use to look up the exact method or matcher name and shape. Methods marked (dual) poll until they succeed when fully applied and return a pollable matcher when under-applied.
 ---
 
 # Biloba API reference
 
-Terse lookup. **(dual)** = acts immediately when fully applied, returns a Gomega matcher when under-applied (poll with `Eventually`). **(matcher)** = always returns a matcher. **first** = acts on the first match; **each** = acts on all matches (empty slice when none). Selectors are CSS strings, `XPath` (see `biloba:xpath`), or semantic **`Locator`**s. Full docs: <https://onsi.github.io/biloba/>.
+Terse lookup. **(dual)** = **polls until it succeeds** when fully applied (`b.Click("#go")` waits until the element is clickable, acts once, then stops), returns a Gomega matcher when under-applied (poll it yourself with `Eventually`). **(matcher)** = always returns a matcher. **first** = acts on the first match; **each** = acts on all matches. Selectors are CSS strings, `XPath` (see `biloba:xpath`), or semantic **`Locator`**s. Full docs: <https://onsi.github.io/biloba/>.
+
+**Poll-by-default.** A fully-applied action/getter polls (the flake-resistant default — see `biloba:flaky-specs`). `b.Immediate()` opts back into act-once/fail-fast (rarely needed). The under-applied matcher form is for when you want to drive the `Eventually`/`Consistently` yourself.
 
 ## Selectors / locators
 Three pathways, all flow through every method/matcher. **CSS is the default** (target stable `#id`/`[data-testid]` hooks, not styling classes); **locators** second (a11y assertions + readable text/label identifiers); **XPath** the rare power tool (axis/ordinal). CSS fastest, XPath fast, locators slowest (full-document ARIA scan).
@@ -21,10 +23,27 @@ Three pathways, all flow through every method/matcher. **CSS is the default** (t
 - `b.Prepare()` — reset the root tab between specs (BeforeEach, `OncePerOrdered`).
 - `b.Context` — the tab's `chromedp` context (escape hatch).
 
+## Poll config  (shallow `*Biloba` clones, à la `Realistic()`; not reset by `Prepare()`)
+Tune or opt out of poll-by-default. Each returns a lightweight view of the same tab — use per-call (`b.WithTimeout(5*time.Second).Click("#go")`).
+- `b.WithTimeout(d)` — override the `Eventually` timeout (else Gomega's global default).
+- `b.WithPolling(d)` — override the polling interval.
+- `b.WithContext(ctx)` — thread a context into the poll (cancellation aborts the wait).
+- `b.Immediate()` — opt into act-once / fail-fast (today's old immediate behavior); the escape hatch, rarely needed.
+- **Four-bucket rule** — misapplying config is a **hard error** (fails the spec):
+
+  | Bucket | Methods | `WithTimeout`/`WithContext` | `WithPolling` | `Immediate` |
+  |---|---|---|---|---|
+  | **Polling** | dual actions, value-getters | ✓ | ✓ | ✓ |
+  | **Waiting command** | `Navigate`, `Capture*Screenshot*` (own ~30s/~5s defaults) | ✓ (overrides own default) | error | error |
+  | **Snapshot** | `HasElement`/`Count`/`Current*ForEach`/`Title`/… | error | error | error |
+  | **One-shot mutation** | `SetCookie`/`StubRequest`/`*Immediately`/`Run`/`RunAsync`/… | error | error | error |
+
+  Configuring a call that resolves to a **bare matcher** (a `(matcher)` method, or the under-applied form of a dual method like `b.WithTimeout(d).Click()`) is also a hard error — configure the `Eventually`, not the matcher.
+
 ## Navigation
 - `b.Navigate(url)` — navigate, assert `200`.
 - `b.NavigateWithStatus(url, code)` — navigate, assert a specific status.
-- `b.Location()` / `b.Title()` — current URL / title (pollable).
+- `b.Location()` / `b.Title()` — current URL / title (**immediate snapshot** — no poll, rejects every config knob; drive your own poll via `Eventually(b.Title)` or the `HaveURL`/`HaveTitle` matchers below).
 - `b.HaveURL(string|matcher)` (matcher) — assert tab URL.
 - `b.HaveTitle(string|matcher)` (matcher) — assert tab title.
 
@@ -50,28 +69,32 @@ Three pathways, all flow through every method/matcher. **CSS is the default** (t
 - `b.HasElement(selector)` → bool (first).
 - `b.Exist()` (matcher) — element matches.
 - `b.Count(selector)` → int / `b.HaveCount(int|matcher)` (matcher).
-- `b.BeVisible()` (matcher) — non-zero `offsetWidth`/`offsetHeight`. / `b.EachBeVisible()` (matcher) — every match visible (vacuously true if none).
-- `b.BeEnabled()` (matcher) — `!el.disabled`. / `b.EachBeEnabled()` (matcher) — every match enabled (vacuously true if none).
+- `b.BeVisible()` (matcher) — non-zero `offsetWidth`/`offsetHeight`. / `b.EachBeVisible()` (matcher) — **≥1 match AND all visible** (fails on zero matches).
+- `b.BeEnabled()` (matcher) — `!el.disabled`. / `b.EachBeEnabled()` (matcher) — **≥1 match AND all enabled** (fails on zero matches).
 - `b.BeClickable()` (matcher) — visible + enabled + topmost at its center (deterministic occlusion guard; opt-in, `Click` does **not** run it).
 
 ## Contents, classes, attributes, state
-- `b.InnerText(selector)` → string (first) / `b.HaveInnerText(string|matcher)` (matcher, exact).
+- `b.GetInnerText(selector)` → string (first; **polls** until the element is present — empty string is a valid value) / `b.HaveInnerText(string|matcher)` (matcher, exact).
+- `b.GetTextContent(selector)` → string (first; polls until present) / `b.HaveTextContent(string|matcher)` (matcher).
 - `b.HaveText(string|matcher)` (matcher) — trims & collapses whitespace before matching.
-- `b.InnerTextForEach(selector)` → []string (each) / `b.EachHaveInnerText(...)` (matcher).
-- `b.HaveClass(string|matcher)` (matcher) — string ⇒ "list contains"; matcher receives `[]string`. / `b.EachHaveClass(string)` (matcher) — every match has the class (vacuously true if none).
+- `b.CurrentInnerTextForEach(selector)` → []string (each; **snapshot**, no poll) / `b.EachHaveInnerText(value|matcher)` (matcher — **≥1 match AND all satisfy**; the no-arg `BeEmpty()` form is gone — assert none via `HaveCount(0)`). Same for `b.CurrentTextContentForEach` / `b.EachHaveTextContent(...)`.
+- `b.HaveClass(string|matcher)` (matcher) — string ⇒ "list contains"; matcher receives `[]string`. / `b.EachHaveClass(string)` (matcher) — **≥1 match AND all have the class** (fails on zero matches).
 - `b.HaveAttribute(name[, string|matcher])` (matcher) — HTML attribute via `getAttribute`.
 - `b.HaveComputedStyle(prop, string|matcher)` (matcher) — via `getComputedStyle`.
 - `b.BeChecked()` (matcher) — checkbox/radio checked.
 - `b.BeFocused()` (matcher) — is `document.activeElement`.
 
 ## Properties  (`.` paths like `dataset.name`; JS types preserved — numbers are `float64`)
-- `b.GetProperty(selector, name)` → any (first) / `b.SetProperty(selector, name, value)` (dual) / `b.HaveProperty(name[, value|matcher])` (matcher).
-- `b.GetPropertyForEach(selector, name)` → []any / `b.SetPropertyForEach(selector, name, value)` (no matcher; gate on the matches being present first) / `b.EachHaveProperty(name[, ...])` (matcher).
-- `b.GetProperties(selector, ...names)` → `Properties` (first); getters `GetString/GetInt/GetFloat64/GetBool/GetStringSlice`.
-- `b.GetPropertiesForEach(selector, ...names)` → `SliceOfProperties` (each); same getters return slices; `.Get(key)`, `.Find(key, val|matcher)`, `.Filter(key, val|matcher)`.
+**Two-axis polling**: the singular `Get*` getters poll until the element is present **AND** every named property/attribute is *defined*. Wrap a name in `b.AllowMissing("name")` to make an absent value a valid `nil` rather than something to wait for. **Sharp edge:** a property that simply doesn't exist on that element type (e.g. `disabled` on a `<div>` — `"disabled" in div` is false) would block the poll forever — wrap it in `AllowMissing`. The names params accept `string` or `AllowMissing` (`any`).
+- `b.GetProperty(selector, name)` → any (first; polls) / `b.SetProperty(selector, name, value)` (dual) / `b.HaveProperty(name[, value|matcher])` (matcher).
+- `b.GetProperties(selector, ...names)` → `Properties` (first; polls); getters `GetString/GetInt/GetFloat64/GetBool/GetStringSlice`.
+- `b.GetAttribute(selector, name)` → any (first; polls; raw `getAttribute` markup, not the resolved property) / `b.GetAttributes(selector, ...names)` → `Properties` (first; polls).
+- `b.AllowMissing(name)` — wrap a name passed to the four two-axis getters (`GetProperty`/`GetProperties`/`GetAttribute`/`GetAttributes`) so absent ⇒ `nil`, doesn't block the poll. No effect elsewhere.
+- **Snapshot plural getters (no poll; `nil` for absent; gate presence first with `Eventually(sel).Should(b.HaveCount(n))`):** `b.CurrentPropertyForEach(selector, name)` → []any, `b.CurrentPropertiesForEach(selector, ...names)` → `SliceOfProperties` (getters return slices; `.Get(key)`, `.Find(key, val|matcher)`, `.Filter(key, val|matcher)`), `b.CurrentAttributeForEach(selector, name)` → []any, `b.CurrentAttributesForEach(selector, ...names)` → `SliceOfProperties`.
+- `b.SetPropertyForEachImmediately(selector, name, value)` — set on **all** matches now, no poll (the `Immediately` suffix is the "know what you're doing" smell). / `b.EachHaveProperty(name[, ...])` (matcher — ≥1 match AND all satisfy).
 
 ## Form values  (rationalizes text/checkbox/radio/multi-select)
-- `b.GetValue(selector)` → any (first; bool for checkbox, checked radio's `value`, `[]string` for multi-select).
+- `b.GetValue(selector)` → any (first; polls until present — empty string / unselected radio `""` is a valid value, no "defined" axis; bool for checkbox, checked radio's `value`, `[]string` for multi-select). / `b.CurrentValueForEach(selector)` → []any (each; snapshot, no poll).
 - `b.SetValue(selector, value)` (dual) — requires visible+enabled; focuses, sets, blurs, fires `input`+`change`. Does **not** type real keys. For a `<select>` the value is matched against the **option `value`**, not its visible label (assert labels via `option.textContent`).
 - `b.ValueLabel(label)` — wrap a `SetValue` arg to target a `<select>` option by its **visible label** instead of its value: `b.SetValue(sel, b.ValueLabel("Sonnet"))`. Multi-select: pass a slice whose entries are `ValueLabel`s (labels and raw values may be mixed). `<select>` only.
 - `b.HaveValue(value|matcher)` (matcher).
@@ -83,7 +106,7 @@ Three pathways, all flow through every method/matcher. **CSS is the default** (t
 - **Pointer options** — `b.At(x,y)` (offset from top-left, à la canvas/map/slider), `b.Shift()`/`b.Ctrl()`/`b.Alt()`/`b.Meta()` (⌘/Win) — accepted by `Click`/`DblClick`/`RightClick`/`MiddleClick`/`Tap`, after the selector or in place of it (matcher form). They compose: `b.Click(sel, b.At(30,40), b.Shift())`. In fast mode any option switches a click off native `el.click()` to a synthetic event carrying coords+flags; realistic uses real CDP input natively.
 - `b.DragTo(source, target)` (dual) — pointer-based drag (`pointerdown`/`move`/`up`); drives @dnd-kit-style DnD, not native HTML5 `draggable`. Matcher subject is the source: `Eventually(src).Should(b.DragTo(tgt))`.
 - `b.ScrollWheel(selector, deltaX, deltaY)` (dual; matcher form `b.ScrollWheel(deltaX, deltaY)`) — `wheel` event then scrolls nearest scrollable ancestor (realistic: real CDP wheel); +deltaY=down, +deltaX=right.
-- `b.ClickEach(selector)` — click all visible+enabled matches (no matcher; gate on the matches being present first).
+- `b.ClickEachImmediately(selector)` — click all visible+enabled matches now, no poll (the `Immediately` suffix flags the no-readiness-fold smell; gate presence first).
 - `b.Focus(selector)` (dual) / `b.Blur(selector)` (dual) / `b.Hover(selector)` (dual; fires pointer/mouse events, not CSS `:hover`) / `b.ScrollIntoView(selector)` (dual).
 - `b.SelectText(selector)` (dual) — select all of the element's text as a real `window.getSelection()` range, dispatching `mouseup` (drives highlight→menu/annotation UIs).
 - `b.SelectRange(selector, start, end)` (dual; matcher form `b.SelectRange(start, end)`) — select chars `[start, end)` across the element's text nodes; same range+mouseup. Read back with `Eventually("window.getSelection().toString()").Should(b.EvaluateTo(…))`.
@@ -94,19 +117,22 @@ Three pathways, all flow through every method/matcher. **CSS is the default** (t
 - Compose inline (`b.Realistic().Click(sel)`), per-spec (`rb := b.Realistic()`), or per-suite (`Label("realistic")` + `BeforeEach{ rb = b.Realistic() }`, then `ginkgo --label-filter='realistic'`/`'!realistic'`). Fast-vs-realistic capability matrix: <https://onsi.github.io/biloba/#realistic-interactions>.
 
 ## Keyboard  (real key events, via chromedp)
-- `b.Type(selector, text)` (dual) — focus, then genuine keystrokes; **appends**. Focusing scrolls the element into view.
-- `b.SendKeys([selector,] ...parts)` — send text + named keys; selector optional (else focused element). No matcher form (the keys-only shape is reserved for the focused element); gate on readiness first (`Eventually(sel).Should(b.BeEnabled())`) when the target appears asynchronously.
+- `b.Type(...)` (dual) — **the** element-targeted keyboard method: focus, then genuine keystrokes (text **and** named `Keys.*`); **appends**; focusing scrolls into view. Arg disambiguation (after stripping modifiers):
+  - `b.Type(selector, payload...)` — **immediate** (polls): selector + ≥1 payload arg. `b.Type("input", "hello")`, `b.Type("input", "hello", biloba.Keys.Enter)`, `b.Type("input", biloba.Keys.Enter)`.
+  - `b.Type(payload)` — **matcher**: a single string, or one-or-more `Keys.*`. `Eventually("#in").Should(b.Type("hello"))`, `Eventually("#in").Should(b.Type(biloba.Keys.Enter))`.
+  - Limitation: the matcher form can't mix *leading text + trailing keys* (`b.Type("hello", Keys.Enter)` reads as immediate selector=`"hello"`). Fine — the immediate form polls, so use it; the matcher form is only for custom `Consistently`/composition.
+- `b.SendKeysToWindowImmediately(...parts)` — **focus-free, no selector, no matcher, no poll**: text + named keys land on the focused element, else fire on `document`/window (global hotkeys). Only you know what should be focused, so it can't poll — gate first: `Eventually(sel).Should(b.BeFocused())` then send. To type *into* a specific element, use `b.Type` (which focuses it).
 - `biloba.Keys.{Enter,Tab,Escape,Backspace,Delete,Arrow{Up,Down,Left,Right},Home,End,PageUp,PageDown}`.
-- **Modifiers** `b.Shift()`/`b.Ctrl()`/`b.Alt()`/`b.Meta()` work here too (same values as the pointer modifiers): pass them in any position to `Type`/`SendKeys` for Shift-Enter, ⌘-A, etc. — `b.SendKeys("textarea", biloba.Keys.Enter, b.Shift())`.
+- **Modifiers** `b.Shift()`/`b.Ctrl()`/`b.Alt()`/`b.Meta()` work here too (same values as the pointer modifiers): pass them in any position to `Type`/`SendKeysToWindowImmediately` for Shift-Enter, ⌘-A, etc. — `b.Type("textarea", biloba.Keys.Enter, b.Shift())`.
 
 ## Uploads
 - `b.SetUpload(selector, ...paths)` (dual; matcher form `b.SetUpload(path)` or, for multiple files, `b.SetUpload([]string{...})`) — set `<input type=file>` files via CDP (paths must exist on Chrome's machine); fires `change`. In the matcher form multiple files must be a single `[]string` (bare variadic paths would be ambiguous with the immediate selector+paths form).
 
 ## Run JS on selected elements
-- `b.InvokeOn(selector, method, ...args)` → any (first) — `el[method](...args)`.
-- `b.InvokeOnEach(selector, method, ...args)` (each).
-- `b.InvokeWith(selector, jsFn, ...args)` → any (first) — `jsFn(el, ...args)`.
-- `b.InvokeWithEach(selector, jsFn, ...args)` (each).
+- `b.InvokeOn(selector, method, ...args)` → any (first; **polls** until present) — `el[method](...args)`.
+- `b.InvokeOnEachImmediately(selector, method, ...args)` → []any (each; snapshot, no poll).
+- `b.InvokeWith(selector, jsFn, ...args)` → any (first; polls until present) — `jsFn(el, ...args)`.
+- `b.InvokeWithEachImmediately(selector, jsFn, ...args)` → []any (each; snapshot, no poll).
 
 ## Dialogs  (register handlers BEFORE the triggering action; per-tab; reset by Prepare)
 - `b.HandleAlertDialogs()` / `HandleConfirmDialogs()` / `HandlePromptDialogs()` / `HandleBeforeUnloadDialogs()` → `DialogHandler`.

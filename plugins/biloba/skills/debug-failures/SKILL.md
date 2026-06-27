@@ -1,11 +1,11 @@
 ---
 name: debug-failures
-description: See why a Biloba spec failed or flaked — the on-failure artifacts (DOM outline + screenshots), how Biloba auto-adapts to humans vs CI vs AI agents, the env vars and config knobs that surface them (BILOBA_SCREENSHOTS_DIR, BILOBA_INLINE_SCREENSHOTS, BILOBA_OUTLINE_MAX, BILOBA_INTERACTIVE, BilobaConfig*), attaching app/store state to a failure, and using b.Outline()/b.A11yOutline() to understand why a selector didn't match. Use when a browser spec is failing or flaky and you need visibility, or to configure failure output for CI/agents. For *preventing* flakes (single-shot reads, racing interactions, optimistic-UI) see biloba:flaky-specs.
+description: See why a Biloba spec failed or flaked — the on-failure artifacts (DOM outline + screenshots), how Biloba auto-adapts to humans vs CI vs AI agents, the env vars and config knobs that surface them (BILOBA_SCREENSHOTS_DIR, BILOBA_INLINE_SCREENSHOTS, BILOBA_OUTLINE_MAX, BILOBA_INTERACTIVE, BilobaConfig*), attaching app/store state to a failure, and using b.Outline()/b.A11yOutline() to understand why a selector didn't match. Use when a browser spec is failing or flaky and you need visibility, or to configure failure output for CI/agents. For *preventing* flakes (single-shot reads, avoiding b.Immediate(), optimistic-UI) see biloba:flaky-specs.
 ---
 
 # Debugging Biloba failures
 
-Biloba adapts failure output to *who's looking* and lets you override any piece. Docs: <https://onsi.github.io/biloba/#failure-artifacts>. This skill is about *seeing why a spec failed*; if a spec is **flaky** (passes locally, fails under `-p`/CI, fails intermittently) the cause is usually a single-shot read or a racing interaction — fix those with `biloba:flaky-specs`, then come back here to read the artifacts.
+Biloba adapts failure output to *who's looking* and lets you override any piece. Docs: <https://onsi.github.io/biloba/#failure-artifacts>. This skill is about *seeing why a spec failed*; if a spec is **flaky** (passes locally, fails under `-p`/CI, fails intermittently) the cause is usually a single-shot `b.Run` read or a reach for `b.Immediate()` (Biloba's actions poll by default) — fix those with `biloba:flaky-specs`, then come back here to read the artifacts.
 
 ## What you get on failure, by environment
 
@@ -54,7 +54,7 @@ Guard the read (`?? null`) so a crashed/half-loaded page doesn't turn the snapsh
 
 **Page-side `console.log` for live debugging.** All page `console.*` output is forwarded to the `GinkgoWriter` (each argument rendered, space-separated). Objects are rendered from CDP's **shallow** preview, so a nested/large object logs lossily (deep fields collapse). When you're logging a state object to chase a DOM/React timing bug, build one string yourself — `console.log('state ' + JSON.stringify(obj))` — to get the full value instead of the truncated preview. Same idea for a quick count probe: `b.Run("document.querySelectorAll('.card').length")` returns the number directly (no need to reach into the outline).
 
-**`HaveInnerText`/`InnerText` timing out on content that's clearly there.** If an `InnerText`/`HaveInnerText` assertion on freshly-changed or dynamically-added content spins until timeout in headless even though the text is plainly in the DOM (and in the outline), it's almost certainly `innerText` returning a stale/partial value — it's computed from layout, which can lag a DOM change before a paint settles. Switch to the layout-independent `HaveTextContent`/`TextContent` (reads `textContent` straight off the tree) or to a plain existence assertion.
+**`HaveInnerText`/`GetInnerText` timing out on content that's clearly there.** If a `GetInnerText`/`HaveInnerText` assertion on freshly-changed or dynamically-added content spins until timeout in headless even though the text is plainly in the DOM (and in the outline), it's almost certainly `innerText` returning a stale/partial value — it's computed from layout, which can lag a DOM change before a paint settles. Switch to the layout-independent `HaveTextContent`/`GetTextContent` (reads `textContent` straight off the tree) or to a plain existence assertion.
 
 ## Inline images (interactive terminals)
 

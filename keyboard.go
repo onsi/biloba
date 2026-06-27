@@ -8,21 +8,21 @@ import (
 )
 
 /*
-Key represents a single named key (e.g. Enter, Tab, Escape) that can be sent to the browser via [Biloba.SendKeys].  Use the [Keys] namespace to access the available keys:
+Key represents a single named key (e.g. Enter, Tab, Escape) that can be sent to the browser via [Biloba.Type] or [Biloba.SendKeysToWindowImmediately].  Use the [Keys] namespace to access the available keys:
 
-	b.SendKeys("input", biloba.Keys.Enter)
+	b.Type("input", biloba.Keys.Enter)
 
-A Key is distinct from a selector so [Biloba.SendKeys] can tell whether its first argument targets an element or is itself a key to send to the focused element.
+A Key is distinct from a selector so [Biloba.Type] can tell whether its first argument targets an element or is itself a key to type into the focused element.
 
 Read https://onsi.github.io/biloba/#keyboard-input to learn more about keyboard input
 */
 type Key string
 
 /*
-Keys is a namespace of the named keys you can send with [Biloba.SendKeys].  The values mirror chromedp's keyboard runes (the [github.com/chromedp/chromedp/kb] package):
+Keys is a namespace of the named keys you can send with [Biloba.Type] or [Biloba.SendKeysToWindowImmediately].  The values mirror chromedp's keyboard runes (the [github.com/chromedp/chromedp/kb] package):
 
-	b.SendKeys("input.search", biloba.Keys.Enter)
-	b.SendKeys(biloba.Keys.Escape) // sent to the currently focused element
+	b.Type("input.search", biloba.Keys.Enter)         // type Enter into the search box
+	b.SendKeysToWindowImmediately(biloba.Keys.Escape) // send Escape to whatever is focused (or the window)
 
 It covers the editing, navigation, lock, and function keys you reach for in a browser test.  For an
 exotic key not listed here (media, IME, launch keys) drop down to chromedp via b.Context and the
@@ -193,125 +193,122 @@ func (b *Biloba) focusAndSendKeys(selector any, keys string, mods []clickModifie
 	return true, nil
 }
 
-/*
-Type() sends text to an element as real keyboard input.  Unlike [Biloba.SetValue] (which sets the value directly and dispatches input/change events) Type focuses the element and dispatches genuine keydown/keypress/keyup events for each character - exercising apps that are wired to real key events (search-as-you-type, editors, hotkeys).
-
-Type() has two modes of operation:
-
-When invoked with a selector and text:
-
-	b.Type("input.search", "hello")
-
-it immediately focuses the first element matching selector and types text into it.  The element must exist, be visible, and be enabled - otherwise the spec fails.
-
-When invoked with just text, Type returns a Gomega matcher that succeeds once an element is found, focusable, and the text has been typed:
-
-	Eventually("input.search").Should(b.Type("hello"))
-
-You can hold keyboard modifiers ([Biloba.Shift], [Biloba.Ctrl], [Biloba.Alt], [Biloba.Meta]) down while typing - handy for hotkeys like Cmd-A (select all):
-
-	b.Type("input.search", "a", b.Meta())
-
-Read https://onsi.github.io/biloba/#keyboard-input to learn more about keyboard input
-*/
-func (b *Biloba) Type(args ...any) types.GomegaMatcher {
+// buildKeys concatenates a keyboard payload - strings and named [Keys] mixed in any order - into the
+// single key string that chromedp dispatches.  It is the shared payload builder for [Biloba.Type] and
+// [Biloba.SendKeysToWindowImmediately] and fails the spec (returning ok==false) on any other type.
+func (b *Biloba) buildKeys(method string, args []any) (string, bool) {
 	b.gt.Helper()
-	rest, mods := splitModifiers(args)
-	if len(rest) == 2 {
-		success, err := b.focusAndSendKeys(rest[0], toString(rest[1]), mods)
-		if err != nil {
-			b.gt.Fatalf("Failed to type:\n%s", err.Error())
-		} else if !success {
-			b.gt.Fatalf("Failed to type: element is not visible or enabled")
-		}
-		return nil
-	}
-	if len(rest) != 1 {
-		b.gt.Fatalf("Type requires text to type")
-		return nil
-	}
-	text := toString(rest[0])
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
-		return b.focusAndSendKeys(selector, text, mods)
-	}).WithMessage("be typable")
-}
-
-/*
-SendKeys() sends one or more named keys (such as Enter, Tab, or Escape) as real keyboard events.  Use the [Keys] namespace for the available keys.
-
-SendKeys() has two modes of operation:
-
-When the first argument is a selector it focuses that element and then sends the remaining keys to it:
-
-	b.SendKeys("input.search", biloba.Keys.Enter)        // type Enter into the search box (e.g. to submit a form)
-	b.SendKeys("textarea", "x", biloba.Keys.Backspace)   // mix text and named keys
-
-When called with only keys (no selector) the keys are sent to whichever element currently has focus:
-
-	b.Click("#editor")
-	b.SendKeys(biloba.Keys.Escape) // send Escape to the focused element
-
-Hold keyboard modifiers ([Biloba.Shift], [Biloba.Ctrl], [Biloba.Alt], [Biloba.Meta]) down by passing them alongside the keys (in any position) - so an app reading e.shiftKey/e.metaKey in a keydown handler sees them:
-
-	b.SendKeys("textarea", biloba.Keys.Enter, b.Shift()) // Shift-Enter
-	b.SendKeys(biloba.Keys.Enter, b.Meta())              // Cmd-Enter to the focused element
-
-SendKeys fails the spec if a selector is provided but no matching element is found, or if the element is hidden or disabled.
-
-SendKeys has no matcher form (the keys-only form is reserved for sending to the focused element, so there is no free shape for it to return a matcher).  Because it acts immediately and never polls, gate it on a readiness anchor when the target appears asynchronously:
-
-	Eventually("input.search").Should(b.BeEnabled())   // wait until it's really there & actionable
-	b.SendKeys("input.search", biloba.Keys.Enter)      // then send once
-
-Read https://onsi.github.io/biloba/#keyboard-input to learn more about keyboard input
-*/
-func (b *Biloba) SendKeys(args ...any) {
-	b.gt.Helper()
-	rest, mods := splitModifiers(args)
-	if len(rest) == 0 {
-		b.gt.Fatalf("SendKeys requires at least one key to send")
-		return
-	}
-
-	var selector any
-	keyArgs := rest
-	switch rest[0].(type) {
-	case Key:
-		// no selector - send to the focused element
-	case XPath:
-		selector = rest[0]
-		keyArgs = rest[1:]
-	case string:
-		selector = rest[0]
-		keyArgs = rest[1:]
-	default:
-		b.gt.Fatalf("SendKeys received an invalid first argument of type %T - it must be a selector or a biloba.Key", rest[0])
-		return
-	}
-
 	keys := ""
-	for _, k := range keyArgs {
+	for _, k := range args {
 		switch v := k.(type) {
 		case Key:
 			keys += string(v)
 		case string:
 			keys += v
 		default:
-			b.gt.Fatalf("SendKeys received an invalid key of type %T - keys must be strings or biloba.Keys", k)
-			return
+			b.gt.Fatalf("%s received an invalid key of type %T - keys must be strings or biloba.Keys", method, k)
+			return "", false
 		}
 	}
+	return keys, true
+}
 
-	if selector != nil {
-		success, err := b.focusAndSendKeys(selector, keys, mods)
-		if err != nil {
-			b.gt.Fatalf("Failed to send keys:\n%s", err.Error())
-		} else if !success {
-			b.gt.Fatalf("Failed to send keys: element is not visible or enabled")
+/*
+Type() sends text - and named [Keys] - to an element as real keyboard input.  Unlike [Biloba.SetValue] (which sets the value directly and dispatches input/change events) Type focuses the element and dispatches genuine keydown/keypress/keyup events for each character - exercising apps that are wired to real key events (search-as-you-type, editors, hotkeys).  Type is the element-targeted keyboard method: pass plain strings, named [Keys], and held modifiers in any mix.
+
+Type() has two modes of operation, chosen by its arguments (after held modifiers are stripped out):
+
+When the first argument is a selector followed by a payload (two or more arguments) Type targets that element - focusing the first element matching selector and typing the payload into it:
+
+	b.Type("input.search", "hello")                    // type "hello"
+	b.Type("input.search", "hello", biloba.Keys.Enter) // type "hello" then press Enter
+	b.Type("input.search", biloba.Keys.Enter)          // press Enter into the search box (e.g. submit a form)
+
+Like Biloba's other action methods Type polls by default: it keeps trying until the element exists, is visible, and is enabled (use [Biloba.Immediate] to act once and fail fast, or [Biloba.WithTimeout] to bound the wait).
+
+When called with just a payload - a single string, or one or more named [Keys] - Type returns a Gomega matcher you poll yourself:
+
+	Eventually("input.search").Should(b.Type("hello"))
+	Eventually("#editor").Should(b.Type(biloba.Keys.Enter))
+
+You can hold keyboard modifiers ([Biloba.Shift], [Biloba.Ctrl], [Biloba.Alt], [Biloba.Meta]) down while typing - handy for hotkeys like Cmd-A (select all):
+
+	b.Type("input.search", "a", b.Meta())
+	Eventually("input.search").Should(b.Type("a", b.Meta()))
+
+Note: the matcher form cannot mix leading text with trailing keys - b.Type("hello", biloba.Keys.Enter) is read as the immediate form with selector "hello".  That's fine: the immediate form now polls, so it already covers that case; reach for the matcher form only when you need a custom Consistently or composition.
+
+Read https://onsi.github.io/biloba/#keyboard-input to learn more about keyboard input
+*/
+func (b *Biloba) Type(args ...any) types.GomegaMatcher {
+	b.gt.Helper()
+	rest, mods := splitModifiers(args)
+	if len(rest) == 0 {
+		b.gt.Fatalf("Type requires text or keys to type")
+		return nil
+	}
+
+	firstIsSelector := false
+	switch rest[0].(type) {
+	case string, XPath:
+		firstIsSelector = true
+	}
+
+	// immediate form: a selector followed by a payload (selector + two-or-more args)
+	if firstIsSelector && len(rest) >= 2 {
+		selector := rest[0]
+		keys, ok := b.buildKeys("Type", rest[1:])
+		if !ok {
+			return nil
 		}
+		matcher := gcustom.MakeMatcher(func(selector any) (bool, error) {
+			return b.focusAndSendKeys(selector, keys, mods)
+		}).WithMessage("be typable")
+		b.pollOrImmediate(selector, matcher)
+		return nil
+	}
+
+	// matcher form: just a payload (one string, or one-or-more named Keys)
+	keys, ok := b.buildKeys("Type", rest)
+	if !ok {
+		return nil
+	}
+	b.guardBareMatcher("Type")
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return b.focusAndSendKeys(selector, keys, mods)
+	}).WithMessage("be typable")
+}
+
+/*
+SendKeysToWindowImmediately() sends one or more named [Keys] (such as Enter, Escape, or a function key) - and plain text - as real keyboard events, focus-free: the keys land on whichever element currently has focus, or, if nothing is focused, fire against document/window (the path for global hotkeys).  There is no selector form - to type into a specific element use [Biloba.Type], which focuses it first.
+
+	b.Click("#editor")
+	b.SendKeysToWindowImmediately(biloba.Keys.Escape) // Escape to the focused #editor
+	b.SendKeysToWindowImmediately("/")                // a "/" hotkey handled at the document level
+
+Hold keyboard modifiers ([Biloba.Shift], [Biloba.Ctrl], [Biloba.Alt], [Biloba.Meta]) down by passing them alongside the keys (in any position) - so an app reading e.shiftKey/e.metaKey in a keydown handler sees them:
+
+	b.SendKeysToWindowImmediately(biloba.Keys.Enter, b.Meta()) // Cmd-Enter to the focused element
+
+As the name says, SendKeysToWindowImmediately acts immediately and never polls - only you know what should be focused when it fires.  When the target appears asynchronously, gate it on a readiness anchor first:
+
+	Eventually("input.search").Should(b.BeFocused()) // wait until it really has focus
+	b.SendKeysToWindowImmediately(biloba.Keys.Enter) // then send once
+
+Read https://onsi.github.io/biloba/#keyboard-input to learn more about keyboard input
+*/
+func (b *Biloba) SendKeysToWindowImmediately(args ...any) {
+	b.gt.Helper()
+	b.guardConfig("SendKeysToWindowImmediately")
+	rest, mods := splitModifiers(args)
+	if len(rest) == 0 {
+		b.gt.Fatalf("SendKeysToWindowImmediately requires at least one key to send")
 		return
 	}
-
+	keys, ok := b.buildKeys("SendKeysToWindowImmediately", rest)
+	if !ok {
+		return
+	}
 	if err := b.dispatchKeys(keys, mods); err != nil {
 		b.gt.Fatalf("Failed to send keys:\n%s", err.Error())
 	}

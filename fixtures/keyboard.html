@@ -32,6 +32,9 @@
     <textarea id="editor"></textarea>
     <div id="last-combo">none</div>
 
+    <!-- records keydowns seen at the document level, so we can assert focus-free / global-hotkey sends -->
+    <div id="global-hotkey">none</div>
+
     <script>
         const log = document.getElementById("key-log")
         const typewriter = document.getElementById("typewriter")
@@ -51,6 +54,11 @@
             if (e.altKey) mods.push("Alt")
             if (e.metaKey) mods.push("Meta")
             lastCombo.innerText = [...mods, e.key].join("+")
+        })
+
+        const globalHotkey = document.getElementById("global-hotkey")
+        document.addEventListener("keydown", (e) => {
+            globalHotkey.innerText = e.key
         })
 
         const form = document.getElementById("search-form")

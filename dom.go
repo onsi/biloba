@@ -87,10 +87,13 @@ func (b *Biloba) runBilobaHandlerAsync(name string, selector any, args ...any) *
 /*
 HasElement(selector) returns true if an element matching selector is found
 
+HasElement is a snapshot primitive: it captures what is present right now and does not poll (to wait, use Eventually(selector).Should(b.Exist())).  Configuring it (WithTimeout/WithPolling/WithContext/Immediate) is a hard error.
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
 func (b *Biloba) HasElement(selector any) bool {
 	b.gt.Helper()
+	b.guardConfig("HasElement")
 	r := b.runBilobaHandler("exists", selector)
 	if r.Error() != nil {
 		b.gt.Fatalf("Failed to check if element exists:\n%s", r.Error())
@@ -114,10 +117,13 @@ func (b *Biloba) Exist() types.GomegaMatcher {
 /*
 Count(selector) returns the number of elements matching selector
 
+Count is a snapshot primitive: it captures the current count and does not poll (to gate on a stable count, use Eventually(selector).Should(b.HaveCount(n))).  Configuring it (WithTimeout/WithPolling/WithContext/Immediate) is a hard error.
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
 func (b *Biloba) Count(selector any) int {
 	b.gt.Helper()
+	b.guardConfig("Count")
 	r := b.runBilobaHandler("count", selector)
 	if r.Error() != nil {
 		b.gt.Fatalf("Failed to count elements:\n%s", r.Error())
@@ -183,8 +189,14 @@ func (b *Biloba) BeEnabled() types.GomegaMatcher {
 	}).WithMessage("be enabled")
 }
 
+// eachEmptyTemplate is the failure rendering shared by every Each* matcher when the selector matches
+// no elements.  Each* asserts "there is at least one match AND all matches satisfy" - zero matches is
+// a failure (a vacuous pass would be a silent false-positive), and under Eventually/Consistently it
+// correctly makes the assertion wait for the elements to appear.
+const eachEmptyTemplate = "Expected at least one element to match {{.Actual}}, but none did"
+
 /*
-EachBeVisible() is a Gomega matcher that passes if every element returned by selector is visible.  It passes vacuously when no elements match.
+EachBeVisible() is a Gomega matcher that passes if there is at least one element matching selector and every such element is visible.  It fails when no elements match.
 
 Use it like this:
 
@@ -196,13 +208,19 @@ visibility is determined by non-zero offsetWidth and offsetHeight
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
 func (b *Biloba) EachBeVisible() types.GomegaMatcher {
+	data := map[string]any{}
 	return gcustom.MakeMatcher(func(selector any) (bool, error) {
-		return b.runBilobaHandler("eachIsVisible", selector).MatcherResult()
-	}).WithMessage("each be visible")
+		r := b.runBilobaHandler("eachIsVisible", selector)
+		if r.Error() != nil {
+			return false, r.Error()
+		}
+		data["Empty"] = r.ResultInt() == 0
+		return r.Success, nil
+	}).WithTemplate("{{if .Data.Empty}}"+eachEmptyTemplate+"{{else}}Expected {{.Actual}} {{.To}} each be visible{{end}}", data)
 }
 
 /*
-EachBeEnabled() is a Gomega matcher that passes if every element returned by selector is not disabled.  It passes vacuously when no elements match.
+EachBeEnabled() is a Gomega matcher that passes if there is at least one element matching selector and every such element is not disabled.  It fails when no elements match.
 
 Use it like this:
 
@@ -212,9 +230,15 @@ Use it like this:
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
 func (b *Biloba) EachBeEnabled() types.GomegaMatcher {
+	data := map[string]any{}
 	return gcustom.MakeMatcher(func(selector any) (bool, error) {
-		return b.runBilobaHandler("eachIsEnabled", selector).MatcherResult()
-	}).WithMessage("each be enabled")
+		r := b.runBilobaHandler("eachIsEnabled", selector)
+		if r.Error() != nil {
+			return false, r.Error()
+		}
+		data["Empty"] = r.ResultInt() == 0
+		return r.Success, nil
+	}).WithTemplate("{{if .Data.Empty}}"+eachEmptyTemplate+"{{else}}Expected {{.Actual}} {{.To}} each be enabled{{end}}", data)
 }
 
 /*
@@ -238,11 +262,13 @@ func (b *Biloba) BeClickable() types.GomegaMatcher {
 }
 
 /*
-InnerText(selector) returns the innerText of the first element matching selector
+GetInnerText(selector) returns the innerText of the first element matching selector.
+
+Like all of Biloba's value-getters it polls by default: it waits until an element matching selector is present (an empty innerText is a valid result), then returns its innerText.  Configure the wait with WithTimeout/WithPolling/WithContext, or opt into act-once/fail-fast with Immediate().
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
-func (b *Biloba) InnerText(selector any) string {
+func (b *Biloba) GetInnerText(selector any) string {
 	b.gt.Helper()
 	return toString(b.GetProperty(selector, "innerText"))
 }
@@ -263,42 +289,42 @@ func (b *Biloba) HaveInnerText(expected any) types.GomegaMatcher {
 }
 
 /*
-InnerTextForEach(selector) returns a slice []string of innerText for each element matching selector
+CurrentInnerTextForEach(selector) returns a snapshot slice []string of innerText for each element matching selector.  It does not poll - gate on the matches being present first (e.g. Eventually(selector).Should(b.HaveCount(n))) when they appear asynchronously.
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
-func (b *Biloba) InnerTextForEach(selector any) []string {
+func (b *Biloba) CurrentInnerTextForEach(selector any) []string {
 	b.gt.Helper()
-	return toStringSlice(b.GetPropertyForEach(selector, "innerText"))
+	b.guardConfig("CurrentInnerTextForEach")
+	return toStringSlice(b.CurrentPropertyForEach(selector, "innerText"))
 }
 
 /*
-EachHaveInnerText(expected) is a Gomega matcher that passes if the []string slice of innerTexts for all matching elements returned by selector matches expected.  expected can be a []string, but you'll probably want to use a Gomega matcher
+EachHaveInnerText(expected) is a Gomega matcher that passes if there is at least one element matching selector and the []string slice of innerTexts for all matching elements satisfies expected.  expected can be a []string, but you'll probably want to use a Gomega matcher.  It fails when no elements match - to assert that nothing matches use Eventually(selector).Should(b.HaveCount(0)) or ShouldNot(b.Exist()).
 
 Use it like this:
 
 	Eventually("div.comment").Should(tab.EachHaveInnerText(ContainElement("new comment")))
 	//equivalent to, but tidier than
-	Eventually(tab.InnerTextForEach).WithArgument("div.comment").Should(ContainElement("new comment"))
+	Eventually(tab.CurrentInnerTextForEach).WithArgument("div.comment").Should(ContainElement("new comment"))
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DO
 M
 */
 func (b *Biloba) EachHaveInnerText(args ...any) types.GomegaMatcher {
-	if len(args) == 0 {
-		args = []any{gomega.BeEmpty()}
-	}
 	return b.EachHaveProperty("innerText", args...)
 }
 
 /*
-TextContent(selector) returns the textContent of the first element matching selector.
+GetTextContent(selector) returns the textContent of the first element matching selector.
 
-Unlike [Biloba.InnerText], textContent is computed straight from the DOM tree and does not depend on layout - which makes it reliable in headless Chrome for content that has just been added or changed (innerText can return a stale or partial value before a paint pass).  Note that textContent includes the text of hidden elements and of <script>/<style> children, and does not reflect CSS text-transform; reach for InnerText when you specifically need the rendered, visible text.
+Unlike [Biloba.GetInnerText], textContent is computed straight from the DOM tree and does not depend on layout - which makes it reliable in headless Chrome for content that has just been added or changed (innerText can return a stale or partial value before a paint pass).  Note that textContent includes the text of hidden elements and of <script>/<style> children, and does not reflect CSS text-transform; reach for GetInnerText when you specifically need the rendered, visible text.
+
+Like all of Biloba's value-getters it polls by default until an element matching selector is present; configure with WithTimeout/WithPolling/WithContext or Immediate().
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
-func (b *Biloba) TextContent(selector any) string {
+func (b *Biloba) GetTextContent(selector any) string {
 	b.gt.Helper()
 	return toString(b.GetProperty(selector, "textContent"))
 }
@@ -306,7 +332,7 @@ func (b *Biloba) TextContent(selector any) string {
 /*
 HaveTextContent(expected) is a Gomega matcher that passes if the first element returned by selector has textContent matching expected.  expected can be a string, or a Gomega matcher.
 
-Prefer HaveTextContent over [Biloba.HaveInnerText] when asserting on dynamic content: textContent is layout-independent and so does not flake in headless Chrome the way innerText can.  See [Biloba.TextContent] for the semantic differences between the two.
+Prefer HaveTextContent over [Biloba.HaveInnerText] when asserting on dynamic content: textContent is layout-independent and so does not flake in headless Chrome the way innerText can.  See [Biloba.GetTextContent] for the semantic differences between the two.
 
 Use it like this:
 
@@ -320,62 +346,76 @@ func (b *Biloba) HaveTextContent(expected any) types.GomegaMatcher {
 }
 
 /*
-TextContentForEach(selector) returns a slice []string of textContent for each element matching selector.
+CurrentTextContentForEach(selector) returns a snapshot slice []string of textContent for each element matching selector.  It does not poll - gate on the matches being present first (e.g. Eventually(selector).Should(b.HaveCount(n))) when they appear asynchronously.
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
-func (b *Biloba) TextContentForEach(selector any) []string {
+func (b *Biloba) CurrentTextContentForEach(selector any) []string {
 	b.gt.Helper()
-	return toStringSlice(b.GetPropertyForEach(selector, "textContent"))
+	b.guardConfig("CurrentTextContentForEach")
+	return toStringSlice(b.CurrentPropertyForEach(selector, "textContent"))
 }
 
 /*
-EachHaveTextContent(expected) is a Gomega matcher that passes if the []string slice of textContents for all matching elements returned by selector matches expected.  expected can be a []string, but you'll probably want to use a Gomega matcher.
+EachHaveTextContent(expected) is a Gomega matcher that passes if there is at least one element matching selector and the []string slice of textContents for all matching elements satisfies expected.  expected can be a []string, but you'll probably want to use a Gomega matcher.  It fails when no elements match - to assert that nothing matches use Eventually(selector).Should(b.HaveCount(0)) or ShouldNot(b.Exist()).
 
 Use it like this:
 
 	Eventually("div.comment").Should(tab.EachHaveTextContent(ContainElement("new comment")))
 	//equivalent to, but tidier than
-	Eventually(tab.TextContentForEach).WithArgument("div.comment").Should(ContainElement("new comment"))
+	Eventually(tab.CurrentTextContentForEach).WithArgument("div.comment").Should(ContainElement("new comment"))
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
 func (b *Biloba) EachHaveTextContent(args ...any) types.GomegaMatcher {
-	if len(args) == 0 {
-		args = []any{gomega.BeEmpty()}
-	}
 	return b.EachHaveProperty("textContent", args...)
 }
 
 /*
-GetProperty(selector, property) returns the named javascript property from the first element matching selector
+GetProperty(selector, property) returns the named javascript property from the first element matching selector.
 
-GetProperty will fail if no element is found.  It returns nil if property is not defined on the element.  Otherwise it returns the value of the property as type any - you'll need to do type assertions yourself.  Or just use a Gomega matcher to handle the types for you.
+GetProperty polls by default: it waits until an element matching selector is present AND the requested property is defined, then returns the property's value as type any (you'll need to do type assertions yourself, or use a Gomega matcher to handle the types for you).  If the element never appears, or the property never becomes defined, GetProperty times out and fails the spec.
 
-Dot-delimited properties are also support.  e.g.
+Wrap the property name in [Biloba.AllowMissing] to make an undefined property a valid (nil) result rather than something to wait for:
 
-	tab.GetProperty("div.comment", "dataset.poster")
+	tab.GetProperty("div.comment", "dataset.poster")                  // waits until dataset.poster is defined
+	tab.GetProperty("div.comment", tab.AllowMissing("dataset.poster")) // returns nil if it's absent
+
+Dot-delimited properties are also supported.  Configure the wait with WithTimeout/WithPolling/WithContext, or opt into act-once/fail-fast with Immediate().
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#properties to learn more about working with properties
 */
-func (b *Biloba) GetProperty(selector any, property string) any {
+func (b *Biloba) GetProperty(selector any, property any) any {
 	b.gt.Helper()
-	r := b.runBilobaHandler("getProperty", selector, property)
-	if r.Error() != nil {
-		b.gt.Fatalf("Failed to get property \"%s\":\n%s", property, r.Error())
-	}
-	return r.Result
+	name := nameOf(property)
+	var result any
+	matcher := gcustom.MakeMatcher(func(sel any) (bool, error) {
+		r := b.runBilobaHandler("getPropertiesP", sel, []any{property})
+		if r.Error() != nil {
+			return false, r.Error()
+		}
+		if !r.Success {
+			return false, nil
+		}
+		result = newProperties(r.Result).Get(name)
+		return true, nil
+	}).WithMessage(fmt.Sprintf("have property %q", name))
+	b.pollOrImmediate(selector, matcher)
+	return result
 }
 
 /*
-GetPropertyForEach(selector, property) returns the requested property for all elements matching selector.  It returns []any and follows the rules of [Biloba.GetProperty].  If no elements are found an empty slice is returned.
+CurrentPropertyForEach(selector, property) returns a snapshot of the requested property for all elements matching selector.  It returns []any (nil entries stand in for elements where the property is undefined) and follows the rules of [Biloba.GetProperty].  If no elements are found an empty slice is returned.
+
+Unlike the singular [Biloba.GetProperty], CurrentPropertyForEach does not poll - it captures what is present right now.  Gate on the matches being present first (e.g. Eventually(selector).Should(b.HaveCount(n))) when they appear asynchronously.
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#properties to learn more about working with properties
 */
-func (b *Biloba) GetPropertyForEach(selector any, property string) []any {
+func (b *Biloba) CurrentPropertyForEach(selector any, property string) []any {
 	b.gt.Helper()
+	b.guardConfig("CurrentPropertyForEach")
 	r := b.runBilobaHandler("getPropertyForEach", selector, property)
 	if r.Error() != nil {
 		b.gt.Fatalf("Failed to get property \"%s\" for each:\n%s", property, r.Error())
@@ -388,28 +428,46 @@ GetAttribute(selector, name) returns the named HTML attribute of the first eleme
 
 GetAttribute is the immediate sibling of the [Biloba.HaveAttribute] matcher - reach for it when you want an attribute value in a Go variable for control-flow rather than to assert on.  Unlike [Biloba.GetProperty], it reads the raw markup attribute (e.g. the literal href="/about") rather than the resolved DOM property (the absolute URL).
 
-	tab.GetAttribute("#link", "href") // "/about"
+GetAttribute polls by default: it waits until an element matching selector is present AND the requested attribute is present, then returns the raw attribute string.  Wrap the name in [Biloba.AllowMissing] to make an absent attribute a valid (nil) result rather than something to wait for:
+
+	tab.GetAttribute("#link", "href")                  // waits until href is present
+	tab.GetAttribute("#link", tab.AllowMissing("href")) // returns nil if href is absent
+
+Configure the wait with WithTimeout/WithPolling/WithContext, or opt into act-once/fail-fast with Immediate().
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#properties to learn more about working with properties and attributes
 */
-func (b *Biloba) GetAttribute(selector any, name string) any {
+func (b *Biloba) GetAttribute(selector any, name any) any {
 	b.gt.Helper()
-	r := b.runBilobaHandler("getAttribute", selector, name)
-	if r.Error() != nil {
-		b.gt.Fatalf("Failed to get attribute \"%s\":\n%s", name, r.Error())
-	}
-	return r.Result
+	attr := nameOf(name)
+	var result any
+	matcher := gcustom.MakeMatcher(func(sel any) (bool, error) {
+		r := b.runBilobaHandler("getAttributesP", sel, []any{name})
+		if r.Error() != nil {
+			return false, r.Error()
+		}
+		if !r.Success {
+			return false, nil
+		}
+		result = newProperties(r.Result).Get(attr)
+		return true, nil
+	}).WithMessage(fmt.Sprintf("have attribute %q", attr))
+	b.pollOrImmediate(selector, matcher)
+	return result
 }
 
 /*
-GetAttributeForEach(selector, name) returns the named HTML attribute for all elements matching selector.  It returns []any and follows the rules of [Biloba.GetAttribute] - nil entries stand in for elements that lack the attribute.  If no elements are found an empty slice is returned.
+CurrentAttributeForEach(selector, name) returns a snapshot of the named HTML attribute for all elements matching selector.  It returns []any and follows the rules of [Biloba.GetAttribute] - nil entries stand in for elements that lack the attribute.  If no elements are found an empty slice is returned.
+
+Unlike the singular [Biloba.GetAttribute], CurrentAttributeForEach does not poll - it captures what is present right now.  Gate on the matches being present first (e.g. Eventually(selector).Should(b.HaveCount(n))) when they appear asynchronously.
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#properties to learn more about working with properties and attributes
 */
-func (b *Biloba) GetAttributeForEach(selector any, name string) []any {
+func (b *Biloba) CurrentAttributeForEach(selector any, name string) []any {
 	b.gt.Helper()
+	b.guardConfig("CurrentAttributeForEach")
 	r := b.runBilobaHandler("getAttributeForEach", selector, name)
 	if r.Error() != nil {
 		b.gt.Fatalf("Failed to get attribute \"%s\" for each:\n%s", name, r.Error())
@@ -457,9 +515,9 @@ func (b *Biloba) HaveProperty(property string, expected ...any) types.GomegaMatc
 }
 
 /*
-EachHaveProperty() is a Gomega matcher with two modes of operation:
+EachHaveProperty() is a Gomega matcher with two modes of operation.  Like the rest of the Each* family it requires at least one match: zero matches fails (to assert that nothing matches use Eventually(selector).Should(b.HaveCount(0)) or ShouldNot(b.Exist())).
 
-When invoked with only one argument, it passes only if all elements matching selector have the requested javascript property defined on them:
+When invoked with only one argument, it passes only if there is at least one element matching selector and all such elements have the requested javascript property defined on them:
 
 	Eventually("div.comment").Should(tab.EachHaveProperty("dataset.poster"))
 
@@ -483,8 +541,9 @@ func (b *Biloba) EachHaveProperty(property string, expected ...any) types.Gomega
 			if r.Error() != nil {
 				return false, r.Error()
 			}
+			data["Empty"] = r.ResultInt() == 0
 			return r.Success, nil
-		}).WithTemplate("Expected each {{.Actual}} {{.To}} each have property \"{{.Data.Property}}\"", data)
+		}).WithTemplate("{{if .Data.Empty}}"+eachEmptyTemplate+"{{else}}Expected each {{.Actual}} {{.To}} each have property \"{{.Data.Property}}\"{{end}}", data)
 	} else {
 		var matcher types.GomegaMatcher
 		if x, ok := expected[0].(types.GomegaMatcher); ok && len(expected) == 1 {
@@ -500,8 +559,16 @@ func (b *Biloba) EachHaveProperty(property string, expected ...any) types.Gomega
 				return false, r.Error()
 			}
 			data["Result"] = r.Result
+			// Fail (with a clear message) on zero matches before handing the empty slice to the
+			// value matcher - otherwise a matcher like BeEmpty() would vacuously pass, and the rest
+			// would report a confusing slice-length mismatch instead of "no elements matched".
+			if s, ok := r.Result.([]any); ok && len(s) == 0 {
+				data["Empty"] = true
+				return false, nil
+			}
+			data["Empty"] = false
 			return matcher.Match(data["Result"])
-		}).WithTemplate("EachHaveProperty \"{{.Data.Property}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+		}).WithTemplate("{{if .Data.Empty}}"+eachEmptyTemplate+"{{else}}EachHaveProperty \"{{.Data.Property}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}{{end}}", data)
 	}
 }
 
@@ -512,7 +579,7 @@ When invoked with a selector and two arguments:
 
 	tab.SetProperty(selector, property, value)
 
-it immediately sets the specified property on the first element matching selector to value.  If no element is found, tab.SetProperty fails the spec.  property must have type string but value can be any type
+it polls by default until the first element matching selector is present, then sets the specified property to value - failing the spec if the element never appears before the timeout.  Opt out with [Biloba.Immediate], or tune the wait with [Biloba.WithTimeout]/[Biloba.WithPolling]/[Biloba.WithContext].  property must have type string but value can be any type
 
 When invoked with just two arguments, tab.SetProperty returns a Gomega matcher that will only succeed once an element is found and its property set:
 
@@ -524,12 +591,14 @@ Read https://onsi.github.io/biloba/#properties to learn more about working with 
 func (b *Biloba) SetProperty(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
 	if len(args) == 3 {
-		r := b.runBilobaHandler("setProperty", args[0], args[1], args[2])
-		if r.Error() != nil {
-			b.gt.Fatalf("Failed to set property \"%s\":\n%s", args[1], r.Error())
-		}
+		property, value := args[1], args[2]
+		matcher := gcustom.MakeMatcher(func(selector any) (bool, error) {
+			return b.runBilobaHandler("setProperty", selector, property, value).MatcherResult()
+		}).WithMessage("be property-settable")
+		b.pollOrImmediate(args[0], matcher)
 		return nil
 	} else {
+		b.guardBareMatcher("SetProperty")
 		return gcustom.MakeMatcher(func(selector any) (bool, error) {
 			return b.runBilobaHandler("setProperty", selector, args[0], args[1]).MatcherResult()
 		}).WithMessage("be property-settable")
@@ -537,15 +606,16 @@ func (b *Biloba) SetProperty(args ...any) types.GomegaMatcher {
 }
 
 /*
-SetPropertyForEach() sets the specified property to the specified value on all DOM elements matching selector. It does nothing if no elements match.
+SetPropertyForEachImmediately() sets the specified property to the specified value on all DOM elements matching selector. It does nothing if no elements match.
 
 Like the rest of the *Each family it acts immediately and has no matcher form - it does not poll.  Gate it on the matches being present first (e.g. Eventually(selector).Should(b.HaveCount(n))) when they appear asynchronously.
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#properties to learn more about working with properties
 */
-func (b *Biloba) SetPropertyForEach(selector any, property string, value any) {
+func (b *Biloba) SetPropertyForEachImmediately(selector any, property string, value any) {
 	b.gt.Helper()
+	b.guardConfig("SetPropertyForEachImmediately")
 	r := b.runBilobaHandler("setPropertyForEach", selector, property, value)
 	if r.Error() != nil {
 		b.gt.Fatalf("Failed to set property \"%s\" for each:\n%s", property, r.Error())
@@ -553,50 +623,131 @@ func (b *Biloba) SetPropertyForEach(selector any, property string, value any) {
 }
 
 /*
-GetProperties() returns a [Properties] struct containing multiple properties from the first DOM element selected by selector.  If no DOM element matches, GetProperties() fails.  If any of the requested properties don't exist - those properties will be set to nil.
+GetProperties() returns a [Properties] struct containing multiple properties from the first DOM element selected by selector.
 
 	p := GetProperties(".notice", "tagName", "classList", "dataset", "disabled")
 	p.GetString("tagName") //"DIV"
 	p.GetStringSlice("classList") //[]string{"notice", "highlight"}
 	p.GetBool("disabled") //false
 
+GetProperties polls by default: it waits until an element matching selector is present AND every requested property is defined, then returns them all.  Wrap individual names in [Biloba.AllowMissing] to let an undefined property come back as nil instead of blocking the poll:
+
+	GetProperties(".notice", "tagName", tab.AllowMissing("dataset.poster"))
+
+Configure the wait with WithTimeout/WithPolling/WithContext, or opt into act-once/fail-fast with Immediate().
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#properties to learn more about working with properties
 */
-func (b *Biloba) GetProperties(selector any, properties ...string) Properties {
+func (b *Biloba) GetProperties(selector any, properties ...any) Properties {
 	b.gt.Helper()
 	if len(properties) == 0 {
 		b.gt.Fatalf("GetProperties requires at least one property to fetch")
 		return nil
 	}
-	r := b.runBilobaHandler("getProperties", selector, properties)
-	if r.Error() != nil {
-		b.gt.Fatalf("Failed to get properties %s:\n%s", strings.Join(properties, ", "), r.Error())
-		return nil
-	}
-	return newProperties(r.Result)
+	var result Properties
+	matcher := gcustom.MakeMatcher(func(sel any) (bool, error) {
+		r := b.runBilobaHandler("getPropertiesP", sel, properties)
+		if r.Error() != nil {
+			return false, r.Error()
+		}
+		if !r.Success {
+			return false, nil
+		}
+		result = newProperties(r.Result)
+		return true, nil
+	}).WithMessage(fmt.Sprintf("have properties %s", strings.Join(namesOf(properties), ", ")))
+	b.pollOrImmediate(selector, matcher)
+	return result
 }
 
 /*
-GetPropertiesForEach() returns a [SliceOfProperties] - i.e. a slice of [Properties] - from each DOM element selected by selector.  If no DOM element matches, GetPropertiesForEach() returns an empty SliceOfProperties.  If any of the requested properties don't exist - those individual properties will be set to nil.
+GetAttributes() returns a [Properties] struct containing multiple raw HTML attributes (via getAttribute) from the first DOM element selected by selector.  It is the batch sibling of [Biloba.GetAttribute] and the attribute-flavored counterpart of [Biloba.GetProperties].
 
-	p := GetPropertiesForEach(".notice", "tagName", "classList", "dataset", "disabled")
+	a := GetAttributes("#link", "href", "data-role")
+	a.GetString("href")      //"/about"
+	a.GetString("data-role") //"nav"
+
+GetAttributes polls by default: it waits until an element matching selector is present AND every requested attribute is present, then returns them all.  Wrap individual names in [Biloba.AllowMissing] to let an absent attribute come back as nil instead of blocking the poll:
+
+	GetAttributes("#link", "href", tab.AllowMissing("data-missing"))
+
+Configure the wait with WithTimeout/WithPolling/WithContext, or opt into act-once/fail-fast with Immediate().
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+Read https://onsi.github.io/biloba/#properties to learn more about working with properties and attributes
+*/
+func (b *Biloba) GetAttributes(selector any, names ...any) Properties {
+	b.gt.Helper()
+	if len(names) == 0 {
+		b.gt.Fatalf("GetAttributes requires at least one attribute to fetch")
+		return nil
+	}
+	var result Properties
+	matcher := gcustom.MakeMatcher(func(sel any) (bool, error) {
+		r := b.runBilobaHandler("getAttributesP", sel, names)
+		if r.Error() != nil {
+			return false, r.Error()
+		}
+		if !r.Success {
+			return false, nil
+		}
+		result = newProperties(r.Result)
+		return true, nil
+	}).WithMessage(fmt.Sprintf("have attributes %s", strings.Join(namesOf(names), ", ")))
+	b.pollOrImmediate(selector, matcher)
+	return result
+}
+
+/*
+CurrentPropertiesForEach() returns a [SliceOfProperties] - i.e. a slice of [Properties] - from each DOM element selected by selector.  If no DOM element matches, CurrentPropertiesForEach() returns an empty SliceOfProperties.  If any of the requested properties don't exist - those individual properties will be set to nil.
+
+	p := CurrentPropertiesForEach(".notice", "tagName", "classList", "dataset", "disabled")
 	p.GetString("tagName") //[]string{"DIV", "DIV", "DIV"}
 	p.GetStringSlice("classList") //[][]string{{"notice", "highlight"}, {"notice", "gray"}, {"notice"}}
 	p.GetBool("disabled") //[]bool{false, true, false}
 
+Unlike the singular [Biloba.GetProperties], CurrentPropertiesForEach does not poll - it captures what is present right now.  Gate on the matches being present first (e.g. Eventually(selector).Should(b.HaveCount(n))) when they appear asynchronously.
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#properties to learn more about working with properties
 */
-func (b *Biloba) GetPropertiesForEach(selector any, properties ...string) SliceOfProperties {
+func (b *Biloba) CurrentPropertiesForEach(selector any, properties ...string) SliceOfProperties {
 	b.gt.Helper()
+	b.guardConfig("CurrentPropertiesForEach")
 	if len(properties) == 0 {
-		b.gt.Fatalf("GetPropertiesForEach requires at least one property to fetch")
+		b.gt.Fatalf("CurrentPropertiesForEach requires at least one property to fetch")
 		return nil
 	}
 	r := b.runBilobaHandler("getPropertiesForEach", selector, properties)
 	if r.Error() != nil {
 		b.gt.Fatalf("Failed to get properties %s for each:\n%s", strings.Join(properties, ", "), r.Error())
+	}
+	return newSliceOfProperties(r.ResultAnySlice())
+}
+
+/*
+CurrentAttributesForEach() returns a [SliceOfProperties] - i.e. a slice of [Properties] - of the named raw HTML attributes (via getAttribute) from each DOM element selected by selector.  It is the snapshot, for-each sibling of [Biloba.GetAttributes] and the attribute-flavored counterpart of [Biloba.CurrentPropertiesForEach].  If no DOM element matches, CurrentAttributesForEach() returns an empty SliceOfProperties.  An attribute that is absent on a given element comes back as nil for that element.
+
+	a := CurrentAttributesForEach(".link", "href", "data-role")
+	a.GetString("href")      //[]string{"/about", "/home"}
+	a.GetString("data-role") //[]string{"nav", ""}
+
+Unlike [Biloba.GetAttributes], CurrentAttributesForEach does not poll - it captures whatever is present right now and never blocks on a missing attribute (there is no AllowMissing axis).  Gate on the matches being present first (e.g. Eventually(selector).Should(b.HaveCount(n))) when they appear asynchronously.
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+Read https://onsi.github.io/biloba/#properties to learn more about working with properties and attributes
+*/
+func (b *Biloba) CurrentAttributesForEach(selector any, names ...any) SliceOfProperties {
+	b.gt.Helper()
+	b.guardConfig("CurrentAttributesForEach")
+	if len(names) == 0 {
+		b.gt.Fatalf("CurrentAttributesForEach requires at least one attribute to fetch")
+		return nil
+	}
+	r := b.runBilobaHandler("getAttributesForEach", selector, namesOf(names))
+	if r.Error() != nil {
+		b.gt.Fatalf("Failed to get attributes %s for each:\n%s", strings.Join(namesOf(names), ", "), r.Error())
 	}
 	return newSliceOfProperties(r.ResultAnySlice())
 }
@@ -613,16 +764,45 @@ Biloba rationalizes the behavior of all input, select, and textarea elements so 
 	tab.GetValue("select") // will be the value of the selected option of the select element
 	tab.GetValue("select.multi-select") // will be a []string of values for all the selected options of the multiple select element
 
+GetValue polls by default: it waits until an element matching selector is present, then returns its value.  An empty string (or an unselected radio group's "") is a valid value - GetValue does not wait for the value to become non-empty.  Configure the wait with WithTimeout/WithPolling/WithContext, or opt into act-once/fail-fast with Immediate().
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#form-elements to learn more about working with form elements
 */
 func (b *Biloba) GetValue(selector any) any {
 	b.gt.Helper()
-	r := b.runBilobaHandler("getValue", selector)
+	var result any
+	matcher := gcustom.MakeMatcher(func(sel any) (bool, error) {
+		r := b.runBilobaHandler("getValueP", sel)
+		if r.Error() != nil {
+			return false, r.Error()
+		}
+		if !r.Success {
+			return false, nil
+		}
+		result = r.Result
+		return true, nil
+	}).WithMessage("have a value")
+	b.pollOrImmediate(selector, matcher)
+	return result
+}
+
+/*
+CurrentValueForEach(selector) returns a snapshot []any of the rationalized form/input value for every element matching selector, following the rules of [Biloba.GetValue].  If no elements match it returns an empty slice.
+
+Unlike [Biloba.GetValue], CurrentValueForEach does not poll - it captures whatever is present right now.  Gate on the matches being present first (e.g. Eventually(selector).Should(b.HaveCount(n))) when they appear asynchronously.
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+Read https://onsi.github.io/biloba/#form-elements to learn more about working with form elements
+*/
+func (b *Biloba) CurrentValueForEach(selector any) []any {
+	b.gt.Helper()
+	b.guardConfig("CurrentValueForEach")
+	r := b.runBilobaHandler("getValueForEach", selector)
 	if r.Error() != nil {
-		b.gt.Fatalf("Failed to get value:\n%s", r.Error())
+		b.gt.Fatalf("Failed to get value for each:\n%s", r.Error())
 	}
-	return r.Result
+	return r.ResultAnySlice()
 }
 
 /*
@@ -661,7 +841,7 @@ When invoked with a selector and a value:
 
 	tab.SetValue(selector, value)
 
-it immediately sets the value on the first element matching selector.  If no element is found, tab.SetValue fails the spec.  The element must be visible and enabled.
+it polls by default until the first element matching selector is present, visible, and enabled, then sets its value - failing the spec if that never happens before the timeout.  Opt out with [Biloba.Immediate], or tune the wait with [Biloba.WithTimeout]/[Biloba.WithPolling]/[Biloba.WithContext].
 
 When invoked with just one argument, tab.SetValue returns a Gomega matcher that will only succeed once an element is found, is visible, and is enabled and its value gets set:
 
@@ -675,21 +855,21 @@ Read https://onsi.github.io/biloba/#form-elements to learn more about working wi
 func (b *Biloba) SetValue(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
 	if len(args) == 2 {
+		value := args[1]
+		var matcher types.GomegaMatcher
 		if b.realistic {
-			ok, err := b.realisticSetValue(args[0], args[1])
-			if err != nil {
-				b.gt.Fatalf("Failed to set value:\n%s", err.Error())
-			} else if !ok {
-				b.gt.Fatalf("Failed to set value: element is not settable (not visible, enabled, in view, or unobscured)")
-			}
-			return nil
+			matcher = gcustom.MakeMatcher(func(selector any) (bool, error) {
+				return b.realisticSetValue(selector, value)
+			}).WithMessage("be value-settable (realistically)")
+		} else {
+			matcher = gcustom.MakeMatcher(func(selector any) (bool, error) {
+				return b.runBilobaHandler("setValue", selector, value).MatcherResult()
+			}).WithMessage("be value-settable")
 		}
-		r := b.runBilobaHandler("setValue", args[0], args[1])
-		if r.Error() != nil {
-			b.gt.Fatalf("Failed to set value:\n%s", r.Error())
-		}
+		b.pollOrImmediate(args[0], matcher)
 		return nil
 	}
+	b.guardBareMatcher("SetValue")
 	if b.realistic {
 		return gcustom.MakeMatcher(func(selector any) (bool, error) {
 			return b.realisticSetValue(selector, args[0])
@@ -721,6 +901,52 @@ func (v ValueLabel) MarshalJSON() ([]byte, error) {
 }
 
 /*
+AllowMissing wraps a property or attribute name passed to one of the two-axis getters ([Biloba.GetProperty], [Biloba.GetProperties], [Biloba.GetAttribute], [Biloba.GetAttributes]) so that an undefined property / absent attribute is a valid (nil) result instead of something the poll waits for.
+
+By default those getters poll until the element is present AND every named property/attribute is defined.  A name wrapped in AllowMissing is exempt from the "defined" requirement - it comes back as nil if absent and never blocks the poll:
+
+	tab.GetProperty("#user", tab.AllowMissing("dataset.middleName"))             // nil if not set
+	tab.GetProperties("#user", "dataset.firstName", tab.AllowMissing("dataset.middleName"))
+
+Sharp edge: a property that simply does not exist on the element type (e.g. "disabled" on a <div>, where "disabled" in div is false) would otherwise block the poll until it times out.  Wrap such names in AllowMissing to get the old nil/zero-value back.
+
+AllowMissing is only meaningful for the property/attribute getters; it has no effect elsewhere.
+
+Read https://onsi.github.io/biloba/#properties to learn more about working with properties
+*/
+func (b *Biloba) AllowMissing(name string) AllowMissing {
+	return AllowMissing(name)
+}
+
+type AllowMissing string
+
+func (a AllowMissing) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]string{"__biloba_allow_missing": string(a)})
+}
+
+// nameOf returns the plain property/attribute name carried by a getter name argument - either an
+// AllowMissing wrapper or a bare string.  It mirrors biloba.js's parseNameSpec so the Go side can key
+// into the result map the handler returns.
+func nameOf(spec any) string {
+	if a, ok := spec.(AllowMissing); ok {
+		return string(a)
+	}
+	if s, ok := spec.(string); ok {
+		return s
+	}
+	return fmt.Sprintf("%v", spec)
+}
+
+// namesOf maps nameOf over a slice (for building human-readable failure messages).
+func namesOf(specs []any) []string {
+	out := make([]string, len(specs))
+	for i, spec := range specs {
+		out[i] = nameOf(spec)
+	}
+	return out
+}
+
+/*
 HaveClass returns a Gomega matcher to assert that the first element matching selector has the expected class.
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
@@ -740,7 +966,7 @@ func (b *Biloba) HaveClass(expected string) types.GomegaMatcher {
 }
 
 /*
-EachHaveClass returns a Gomega matcher to assert that every element matching selector has the expected class.  It passes vacuously when no elements match.
+EachHaveClass returns a Gomega matcher that passes if there is at least one element matching selector and every such element has the expected class.  It fails when no elements match.
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
@@ -755,10 +981,12 @@ func (b *Biloba) EachHaveClass(expected string) types.GomegaMatcher {
 		}
 		data["Result"] = r.Result
 		if classLists, ok := r.Result.([]any); ok && len(classLists) == 0 {
-			return true, nil // vacuously true when no elements match
+			data["Empty"] = true
+			return false, nil // fail (not vacuously pass) when no elements match
 		}
+		data["Empty"] = false
 		return matcher.Match(data["Result"])
-	}).WithTemplate("EachHaveClass for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}).WithTemplate("{{if .Data.Empty}}"+eachEmptyTemplate+"{{else}}EachHaveClass for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}{{end}}", data)
 }
 
 /*
@@ -893,9 +1121,9 @@ When invoked with a selector:
 
 	tab.Click("#submit")
 
-it immediately clicks the first element matching selector.  It fails if no element is found, or if the element is hidden or disabled.
+it polls by default until the first element matching selector exists, is visible, and is enabled, then clicks it - failing the spec if that never happens before the timeout.  Opt out with [Biloba.Immediate] to act once and fail fast, or tune the wait with [Biloba.WithTimeout]/[Biloba.WithPolling]/[Biloba.WithContext].
 
-When invoked with no selector, tab.Click() returns a Gomega matcher.  This allows you to poll until an element is clickable (exists, is visible, and is enabled):
+When invoked with no selector, tab.Click() returns a Gomega matcher you poll yourself:
 
 	Eventually("#submit").Should(tab.Click())
 
@@ -910,11 +1138,11 @@ Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about sel
 */
 func (b *Biloba) Click(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
-	return b.pointerInteraction("click", "element is not clickable (it is disabled, off-screen, or obscured by another element)", "be clickable", args, b.performClick)
+	return b.pointerInteraction("click", "be clickable", args, b.performClick)
 }
 
 /*
-ClickEach() clicks on every DOM element matching selector that is visible and enabled.
+ClickEachImmediately() clicks on every DOM element matching selector that is visible and enabled.
 
 If no elements match, nothing happens.
 
@@ -922,8 +1150,9 @@ Like the rest of the *Each family it acts immediately and has no matcher form - 
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
-func (b *Biloba) ClickEach(selector any) {
+func (b *Biloba) ClickEachImmediately(selector any) {
 	b.gt.Helper()
+	b.guardConfig("ClickEachImmediately")
 	if b.realistic {
 		if err := b.realisticClickEach(selector); err != nil {
 			b.gt.Fatalf("Failed to click each:\n%s", err.Error())
@@ -941,7 +1170,7 @@ DblClick() double-clicks the first element matching selector.
 
 	tab.DblClick("#row")
 
-it immediately double-clicks (fast mode fires two click events plus a dblclick event; realistic mode dispatches a real double mouse click).  It fails if no element is found, or if the element is hidden or disabled.
+it polls by default until the element exists, is visible, and is enabled, then double-clicks it (fast mode fires two click events plus a dblclick event; realistic mode dispatches a real double mouse click) - failing the spec if that never happens before the timeout.  Opt out with [Biloba.Immediate], or tune the wait with [Biloba.WithTimeout]/[Biloba.WithPolling]/[Biloba.WithContext].
 
 When invoked with no selector, tab.DblClick() returns a Gomega matcher:
 
@@ -953,7 +1182,7 @@ Read https://onsi.github.io/biloba/#interacting-with-elements to learn more abou
 */
 func (b *Biloba) DblClick(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
-	return b.pointerInteraction("double-click", "element is not clickable (it is disabled, off-screen, or obscured by another element)", "be double-clickable", args, b.performDblClick)
+	return b.pointerInteraction("double-click", "be double-clickable", args, b.performDblClick)
 }
 
 /*
@@ -961,7 +1190,7 @@ RightClick() right-clicks (context-clicks) the first element matching selector.
 
 	tab.RightClick("#row")
 
-it immediately right-clicks (fast mode dispatches mousedown/mouseup/contextmenu events; realistic mode dispatches a real right-button mouse click).  It fails if no element is found, or if the element is hidden or disabled.
+it polls by default until the element exists, is visible, and is enabled, then right-clicks it (fast mode dispatches mousedown/mouseup/contextmenu events; realistic mode dispatches a real right-button mouse click) - failing the spec if that never happens before the timeout.  Opt out with [Biloba.Immediate], or tune the wait with [Biloba.WithTimeout]/[Biloba.WithPolling]/[Biloba.WithContext].
 
 When invoked with no selector, tab.RightClick() returns a Gomega matcher:
 
@@ -973,7 +1202,7 @@ Read https://onsi.github.io/biloba/#interacting-with-elements to learn more abou
 */
 func (b *Biloba) RightClick(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
-	return b.pointerInteraction("right-click", "element is not clickable (it is disabled, off-screen, or obscured by another element)", "be right-clickable", args, b.performRightClick)
+	return b.pointerInteraction("right-click", "be right-clickable", args, b.performRightClick)
 }
 
 /*
@@ -981,7 +1210,7 @@ MiddleClick() middle-clicks (auxiliary-clicks) the first element matching select
 
 	tab.MiddleClick("#row")
 
-it immediately middle-clicks (fast mode dispatches mousedown/mouseup/auxclick events; realistic mode dispatches a real middle-button mouse click).  It fails if no element is found, or if the element is hidden or disabled.
+it polls by default until the element exists, is visible, and is enabled, then middle-clicks it (fast mode dispatches mousedown/mouseup/auxclick events; realistic mode dispatches a real middle-button mouse click) - failing the spec if that never happens before the timeout.  Opt out with [Biloba.Immediate], or tune the wait with [Biloba.WithTimeout]/[Biloba.WithPolling]/[Biloba.WithContext].
 
 When invoked with no selector, tab.MiddleClick() returns a Gomega matcher:
 
@@ -993,7 +1222,7 @@ Read https://onsi.github.io/biloba/#interacting-with-elements to learn more abou
 */
 func (b *Biloba) MiddleClick(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
-	return b.pointerInteraction("middle-click", "element is not clickable (it is disabled, off-screen, or obscured by another element)", "be middle-clickable", args, b.performMiddleClick)
+	return b.pointerInteraction("middle-click", "be middle-clickable", args, b.performMiddleClick)
 }
 
 /*
@@ -1001,7 +1230,7 @@ Tap() taps (touches) the first element matching selector.
 
 	tab.Tap("#row")
 
-it immediately taps (fast mode dispatches synthetic touch and pointer events plus a click; realistic mode dispatches a real CDP touch).  It fails if no element is found, or if the element is hidden or disabled.
+it polls by default until the element exists, is visible, and is enabled, then taps it (fast mode dispatches synthetic touch and pointer events plus a click; realistic mode dispatches a real CDP touch) - failing the spec if that never happens before the timeout.  Opt out with [Biloba.Immediate], or tune the wait with [Biloba.WithTimeout]/[Biloba.WithPolling]/[Biloba.WithContext].
 
 When invoked with no selector, tab.Tap() returns a Gomega matcher:
 
@@ -1013,7 +1242,7 @@ Read https://onsi.github.io/biloba/#interacting-with-elements to learn more abou
 */
 func (b *Biloba) Tap(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
-	return b.pointerInteraction("tap", "element is not tappable (it is disabled, off-screen, or obscured by another element)", "be tappable", args, b.performTap)
+	return b.pointerInteraction("tap", "be tappable", args, b.performTap)
 }
 
 /*
@@ -1023,7 +1252,7 @@ When invoked with a source and a target selector:
 
 	tab.DragTo("#card", "#column")
 
-it immediately drags source's center onto target's center with a pointer-based drag sequence (pointerdown/pointermove/pointerup plus the matching mouse events; realistic mode dispatches the drag with real CDP mouse input).  It is meant for pointer-based drag-and-drop libraries (@dnd-kit and the like); it does NOT drive native HTML5 draggable - for that, drop to chromedp via tab.Context.  It fails if either element is not found, or if source is hidden.
+it drags source's center onto target's center with a pointer-based drag sequence (pointerdown/pointermove/pointerup plus the matching mouse events; realistic mode dispatches the drag with real CDP mouse input).  It is meant for pointer-based drag-and-drop libraries (@dnd-kit and the like); it does NOT drive native HTML5 draggable - for that, drop to chromedp via tab.Context.  It polls by default, retrying the whole find-source/find-target/drag operation until both endpoints are present and source is visible - failing the spec if that never happens before the timeout.  Opt out with [Biloba.Immediate], or tune the wait with [Biloba.WithTimeout]/[Biloba.WithPolling]/[Biloba.WithContext].
 
 When invoked with just a target, tab.DragTo() returns a Gomega matcher whose subject is the source.  This lets you poll until both source and target are present and the drag can be performed - folding the wait into the action so you don't have to assert both endpoints exist first:
 
@@ -1034,15 +1263,18 @@ Read https://onsi.github.io/biloba/#interacting-with-elements to learn more abou
 func (b *Biloba) DragTo(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
 	if len(args) >= 2 {
-		ok, err := b.performDrag(args[0], args[1])
-		if err != nil {
-			b.gt.Fatalf("Failed to drag:\n%s", err.Error())
-		} else if !ok {
-			b.gt.Fatalf("Failed to drag: source or target is not actionable (it is disabled, off-screen, or obscured by another element)")
-		}
+		// Immediate form: poll the WHOLE find-source/find-target/drag operation.  The matcher's
+		// subject is the source and it re-resolves the target on every attempt (performDrag
+		// re-encodes and re-finds target in JS each call), so a late-arriving target is waited on too.
+		target := args[1]
+		matcher := gcustom.MakeMatcher(func(source any) (bool, error) {
+			return b.performDrag(source, target)
+		}).WithMessage("be draggable to the target")
+		b.pollOrImmediate(args[0], matcher)
 		return nil
 	}
 	target := args[0]
+	b.guardBareMatcher("DragTo")
 	return gcustom.MakeMatcher(func(source any) (bool, error) {
 		return b.performDrag(source, target)
 	}).WithMessage("be draggable to the target")
@@ -1065,7 +1297,7 @@ ScrollWheel() scrolls the mouse wheel over the first element matching selector.
 
 	tab.ScrollWheel("#scroll-box", 0, 200)   // scrolls down 200px (positive deltaY is down, positive deltaX is right)
 
-it immediately dispatches a wheel event at the element's center and scrolls the nearest scrollable ancestor (realistic mode dispatches a real CDP wheel event that scrolls via genuine trusted input).  It fails if the element is not found or is hidden.
+it polls by default until the element is present and visible, then dispatches a wheel event at the element's center and scrolls the nearest scrollable ancestor (realistic mode dispatches a real CDP wheel event that scrolls via genuine trusted input) - failing the spec if that never happens before the timeout.  Opt out with [Biloba.Immediate], or tune the wait with [Biloba.WithTimeout]/[Biloba.WithPolling]/[Biloba.WithContext].
 
 When invoked with just the deltas (no selector), tab.ScrollWheel() returns a Gomega matcher so you can poll until an element is present to scroll:
 
@@ -1083,12 +1315,10 @@ func (b *Biloba) ScrollWheel(args ...any) types.GomegaMatcher {
 			b.gt.Fatalf("ScrollWheel requires numeric deltaX and deltaY")
 			return nil
 		}
-		success, err := b.performScrollWheel(args[0], dx, dy)
-		if err != nil {
-			b.gt.Fatalf("Failed to scroll wheel:\n%s", err.Error())
-		} else if !success {
-			b.gt.Fatalf("Failed to scroll wheel: element is not visible")
-		}
+		matcher := gcustom.MakeMatcher(func(selector any) (bool, error) {
+			return b.performScrollWheel(selector, dx, dy)
+		}).WithMessage("be scrollable with the mouse wheel")
+		b.pollOrImmediate(args[0], matcher)
 		return nil
 	case 2:
 		dx, okX := asFloat64(args[0])
@@ -1097,6 +1327,7 @@ func (b *Biloba) ScrollWheel(args ...any) types.GomegaMatcher {
 			b.gt.Fatalf("ScrollWheel requires numeric deltaX and deltaY")
 			return nil
 		}
+		b.guardBareMatcher("ScrollWheel")
 		return gcustom.MakeMatcher(func(selector any) (bool, error) {
 			return b.performScrollWheel(selector, dx, dy)
 		}).WithMessage("be scrollable with the mouse wheel")
@@ -1120,7 +1351,7 @@ func (b *Biloba) performScrollWheel(selector any, deltaX, deltaY float64) (bool,
 /*
 Focus() focuses the first element matching selector.
 
-When invoked with a selector, tab.Focus("input.search") acts immediately and fails the spec if no element is found, or if the element is hidden or disabled.
+When invoked with a selector, tab.Focus("input.search") polls by default until the element exists, is visible, and is enabled, then focuses it - failing the spec if that never happens before the timeout.  Opt out with [Biloba.Immediate], or tune the wait with [Biloba.WithTimeout]/[Biloba.WithPolling]/[Biloba.WithContext].
 
 When invoked with no arguments, tab.Focus() returns a Gomega matcher so you can poll until an element is focusable:
 
@@ -1130,16 +1361,15 @@ Read https://onsi.github.io/biloba/#interacting-with-elements to learn more abou
 */
 func (b *Biloba) Focus(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
-	if len(args) > 0 {
-		r := b.runBilobaHandler("focus", args[0])
-		if r.Error() != nil {
-			b.gt.Fatalf("Failed to focus:\n%s", r.Error())
-		}
-		return nil
-	}
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+	matcher := gcustom.MakeMatcher(func(selector any) (bool, error) {
 		return b.runBilobaHandler("focus", selector).MatcherResult()
 	}).WithMessage("be focusable")
+	if len(args) > 0 {
+		b.pollOrImmediate(args[0], matcher)
+		return nil
+	}
+	b.guardBareMatcher("Focus")
+	return matcher
 }
 
 /*
@@ -1152,7 +1382,7 @@ This is useful when you want to explicitly trigger a blur handler - for example 
 
 Note that a blur event only fires if the element is actually focused; [Biloba.SetValue] leaves the text input it sets focused, so the example above works.
 
-When invoked with a selector, tab.Blur("input.search") acts immediately and fails the spec if no element is found.
+When invoked with a selector, tab.Blur("input.search") polls by default until the element is present, then blurs it - failing the spec if it never appears before the timeout.  Opt out with [Biloba.Immediate], or tune the wait with [Biloba.WithTimeout]/[Biloba.WithPolling]/[Biloba.WithContext].
 
 When invoked with no arguments, tab.Blur() returns a Gomega matcher so you can poll until an element is present to blur:
 
@@ -1162,16 +1392,15 @@ Read https://onsi.github.io/biloba/#interacting-with-elements to learn more abou
 */
 func (b *Biloba) Blur(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
-	if len(args) > 0 {
-		r := b.runBilobaHandler("blur", args[0])
-		if r.Error() != nil {
-			b.gt.Fatalf("Failed to blur:\n%s", r.Error())
-		}
-		return nil
-	}
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+	matcher := gcustom.MakeMatcher(func(selector any) (bool, error) {
 		return b.runBilobaHandler("blur", selector).MatcherResult()
 	}).WithMessage("be blurrable")
+	if len(args) > 0 {
+		b.pollOrImmediate(args[0], matcher)
+		return nil
+	}
+	b.guardBareMatcher("Blur")
+	return matcher
 }
 
 /*
@@ -1179,7 +1408,7 @@ Hover() dispatches the pointer/mouse events associated with hovering (pointerove
 
 Like all of Biloba's interactions this is a pragmatic simulation, not a real pointer: it fires synthetic events synchronously and atomically in the browser.  That means it triggers JavaScript hover handlers (e.g. a menu that opens on mouseenter) but does not activate CSS :hover styling - for that you'll need to drop down to chromedp's input domain.
 
-When invoked with a selector, tab.Hover(".menu") acts immediately and fails the spec if no element is found, or if the element is hidden.
+When invoked with a selector, tab.Hover(".menu") polls by default until the element is present and visible, then hovers it - failing the spec if that never happens before the timeout.  Opt out with [Biloba.Immediate], or tune the wait with [Biloba.WithTimeout]/[Biloba.WithPolling]/[Biloba.WithContext].
 
 When invoked with no arguments, tab.Hover() returns a Gomega matcher so you can poll until an element is hoverable:
 
@@ -1189,13 +1418,13 @@ Read https://onsi.github.io/biloba/#interacting-with-elements to learn more abou
 */
 func (b *Biloba) Hover(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
-	return b.pointerInteraction("hover", "element is off-screen", "be hoverable", args, b.performHover)
+	return b.pointerInteraction("hover", "be hoverable", args, b.performHover)
 }
 
 /*
 ScrollIntoView() scrolls the first element matching selector into view (via the element's scrollIntoView()).
 
-When invoked with a selector, tab.ScrollIntoView("#footer") acts immediately and fails the spec if no element is found.
+When invoked with a selector, tab.ScrollIntoView("#footer") polls by default until the element is present, then scrolls it into view - failing the spec if it never appears before the timeout.  Opt out with [Biloba.Immediate], or tune the wait with [Biloba.WithTimeout]/[Biloba.WithPolling]/[Biloba.WithContext].
 
 When invoked with no arguments, tab.ScrollIntoView() returns a Gomega matcher so you can poll until an element is present to scroll to:
 
@@ -1205,22 +1434,21 @@ Read https://onsi.github.io/biloba/#interacting-with-elements to learn more abou
 */
 func (b *Biloba) ScrollIntoView(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
-	if len(args) > 0 {
-		r := b.runBilobaHandler("scrollIntoView", args[0])
-		if r.Error() != nil {
-			b.gt.Fatalf("Failed to scroll into view:\n%s", r.Error())
-		}
-		return nil
-	}
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+	matcher := gcustom.MakeMatcher(func(selector any) (bool, error) {
 		return b.runBilobaHandler("scrollIntoView", selector).MatcherResult()
 	}).WithMessage("be scrollable into view")
+	if len(args) > 0 {
+		b.pollOrImmediate(args[0], matcher)
+		return nil
+	}
+	b.guardBareMatcher("ScrollIntoView")
+	return matcher
 }
 
 /*
 SelectText() selects all of the text inside the first element matching selector - the equivalent of dragging the cursor across it - and produces a genuine window.getSelection() range, then dispatches a mouseup so selection-driven UIs (a "highlight → menu" toolbar, an annotation layer) react.
 
-When invoked with a selector, tab.SelectText("#passage") acts immediately and fails the spec if no element is found, or if the element is hidden.
+When invoked with a selector, tab.SelectText("#passage") polls by default until the element is present and visible, then selects its text - failing the spec if that never happens before the timeout.  Opt out with [Biloba.Immediate], or tune the wait with [Biloba.WithTimeout]/[Biloba.WithPolling]/[Biloba.WithContext].
 
 When invoked with no arguments, tab.SelectText() returns a Gomega matcher so you can poll until an element is present to select:
 
@@ -1255,28 +1483,31 @@ func (b *Biloba) SelectText(args ...any) types.GomegaMatcher {
 	switch {
 	case len(positional) == 0 && !hasOpts:
 		// matcher form, select all of the element's text; selector supplied by Eventually
+		b.guardBareMatcher("SelectText")
 		return gcustom.MakeMatcher(func(selector any) (bool, error) {
 			return b.runBilobaHandler("selectText", selector).MatcherResult()
 		}).WithMessage("be selectable")
 	case len(positional) == 1 && !hasOpts:
 		// immediate form, select all of the element's text
-		r := b.runBilobaHandler("selectText", positional[0])
-		if r.Error() != nil {
-			b.gt.Fatalf("Failed to select text:\n%s", r.Error())
-		}
+		matcher := gcustom.MakeMatcher(func(selector any) (bool, error) {
+			return b.runBilobaHandler("selectText", selector).MatcherResult()
+		}).WithMessage("be selectable")
+		b.pollOrImmediate(positional[0], matcher)
 		return nil
 	case len(positional) == 1 && hasOpts:
 		// matcher form, select an occurrence of substring; selector supplied by Eventually
 		substring := positional[0]
+		b.guardBareMatcher("SelectText")
 		return gcustom.MakeMatcher(func(selector any) (bool, error) {
 			return b.runBilobaHandler("selectOccurrence", selector, substring, cfg.occurrence).MatcherResult()
 		}).WithMessage("be selectable")
 	case len(positional) == 2:
 		// immediate form, select an occurrence of substring
-		r := b.runBilobaHandler("selectOccurrence", positional[0], positional[1], cfg.occurrence)
-		if r.Error() != nil {
-			b.gt.Fatalf("Failed to select text:\n%s", r.Error())
-		}
+		substring := positional[1]
+		matcher := gcustom.MakeMatcher(func(selector any) (bool, error) {
+			return b.runBilobaHandler("selectOccurrence", selector, substring, cfg.occurrence).MatcherResult()
+		}).WithMessage("be selectable")
+		b.pollOrImmediate(positional[0], matcher)
 		return nil
 	default:
 		b.gt.Fatalf("SelectText: unsupported arguments.  Use SelectText(selector), SelectText(selector, substring), or SelectText(selector, substring, tab.Occurrence(n)) to act immediately; or SelectText() and SelectText(substring, tab.Occurrence(n)) to return a matcher.")
@@ -1311,7 +1542,7 @@ The offsets count characters into the element's text content (start inclusive, e
 
 	tab.SelectRange("#passage", 5, 12) // selects characters 5..11
 
-When invoked with a selector, start, and end it acts immediately and fails the spec if no element is found, if the element is hidden, or if [start, end] is out of bounds.
+When invoked with a selector, start, and end it polls by default until the element is present and visible, then selects the range - failing the spec if that never happens before the timeout (or if [start, end] is out of bounds).  Opt out with [Biloba.Immediate], or tune the wait with [Biloba.WithTimeout]/[Biloba.WithPolling]/[Biloba.WithContext].
 
 When invoked with just start and end, tab.SelectRange(start, end) returns a Gomega matcher whose subject is the selector:
 
@@ -1322,10 +1553,11 @@ Read https://onsi.github.io/biloba/#selecting-text to learn more about selecting
 func (b *Biloba) SelectRange(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
 	if len(args) == 3 {
-		r := b.runBilobaHandler("selectRange", args[0], args[1], args[2])
-		if r.Error() != nil {
-			b.gt.Fatalf("Failed to select range:\n%s", r.Error())
-		}
+		start, end := args[1], args[2]
+		matcher := gcustom.MakeMatcher(func(selector any) (bool, error) {
+			return b.runBilobaHandler("selectRange", selector, start, end).MatcherResult()
+		}).WithMessage("be selectable")
+		b.pollOrImmediate(args[0], matcher)
 		return nil
 	}
 	if len(args) != 2 {
@@ -1333,6 +1565,7 @@ func (b *Biloba) SelectRange(args ...any) types.GomegaMatcher {
 		return nil
 	}
 	start, end := args[0], args[1]
+	b.guardBareMatcher("SelectRange")
 	return gcustom.MakeMatcher(func(selector any) (bool, error) {
 		return b.runBilobaHandler("selectRange", selector, start, end).MatcherResult()
 	}).WithMessage("be selectable")
@@ -1349,6 +1582,7 @@ Read https://onsi.github.io/biloba/#selecting-text to learn more about selecting
 */
 func (b *Biloba) ClearSelection() {
 	b.gt.Helper()
+	b.guardConfig("ClearSelection")
 	if _, err := b.RunErr("window.getSelection().removeAllRanges()"); err != nil {
 		b.gt.Fatalf("Failed to clear selection:\n%s", err.Error())
 	}
@@ -1365,27 +1599,37 @@ are equivalent to the javascript:
 	document.querySelector("input.login")["scrollIntoView"]()
 	document.querySelector(".notice")["setAttribute"]("data-age", "17")
 
-InvokeOn() fails if no element is found, or if the method is not defined on the element. Anything returned by method is returned by InvokeOn with type any:
+InvokeOn polls by default: it waits until an element matching selector is present, then invokes method on it.  If the method is undefined on the element, or it throws, the error is surfaced when the poll times out (under [Biloba.Immediate] it fails fast on the first attempt instead).  Anything returned by method is returned by InvokeOn with type any:
 
-	Expect(document.InvokeOn("getAttribute", "data-age")).To(Equal("17"))
+	Expect(tab.InvokeOn(".notice", "getAttribute", "data-age")).To(Equal("17"))
+
+Configure the wait with WithTimeout/WithPolling/WithContext, or opt into act-once/fail-fast with Immediate().
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#invoking-javascript-on-and-with-selected-elements to learn more about invoking javascript on/with DOM elements
 */
-func (b *Biloba) InvokeOn(selector string, methodName string, args ...any) any {
+func (b *Biloba) InvokeOn(selector any, methodName string, args ...any) any {
 	b.gt.Helper()
 	finalArgs := []any{methodName}
 	finalArgs = append(finalArgs, args...)
-	r := b.runBilobaHandler("invokeOn", selector, finalArgs...)
-	if r.Error() != nil {
-		b.gt.Fatalf("Failed to invoke \"%s\":\n%s", methodName, r.Error())
-		return nil
-	}
-	return r.Result
+	var result any
+	matcher := gcustom.MakeMatcher(func(sel any) (bool, error) {
+		r := b.runBilobaHandler("invokeOnP", sel, finalArgs...)
+		if r.Error() != nil {
+			return false, r.Error()
+		}
+		if !r.Success {
+			return false, nil
+		}
+		result = r.Result
+		return true, nil
+	}).WithMessage(fmt.Sprintf("respond to %q", methodName))
+	b.pollOrImmediate(selector, matcher)
+	return result
 }
 
 /*
-InvokeOnEach() invokes the passed-in method, passing in the args if any, on all elements matching selector.  It returns a []any slice containing any return values from each invocation.
+InvokeOnEachImmediately() invokes the passed-in method, passing in the args if any, on all elements matching selector.  It returns a []any slice containing any return values from each invocation.
 
 All invocations receive the same arguments.
 
@@ -1394,8 +1638,9 @@ See [Biloba.InvokeOn] for more details
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#invoking-javascript-on-and-with-selected-elements to learn more about invoking javascript on/with DOM elements
 */
-func (b *Biloba) InvokeOnEach(selector string, methodName string, args ...any) []any {
+func (b *Biloba) InvokeOnEachImmediately(selector string, methodName string, args ...any) []any {
 	b.gt.Helper()
+	b.guardConfig("InvokeOnEachImmediately")
 	finalArgs := []any{methodName}
 	finalArgs = append(finalArgs, args...)
 	r := b.runBilobaHandler("invokeOnEach", selector, finalArgs...)
@@ -1417,40 +1662,49 @@ callableScript must be a snippet of javascript that evaluates to a callable func
 		el.appendChild(li);
 	}`
 	b.InvokeWith("ul", appendLi, "Another Item") //runs on the first <ul>
-	b.InvokeWithEach("ul", appendLi, "Another Item For All") //runs on all <ul>s
+	b.InvokeWithEachImmediately("ul", appendLi, "Another Item For All") //runs on all <ul>s
 
-# InvokeWith fails if no element is found
+InvokeWith polls by default: it waits until an element matching selector is present, then invokes the function.  If the script throws, the error is surfaced when the poll times out (under [Biloba.Immediate] it fails fast on the first attempt instead).  Configure the wait with WithTimeout/WithPolling/WithContext, or opt into act-once/fail-fast with Immediate().
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#invoking-javascript-on-and-with-selected-elements to learn more about invoking javascript on/with DOM elements
 */
-func (b *Biloba) InvokeWith(selector string, callableScript string, args ...any) any {
+func (b *Biloba) InvokeWith(selector any, callableScript string, args ...any) any {
 	b.gt.Helper()
 	finalArgs := []any{callableScript}
 	finalArgs = append(finalArgs, args...)
-	r := b.runBilobaHandler("invokeWith", selector, finalArgs...)
-	if r.Error() != nil {
-		b.gt.Fatalf("Failed to InvokeWith:\n%s", r.Error())
-		return nil
-	}
-	return r.Result
+	var result any
+	matcher := gcustom.MakeMatcher(func(sel any) (bool, error) {
+		r := b.runBilobaHandler("invokeWithP", sel, finalArgs...)
+		if r.Error() != nil {
+			return false, r.Error()
+		}
+		if !r.Success {
+			return false, nil
+		}
+		result = r.Result
+		return true, nil
+	}).WithMessage("be invokable")
+	b.pollOrImmediate(selector, matcher)
+	return result
 }
 
 /*
-InvokeWithEach() finds all elements matching selector then invokes the passed-in function on each element, passing in the element and any additional args provided.  It collects the return values for each invocation and returns them as an []any slice.
+InvokeWithEachImmediately() finds all elements matching selector then invokes the passed-in function on each element, passing in the element and any additional args provided.  It collects the return values for each invocation and returns them as an []any slice.
 
 See [Biloba.InvokeWith] for more details
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#invoking-javascript-on-and-with-selected-elements to learn more about invoking javascript on/with DOM elements
 */
-func (b *Biloba) InvokeWithEach(selector string, callableScript string, args ...any) []any {
+func (b *Biloba) InvokeWithEachImmediately(selector string, callableScript string, args ...any) []any {
 	b.gt.Helper()
+	b.guardConfig("InvokeWithEachImmediately")
 	finalArgs := []any{callableScript}
 	finalArgs = append(finalArgs, args...)
 	r := b.runBilobaHandler("invokeWithEach", selector, finalArgs...)
 	if r.Error() != nil {
-		b.gt.Fatalf("Failed to InvokeWithEach:\n%s", callableScript, r.Error())
+		b.gt.Fatalf("Failed to InvokeWithEachImmediately:\n%s\n\n%s", callableScript, r.Error())
 		return nil
 	}
 	return r.ResultAnySlice()

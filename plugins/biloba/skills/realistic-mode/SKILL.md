@@ -44,15 +44,18 @@ Selection is track-agnostic (`b.ByRole`/`ByText`/`ByLabel`, CSS, `>>>`, XPath wo
 | `DblClick`/`RightClick`/`MiddleClick` | synthetic events (`dblclick`/`contextmenu`/`auxclick`) | scroll + stability + occlusion + real button input (native context menu fires) |
 | `Hover` | JS pointer/mouse events; **no** CSS `:hover` | moves the **real pointer** → CSS `:hover` activates |
 | `SetValue` | sets value, fires `input`/`change` (no typing) | text inputs: real click → clear → real keystrokes → blur; checkboxes: real click. Native pickers (radio/`<select>`/multi) fall back to fast JS |
-| `Type`/`SendKeys` | real CDP key events already | additionally scrolls into view first |
+| `Type` | real CDP key events already | additionally scrolls the element into view first |
+| `SendKeysToWindowImmediately` | real CDP key events already | no target element — sends to current focus, nothing to scroll |
 | pointer options `b.At(x,y)`/`b.Shift()`… | any option switches a click off native `el.click()` to a synthetic event carrying coords+modifier flags | real CDP input honoring the offset (translated, bounds-checked) + modifier bitmask |
 | `DragTo` | `pointerdown`/`move`/`up` events | real CDP mouse drag (scrolls + checks both ends) |
 | `ScrollWheel` | synthetic `wheel` + manual ancestor scroll | real CDP wheel — genuine trusted input, scrolls the page |
 | `Tap` | synthetic touch/pointer + `click` | real CDP `touchStart`/`touchEnd` |
 
-The whole vocabulary (`DblClick`, `RightClick`, `MiddleClick`, pointer options `b.At`/`b.Shift`/`b.Ctrl`/`b.Alt`/`b.Meta`, `DragTo`, `ScrollWheel`, `Tap`, `Type`/`SendKeys`) is in `biloba:write-tests` and `biloba:api`.
+The whole vocabulary (`DblClick`, `RightClick`, `MiddleClick`, pointer options `b.At`/`b.Shift`/`b.Ctrl`/`b.Alt`/`b.Meta`, `DragTo`, `ScrollWheel`, `Tap`, `Type`) is in `biloba:write-tests` and `biloba:api`.
 
-**Scroll-into-view lives only on this track** (plus the focus-bearing `SetValue`/`Type`/`SendKeys`, whose `.focus()` scrolls). A *fast* `Click`/`Tap` never moves the page — so if a scroll/layout spec needs the viewport held still, stay on the fast track; and if a scroll position shifts around a fast click, the cause is app-side, not Biloba (a real diagnosis trap — see `biloba:flaky-specs`).
+**Realistic interactions poll by default too.** `b.Realistic()` is the same shallow `*Biloba`-clone pattern as the poll-config handles, so it **composes** with them: `b.Realistic().WithTimeout(5*time.Second).Click("#submit")`, `b.Realistic().Immediate().Click(...)`. A fully-applied `rb.Click(sel)` polls (scroll + stability + occlusion + click) until it succeeds, exactly like the fast track — you don't have to wrap realistic interactions in `Eventually` to get readiness-waiting (though the matcher form is still there when you want to own the poll).
+
+**Scroll-into-view lives only on this track** (plus the focus-bearing `SetValue`/`Type`, whose `.focus()` scrolls). A *fast* `Click`/`Tap` never moves the page — so if a scroll/layout spec needs the viewport held still, stay on the fast track; and if a scroll position shifts around a fast click, the cause is app-side, not Biloba (a real diagnosis trap — see `biloba:flaky-specs`).
 
 ## The three composition patterns
 
@@ -87,6 +90,6 @@ With the label, `ginkgo --label-filter='realistic'` runs only the realistic lane
 ## Pitfalls
 
 - **Don't realistic-mode the whole suite.** It defeats Biloba's performance and stability story; reserve it for smoke tests.
-- A realistic interaction on an occluded/off-screen element **polls and fails** like a real interaction — that's the feature, but it means realistic specs are more timing-sensitive. Lean on the matcher form (`Eventually(sel).Should(rb.Click())`) so readiness-waiting is built in.
+- A realistic interaction on an occluded/off-screen element **polls and fails** like a real interaction — that's the feature, but it means realistic specs are more timing-sensitive. The fully-applied `rb.Click(sel)` already polls (readiness-waiting is built in); bump `rb.WithTimeout(d)` for a genuinely slow scroll/settle rather than dropping to `Immediate()`.
 - `DragTo` drives **pointer-based** DnD libraries (@dnd-kit, Sortable), **not** native HTML5 `draggable` (which uses a separate drag-event model).
 - `Focus` stays a plain JS focus even on the realistic track (matching how real engines focus without a side-effecting click).

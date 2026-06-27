@@ -1,6 +1,6 @@
 ---
 name: overview
-description: The Biloba mental model for writing browser tests in your own Ginkgo/Gomega suite — the three principles and the consequences they have for how you write specs (pragmatic simulation, never-polls, drop-to-chromedp). Use this first when you start working with Biloba in a project, or to decide whether Biloba fits a testing task. Routes to the other biloba:* skills.
+description: The Biloba mental model for writing browser tests in your own Ginkgo/Gomega suite — the three principles and the consequences they have for how you write specs (pragmatic simulation, poll-by-default, drop-to-chromedp). Use this first when you start working with Biloba in a project, or to decide whether Biloba fits a testing task. Routes to the other biloba:* skills.
 ---
 
 # Biloba: the mental model
@@ -17,21 +17,21 @@ Read the canonical narrative docs at <https://onsi.github.io/biloba/> for the fu
 
 **2. Stability via pragmatism.** Biloba favors a good-enough *simulation* run atomically in the browser over a realistic emulation across async round-trips. A click is `element.click()` after synchronous visibility/enabled checks — no scroll-into-view, no centroid, no occlusion test. This **fast track** is the default `b`. The consequences you must internalize:
 - **Visibility = non-zero `offsetWidth`/`offsetHeight`.** The fast track won't catch an element hidden *behind* another or off-screen. Use `HaveComputedStyle` for explicit style assertions, or `BeClickable()` to assert topmost-at-its-center.
-- **`SetValue` sets the value and fires `input`/`change` — it does *not* type.** Apps wired to real key events (search-as-you-type, rich text, hotkeys) need `b.Type`/`b.SendKeys`. → `biloba:write-tests`.
+- **`SetValue` sets the value and fires `input`/`change` — it does *not* type.** Apps wired to real key events (search-as-you-type, rich text, hotkeys) need `b.Type`. → `biloba:write-tests`.
 - **`Hover` fires pointer/mouse events but does not activate CSS `:hover`.**
 - **There are two interaction tracks.** When a handful of specs genuinely need realism (real clicks through occlusion, scroll-into-view, CSS `:hover`, drags), opt into the **realistic track** with `b.Realistic()` — a view of the *same tab* that routes interactions through real Chrome DevTools Protocol input. It's per-spec opt-in (it costs round-trips and can reintroduce timing flake), so the bulk of your suite stays on the fast track. → `biloba:write-tests`. For cross-origin frames / geolocation / any other CDP feature, drop to chromedp (escape hatch below).
 
 **3. Conciseness via Ginkgo and Gomega.**
 - **Most methods don't return errors** — errors become Ginkgo test failures for you.
-- **Biloba never polls.** Methods either act immediately *or* return a Gomega matcher that *you* wrap in `Eventually`/`Consistently`. This dual immediate/matcher API is the single most important pattern — learn it in `biloba:write-tests`.
+- **Biloba polls by default.** A fully-applied call (`b.Click("#go")`, `b.GetProperty(sel, "href")`) **polls until it succeeds** — it waits for the element to be ready, acts/reads once, then stops. The under-applied form returns a Gomega matcher *you* wrap in `Eventually`/`Consistently` when you want to drive the poll yourself. This dual API is the single most important pattern — learn it in `biloba:write-tests`. (Poll-by-default exists to kill the immediate-mode flake footgun; `b.Immediate()` opts back into act-once/fail-fast, rarely needed.)
 - `console.log` streams to the `GinkgoWriter`; a failing `console.assert` fails the spec.
 
 ## The one habit that keeps suites non-flaky
 
-**Never assert on a value you read exactly once.** A browser is a pile of async settles (a WS frame, a layout/measure pass, an rAF-injected node, an optimistic→server reconciliation); any single read can land before the thing you care about settles. This is the root of almost every Biloba flake. Three reflexes follow:
+**Never assert on a value you read exactly once.** A browser is a pile of async settles (a WS frame, a layout/measure pass, an rAF-injected node, an optimistic→server reconciliation); any single read can land before the thing you care about settles. Biloba's poll-by-default actions and getters handle this for you — the residual flake sources are the few things that *don't* poll. Three reflexes follow:
 
-- **Poll reads, don't snapshot them.** `b.Run(expr, &x); Expect(x)` is a single-shot read — wrap it: `Eventually(b.Run).WithArguments(expr).Should(matcher)` (numbers decode to `float64` → `BeNumerically`). Geometry / `getBoundingClientRect` / computed-style reads settle *after* an element exists, so they must be polled even once it's there.
-- **Immediate interactions race silently and fail *later*.** A fully-applied `b.Click(sel)`/`b.Tap(sel)` fired a frame too early no-ops — and the spec fails downstream at the dependent assertion, not at the interaction. **Default to the matcher form `Eventually(sel).Should(b.Click())`** (it polls until clickable, clicks once, then stops — safe even on toggles); reach for the immediate form only right after you've proven readiness.
+- **`b.Run` reads don't poll — wrap them.** `b.Run(expr, &x); Expect(x)` is a single-shot read (`Run` stays immediate fail-fast on purpose — a thrown JS error is usually a real bug). Wrap it: `Eventually(b.Run).WithArguments(expr).Should(matcher)` (numbers decode to `float64` → `BeNumerically`). Geometry / `getBoundingClientRect` / computed-style reads settle *after* an element exists, so they must be polled even once it's there.
+- **Don't reach for `b.Immediate()`.** The default `b.Click(sel)`/`b.GetProperty(...)` already polls until ready, so you almost never need the act-once escape hatch; reaching for it reintroduces the classic "raced a frame, failed downstream" flake. The few methods that genuinely can't poll (`SendKeysToWindowImmediately`, the `*Immediately` plural verbs) carry the smell in their names — gate them by hand. → `biloba:flaky-specs`.
 - **If your app renders optimistically, the DOM lies.** It shows the pre-confirmation state, and `Eventually` on it just re-reads the optimistic copy — wait on a server-authoritative signal instead.
 
 When a spec is flaky, order-dependent, or only fails under `-p`/CI, go straight to `biloba:flaky-specs`.

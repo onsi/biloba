@@ -218,6 +218,7 @@ AllSpawnedTabs() returns all tabs that were spawned by the current tab.  Spawned
 Read https://onsi.github.io/biloba/#managing-tabs to learn more about managing tabs
 */
 func (b *Biloba) AllSpawnedTabs() Tabs {
+	b.guardConfig("AllSpawnedTabs")
 	out := Tabs{}
 	for _, tab := range b.AllTabs() {
 		if b.isSiblingTab(tab) {

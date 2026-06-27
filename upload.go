@@ -16,7 +16,7 @@ Setting a file input's files is one of the few things that cannot be simulated i
 	b.SetUpload("input[type=file]", "./fixtures/avatar.png")
 	b.SetUpload("#attachments", "./a.txt", "./b.txt") // multiple files (the input needs the `multiple` attribute)
 
-SetUpload fails the spec if no element matches selector.
+SetUpload polls by default: it waits until a file input matching selector is present, then attaches the files - failing the spec if it never appears before the timeout.  Opt out with [Biloba.Immediate], or tune the wait with [Biloba.WithTimeout]/[Biloba.WithPolling]/[Biloba.WithContext].
 
 When invoked with just the path(s) (no selector) SetUpload returns a Gomega matcher so you can poll until the file input is present:
 
@@ -35,6 +35,7 @@ func (b *Biloba) SetUpload(args ...any) types.GomegaMatcher {
 	// matcher form.
 	if len(args) == 1 {
 		if paths, ok := uploadPaths(args); ok {
+			b.guardBareMatcher("SetUpload")
 			return gcustom.MakeMatcher(func(selector any) (bool, error) {
 				return b.performSetUpload(selector, paths)
 			}).WithMessage("be uploadable to")
@@ -50,13 +51,10 @@ func (b *Biloba) SetUpload(args ...any) types.GomegaMatcher {
 		b.gt.Fatalf("SetUpload paths must be strings (or a single []string)")
 		return nil
 	}
-	success, err := b.performSetUpload(args[0], paths)
-	if err != nil {
-		b.gt.Fatalf("Failed to set upload:\n%s", err.Error())
-	} else if !success {
-		encoded, _ := encodeSelector(args[0])
-		b.gt.Fatalf("Failed to set upload:\ncould not find DOM element matching selector: %s", encoded[1:])
-	}
+	matcher := gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return b.performSetUpload(selector, paths)
+	}).WithMessage("be uploadable to")
+	b.pollOrImmediate(args[0], matcher)
 	return nil
 }
 

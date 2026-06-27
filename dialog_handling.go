@@ -181,6 +181,7 @@ HandleAlertDialogs() registers an alert DialogHandler
 Read https://onsi.github.io/biloba/#handling-dialogs to learn more about handling dialogs
 */
 func (b *Biloba) HandleAlertDialogs() *DialogHandler {
+	b.guardConfig("HandleAlertDialogs")
 	return b.addDialogHandler(&DialogHandler{dialogType: DialogTypeAlert})
 }
 
@@ -190,6 +191,7 @@ HandleBeforeunloadDialogs() registers an beforeunload DialogHandler
 Read https://onsi.github.io/biloba/#handling-dialogs to learn more about handling dialogs
 */
 func (b *Biloba) HandleBeforeunloadDialogs() *DialogHandler {
+	b.guardConfig("HandleBeforeunloadDialogs")
 	return b.addDialogHandler(&DialogHandler{dialogType: DialogTypeBeforeunload})
 }
 
@@ -199,6 +201,7 @@ HandleConfirmDialogs() registers a confirm DialogHandler
 Read https://onsi.github.io/biloba/#handling-dialogs to learn more about handling dialogs
 */
 func (b *Biloba) HandleConfirmDialogs() *DialogHandler {
+	b.guardConfig("HandleConfirmDialogs")
 	return b.addDialogHandler(&DialogHandler{dialogType: DialogTypeConfirm})
 }
 
@@ -208,6 +211,7 @@ HandlePromptDialogs() registers a prompt Dialoghandler
 Read https://onsi.github.io/biloba/#handling-dialogs to learn more about handling dialogs
 */
 func (b *Biloba) HandlePromptDialogs() *DialogHandler {
+	b.guardConfig("HandlePromptDialogs")
 	return b.addDialogHandler(&DialogHandler{dialogType: DialogTypePrompt})
 }
 
@@ -226,6 +230,7 @@ Pass RemoveDialogHandler() a handler returned by one of the Handle*Dialogs metho
 Read https://onsi.github.io/biloba/#handling-dialogs to learn more about handling dialogs
 */
 func (b *Biloba) RemoveDialogHandler(handler *DialogHandler) {
+	b.guardConfig("RemoveDialogHandler")
 	handlers := []*DialogHandler{}
 	b.lock.Lock()
 	for _, h := range b.dialogHandlers {
@@ -243,6 +248,7 @@ Dialogs() returns all dialogs handled by this Biloba tab in this spec
 Read https://onsi.github.io/biloba/#inspecting-handled-dialogs to learn more about inspecting handled dialogs
 */
 func (b *Biloba) Dialogs() Dialogs {
+	b.guardConfig("Dialogs")
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	return append(Dialogs{}, b.dialogs...)

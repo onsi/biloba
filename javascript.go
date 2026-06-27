@@ -118,9 +118,20 @@ For a side-effect-only script you don't need a decode target at all - just omit 
 
 # If an error occurs Run() will fail the spec
 
+Run does not poll: a thrown error is usually a real bug, not a not-ready condition, so auto-polling would mask it.  For a polling path use [Biloba.RunErr] + Eventually, or [Biloba.EvaluateTo].  Configuring Run (WithTimeout/WithPolling/WithContext/Immediate) is a hard error.
+
 Read https://onsi.github.io/biloba/#running-arbitrary-javascript to learn more about running JavaScript in Biloba
 */
 func (b *Biloba) Run(script string, args ...any) any {
+	b.gt.Helper()
+	b.guardConfig("Run")
+	return b.run(script, args...)
+}
+
+// run is the unguarded substrate behind Run.  Internal callers (e.g. reloadBiloba on the polling hot
+// path, the Storage and WindowSize helpers) use it directly so the public Run's config guard does not
+// fire for Biloba's own internal scripting - only for a user who explicitly misconfigures a Run call.
+func (b *Biloba) run(script string, args ...any) any {
 	b.gt.Helper()
 	res, err := b.RunErr(script, args...)
 	if err != nil {
@@ -156,10 +167,13 @@ As with Run you can pass a single pointer argument to decode the result into a s
 
 # If the script throws or the awaited promise rejects RunAsync will fail the spec
 
+Like [Biloba.Run], RunAsync does not poll and configuring it (WithTimeout/WithPolling/WithContext/Immediate) is a hard error; for a polling path use [Biloba.RunErrAsync] + Eventually.
+
 Read https://onsi.github.io/biloba/#running-arbitrary-javascript to learn more about running JavaScript in Biloba
 */
 func (b *Biloba) RunAsync(script string, args ...any) any {
 	b.gt.Helper()
+	b.guardConfig("RunAsync")
 	res, err := b.RunErrAsync(script, args...)
 	if err != nil {
 		b.gt.Fatalf("Failed to run async script:\n%s\n\n%s", script, err.Error())

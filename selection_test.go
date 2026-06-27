@@ -1,6 +1,8 @@
 package biloba_test
 
 import (
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -30,9 +32,22 @@ var _ = Describe("Selecting text", func() {
 			Ω(selectedText()).Should(Equal("The quick brown fox"))
 		})
 
-		It("fails the spec when no element matches", func() {
-			b.SelectText("#non-existing")
-			ExpectFailures(ContainSubstring("Failed to select text"))
+		It("times out (poll-by-default) when no element matches", func() {
+			b.WithTimeout(time.Millisecond * 60).SelectText("#non-existing")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("could not find DOM element matching selector: #non-existing"),
+			))
+		})
+
+		It("fails fast under Immediate() when no element matches", func() {
+			b.Immediate().SelectText("#non-existing")
+			ExpectFailures(ContainSubstring("could not find DOM element matching selector: #non-existing"))
+		})
+
+		It("is a hard error to configure the bare-matcher form", func() {
+			b.WithTimeout(time.Second).SelectText()
+			ExpectFailures(ContainSubstring("SelectText(...) returns a matcher"))
 		})
 	})
 
@@ -73,18 +88,21 @@ var _ = Describe("Selecting text", func() {
 		})
 
 		It("fails the spec when the substring is not found", func() {
-			b.SelectText("#repeated", "zzz")
+			b.Immediate().SelectText("#repeated", "zzz")
 			ExpectFailures(ContainSubstring(`could not find occurrence 1 of "zzz" (found 0 occurrence(s))`))
 		})
 
 		It("fails the spec when there are not enough occurrences", func() {
-			b.SelectText("#repeated", "cell", b.Occurrence(4))
+			b.Immediate().SelectText("#repeated", "cell", b.Occurrence(4))
 			ExpectFailures(ContainSubstring(`could not find occurrence 4 of "cell" (found 3 occurrence(s))`))
 		})
 
-		It("fails the spec when no element matches", func() {
-			b.SelectText("#non-existing", "cell")
-			ExpectFailures(ContainSubstring("Failed to select text"))
+		It("times out (poll-by-default) when no element matches", func() {
+			b.WithTimeout(time.Millisecond * 60).SelectText("#non-existing", "cell")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("could not find DOM element matching selector: #non-existing"),
+			))
 		})
 	})
 
@@ -111,13 +129,26 @@ var _ = Describe("Selecting text", func() {
 		})
 
 		It("fails the spec when the range is out of bounds", func() {
-			b.SelectRange("#passage", 0, 999)
+			b.Immediate().SelectRange("#passage", 0, 999)
 			ExpectFailures(ContainSubstring("out of bounds"))
 		})
 
-		It("fails the spec when no element matches", func() {
-			b.SelectRange("#non-existing", 0, 1)
-			ExpectFailures(ContainSubstring("Failed to select range"))
+		It("times out (poll-by-default) when no element matches", func() {
+			b.WithTimeout(time.Millisecond * 60).SelectRange("#non-existing", 0, 1)
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("could not find DOM element matching selector: #non-existing"),
+			))
+		})
+
+		It("fails fast under Immediate() when no element matches", func() {
+			b.Immediate().SelectRange("#non-existing", 0, 1)
+			ExpectFailures(ContainSubstring("could not find DOM element matching selector: #non-existing"))
+		})
+
+		It("is a hard error to configure the bare-matcher form", func() {
+			b.WithTimeout(time.Second).SelectRange(0, 1)
+			ExpectFailures(ContainSubstring("SelectRange(...) returns a matcher"))
 		})
 	})
 

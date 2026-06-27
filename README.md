@@ -66,7 +66,7 @@ Describe("a simple chat app", func() {
 	It("delivers messages between Sally and Jane", func() {
 		lastEntry := b.ByRole("listitem").Within("#conversation").Last()
 		tabSally.Type("#input", "Hey Jane, how are you?") // real keystrokes...
-		tabSally.SendKeys("#input", biloba.Keys.Enter)    // ...sent by pressing Enter
+		tabSally.Type("#input", biloba.Keys.Enter)        // ...sent by pressing Enter
 		Eventually(lastEntry).Should(tabJane.HaveText("Hey Jane, how are you?"))
 
 		tabJane.Type("#input", "I'm splendid, Sally!")
@@ -123,6 +123,25 @@ Describe("a simple chat app", func() {
 Run these in series with `ginkgo`.  And in parallel with `ginkgo -p` for fast, stable, isolated browser tests.
 
 Biloba is quite feature complete and in active development.  However, a 1.0 release milestone has not been reached yet, so the public API contract may shift as the project evolves.
+
+### Poll by default
+
+Browsers are asynchronous, so Biloba's interactions and value-getters **poll by default**.  A fully-applied call like `tab.Click("#go")` or `tab.SetValue("#input", "hi")` retries — finding-and-acting atomically in the browser — until it succeeds or times out.  No more sprinkling `Eventually(...).Should(tab.Exist())` gates in front of every action: the action waits for you.
+
+When you want to make the wait explicit (to compose with `Consistently`, or assert on a richer condition), every interaction also has a matcher form you hand to Gomega:
+
+```go
+Eventually("#go").Should(tab.Click())
+Eventually(tab.ByLabel("Email")).Should(tab.SetValue("me@example.com"))
+```
+
+And when you genuinely want act-once / fail-fast semantics — no polling — opt out with `tab.Immediate()`:
+
+```go
+tab.Immediate().Click("#go") // act now; fail immediately if it isn't clickable yet
+```
+
+Polling timeout, interval, and context are configurable Gomega-style with `tab.WithTimeout(...)`, `tab.WithPolling(...)`, and `tab.WithContext(...)`.
 
 ### Fast and realistic interaction tracks
 

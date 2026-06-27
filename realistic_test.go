@@ -3,6 +3,7 @@ package biloba_test
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -96,15 +97,18 @@ var _ = Describe("BeClickable and realistic interactions", func() {
 			// realistic Click dispatches a real mouse event, which would land on the overlay,
 			// so it refuses and fails the spec rather than clicking the hidden button
 			b.Run(`document.getElementById('covered-result').textContent = 'reset'`)
-			b.Realistic().Click("#covered-btn")
-			ExpectFailures(ContainSubstring("not clickable"))
+			b.Realistic().WithTimeout(time.Millisecond * 60).Click("#covered-btn")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("to be clickable"),
+			))
 			Expect("#covered-result").To(b.HaveInnerText("reset"))
 		})
 	})
 
-	Describe("realistic ClickEach", func() {
+	Describe("realistic ClickEachImmediately", func() {
 		It("clicks every matching element with real input", func() {
-			b.Realistic().ClickEach(".each-btn")
+			b.Realistic().ClickEachImmediately(".each-btn")
 			Eventually(".each-btn").Should(b.EachHaveInnerText("clicked", "clicked", "clicked"))
 		})
 	})

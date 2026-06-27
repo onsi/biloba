@@ -60,10 +60,10 @@ type PointerOption func(*pointerConfig)
 Modifier is a held keyboard modifier - Shift, Ctrl, Alt, or Meta - shared by pointer interactions
 (shift-click) and keyboard input (Shift-Enter).  Build them with [Biloba.Shift], [Biloba.Ctrl],
 [Biloba.Alt], and [Biloba.Meta] and pass them to a pointer method ([Biloba.Click] and friends) or a
-keyboard method ([Biloba.Type], [Biloba.SendKeys]):
+keyboard method ([Biloba.Type], [Biloba.SendKeysToWindowImmediately]):
 
 	b.Click("#row", b.Shift())                     // shift-click
-	b.SendKeys("textarea", biloba.Keys.Enter, b.Shift()) // Shift-Enter
+	b.Type("textarea", biloba.Keys.Enter, b.Shift()) // Shift-Enter
 
 Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
 */
@@ -89,7 +89,7 @@ func (b *Biloba) At(offsetX, offsetY float64) PointerOption {
 Shift() holds the Shift key down during a pointer interaction or keyboard input:
 
 	b.Click("#row", b.Shift())                           // shift-click
-	b.SendKeys("textarea", biloba.Keys.Enter, b.Shift()) // Shift-Enter
+	b.Type("textarea", biloba.Keys.Enter, b.Shift()) // Shift-Enter
 
 Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
 */
@@ -164,27 +164,28 @@ func (b *Biloba) parsePointerArgs(verb string, args []any) (selector any, cfg po
 	return selector, cfg, immediate
 }
 
-// pointerInteraction wires up the immediate/matcher x fast/realistic fork that every single-selector
+// pointerInteraction wires up the poll/immediate x fast/realistic fork that every single-selector
 // pointer interaction shares.  act performs the interaction on a resolved selector and returns
-// (didIt, err): a non-nil err is a hard failure (missing/hidden element - matchers keep polling on
-// it, immediates fail), and a false didIt with a nil err is a soft "present but not actionable yet"
-// (matchers poll, immediates fail with notActionable).  The fast path collapses both failure modes
-// into err; the realistic path distinguishes them - either way Eventually retries and immediates fail.
-func (b *Biloba) pointerInteraction(verb, notActionable, matcherMessage string, args []any, act func(selector any, cfg pointerConfig) (bool, error)) types.GomegaMatcher {
+// (didIt, err): a non-nil err is a hard failure (missing/hidden element) and a false didIt with a nil
+// err is a soft "present but not actionable yet".  Both are retried while polling and both fail in
+// Immediate() mode - Gomega's MatcherResult semantics give us that for free.
+//
+// When a selector is present the call resolves to the poll-by-default action form: it routes through
+// pollOrImmediate (poll unless Immediate() is set).  When under-applied it returns the bare matcher
+// for the user to wrap in Eventually/Expect - and configuring that call (WithTimeout/...) is a hard
+// error, since you configure the Eventually, not the matcher.
+func (b *Biloba) pointerInteraction(verb, matcherMessage string, args []any, act func(selector any, cfg pointerConfig) (bool, error)) types.GomegaMatcher {
 	b.gt.Helper()
 	selector, cfg, immediate := b.parsePointerArgs(verb, args)
-	if immediate {
-		ok, err := act(selector, cfg)
-		if err != nil {
-			b.gt.Fatalf("Failed to %s:\n%s", verb, err.Error())
-		} else if !ok {
-			b.gt.Fatalf("Failed to %s: %s", verb, notActionable)
-		}
-		return nil
-	}
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+	matcher := gcustom.MakeMatcher(func(selector any) (bool, error) {
 		return act(selector, cfg)
 	}).WithMessage(matcherMessage)
+	if immediate {
+		b.pollOrImmediate(selector, matcher)
+		return nil
+	}
+	b.guardBareMatcher(verb)
+	return matcher
 }
 
 // performClick / performDblClick / performRightClick / performMiddleClick / performTap are the

@@ -1,15 +1,15 @@
 ---
 name: flaky-specs
-description: Diagnose and prevent flaky Biloba specs — tests that pass locally but fail in CI, fail intermittently under `ginkgo -p`, or fail "somewhere else" than the line that's actually wrong. The throughline — a browser test should never assert on a value it read exactly once — and the concrete smells behind it: single-shot `b.Run(expr,&x)` reads, immediate interactions that race silently and surface the failure later, optimistic-UI/server-reconciliation traps, and async-settling geometry/layout/document-order reads. Use when a browser spec is flaky, nondeterministic, order-dependent, or load-sensitive, or when reviewing a suite for latent races.
+description: Diagnose and prevent flaky Biloba specs — tests that pass locally but fail in CI, fail intermittently under `ginkgo -p`, or fail "somewhere else" than the line that's actually wrong. Biloba polls by default, so the headline rule is "don't reach for b.Immediate()"; the residual smells — single-shot `b.Run(expr,&x)` reads, the non-polling SendKeysToWindowImmediately/`*Immediately` verbs, AllowMissing for absent-on-type properties, optimistic-UI/server-reconciliation traps, and async-settling geometry/layout/document-order reads. Use when a browser spec is flaky, nondeterministic, order-dependent, or load-sensitive, or when reviewing a suite for latent races.
 ---
 
 # Avoiding & fixing flaky Biloba specs
 
-The one rule that prevents almost every Biloba flake:
+**Biloba polls by default — so the actions and getters you write (`b.Click(sel)`, `b.GetProperty(...)`, `b.SetValue(...)`) already wait for the element to be ready and act exactly once. The whole poll-by-default design exists to kill the immediate-mode flake footgun.** That removes the single biggest historical flake source. What's left is the handful of things that *don't* poll, plus reads you take in your own Go/JS:
 
 > **Never assert on a value you read exactly once.** A browser is a pile of async settles — a WS frame, a layout/measure pass, an rAF-scheduled DOM injection, an optimistic→authoritative reconciliation. Any single read can land *before* the thing you care about settles. Poll it instead.
 
-Biloba's ergonomics quietly invite the single-shot read (it has a clean "read a value directly" API), so this is the first thing to suspect when a spec flakes. The smells below are the recurring shapes; each has a polling fix. For the failure-artifact side (reading outlines/screenshots once a spec *has* failed) see `biloba:debug-failures`; for the authoring baseline see `biloba:write-tests`.
+The two reflexes: **don't reach for `b.Immediate()`** (it opts back into the old act-once race), and **wrap your own `b.Run` reads in `Eventually`** (Biloba can't poll a value you extract by hand). The smells below are the recurring shapes; each has a polling fix. For the failure-artifact side (reading outlines/screenshots once a spec *has* failed) see `biloba:debug-failures`; for the authoring baseline see `biloba:write-tests`.
 
 ## Smell 1 — the single-shot `b.Run` read  (the #1 flake source)
 
@@ -52,47 +52,40 @@ rg ', &(\w+)\)' -n          # every "…, &x)" — incl. the orphan close-line o
 
 — then for each captured var, check whether an `Expect(x)`/`Ω(x)` follows within a few lines (that's the single-shot read). The decode target, not the `b.Run(` token, is the reliable anchor.
 
-## Smell 2 — an immediate interaction that races, and fails *somewhere else*
+## Smell 2 — reaching for `b.Immediate()` and reintroducing the race
 
-`b.Click(sel)`, `b.Tap(sel)`, `b.SelectText(sel)`, `b.SetValue(sel, …)`, a raw `b.Run(…click())` — every **immediate** (fully-applied) form acts *now* and **does not poll** (Biloba never polls itself). Fire one a frame too early — right after a re-render, a list load, a hero/card injection — and it no-ops or hits a stale element. The cruel part: **the spec doesn't fail at the interaction.** It fails later, at the assertion that depended on it — a downstream `Eventually(...class…)` that times out, or a `null is not an object` from the app's own handler — with nothing pointing back at the racing interaction.
-
-**The fix is the matcher form — and it should be your default for every interaction.** `Eventually(sel).Should(b.Click())` **polls until the element exists and is clickable (visible + enabled), dispatches exactly one atomic click on the first success, then succeeds and stops.** It does *not* re-click on later polls — the successful dispatch *is* the matcher's success condition, so `Eventually` stops the instant the click lands. That makes it the safe default everywhere — including on a **toggle**: it never oscillates, because it fires once and the poll ends.
+`b.Click(sel)`, `b.Tap(sel)`, `b.SelectText(sel)`, `b.SetValue(sel, …)` — every fully-applied action now **polls until the element is ready, acts exactly once, then stops.** This is the default, and it is what keeps these flake-free: a `b.Click("#go")` written right after a re-render, a list load, or a card injection simply *waits* for the element instead of racing it. **Write the plain fully-applied form and move on.**
 
 ```go
-Eventually(sel).Should(b.Click())           // poll until clickable, click once, stop — then…
+b.Click("#go")                              // polls until clickable, clicks once, stops — then…
 Eventually(out).Should(b.HaveClass("open")) // …assert the observable outcome
 ```
 
-This generalizes across the whole dual vocabulary — `Click/DblClick/RightClick/MiddleClick`, `Tap`, `SetValue`, `SelectText`, `SelectRange`, `Type`, `Focus`, `Blur`, `Hover`, `ScrollIntoView`, `ScrollWheel`, `SetUpload`, `DragTo`. Selector-only verbs become `Eventually(sel).Should(b.Verb())`; verbs with trailing args move the selector into `Eventually` and keep the rest in the matcher (`b.SetValue(sel, v)` → `Eventually(sel).Should(b.SetValue(v))`; `b.ScrollWheel(sel, dx, dy)` → `Eventually(sel).Should(b.ScrollWheel(dx, dy))`; `b.SetUpload(sel, path)` → `Eventually(sel).Should(b.SetUpload(path))`, with multiple files passed as a `[]string`).
+The flake comes back only if you **opt out** with `b.Immediate()`. `b.Immediate().Click(sel)` acts once and fails fast — fire it a frame too early and it no-ops or hits a stale element, and (the cruel part) **the spec doesn't fail at the interaction**: it fails later, at the assertion that depended on it — a downstream `Eventually(...class…)` that times out, or a `null is not an object` from the app's own handler — with nothing pointing back. **So the anti-flake rule is simple: don't reach for `b.Immediate()`.** There is almost never a reason to; the default already does the right thing. (If the default wait is too short, tune it — `b.WithTimeout(d).Click(sel)` — don't drop to `Immediate`.)
 
-**Reach for the immediate `b.Click(sel)` only when you've *just* proven readiness on the line above** — and even then the matcher form is never wrong, so when in doubt use it. If you do go immediate, gate first:
+The **matcher form** (`Eventually(sel).Should(b.Click())`) is still available when you want to own the poll — a custom `Consistently`, composing with `.And()`, or driving a non-default `Eventually`. It has the same single-shot-and-stop semantics (it dispatches once on first success, never re-fires, so it's safe even on a **toggle**). Selector-only verbs become `Eventually(sel).Should(b.Verb())`; verbs with trailing args move the selector into `Eventually` and keep the rest in the matcher (`b.SetValue(sel, v)` → `Eventually(sel).Should(b.SetValue(v))`; `b.ScrollWheel(sel, dx, dy)` → `Eventually(sel).Should(b.ScrollWheel(dx, dy))`). But for the common case you don't need it — the fully-applied form already polls.
 
-```go
-Eventually(sel).Should(b.BeClickable())     // prove it's there & actionable…
-b.Click(sel)                                // …then act once
-```
-
-(When does the action genuinely re-fire? Only if you wrap it in `Consistently` instead of `Eventually`, or `.And()` it with a condition that never settles so the surrounding poll never terminates. Neither is the normal form — `Eventually(sel).Should(b.Click())` is single-shot and safe.)
-
-**The one sanctioned use of immediate mode inside a poll: "set-and-confirm-it-stuck".** When you act on an *optimistic* field that can silently revert (Smell 3), put the immediate action *and* its confirmation inside one `Eventually(func(g Gomega){...})` closure — the closure is the poll, so the action re-fires each iteration until the value is observed to have stuck:
+**The one sanctioned use of `Immediate()`: "set-and-confirm-it-stuck".** When you act on an *optimistic* field that can silently revert (Smell 3), put an **immediate** action *and* its confirmation inside one `Eventually(func(g Gomega){...})` closure — the closure is the poll, so the action re-fires each iteration until the value is observed to have stuck. Use `b.Immediate()` here so the inner action acts once per iteration (a default polling `SetValue` would run its *own* nested poll inside each closure pass):
 
 ```go
 Eventually(func(g Gomega) {
-    b.SetValue("#qty", 3)                       // immediate — re-runs each poll…
+    b.Immediate().SetValue("#qty", 3)           // act once per iteration — re-runs each poll…
     g.Expect("#qty").To(b.HaveValue("3"))       // …until the value actually sticks
 }).Should(Succeed())
 ```
 
-This is correct and deliberate — don't "convert" these immediates to the matcher form. The matcher form acts *once*; here you want to keep re-asserting against a value that may reconcile away.
+This is the rare case where reaching for `Immediate()` is correct and deliberate: you want to keep re-asserting against a value that may reconcile away, and the *outer* `Eventually` is the poll. (Everywhere else, prefer the plain poll-by-default form — Smell 2.)
 
-**The action matcher does not check occlusion — keep an explicit `BeClickable` gate when an overlay may cover the target.** `Eventually(sel).Should(b.Click())` gates on visible + enabled, but a fast click is `element.click()`; it does **not** verify the element is the topmost thing at its center, so it will happily "click" through a modal/overlay sitting on top. When occlusion is possible, gate with `Eventually(sel).Should(b.BeClickable())` (which adds the topmost-at-center check) before acting, or use `b.Realistic()` (which refuses to click through an overlay). The matcher form alone won't catch it.
+**The poll-by-default action does not check occlusion — keep an explicit `BeClickable` gate when an overlay may cover the target.** `b.Click(sel)` polls on visible + enabled, but a fast click is `element.click()`; it does **not** verify the element is the topmost thing at its center, so it will happily "click" through a modal/overlay sitting on top. When occlusion is possible, gate with `Eventually(sel).Should(b.BeClickable())` (which adds the topmost-at-center check) before acting, or use `b.Realistic()` (which refuses to click through an overlay). Poll-by-default alone won't catch it.
 
-**A few interactions have no matcher form — gate them by hand.** `SendKeys` (its keys-only shape is reserved for the focused element) and the `*Each` verbs (`ClickEach`, `SetPropertyForEach`) act immediately with no matcher to fold readiness into, so they carry the same race. Put an explicit readiness gate on the line above:
+**Two interactions can't poll — gate them by hand.** `b.SendKeysToWindowImmediately(...)` (focus-free; routes to the focused element, else `document`/window — only *you* know what should be focused) and the `*Immediately` plural verbs (`ClickEachImmediately`, `SetPropertyForEachImmediately`) act now with no readiness to fold in, so they carry the classic race. Gate explicitly — for `SendKeysToWindowImmediately`, on *focus*:
 
 ```go
-Eventually("input.search").Should(b.BeEnabled())   // gate…
-b.SendKeys("input.search", biloba.Keys.Enter)      // …then send once
+Eventually("input.search").Should(b.BeFocused())   // gate on focus…
+b.SendKeysToWindowImmediately(biloba.Keys.Enter)   // …then send once
 ```
+
+(To send keys into a specific element, prefer `b.Type(sel, ...)` — it focuses first and *polls*, so it needs no hand-gate.)
 
 ## Smell 3 — optimistic UI + server reconciliation (the DOM lies)
 
@@ -110,9 +103,24 @@ Eventually(b.Run).WithArguments(`document.querySelector("#card").offsetHeight`).
     Should(BeNumerically("<=", 0.8*viewportH))              // ...but measure must still be polled
 ```
 
+## Smell 5 — a two-axis getter polling forever on a property the element type doesn't have
+
+The value-getters `GetProperty`/`GetProperties`/`GetAttribute`/`GetAttributes` poll on **two axes**: until the element is present **and** every named property/attribute is *defined*. That's the desired behavior for something that fills in asynchronously (`dataset.poster` populated by a late render). But it bites when the name simply *doesn't exist on that element type* — `b.GetProperty("div.card", "disabled")` (a `<div>` has no `disabled`, so `"disabled" in div` is false) **polls until timeout**, then fails, even though the element was there all along. Same for an attribute that legitimately may be absent.
+
+**Fix: wrap the name in `b.AllowMissing(...)`** — it exempts that name from the "defined" axis, so an absent value comes back as `nil` and never blocks the poll:
+
+```go
+b.GetProperty("div.card", b.AllowMissing("disabled"))           // nil instead of a timeout
+b.GetProperties("#user", "dataset.firstName", b.AllowMissing("dataset.middleName"))
+```
+
+(`GetValue`/`GetInnerText`/`GetTextContent` have no "defined" axis — empty string / unselected-radio `""` is a valid value — so they poll on presence only and never need `AllowMissing`.)
+
+A flip-side, *anti*-flake improvement to know about: the `Each*` matchers (`EachBeVisible`/`EachBeEnabled`/`EachHaveClass`/`EachHaveInnerText`/`EachHaveProperty`/…) now **fail on zero matches** ("≥1 match AND all satisfy") rather than passing vacuously. So `Eventually(sel).Should(b.EachBeVisible())` correctly *waits for the elements to appear* instead of passing instantly against an empty set — a former silent false-positive is now a real poll. To assert that nothing matches, use `Eventually(sel).Should(b.HaveCount(0))` or `ShouldNot(b.Exist())` (the old no-arg `EachHaveInnerText()`/`EachHaveTextContent()` "is empty" forms are gone).
+
 ## Fast interactions act in place — they don't scroll or move focus
 
-A useful non-flake fact, since the opposite is easy to assume: **fast-track `b.Click`/`b.Tap` do *not* `scrollIntoView` and do *not* move focus** — a plain fast click is `element.click()` after a visibility check, nothing more. So a fast click never moves the page out from under a scroll/layout assertion; if a scroll position changes around a click, the cause is app-side (a click handler) — don't blame Biloba. Scroll-into-view comes only from **`b.Realistic()`** (which scrolls deliberately) and from **focus-bearing ops** — `b.Focus`, `b.SetValue`, `b.Type`, `b.SendKeys` — because the browser's `.focus()` scrolls its target into view by default. If a spec asserts on scroll position, keep focus-bearing ops away from the element under test (or read scroll + act in one atomic `b.Run`).
+A useful non-flake fact, since the opposite is easy to assume: **fast-track `b.Click`/`b.Tap` do *not* `scrollIntoView` and do *not* move focus** — a plain fast click is `element.click()` after a visibility check, nothing more. So a fast click never moves the page out from under a scroll/layout assertion; if a scroll position changes around a click, the cause is app-side (a click handler) — don't blame Biloba. Scroll-into-view comes only from **`b.Realistic()`** (which scrolls deliberately) and from **focus-bearing ops** — `b.Focus`, `b.SetValue`, `b.Type` — because the browser's `.focus()` scrolls its target into view by default. If a spec asserts on scroll position, keep focus-bearing ops away from the element under test (or read scroll + act in one atomic `b.Run`).
 
 ## The throughline, restated
 

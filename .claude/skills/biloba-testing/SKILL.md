@@ -51,6 +51,21 @@ var _ = Describe("...", func() {
 
 Navigate, then `Eventually(<anchor>).Should(b.Exist())` to gate on readiness, then exercise behavior. `Ω` and `Expect` are interchangeable.
 
+## Poll-by-default changes how you assert failures
+
+**Biloba polls by default.** The fully-applied form of a DOM method (`b.Click("#go")`, `b.GetValue("#x")`) now *waits* — it runs the method's matcher under `Eventually` bound to `gt`. Two consequences for specs:
+
+- **A not-found / not-actionable call no longer fails immediately with a `Failed to <verb>` message.** It polls until a deadline and then surfaces a Gomega **"Timed out after…"** failure that wraps the matcher message (and, for a genuine JS error, the error text inside that wrapper). So drive these specs with a *short* timeout and assert the timeout substring, **not** an exact immediate-fatal string:
+  ```go
+  b.WithTimeout(time.Millisecond * 60).GetInnerText("#non-existing")
+  ExpectFailures(ContainSubstring("Timed out after"))
+  ```
+- **`b.Immediate()` reproduces the old act-once / fail-fast behavior** (it uses `Expect`, a single evaluation). Reach for it when you want to assert the bare matcher message without waiting out a poll:
+  ```go
+  Ω(b.Immediate().GetInnerText("#non-existing")).Should(Equal(""))
+  ExpectFailures(ContainSubstring(`have property "innerText"`))
+  ```
+
 ## Asserting that a Biloba call SHOULD fail the spec
 
 This is the non-obvious part. Biloba normally turns errors into Ginkgo failures via `GinkgoT().Fatalf`. In this suite, Biloba is wired to a custom `*bilobaT` (the package var `gt`) that **captures** `Fatal`/`Fatalf` into `gt.failures` instead of aborting the spec. So to test Biloba's own failure behavior:
@@ -62,8 +77,17 @@ It("errors when the selector is malformed", func() {
 })
 ```
 
-- `ExpectFailures(expected ...any)` asserts the captured failures match (each arg is a Gomega matcher or a string compared with `Equal`) and then clears the buffer.
+- `ExpectFailures(expected ...any)` is **`ConsistOf`-based**: it expects **one matcher per captured failure** (each arg is a Gomega matcher or a string compared with `Equal`), then clears the buffer. To assert **two substrings against a single failure**, pass one `SatisfyAll(...)`, not two args:
+  ```go
+  b.WithTimeout(time.Millisecond*60).SetValue("#non-existing", "foo")
+  ExpectFailures(SatisfyAll(
+  	ContainSubstring("Timed out after"),
+  	ContainSubstring("could not find DOM element matching selector: #non-existing"),
+  ))
+  ```
 - An `AfterEach` asserts `gt.failures` is empty — **if a spec triggers a Biloba failure and you don't consume it with `ExpectFailures`, the spec fails** with "Did you forget to call ExpectFailures?".
+
+This `gt`/`ExpectFailures` path is also how you assert **hard errors from the four-bucket guards** — e.g. configuring a method that doesn't support a knob (`b.WithPolling(...).Navigate(...)`, `b.Immediate().Count(...)`) or configuring a bare matcher (`b.WithTimeout(d).Click()`). These are `gt.Fatalf` calls, so capture them with `ExpectFailures(ContainSubstring("does not support WithPolling"))` (or `ContainSubstring("returns a matcher")` for the bare-matcher guard).
 
 For **matchers**, you usually don't go through `gt` — call `Match` directly and inspect the returned error:
 ```go
@@ -72,7 +96,15 @@ match, err := b.BeVisible().Match("#non-existing")
 Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
 ```
 
-You can also assert exact failure-message text for matchers via `matcher.FailureMessage(actual)` (see `HaveCount` specs).
+### The `FailureMessage` gotcha
+
+gcustom matchers render their template from data populated **during `Match`**. So to assert a matcher's `FailureMessage`, reuse the **same matcher instance** the assertion already `Match`-ed — calling `FailureMessage` on a *fresh* matcher renders against empty data:
+```go
+m := b.EachBeVisible()
+Ω(".non-existing").ShouldNot(m)                 // this Match populates m's template data
+Ω(m.FailureMessage(".non-existing")).Should(ContainSubstring("Expected at least one element to match"))
+```
+(See the `HaveCount`/`EachBeVisible` specs.)
 
 ## Spec-authoring idioms (reach for these before `b.Run`)
 

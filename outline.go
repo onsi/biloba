@@ -51,6 +51,7 @@ Read https://onsi.github.io/biloba/#outline for details.
 */
 func (b *Biloba) Outline() string {
 	b.gt.Helper()
+	b.guardConfig("Outline")
 	b.ensureBiloba()
 	resp := &bilobaJSResponse{}
 	_, err := b.RunErr("_biloba.outline()", resp)

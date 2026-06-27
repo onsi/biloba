@@ -26,12 +26,12 @@ var _ = Describe("Piercing shadow DOM and same-origin iframes with >>>", func() 
 
 		It("supports the *Each / count forms across the boundary", func() {
 			Expect("my-widget >>> .item").To(b.HaveCount(2))
-			Expect(b.InnerTextForEach("my-widget >>> .item")).To(Equal([]string{"A", "B"}))
+			Expect(b.CurrentInnerTextForEach("my-widget >>> .item")).To(Equal([]string{"A", "B"}))
 		})
 
 		It("reports the full selector when a boundary can't be crossed", func() {
 			// #hello is a plain element with no shadow root, so the boundary can't be crossed
-			b.Click("#hello >>> .nope")
+			b.Immediate().Click("#hello >>> .nope")
 			ExpectFailures(ContainSubstring("could not find DOM element matching selector: #hello >>> .nope"))
 		})
 

@@ -21,10 +21,10 @@ The returned *Biloba shares this tab's Chrome connection and state - it is the s
 
 What realistic mode does differently:
   - Click: scrolls the element to the viewport center, waits for its box to stop moving, verifies it is enabled and is the topmost element at its centroid (so an occluding overlay or an off-screen element does NOT click through - it polls/fails like a real interaction), moves the real pointer to it, then dispatches a real mousePressed/mouseReleased.  Coordinates inside same-origin >>> iframes are translated to the top-level viewport.
-  - ClickEach: clicks every matching element with real input (scrolling+re-measuring each in turn), skipping any that are hidden/disabled/off-screen/obscured.
+  - ClickEachImmediately: clicks every matching element with real input (scrolling+re-measuring each in turn), skipping any that are hidden/disabled/off-screen/obscured.
   - Hover: scrolls into view and moves the real mouse to the centroid, which activates genuine CSS :hover (Biloba's synthetic Hover does not).
   - SetValue: text inputs are focused with a real click, cleared, and typed with real key events (then blurred to fire change); checkboxes are toggled with a real click. Native pickers - radio groups, <select>, multi-selects - fall back to the fast JS path, since they can't be driven by a real pointer (Playwright's selectOption sets them programmatically too).
-  - Type/SendKeys: already use real CDP key events; realistic mode additionally scrolls the element into view before typing.
+  - Type/SendKeysToWindowImmediately: already use real CDP key events; realistic mode additionally scrolls the element into view before typing.
 
 Realistic interactions cost real CDP round-trips and can reintroduce the timing sensitivity Biloba's atomic model avoids - that is the deliberate cost, which is why it is opt-in per spec.  (Focus stays a plain JS focus, matching how real engines focus elements without a side-effecting click.)
 
@@ -76,7 +76,7 @@ func (b *Biloba) scrollToStablePoint(selector any) (clickPoint, error) {
 
 // realisticClickEach clicks every matching element with real CDP input, scrolling and re-measuring
 // each one in turn (positions shift as earlier clicks mutate the page).  Elements that are missing,
-// hidden, disabled, off-screen, or obscured are skipped - mirroring fast ClickEach, which clicks
+// hidden, disabled, off-screen, or obscured are skipped - mirroring fast ClickEachImmediately, which clicks
 // only the visible+enabled matches.
 func (b *Biloba) realisticClickEach(selector any) error {
 	count := b.runBilobaHandler("count", selector)

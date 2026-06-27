@@ -432,13 +432,11 @@ Here are some of the ways Biloba integrates with Ginkgo and Gomega so you can fo
 
 	This allows you to seamlessly decide whether some assertions are better handled in Javascript vs in Go.
 
-5. Biloba never polls.  Instead, it can return Gomega matchers that _you_ poll with Eventually.
+5. Biloba polls by default.  Most DOM interactions keep retrying until they succeed (or time out), and any of them can also hand you a Gomega matcher that _you_ drive with `Eventually`/`Consistently`.
 
-	This allows you to be explicit about when an interaction should succeed immediately vs when an interaction needs to poll while the browser gets into the right state.
+	This means you rarely need a separate readiness check before acting.  A quick example: `b.Click("#submit")` keeps trying to click the element with `id` `submit` - it waits until that element exists, is visible, and is enabled, then clicks it once.  If you'd rather compose the polling yourself, drop the argument and `b.Click()` returns a matcher: `Eventually("#submit").Should(b.Click())`.
 
-	We'll dive into this more in the [Working with the DOM](#working-with-the-dom) chapter below, but as a quick example: `b.Click("#submit")` will immediately click the element with `id` `submit`.  This will only pass if the element exists, is visible, and interactible when `b.Click` is called.  But, perhaps the page is still loading.  Rather than have a separate polling readiness check you can simply write: `Eventually("#submit").Should(b.Click())`.
-
-	When called with an argument, `b.Click` is invoked immediately and will fail the test if it fails.  When invoked without an argument, `b.Click` returns a Gomega matcher that can be polled.
+	We'll dive into all of this - the configuration knobs (`b.WithTimeout`/`b.WithPolling`/`b.WithContext`) and the `b.Immediate()` escape hatch - in the [Interacting with Elements](#interacting-with-elements) section below.
 
 ### Claude Code Skills
 
@@ -536,6 +534,8 @@ b.Navigate("http://example.com/search?q=foo")
 ```
 
 this navigates the tab and ensures the response was `http.StatusOK`.  If you need to assert a different response code use `NavigateWithStatus("http://example.com/not-found", http.StatusNotFound)`
+
+`Navigate` is a [waiting command](#interacting-with-elements): it does a single bounded wait (~30s by default) for the navigation to complete, rather than polling.  You can override that deadline, or thread in a cancellable context, with `b.WithTimeout(...)` and `b.WithContext(...)` - `b.WithTimeout(60 * time.Second).Navigate(slowURL)`.  (`WithPolling` and `Immediate` don't apply to a one-shot wait and are rejected.)
 
 The DOM will probably not be ready immediately after navigation so a typical next line will be an `Eventually` that looks something like:
 
@@ -868,6 +868,64 @@ Finally - some Biloba methods use the **first** element returned by the `selecto
 
 Now that we know how to `select` DOM elements - let's dig into what we can do with them.
 
+### Interacting with Elements
+
+Now that we can _select_ elements, let's act on them.  Before we walk the catalog of interactions, one idea shapes nearly all of them: **Biloba polls by default.**
+
+#### Poll by default
+
+Browser tests are full of small waits: a button isn't clickable until the page hydrates, an input doesn't exist until a modal opens, text doesn't settle until a render completes.  The classic source of flakiness is acting a beat too early.  So Biloba's DOM methods don't act once and give up - they keep retrying until they succeed or a deadline passes.
+
+This shows up in the **dual immediate/matcher API** that runs through most of Biloba's action and value methods, keyed on how many arguments you pass:
+
+- **Fully applied → Biloba polls for you.**  `b.Click("#go")` keeps trying to click `#go` until it exists, is visible, and is enabled - then clicks it once.  `b.SetValue("#x", 3)`, `b.Type("#search", "gophers")`, and `text := b.GetInnerText("#title")` all behave the same way: they wait for the element to be ready, then do the thing (and the value-getters return the value).  If the deadline passes first the spec fails with Gomega's familiar `Timed out after…` message.
+- **Under applied → you get a matcher to poll.**  Drop the selector and the same method returns a Gomega matcher you wrap in `Eventually`/`Consistently`/`Expect` yourself: `Eventually("#go").Should(b.Click())`, `Eventually("#x").Should(b.SetValue(3))`.  Reach for this when you want to compose the assertion - a custom `Consistently`, a `SatisfyAll`, or a polling style of your own.
+
+Because the fully-applied form already polls, you usually don't need a separate readiness check:
+
+```go
+b.Navigate("http://example.com/homepage")
+b.Click("#login") // waits for #login to be clickable, then clicks - no preceding Eventually needed
+```
+
+#### Tuning the poll: `WithTimeout`, `WithPolling`, `WithContext`
+
+By default Biloba's polling inherits Gomega's global `Eventually` settings (the timeout and interval you set with `SetDefaultEventuallyTimeout`/`SetDefaultEventuallyPollingInterval`).  To override them for a single interaction, ask for a lightweight view of the tab - exactly like [`b.Realistic()`](#realistic-interactions) it's a shallow clone-with-a-flag, so you chain it inline:
+
+```go
+b.WithTimeout(5 * time.Second).Click("#slow-to-appear")
+b.WithPolling(50 * time.Millisecond).Click("#busy")
+b.WithContext(ctx).GetInnerText("#title")                            // a cancelled ctx aborts the wait
+b.WithTimeout(10*time.Second).WithPolling(time.Second).Click("#go")  // they compose
+```
+
+These mirror Gomega's `Eventually(...).WithTimeout(...).WithPolling(...).WithContext(...)` - they configure the poll Biloba runs under the hood.
+
+#### Acting once: `b.Immediate()` (the escape hatch)
+
+Occasionally you really do want act-once / fail-fast behavior - to assert that something is clickable *right now*, with no waiting.  `b.Immediate()` gives you that:
+
+```go
+b.Immediate().Click("#go") // click once; fail immediately if #go isn't ready this instant
+```
+
+Treat this as a footgun you reach for rarely.  Acting without polling is the classic way to reintroduce flakiness - the very thing poll-by-default exists to prevent.  When you simply want to bound the wait, prefer `b.WithTimeout(...)` over `b.Immediate()`.
+
+> The matcher form is driven by the `Eventually`/`Expect` you wrap it in, so passing any of these knobs to a bare-matcher form (e.g. `b.WithTimeout(d).Click()` with no selector) is an error - configure the `Eventually`, not the matcher.
+
+#### Which methods honor which knobs
+
+Not every Biloba method polls, so not every method accepts these knobs.  Biloba sorts into four buckets, and misapplying a knob is a loud error (so you find out immediately rather than via a silent no-op):
+
+| Bucket | Examples | `WithTimeout` / `WithContext` | `WithPolling` | `Immediate` |
+|---|---|---|---|---|
+| **Polling** - actions & value-getters | `Click`, `SetValue`, `Type`, `GetProperty`, `GetValue`, `GetInnerText`, `InvokeOn` | honored | honored | honored |
+| **Waiting commands** - one bounded wait | `Navigate`, the `CaptureScreenshot*` family | honored (overrides the built-in deadline) | error | error |
+| **Snapshot / state queries** | `HasElement`, `Count`, `Title`, every `Current*ForEach`, `GetCookies` | error | error | error |
+| **One-shot mutations & raw JS** | `SetWindowSize`, the `*Immediately` family, `Run`, `RunAsync` | error | error | error |
+
+The intuition: a method polls (and accepts every knob) when it is *waiting for the DOM to reach a state*.  A **waiting command** like `Navigate` does a single bounded wait for one event, so it keeps a purpose-built default deadline (~30s for navigation, ~5s for screenshots) that `WithTimeout` can override - but there's no repeated probe for `WithPolling` to tune.  A **snapshot** reads "what's true right now" and so never waits; when you want to wait for a snapshot to change, gate it on a polling matcher first (`Eventually(sel).Should(b.HaveCount(n))`, *then* read).  A **one-shot mutation** (and the raw-JS `Run`/`RunAsync`) just does its thing once.
+
 ### Existence, Counting, Visibility, and Interactibility
 
 You can check if a tab has an element matching `selector` with:
@@ -876,9 +934,9 @@ You can check if a tab has an element matching `selector` with:
 hasEl := b.HasElement(selector) //returns bool
 ```
 
-this runs immediately on the reusable root tab.  To check a different tab, call `tab.HasElement(selector)`.  **The DOM method always operates on the tab it is invoked on.**
+`HasElement` is a **snapshot**: it reads the DOM once, right now, and returns a `bool` (it never polls, and rejects the `WithTimeout`/`Immediate` knobs).  It runs on the reusable root tab; to check a different tab, call `tab.HasElement(selector)`.  **The DOM method always operates on the tab it is invoked on.**
 
-As discussed [above](#ginkgo-and-gomega-integration) - Biloba never polls unless you ask it to.  It's common to want to wait until an element exists before taking some action on the page.  To do that you'd need to poll `b.HaElement`... which, with Gomega, could look like this:
+It's common to want to wait until an element exists before taking some action on the page.  Since `HasElement` doesn't poll, you'd need to poll it yourself - which, with Gomega, could look like this:
 
 ```go
 Eventually(b.HasElement).WithArguments(selector).Should(BeTrue())
@@ -942,7 +1000,7 @@ This will catch cases where the DOM element has `display:none` or if it's parent
 
 Since `BeVisible()` validates existence you do not need to have an `Eventually(selector).Should(b.Exist())` before checking `BeVisible()`
 
-`BeVisible()` operates on the **first** element found by `selector`.  To assert that **every** matching element is visible use `EachBeVisible()` (it passes vacuously when no elements match):
+`BeVisible()` operates on the **first** element found by `selector`.  To assert that **every** matching element is visible use `EachBeVisible()` (it requires **at least one** match and that every match be visible - it fails, rather than passing vacuously, when nothing matches):
 
 ```go
 Eventually(selector).Should(b.EachBeVisible())
@@ -970,7 +1028,7 @@ Biloba's disabled check is simply:
 
 As with `BeVisible()` you don't need to assert existence before asserting `BeEnabled()` - existence is implicitly validated by `BeEnabled()`
 
-`BeEnabled()` operates on the **first** element found by `selector`.  To assert that **every** matching element is enabled use `EachBeEnabled()` (it passes vacuously when no elements match):
+`BeEnabled()` operates on the **first** element found by `selector`.  To assert that **every** matching element is enabled use `EachBeEnabled()` (it requires **at least one** match and that every match be enabled - it fails, rather than passing vacuously, when nothing matches):
 
 ```go
 Eventually(selector).Should(b.EachBeEnabled())
@@ -997,13 +1055,13 @@ Because `elementFromPoint` is synchronous this stays a single atomic check with 
 
 ### Contents and Classes
 
-You can get the `innerText` of an element with `InnerText()`:
+You can get the `innerText` of an element with `GetInnerText()`:
 
 ```go
-text := b.InnerText(selector) //returns string
+text := b.GetInnerText(selector) //returns string
 ```
 
-If the element does not exist, `InnerText` will fail the test for you.  If you want to make an assertion on the text and, especially, if you want to pull until the text matches an assertion use `HaveInnerText()`:
+Like all of Biloba's value-getters, `GetInnerText` [polls](#interacting-with-elements): it waits until an element matching `selector` is present, then returns its `innerText` (an empty `innerText` is a perfectly valid result - it does not wait for the text to become non-empty).  If the element never appears it times out and fails the spec.  If you want to make an assertion on the text - and, especially, if you want to poll until the text matches an assertion - use `HaveInnerText()`:
 
 ```go
 Eventually(selector).Should(b.HaveInnerText("Expected text goes here"))
@@ -1018,7 +1076,7 @@ Eventually(selector).Should(b.HaveInnerText(HavePrefix("Expected")))
 //etc...
 ```
 
-Both `HaveInnerText` and `InnerText` always operate on the **first** element matching `selector.
+Both `HaveInnerText` and `GetInnerText` always operate on the **first** element matching `selector.
 
 `HaveInnerText` requires an _exact_ match (modulo any Gomega matcher you provide).  This can be annoying when templating introduces incidental whitespace - leading/trailing spaces, newlines, or runs of spaces that you don't care about.  For those cases reach for `HaveText()`, which trims and collapses all internal whitespace runs down to single spaces _before_ matching:
 
@@ -1030,37 +1088,38 @@ Eventually(selector).Should(b.HaveText(ContainSubstring("there Biloba"))) //pass
 
 Like `HaveInnerText`, `HaveText` accepts either a string (for an exact, post-normalization match) or a Gomega matcher, and operates on the **first** element matching `selector`.
 
-`innerText` reflects the _rendered_ text - it depends on layout and CSS - which is exactly what you want when you're asserting on what the user actually sees.  But it has a sharp edge in headless Chrome: because it's computed from layout, freshly-added or just-changed dynamic content can come back stale or partial before a paint settles - and an `Eventually(...).Should(b.HaveInnerText(...))` can then spin until it times out even though the content is plainly in the DOM.  For those cases reach for `TextContent()`/`HaveTextContent()` (and `TextContentForEach()`/`EachHaveTextContent()`), which read the element's `textContent` instead - computed straight from the DOM tree, so it's layout-independent and robust against that timing:
+`innerText` reflects the _rendered_ text - it depends on layout and CSS - which is exactly what you want when you're asserting on what the user actually sees.  But it has a sharp edge in headless Chrome: because it's computed from layout, freshly-added or just-changed dynamic content can come back stale or partial before a paint settles - and an `Eventually(...).Should(b.HaveInnerText(...))` can then spin until it times out even though the content is plainly in the DOM.  For those cases reach for `GetTextContent()`/`HaveTextContent()` (and `CurrentTextContentForEach()`/`EachHaveTextContent()`), which read the element's `textContent` instead - computed straight from the DOM tree, so it's layout-independent and robust against that timing:
 
 ```go
-text := b.TextContent(selector) //returns string
+text := b.GetTextContent(selector) //returns string
 Eventually(selector).Should(b.HaveTextContent("Expected text goes here"))
 Eventually(selector).Should(b.HaveTextContent(ContainSubstring("text")))
 ```
 
-The tradeoff: `textContent` is _not_ the rendered text.  It includes the text of hidden elements and of `<script>`/`<style>` tags, does not collapse whitespace, and does not reflect CSS `text-transform`.  So reach for `InnerText`/`HaveInnerText` (or `HaveText`) when you specifically want the visible, normalized text, and reach for `TextContent`/`HaveTextContent` (or a plain existence assertion) when you want a robust check on dynamic content.  The whole `TextContent` family mirrors the `InnerText` family exactly, including the `ForEach`/`Each` variants below.
+The tradeoff: `textContent` is _not_ the rendered text.  It includes the text of hidden elements and of `<script>`/`<style>` tags, does not collapse whitespace, and does not reflect CSS `text-transform`.  So reach for `GetInnerText`/`HaveInnerText` (or `HaveText`) when you specifically want the visible, normalized text, and reach for `GetTextContent`/`HaveTextContent` (or a plain existence assertion) when you want a robust check on dynamic content.  The whole `TextContent` family mirrors the `InnerText` family exactly, including the `ForEach`/`Each` variants below.
 
-You can fetch the content for a bunch of elements simultaneously with `InnerTextForEach()/EachHaveInnerText()`:
+You can fetch the content for a bunch of elements simultaneously with `CurrentInnerTextForEach()`:
 
 ```go
-texts := b.InnerTextForEach(selector) // returns []string
+texts := b.CurrentInnerTextForEach(selector) // returns []string
 ```
 
 returns a slice of strings for all elements matching selector.  For example:
 
 ```go
-list := b.InnerTextForEach("ol.movies li")
+list := b.CurrentInnerTextForEach("ol.movies li")
 ```
 
-will return the individual inner texts for each list element under all `<ol>`s with class `movies`.  If no elements are found `list` will be an empty slice.
+will return the individual inner texts for each list element under all `<ol>`s with class `movies`.  If no elements are found `list` will be an empty slice.  The `Current*ForEach` getters are **snapshots** - they read the matches as they are *right now* and never poll.  When the elements appear asynchronously, gate on their count first with `Eventually("ol.movies li").Should(b.HaveCount(n))` and *then* read.
 
-You can assert on InnerTextForEach with `b.EachHaveInnerText()` like so:
+You can assert on the set of inner texts with `b.EachHaveInnerText()` like so:
 
 ```go
 Expect(selector).To(b.EachHaveInnerText("A", "B", "C")) //uses Gomega's HaveExactElements matcher to assert the texts match, in order
-Expect(selector).To(b.EachHaveInnerText(ContainElement("B")) //passes the entire slice to the matcher
-Expect("#non-existing").To(b.EachHaveInnerText()) // this will succeed - an empty slice is returned when there is no selector match and `b.EachHaveInnerText() will assert that the slice is empty
+Expect(selector).To(b.EachHaveInnerText(ContainElement("B"))) //passes the entire slice to the matcher
 ```
+
+Like every `Each*` matcher, `EachHaveInnerText` requires **at least one** match: it fails (rather than passing vacuously) when nothing matches, which keeps it honest under `Eventually`/`Consistently`.  To assert that *nothing* matches a selector, use `Eventually(selector).Should(b.HaveCount(0))` (or `ShouldNot(b.Exist())`) instead.
 
 **Two text-assertion recipes worth knowing** (both replace common `b.Run` text-scanning crutches):
 
@@ -1094,7 +1153,7 @@ Eventually(selector).Should(b.HaveClass(ContainElement("published")))
 
 i.e. the class list should include `published`.  `HaveClass` always operates on the **first** element found by `selector`.
 
-To assert that **every** matching element has a given class use `EachHaveClass(string)` (it passes vacuously when no elements match):
+To assert that **every** matching element has a given class use `EachHaveClass(string)` (it requires **at least one** match and that every match have the class - it fails, rather than passing vacuously, when nothing matches):
 
 ```go
 Eventually(selector).Should(b.EachHaveClass("published"))
@@ -1112,20 +1171,31 @@ Eventually(selector).Should(b.HaveAttribute("href", "/about")) //exact value
 Eventually(selector).Should(b.HaveAttribute("href", HaveSuffix("about"))) //matcher
 ```
 
-When you want an attribute value in a Go variable for *control-flow* (rather than to assert on) use the immediate getter `b.GetAttribute(selector, name)` - the attribute sibling of [`b.GetProperty`](#properties).  It returns the raw markup attribute as type `any`, or `nil` when the attribute is absent:
+When you want an attribute value in a Go variable for *control-flow* (rather than to assert on) use the getter `b.GetAttribute(selector, name)` - the attribute sibling of [`b.GetProperty`](#properties).  It returns the raw markup attribute as type `any`:
 
 ```go
 href := b.GetAttribute("#link", "href") // "/about" - the raw attribute, not the resolved property
 theme := b.GetAttribute("html", "data-theme")
 ```
 
-`b.GetAttributeForEach(selector, name)` returns a `[]any` with the attribute for every matching element (`nil` entries where the attribute is absent, an empty slice when nothing matches) - mirroring `b.GetPropertyForEach`:
+Like the property getters, `GetAttribute` is a **two-axis** poller: it waits until an element matching `selector` is present **and** the named attribute is present, then returns it.  If you want an *absent* attribute to come back as `nil` rather than blocking the poll, wrap the name in [`b.AllowMissing`](#properties):
 
 ```go
-Expect(b.GetAttributeForEach(".notice", "data-name")).To(HaveExactElements("henry", "bob", BeNil()))
+b.GetAttribute("#link", b.AllowMissing("data-role")) // nil if data-role isn't set, no waiting
 ```
 
-Both fail the spec if `selector`'s engine errors; like the rest of the immediate getters they read the DOM exactly once, so wrap them in `Eventually` (or use `b.HaveAttribute`) when you need to poll.
+To fetch several attributes from one element at once use `b.GetAttributes(selector, names...)`, which returns a [`Properties`](#properties) map (and polls the same way, with `AllowMissing` available per name):
+
+```go
+a := b.GetAttributes("#link", "href", "data-role")
+a.GetString("href") // "/about"
+```
+
+`b.CurrentAttributeForEach(selector, name)` is the **snapshot** for-each variant: it returns a `[]any` with the attribute for every matching element *right now* (`nil` entries where the attribute is absent, an empty slice when nothing matches) - mirroring `b.CurrentPropertyForEach`.  Its plural sibling `b.CurrentAttributesForEach(selector, names...)` returns a [`SliceOfProperties`](#properties).  Neither polls (there is no `AllowMissing` axis), so gate on a count first when the elements appear asynchronously:
+
+```go
+Expect(b.CurrentAttributeForEach(".notice", "data-name")).To(HaveExactElements("henry", "bob", BeNil()))
+```
 
 `BeChecked()` asserts that a checkbox or radio button is checked (it's sugar for `b.HaveProperty("checked", true)`):
 
@@ -1152,14 +1222,14 @@ Eventually(selector).Should(b.HaveComputedStyle("color", ContainSubstring("255")
 
 Biloba provides a bunch of methods for getting, setting, and asserting on properties:
 
-You use `GetProperty/SetProperty/HaveProperty` to work with a **single** property on a **single** element (the first returned by `selector`).  You use `GetPropertyForEach/SetPropertyForEach/EachHaveProperty` to work with a **single** property for **all** elements matching `selector`.  You use `GetProperties` to fetch **multiple** properties for a **single** element and `GetPropertiesForEach` to fetch **multiple** properties for **all** elements matching `selector`.
+You use `GetProperty/SetProperty/HaveProperty` to work with a **single** property on a **single** element (the first returned by `selector`).  You use `CurrentPropertyForEach/SetPropertyForEachImmediately/EachHaveProperty` to work with a **single** property for **all** elements matching `selector`.  You use `GetProperties` to fetch **multiple** properties for a **single** element and `CurrentPropertiesForEach` to fetch **multiple** properties for **all** elements matching `selector`.
 
 All of these methods follow the following rules:
 
-- If the method operates on a **single** element, it always fails if the element is not found
-- If the method is an `Each` method that operates on **all** elements it returns an empty slice if no element is found.  Otherwise it returns a slice matching the length of the number of elements found.
-- The `Get*` methods return `nil` if no property is found.  The `Each` variants will include `nil` in their returned slice for elements that don't have the property.
-- All methods support `.` property delimiters.  For example you can access `data` attributes using `dataset.key`.  `Set*` methods will fail if the delimiter chain cannot be traversed (e.g. setting `foo.bar.baz` fails if either `foo` or `bar` re not defined on the element.  But `dataset.newKey` will succeed as `dataset` _is_ defined).  `Get*` do not fail, but simply return `nil` if the delimiter chain cannot be traversed.
+- The **single**-element getters and setters (`GetProperty`, `GetProperties`, `SetProperty`) [poll](#interacting-with-elements).  The getters poll until the element is present *and every named property is defined* (see [`AllowMissing`](#properties) below for the escape hatch); `SetProperty` polls until the element exists and the property is settable.  They fail the spec only if the deadline passes.
+- The plural `Current*ForEach` getters are **snapshots** - they read whatever matches *right now* and never poll.  They return an empty slice if no element matches; otherwise a slice matching the number of elements found, with `nil` standing in for any element that lacks the requested property.  Gate on a count first (`Eventually(sel).Should(b.HaveCount(n))`) when the elements appear asynchronously.
+- `SetPropertyForEachImmediately` acts on the current set immediately (no poll, no matcher form) - its `*Immediately` suffix is a deliberate "make sure you mean it" smell.
+- All methods support `.` property delimiters.  For example you can access `data` attributes using `dataset.key`.  `Set*` methods will fail if the delimiter chain cannot be traversed (e.g. setting `foo.bar.baz` fails if either `foo` or `bar` are not defined on the element.  But `dataset.newKey` will succeed as `dataset` _is_ defined).  The snapshot `Current*ForEach` getters do not fail, but simply return `nil` if the delimiter chain cannot be traversed.
 - All properties are returned from JavaScript without type conversions: numbers will be `float64`, booleans will be `bool`, and strings will be `string`.  Arrays will be `[]any` and maps `[any]any`.  Anything `null`/`undefined` will be `nil`.  There are, however, two exceptions:
 	- JavaScript properties that are [iterable](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Iteration_protocols) will be turned into `[]any` when returned (this allows `GetProperty(selector, "classList")` to return a slice).  
 	- JavaScript properties of type `DOMStringMap` will be turned into `map[any]any` - this allows you get all `data` attributes via `GetProperty(selector, "dataset")`.
@@ -1170,7 +1240,13 @@ Let's show these in use to cover some additional nuances.  You can get any JavaS
 property := b.GetProperty(selector, "href") //returns type any
 ```
 
-this will query the DOM immediately and return the property value of the **first** element matching `selector`.  The value will have type `any` and the actual type will depend on what was stored in the property in JavaScript.  If no element matching `selector` is found the test will fail.  If an element is found, but doesn't have the requested property then - in keeping with JavaScript - `nil` is returned.
+this returns the property value of the **first** element matching `selector`.  The value will have type `any` and the actual type will depend on what was stored in the property in JavaScript.  `GetProperty` polls: it waits until an element matching `selector` is present **and** the requested property is defined, then returns it (failing the spec only if the deadline passes).
+
+That "and the property is defined" axis has a **sharp edge** worth knowing: a property that simply doesn't exist on the element *type* - asking for `disabled` on a `<div>`, say, where `"disabled" in div` is `false` - never becomes defined, so the poll will block until it times out.  When you genuinely expect a property may be absent, wrap its name in [`b.AllowMissing`](#properties) (below) to get the old return-`nil`-immediately behavior:
+
+```go
+b.GetProperty("div.comment", b.AllowMissing("dataset.poster")) // nil if it's absent, no waiting
+```
 
 You can fetch subproperties using `.` notation:
 
@@ -1197,33 +1273,33 @@ Eventually(selector).Should(b.HaveProperty("dataset.name", "henry")) // an asser
 Eventually(selector).Should(b.HaveProperty("dataset.missing", BeNil())) // an assertion on an undefined property
 ```
 
-You can also set properties with `b.SetProperty()`.  When passed three arguments `b.SetProperty` operates immediately:
+You can also set properties with `b.SetProperty()`.  When passed three arguments `b.SetProperty` acts (and, like Biloba's other actions, [polls by default](#interacting-with-elements) until the element exists and the property is settable):
 
 ```go
 b.SetProperty(selector, "href", "http://www.example.com/")
 b.SetProperty(selector, "dataset.name", "Bob")
 ```
 
-when passed two arguments, it returns a matcher that can be polled:
+when passed two arguments, it returns a matcher that you can poll yourself:
 
 ```go
 Eventually(selector).Should(b.SetProperty("dataset.name", "George"))
 ```
 
-`SetProperty` fails if selector doesn't match an element.  It will also fail if a delimited property (e.g. `foo.bar.baz`) can't be accessed.
+`SetProperty` fails if a delimited property (e.g. `foo.bar.baz`) can't be accessed.
 
-To operate on every element returned by the `selector` use `GetPropertyForEach/EachHaveProperty/SetPropertyForEach`.  Here's how they work:
+To operate on every element returned by the `selector` use `CurrentPropertyForEach/EachHaveProperty/SetPropertyForEachImmediately`.  Here's how they work:
 
 ```go
-b.GetPropertyForEach(".notice", "id")
+b.CurrentPropertyForEach(".notice", "id")
 ```
 
-will return a **slice** of type `[]any` that contains the `id` property of all elements matching the `.notice` selector.  If no elements are found, an empty slice is returned.  If any elements don't have the requested property, the value in the slice for that element will be `nil`.  You can make assertions on the returned value like so:
+will return a **snapshot** **slice** of type `[]any` that contains the `id` property of all elements matching the `.notice` selector *right now* (no polling).  If no elements are found, an empty slice is returned.  If any elements don't have the requested property, the value in the slice for that element will be `nil`.  You can make assertions on the returned value like so:
 
 ```go
-Expect(b.GetPropertyForEach(".notice", "id")).To(HaveExactElements("A", BeNil(), "C"))
-Expect(b.GetPropertyForEach(".notice", "dataset.name")).To(ContainElement("Bob"))
-Expect(b.GetPropertyForEach(".does-not-exist", "foo")).To(BeEmpty())
+Expect(b.CurrentPropertyForEach(".notice", "id")).To(HaveExactElements("A", BeNil(), "C"))
+Expect(b.CurrentPropertyForEach(".notice", "dataset.name")).To(ContainElement("Bob"))
+Expect(b.CurrentPropertyForEach(".does-not-exist", "foo")).To(BeEmpty())
 ```
 
 (note that you must use `BeNil` instead of `nil` in Gomega's collection matchers)
@@ -1232,31 +1308,31 @@ Alternatively, you can use `EachHaveProperty` to make an assertion directly and/
 
 ```go
 //assert that every .notice has a dataset.name defined on it
-Eventually(".notice").Should(EachHaveProperty("dataset.name"))
+Eventually(".notice").Should(b.EachHaveProperty("dataset.name"))
 
 //require an exact match - note that you can specify nil to assert that an element does not have this property
-Eventually(".notice").Should(EachHaveProperty("dataset.name", "Bob", "George", nil, "John"))
+Eventually(".notice").Should(b.EachHaveProperty("dataset.name", "Bob", "George", nil, "John"))
 
 //use a matcher - this ensures that there are is at least a .notice with name Bob and one with name George
-Eventually(".notice").Should(EachHaveProperty("dataset.name", ContainElements("Bob", "George")))
+Eventually(".notice").Should(b.EachHaveProperty("dataset.name", ContainElements("Bob", "George")))
 
 //if you don't care about order, use ConsistOf 
-Eventually(".notice").Should(EachHaveProperty("dataset.name", ConsistOf(BeNil(), "John", "Bob", "George")))
+Eventually(".notice").Should(b.EachHaveProperty("dataset.name", ConsistOf(BeNil(), "John", "Bob", "George")))
 
 // if you want all attribute values to be the same, use Gomega's `HaveEach`:
-Eventually(".notice").Should(EachHaveProperty("disabled", HaveEach(BeFalse())))
+Eventually(".notice").Should(b.EachHaveProperty("disabled", HaveEach(BeFalse())))
 ```
 
-You can use `SetPropertyForEach` to set the specified property to the specified value for **all** matched elements.  Since we're pointing at the set of _all_ elements matched by a selector it makes less sense to poll, so `SetPropertyForEach` does not provide a matcher variant.  You can use it like this:
+You can use `SetPropertyForEachImmediately` to set the specified property to the specified value for **all** matched elements.  Since we're pointing at the set of _all_ elements matched by a selector it acts immediately on the current set rather than polling (hence the `*Immediately` suffix), and so has no matcher variant.  You can use it like this:
 
 ```go
-b.SetPropertyForEach(b.XPath("li").WithText("Seventeen"), "count", 17)
-b.SetPropertyForEach(".notice", "dataset.name", "John")
+b.SetPropertyForEachImmediately(b.XPath("li").WithText("Seventeen"), "count", 17)
+b.SetPropertyForEachImmediately(".notice", "dataset.name", "John")
 ```
 
-Now all elements matching `<li>Seventeen</li>` will have a `count` property set to `17`; and all elements with class `notice` will have a `name` data attribute with value `John`.  If no elements match... nothing happens.  The only way `SetPropertyForEach` fails is if you provide a delimited property that it cannot traverse (e.g. `foo.bar.baz` - if either `foo` or `bar` do not already exist).
+Now all elements matching `<li>Seventeen</li>` will have a `count` property set to `17`; and all elements with class `notice` will have a `name` data attribute with value `John`.  If no elements match... nothing happens.  The only way `SetPropertyForEachImmediately` fails is if you provide a delimited property that it cannot traverse (e.g. `foo.bar.baz` - if either `foo` or `bar` do not already exist).
 
-Often it can be more convenient, and efficient, to work with multiple properties at once.  You can do this with `GetProperties` and `GetPropertiesForEach`.  Unlike the other property-related methods in this section these return type `biloba.Properties` and `biloba.SliceOfProperties` to help with managing types (which can quickly get unwieldy when you're working with `[]map[string]any`).
+Often it can be more convenient, and efficient, to work with multiple properties at once.  You can do this with `GetProperties` (polling) and `CurrentPropertiesForEach` (snapshot).  Unlike the other property-related methods in this section these return type `biloba.Properties` and `biloba.SliceOfProperties` to help with managing types (which can quickly get unwieldy when you're working with `[]map[string]any`).
 
 You use `GetProperties` to get multiple properties for a `selector` at once:
 
@@ -1264,7 +1340,7 @@ You use `GetProperties` to get multiple properties for a `selector` at once:
 props := b.GetProperties(".notice", "classList", "tagName", "disabled", "offsetWidth", "dataset.name")
 ```
 
-this will fail if no element matches `selector`.  The object returned, `props`, will have `type Properties map[string]any` - you can access defined properties with map notation: e.g. `props["classList"]`.  However this will always return type `any`.  You can, instead, use `Properties`' various getters to force a type conversion:
+Like `GetProperty`, this polls until an element matches `selector` and every requested property is defined (wrap names you expect may be absent in [`b.AllowMissing`](#properties), and recall the [sharp edge](#properties) above - a property like `disabled` that doesn't exist on the element type would otherwise block the poll).  The object returned, `props`, will have `type Properties map[string]any` - you can access defined properties with map notation: e.g. `props["classList"]`.  However this will always return type `any`.  You can, instead, use `Properties`' various getters to force a type conversion:
 
 ```go
 props.GetString("tagName") //returns a string
@@ -1276,13 +1352,13 @@ props.GetStringSlice("classList") //returns []string - any `nil` entries in the 
 
 all of these always return the zero or empty value if the requested property does not exist or came back as `nil` from JavaScript.  e.g. `props.GetFloat64("offsetHeight")` will return `0.0` in our example since we did not request `offsetHeight` in our call to `GetProperties`.  If you choose the wrong type, Biloba will panic - which Ginkgo will catch and fail the test.
 
-Lastly, to fetch multiple properties from multiple elements use:
+Lastly, to fetch multiple properties from multiple elements use the snapshot for-each getter:
 
 ```go
-propsForEach := b.GetPropertiesForEach(".notice", "classList", "tagName", "disabled", "offsetWidth", "dataset.name")
+propsForEach := b.CurrentPropertiesForEach(".notice", "classList", "tagName", "disabled", "offsetWidth", "dataset.name")
 ```
 
-here `propsForEach` is `type SliceOfProperties []Properties` and will have zero length if no elements are found.  You can, of course, use index notation to access a particular property and then fetch a particular key: `propsForEach[0].GetString("tagName")` **or** you can generate a typed slice of a particular key for all elements:
+here `propsForEach` is `type SliceOfProperties []Properties` and will have zero length if no elements are found (it reads the current set and does not poll - gate on a count first when the elements appear asynchronously).  You can, of course, use index notation to access a particular property and then fetch a particular key: `propsForEach[0].GetString("tagName")` **or** you can generate a typed slice of a particular key for all elements:
 
 ```go
 propsForEach.GetString("tagName") //returns a []string
@@ -1309,7 +1385,7 @@ also - while constructing the slice - `SliceOfProperties` calls the relevant typ
 then the following will succeed:
 
 ```go
-p := b.GetPropertiesForEach(".notice", "id", "classList", "tagName", "data.name", "href")
+p := b.CurrentPropertiesForEach(".notice", "id", "classList", "tagName", "data.name", "href")
 Expect(p.GetString("tagName")).To(Equal([]string{"DIV", "DIV", "A"}))
 Expect(p.GetString("data.name")).To(Equal([]string{"", "jane", "molly"})
 Expect(p.GetString("id")).To(Equal([]string{"new-user-1", "jane-127", "molly-4"})
@@ -1346,21 +1422,21 @@ Eventually("#my-text-input").Should(b.HaveValue("some other value"))
 Eventually("#my-text-input").Should(b.HaveValue(ContainSubstring("other")))
 ```
 
-`GetValue` will fail the test if it can't find a DOM element matching the selector.  If it does, it will return that DOM element's value even if the DOM element is hidden or disabled.  Similarly, `HaveValue` will fail to match if it can't find an element - but will proceed if the element is hidden or disabled.
+`GetValue` [polls](#interacting-with-elements) until it finds a DOM element matching the selector, then returns that element's value even if the element is hidden or disabled (an empty value is a valid result - it does not wait for the value to become non-empty).  Similarly, `HaveValue` will fail to match if it can't find an element - but will proceed if the element is hidden or disabled.  There is also a snapshot for-each getter, `b.CurrentValueForEach(selector)`, which returns a `[]any` of the values for every matching element *right now* (no polling).
 
-`SetValue`, on the other hand, requires that the element exist, be visible, and be enabled:
+`SetValue`, on the other hand, requires that the element exist, be visible, and be enabled - and, like Biloba's other actions, it **polls by default** until all three hold:
 
 ```go
-b.SetValue("#my-hidden-numeric-input", 3)
+b.SetValue("#my-temporarily-hidden-numeric-input", 3) // waits until the input is present, visible, and enabled, then sets it
 ```
 
-will fail the test (assuming `#my-hidden-numeric-input` is not visible).  You can, however, use `b.SetValue` _as a matcher_:
+You can also use `b.SetValue` _as a matcher_ - drop the value's selector and poll it yourself:
 
 ```go
 Eventually("#my-temporarily-hidden-numeric-input").Should(b.SetValue(3))
 ```
 
-If `SetValue` has two arguments - it operates immediately and fails the test if it runs into issues.  If it only has one argument it returns a matcher that you can poll.
+If `SetValue` has two arguments it acts (polling by default); if it has one argument it returns a matcher that you drive with `Eventually`/`Consistently`.  (If you specifically want the old act-once behavior - fail immediately when the input isn't ready this instant - reach for `b.Immediate().SetValue(...)`.)
 
 > What about types?  I see you sending both strings and integers to SetValue.
 
@@ -1404,7 +1480,7 @@ When Biloba sets a value it does the following:
 
 For text inputs `SetValue` focuses the element and dispatches `input`/`change`, but it does **not** blur the element afterwards.  So an `onBlur` handler - commit-on-blur, an inline editor that unmounts on blur - will **not** fire as a side effect of `SetValue`.  When you _do_ want that, pair it with [`b.Blur`](#hovering-focusing-and-scrolling): `b.SetValue("#name", "New"); b.Blur("#name")` (the text input is left focused, so the blur fires).  (The `<select>` path still blurs - that's load-bearing for its `change` semantics.)
 
-That should get _most_ web applications to realize that a form input has been set.  Some applications, though, are wired up to real keyboard events (search-as-you-type fields, rich-text editors, hotkeys).  `SetValue` does **not** fire `keydown`/`keypress`/`keyup` - it sets the value directly.  For those cases reach for [Keyboard Input](#keyboard-input) (`b.Type` and `b.SendKeys`), which dispatch genuine key events.
+That should get _most_ web applications to realize that a form input has been set.  Some applications, though, are wired up to real keyboard events (search-as-you-type fields, rich-text editors, hotkeys).  `SetValue` does **not** fire `keydown`/`keypress`/`keyup` - it sets the value directly.  For those cases reach for [Keyboard Input](#keyboard-input) (`b.Type` and `b.SendKeysToWindowImmediately`), which dispatch genuine key events.
 
 #### Working with Checkboxes
 
@@ -1498,7 +1574,7 @@ You can click on elements with `b.Click()`.  If you run
 b.Click(selector)
 ```
 
-Biloba will find the **first** element matching `selector`, confirm that it exists, is visible, and is enabled - and then it will call `element.Click()`.  If any of these checks fail, `b.Click` will fail the test.
+Biloba [polls](#interacting-with-elements): it waits until the **first** element matching `selector` exists, is visible, and is enabled, and then it calls `element.click()`.  If the deadline passes before all three hold, `b.Click` fails the spec.
 
 You can, alternatively, use `b.Click()` as a matcher:
 
@@ -1506,16 +1582,14 @@ You can, alternatively, use `b.Click()` as a matcher:
 Eventually(selector).Should(b.Click())
 ```
 
-this will poll the browser until `selector` points to an element that exists, is visible, and is enabled.  At which point the element will be clicked (just once) and the assertion will succeed.
+this polls the browser until `selector` points to an element that exists, is visible, and is enabled - at which point the element is clicked (just once) and the assertion succeeds.  Reach for this form when you want to compose the polling yourself.
 
-The ability to use `Eventually` in this way is convenient as it allow you to write code like this:
+Because the fully-applied form already polls, you don't need a separate `Eventually` to wait for the page to load or the element to appear:
 
 ```go
 b.Navigate("http://example.com/homepage")
-Eventually("#login").Should(b.Click())
+b.Click("#login") // waits for #login to be clickable, then clicks
 ```
-
-you don't need a separate `Eventually` poll to wait for the page to load or the element to appear.
 
 > **Driving a *cycling* control to a target state? Don't click inside an `Eventually` body.**  It's tempting to write `Eventually(func(g Gomega) { if state != want { b.Click("#toggle") }; g.Expect(state).To(Equal(want)) })` to push a multi-state toggle (a 3-way theme switch, a sort-direction cycler) into a particular state.  This is a footgun: `Eventually` re-runs its body every polling interval, so it **rapid-fires a click each poll** before the state has settled - bursting extra clicks that sail past your target and can land on unrelated UI mid-rerender.  The body of an `Eventually`/`Consistently` must be **idempotent**; a side effect that fires every poll is a bug.  The correct shape is *click once, then wait for the change before reconsidering*:
 >
@@ -1533,10 +1607,10 @@ you don't need a separate `Eventually` poll to wait for the page to load or the 
 You can also click on every element matching `selector` using:
 
 ```go
-b.ClickEach(selector)
+b.ClickEachImmediately(selector)
 ```
 
-unlike `Click`, `ClickEach` does not have a matcher variant.  It simply clicks on all the elements that match the selector that are also visible and enabled.  Elements that are not visible or enabled are silently skipped.
+unlike `Click`, `ClickEachImmediately` acts on the current set immediately - it does not poll and has no matcher variant (hence the `*Immediately` suffix).  It clicks on all the matching elements that are also visible and enabled; elements that are not visible or enabled are silently skipped, and if nothing matches it's a no-op.  Gate it on a count first (`Eventually(selector).Should(b.HaveCount(n))`) when the elements appear asynchronously.
 
 #### Pointer Options: Offsets and Modifiers
 
@@ -1723,14 +1797,14 @@ Eventually(".menu").Should(rb.Hover()) // moves the real mouse, activating CSS :
 In realistic mode:
 
 - **`Click`** scrolls the element to the center of the viewport, **waits for its box to stop moving**, verifies it is enabled and is the topmost element at its center point (so an occluding overlay or an off-screen element does **not** click through - the matcher form keeps polling, the immediate form fails the spec), moves the real pointer to it (so hover-gated clicks register), then dispatches a real `mousePressed`/`mouseReleased`.  This is the inverse of plain `Click`, which clicks the element directly regardless of what's on top of it.  Clicks through `>>>` same-origin iframe boundaries are translated to top-level viewport coordinates so the real mouse lands in the right place.  [Pointer options](#pointer-options-offsets-and-modifiers) are honored natively: `b.At(x,y)` retargets to the offset point (translated to the viewport and bounds-checked), and `b.Shift()`/etc. hold a real CDP modifier bitmask down.
-- **`ClickEach`** clicks every matching element with real input, scrolling and re-measuring each in turn, and skipping any that are hidden, disabled, off-screen, or obscured.
+- **`ClickEachImmediately`** clicks every matching element with real input, scrolling and re-measuring each in turn, and skipping any that are hidden, disabled, off-screen, or obscured.
 - **`DblClick`** / **`RightClick`** / **`MiddleClick`** apply the same scroll/stability/occlusion machinery as `Click`, then dispatch a real double-click (two click sequences with an incrementing click-count, so Chrome fires a genuine `dblclick`), right-button click (firing the browser's native `contextmenu`), or middle-button click (firing `auxclick`) - all honoring pointer options.
 - **`DragTo`** scrolls and measures stable, actionable points for *both* the source and target, then drives a real CDP pointer drag - press at the source, several interpolated moves toward the target, release at the target - so pointer-based drag-and-drop libraries see genuine pointer input (it still does not drive native HTML5 `draggable`).
 - **`ScrollWheel`** scrolls the element into view, measures a stable, actionable point, then dispatches a real CDP wheel event there - genuine trusted input that actually scrolls the page (unlike the synthetic fast `ScrollWheel`, which dispatches a `wheel` event and then manually scrolls the nearest scrollable ancestor).
 - **`Tap`** applies the same scroll/stability/occlusion machinery as `Click`, then dispatches a real CDP touch (`touchStart`/`touchEnd`) at the element's center (or `b.At` offset) - genuine trusted touch input (unlike the synthetic fast `Tap`, which dispatches touch/pointer events plus a `click`).
 - **`Hover`** scrolls into view and moves the real mouse to the element's center, which - unlike the synthetic `Hover` - activates genuine CSS `:hover` (e.g. a menu that only appears via a `:hover` rule).
 - **`SetValue`** drives form controls with real input: a text input is focused with a real click, cleared, and typed with real key events (then blurred to fire `change`); a checkbox is toggled with a real click (and left alone if it's already in the desired state).  Native pickers - radio groups, `<select>`, and multi-selects - fall back to the fast JS path, because they can't be driven by a real pointer (Playwright's `selectOption` sets them programmatically too).
-- **`Type`** / **`SendKeys`** already use real CDP key events; in realistic mode they additionally scroll the element into view before typing.
+- **`Type`** / **`SendKeysToWindowImmediately`** already use real CDP key events; in realistic mode they additionally scroll the element into view before typing.
 
 All keep Biloba's dual immediate/matcher API (`rb.Click("#go")` vs `Eventually("#go").Should(rb.Click())`).  For anything else you can still [drop down to chromedp](#chromedp-breaking-the-fourth-wall) via `b.Context`.
 
@@ -1765,7 +1839,7 @@ Biloba's interactions run on two tracks: the fast default (`b`) is an atomic Jav
 | `Click` | visible + enabled, then `el.click()` - **clicks through overlays and off-screen elements** | scroll into view → stability wait → topmost-at-point (occlusion) check → real pointer move + `mousePressed`/`mouseReleased` |
 | `Click(…, b.At(x,y))` | synthetic `click` at the offset's `clientX/clientY` (any option switches off `el.click()`) | real CDP click at the offset point (iframe-translated), occlusion/viewport-checked |
 | `Click(…, b.Shift()…)` | synthetic click carrying the modifier flags | real click with the modifier bitmask held in CDP |
-| `ClickEach` | `el.click()` on every visible+enabled match | real click on each, re-measured; skips hidden/disabled/off-screen/obscured |
+| `ClickEachImmediately` | `el.click()` on every visible+enabled match | real click on each, re-measured; skips hidden/disabled/off-screen/obscured |
 | `DblClick` | two `el.click()`s + a `dblclick` event | real double-click (incrementing click-count) with full actionability |
 | `RightClick` / `MiddleClick` | synthetic `mousedown`/`mouseup` + `contextmenu` / `auxclick` | real right/middle-button click (native `contextmenu` / `auxclick`) |
 | `DragTo(src,tgt)` | synthetic pointer drag sequence | real CDP pointer drag (press → interpolated moves → release). Neither drives native HTML5 `draggable` |
@@ -1773,7 +1847,7 @@ Biloba's interactions run on two tracks: the fast default (`b`) is an atomic Jav
 | `Tap` | synthetic touch + pointer events + `click` | real CDP touch (`touchStart`/`touchEnd`) |
 | `Hover` | synthetic pointer/mouse events - **does not** trigger CSS `:hover` | real pointer move - activates genuine CSS `:hover` |
 | `SetValue` | sets `value`/`checked` + fires `input`/`change` | text: real click-focus + typed keys + blur; checkbox: real click; radio/`<select>`: JS (native pickers can't be driven by a real pointer) |
-| `Type` / `SendKeys` | real CDP key events (both tracks) | same, plus scroll-into-view first |
+| `Type` / `SendKeysToWindowImmediately` | real CDP key events (both tracks) | same, plus scroll-into-view first |
 | `Focus` | `el.focus()` (both tracks - real engines focus without a side-effecting click) | `el.focus()` |
 | `ScrollIntoView` | real `scrollIntoView()` (both tracks) | real `scrollIntoView()` |
 | `SetUpload` | CDP `DOM.setFileInputFiles` (both tracks - cannot be simulated in JS) | same |
@@ -1810,60 +1884,68 @@ Eventually("#attachments").Should(b.SetUpload([]string{aPath, bPath}))
 
 ### Keyboard Input
 
-`b.SetValue` sets an input's value directly and dispatches `input`/`change` events.  That satisfies most applications, but some are wired up to **real keyboard events** - search-as-you-type fields, rich-text editors, and hotkey handlers all listen for `keydown`/`keypress`/`keyup`.  Biloba cannot synthesize those atomically in JavaScript (the browser forbids synthetic key events from actually typing into the page), so it drops down to `chromedp`'s input domain for you with `b.Type` and `b.SendKeys`.
+`b.SetValue` sets an input's value directly and dispatches `input`/`change` events.  That satisfies most applications, but some are wired up to **real keyboard events** - search-as-you-type fields, rich-text editors, and hotkey handlers all listen for `keydown`/`keypress`/`keyup`.  Biloba cannot synthesize those atomically in JavaScript (the browser forbids synthetic key events from actually typing into the page), so it drops down to `chromedp`'s input domain for you.  There are two methods:
 
-#### Typing Text
+- **`b.Type`** is the element-targeted keyboard method - it focuses an element and sends text, named keys, and modifiers to it.  Like Biloba's other actions it [polls](#interacting-with-elements).
+- **`b.SendKeysToWindowImmediately`** is the focus-free method - it fires keys at whatever currently has focus (or the document/window for global hotkeys), with no selector and no polling.
 
-`b.Type` focuses an element and then sends genuine keystrokes - one `keydown`/`keypress`/`keyup` sequence per character:
+#### Typing into an element with `b.Type`
+
+`b.Type` focuses an element and then sends genuine keystrokes - one `keydown`/`keypress`/`keyup` sequence per character.  It is the one keyboard method you reach for to drive a specific element: it takes plain text, named keys from the `biloba.Keys` namespace, and held modifiers, in any mix.
 
 ```go
-b.Type("input.search", "gophers")
+b.Type("input.search", "gophers")                    // type "gophers"
+b.Type("input.search", "gophers", biloba.Keys.Enter) // type "gophers" then press Enter (submit)
+b.Type("input.search", biloba.Keys.Enter)            // press Enter into the search box
 ```
 
-Biloba finds the **first** element matching `selector`, confirms that it exists, is visible, and is enabled, focuses it, and then types the text.  If any of those checks fail, `b.Type` fails the test.  Unlike `SetValue`, `Type` **appends** to whatever is already in the field (it types as a user would) and triggers any key-event listeners.
+Biloba waits until the **first** element matching `selector` exists, is visible, and is enabled, focuses it, and then types the payload (polling by default; use `b.Immediate()` to act once, or `b.WithTimeout(...)` to bound the wait).  Unlike `SetValue`, `Type` **appends** to whatever is already in the field (it types as a user would) and triggers any key-event listeners.
 
-Like `Click` and `SetValue`, `Type` also works as a matcher so you can poll until the element is ready:
+`Type` chooses between its two forms by its arguments (after held modifiers are stripped out):
+
+- **A selector followed by a payload** (two or more arguments, the first a `string`/`XPath`) → the **immediate** form above: the first argument is the element, the rest is what to type.
+- **Just a payload** - a single string, or one or more named `Keys` → the **matcher** form: it returns a Gomega matcher you poll yourself, with the selector supplied by `Eventually`:
 
 ```go
 Eventually("input.search").Should(b.Type("gophers"))
+Eventually("#editor").Should(b.Type(biloba.Keys.Enter))
 ```
 
-#### Sending Named Keys
+(One consequence of that rule: the matcher form can't mix *leading text with trailing keys* - `b.Type("hello", biloba.Keys.Enter)` is read as the immediate form with selector `"hello"`.  That's fine, because the immediate form already polls; reach for the matcher form only when you need a custom `Consistently` or composition.)
 
-To send named keys - `Enter`, `Tab`, `Escape`, the arrow keys, `Backspace`, etc. - use `b.SendKeys` together with the `biloba.Keys` namespace:
+The available named keys are exposed on `biloba.Keys`.  These cover the editing, navigation, lock, and function keys you reach for in a browser test: `Backspace`, `Tab`, `Enter`, `Escape`, `Space`, `Delete`, `Insert`; the navigation cluster `ArrowUp`/`ArrowDown`/`ArrowLeft`/`ArrowRight`, `Home`, `End`, `PageUp`, `PageDown`; the locks `CapsLock`, `NumLock`, `ScrollLock`; the misc control keys `ContextMenu`, `PrintScreen`, `Pause`, `Help`, `Clear`; and the function keys `F1` through `F24`.  Each is a `biloba.Key` - for an exotic key that isn't listed (media, IME, launch keys) you can drop down to `chromedp` via `b.Context` and the [chromedp/kb](https://pkg.go.dev/github.com/chromedp/chromedp/kb) package.
+
+#### Sending keys to the focused element with `b.SendKeysToWindowImmediately`
+
+When you want to fire keys at whatever already has focus - a global hotkey handled at the document level, or a follow-up on an element you've just focused - use `b.SendKeysToWindowImmediately`.  It is **focus-free**: there's no selector, the keys land on the document's `activeElement` (or on `document`/`window` if nothing is focused).
 
 ```go
-b.Type("input.search", "gophers")
-b.SendKeys("input.search", biloba.Keys.Enter) // submit the form
+b.Click("#editor")                                // focuses the editor
+b.SendKeysToWindowImmediately(biloba.Keys.Escape) // Escape, sent to the focused editor
+b.SendKeysToWindowImmediately("/")                // a "/" hotkey handled at the document level
 ```
 
-When the first argument is a selector, `SendKeys` focuses that element first (failing the test if it is missing, hidden, or disabled).  You can mix text and named keys in a single call:
+As the name says, it acts **immediately and never polls** - only you know what *should* be focused when it fires.  When the target appears asynchronously, gate it on a readiness anchor first and then send once:
 
 ```go
-b.SendKeys("textarea", "Hello", biloba.Keys.Enter, "World")
+Eventually("input.search").Should(b.BeFocused()) // wait until it really has focus
+b.SendKeysToWindowImmediately(biloba.Keys.Enter) // then send
 ```
 
-If you omit the selector entirely the keys are sent to whichever element currently has focus.  This is handy for global hotkeys, or for following up on an element you've already focused:
-
-```go
-Eventually("#editor").Should(b.Click()) // focuses the editor
-b.SendKeys(biloba.Keys.Escape)          // sent to the focused editor
-```
-
-The available keys are exposed on `biloba.Keys`.  These cover the editing, navigation, lock, and function keys you reach for in a browser test: `Backspace`, `Tab`, `Enter`, `Escape`, `Space`, `Delete`, `Insert`; the navigation cluster `ArrowUp`/`ArrowDown`/`ArrowLeft`/`ArrowRight`, `Home`, `End`, `PageUp`, `PageDown`; the locks `CapsLock`, `NumLock`, `ScrollLock`; the misc control keys `ContextMenu`, `PrintScreen`, `Pause`, `Help`, `Clear`; and the function keys `F1` through `F24`.  Each is a `biloba.Key` - for an exotic key that isn't listed (media, IME, launch keys) you can drop down to `chromedp` via `b.Context` and the [chromedp/kb](https://pkg.go.dev/github.com/chromedp/chromedp/kb) package.
+(To type into a *specific* element, use `b.Type`, which focuses it for you and polls.)
 
 #### Holding modifiers (Shift-Enter, Cmd-A)
 
 To hold a keyboard modifier down while typing or sending keys, pass `b.Shift()`, `b.Ctrl()`, `b.Alt()`, or `b.Meta()` alongside the keys (in any position).  These are the **same** modifier options you hold during a [pointer interaction](#pointer-options-offsets-and-modifiers) (`Meta` is Command on macOS and the Windows key elsewhere):
 
 ```go
-b.SendKeys("textarea", biloba.Keys.Enter, b.Shift()) // Shift-Enter (e.g. soft newline)
-b.SendKeys(biloba.Keys.Enter, b.Meta())              // Cmd-Enter to the focused element (e.g. submit)
-b.Type("input", "a", b.Meta())                       // Cmd-A (select all)
-Eventually("textarea").Should(b.Type("a", b.Meta())) // the matcher form takes modifiers too
+b.Type("textarea", biloba.Keys.Enter, b.Shift())            // Shift-Enter (e.g. soft newline)
+b.Type("input", "a", b.Meta())                              // Cmd-A (select all)
+Eventually("textarea").Should(b.Type("a", b.Meta()))        // the matcher form takes modifiers too
+b.SendKeysToWindowImmediately(biloba.Keys.Enter, b.Meta())  // Cmd-Enter to the focused element (e.g. submit)
 ```
 
-The modifier flags ride on every dispatched key event, so an app reading `e.shiftKey`/`e.metaKey`/`e.ctrlKey`/`e.altKey` in a `keydown` handler sees exactly the combo you sent.  This is the path to reach for when your app is wired to hotkeys; before this you had to drop down to `chromedp` via `b.Context` to send a modifier combo.
+The modifier flags ride on every dispatched key event, so an app reading `e.shiftKey`/`e.metaKey`/`e.ctrlKey`/`e.altKey` in a `keydown` handler sees exactly the combo you sent.  This is the path to reach for when your app is wired to hotkeys.
 
 ### Invoking JavaScript on and with selected elements
 
@@ -1875,7 +1957,7 @@ You can invoke a method defined on a DOM element (e.g. `focus()` or `scrollIntoV
 b.InvokeOn(selector, methodName, <optional args>)
 ```
 
-`InvokeOn` operates on the **first** matching element (failing if none are found) and returns whatever the called method returns.  You can also pass arguments in - some examples:
+`InvokeOn` operates on the **first** matching element and returns whatever the called method returns.  Like the other value-getters it [polls](#interacting-with-elements): it waits until an element matching `selector` is present before invoking the method (a method that is undefined or throws surfaces as a spec failure - at the deadline under polling, or immediately under `b.Immediate()`).  You can also pass arguments in - some examples:
 
 ```go
 b.InvokeOn("#submit", "click") //though you should really just use b.Click("#submit")
@@ -1887,16 +1969,16 @@ b.InvokeOn(".notice", "setAttribute", "data-age", "17") // calls el.setAttribute
 Expect(b.InvokeOn(".notice", "getAttribute", "data-age")).To(Equal("17")) // will now pass
 ```
 
-Similarly, you can use `InvokeOnEach` to invoke a method and arguments on **all** matching elements.  Nothing happens if no elements match and there is no way, currently, to specify different arguments for different matching elements.
+Similarly, you can use `InvokeOnEachImmediately` to invoke a method and arguments on **all** matching elements.  Like the rest of the `*Immediately` family it acts on the current set immediately (no poll), nothing happens if no elements match, and there is no way, currently, to specify different arguments for different matching elements.
 
-The upshot is that `InvokeOn/InvokeOnEach` find elements then call `el[methodName](...args)`.  This works well if the element has a relevant method defined on it.
+The upshot is that `InvokeOn/InvokeOnEachImmediately` find elements then call `el[methodName](...args)`.  This works well if the element has a relevant method defined on it.
 
-If you want to do something more complex with the element - or you want to call several methods atomically - you can use `InvokeWith/InvokeWithEach`.  These take a callable snippet of JavaScript and invoke it - passing in the element along with any optional arguments you've provided, and returning the result.  Here's an example:
+If you want to do something more complex with the element - or you want to call several methods atomically - you can use `InvokeWith/InvokeWithEachImmediately`.  These take a callable snippet of JavaScript and invoke it - passing in the element along with any optional arguments you've provided, and returning the result.  `InvokeWith` polls for its element just like `InvokeOn`; `InvokeWithEachImmediately` is the immediate snapshot for-each variant.  Here's an example:
 
 ```go
 countCharacters := `(el) => len(el.innerText)`
 Expect(b.InvokeWith(".notice", countCharacters)).To(Equal(12.0))
-Expect(b.InvokeWithEach(".notice", countCharacters)).To(HaveExactElements(12.0, 4.0, 73.0))
+Expect(b.InvokeWithEachImmediately(".notice", countCharacters)).To(HaveExactElements(12.0, 4.0, 73.0))
 
 appendLi := `(el, text) => {
 	let li = document.createElement('li')
@@ -1904,7 +1986,7 @@ appendLi := `(el, text) => {
 	el.appendChild(li);
 }`
 b.InvokeWith("ul", appendLi, "Another Item") //runs on the first <ul>
-b.InvokeWithEach("ul", appendLi, "Another Item For All") //runs on all <ul>s
+b.InvokeWithEachImmediately("ul", appendLi, "Another Item For All") //runs on all <ul>s
 ```
 
 ### The XPath DSL

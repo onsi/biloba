@@ -235,6 +235,29 @@ if (!window["_biloba"]) {
         if (!!result.error) result.error = result.error + errAnnotation
         return result
     }
+    // poll is one()'s poll-by-default sibling for the value-extracting getters.  Where one() reports a
+    // missing element as an *error* (fail fast), poll reports it as {success:false} with no error so the
+    // Go-side matcher RETRIES (Eventually) until the element shows up.  A genuine guard failure or thrown
+    // error still surfaces as an error (fail fast).  The final callback may itself return {success:false}
+    // (no error) to keep the poll waiting - e.g. a required-but-not-yet-defined property.
+    let poll = (...chain) => (s, ...args) => {
+        let n = sel(s)
+        if (!n) return { success: false } // not found -> retry, NOT an error
+        let errAnnotation = (typeof s == "string" ? ": " + s.slice(1) : "")
+        for (let i = 0; i < chain.length - 1; i++) {
+            let r = chain[i](n, ...args)
+            if (!r.success) return !!r.error ? r : rErr(r.guard + errAnnotation)
+        }
+        let result = chain[chain.length - 1](n, ...args)
+        if (!!result.error) result.error = result.error + errAnnotation
+        return result
+    }
+    // parseNameSpec unwraps a property/attribute name argument: a plain string is REQUIRED (it gates the
+    // poll until defined) while {__biloba_allow_missing: "x"} (produced by Go's AllowMissing) is optional
+    // (returned as null when absent, never blocking the poll).
+    let parseNameSpec = (spec) => (spec && typeof spec == "object" && "__biloba_allow_missing" in spec)
+        ? { name: spec.__biloba_allow_missing, required: false }
+        : { name: spec, required: true }
     let dispatchInputChange = (n) => {
         n.dispatchEvent(new Event('input', { bubbles: true }))
         n.dispatchEvent(new Event('change', { bubbles: true }))
@@ -243,8 +266,11 @@ if (!window["_biloba"]) {
     b.count = each(ns => rRes(ns.length))
     b.isVisible = one(n => r(n.offsetWidth > 0 || n.offsetHeight > 0 || n.offsetParent != null, "DOM element is not visible"))
     b.isEnabled = one(n => r(!n.disabled, "DOM element is not enabled"))
-    b.eachIsVisible = each(ns => r(ns.every(n => b.isVisible(n).success), "not all DOM elements are visible"))
-    b.eachIsEnabled = each(ns => r(ns.every(n => b.isEnabled(n).success), "not all DOM elements are enabled"))
+    // eachIsVisible/eachIsEnabled fail (not vacuously pass) when no elements match: a "every element
+    // satisfies" assertion against an empty set is a silent false-positive.  result carries ns.length
+    // so the Go matcher can tell "no elements matched" apart from "some element failed the check".
+    b.eachIsVisible = each(ns => { return { success: ns.length > 0 && ns.every(n => b.isVisible(n).success), result: ns.length } })
+    b.eachIsEnabled = each(ns => { return { success: ns.length > 0 && ns.every(n => b.isEnabled(n).success), result: ns.length } })
     // pointerOpts builds a MouseEvent init from a pointer options object {ox,oy,hasOffset,shift,...}:
     // the coordinates are the element's center, or its top-left corner plus the offset when one is
     // given, and the modifier flags carry through to shift/ctrl/alt/meta-aware handlers.
@@ -562,7 +588,7 @@ if (!window["_biloba"]) {
         ns.forEach(n => b.click(n))
         return r()
     })
-    b.getValue = one(n => {
+    let getValueImpl = (n) => {
         if (n.type == "checkbox") {
             return rRes(n.checked)
         } else if (n.type == "radio") {
@@ -573,7 +599,11 @@ if (!window["_biloba"]) {
             return rRes([...n.selectedOptions].map(o => o.value))
         }
         return rRes(n.value)
-    })
+    }
+    b.getValue = one(getValueImpl)
+    b.getValueP = poll(getValueImpl) // GetValue: poll until the element is present ("" is a valid value)
+    // getValueForEach backs CurrentValueForEach: a pure snapshot of each match's rationalized value.
+    b.getValueForEach = each((ns) => rRes(ns.map(n => getValueImpl(n).result)))
     b.setValue = one(b.isVisible, b.isEnabled, (n, v) => {
         // a ValueLabel argument arrives as {__biloba_value_label: "..."}; labelOf unwraps it (or returns null)
         let labelOf = (val) => (val && typeof val == "object" && "__biloba_value_label" in val) ? val.__biloba_value_label : null
@@ -639,6 +669,24 @@ if (!window["_biloba"]) {
     })
     b.getAttribute = one((n, a) => rRes(n.getAttribute(a)))
     b.getAttributeForEach = each((ns, a) => rRes(ns.map(n => n.getAttribute(a))))
+    // getAttributesForEach backs CurrentAttributesForEach: a pure snapshot of the named raw HTML
+    // attributes for each match.  Absent attributes come back as null (no two-axis polling here).
+    b.getAttributesForEach = each((ns, names) => rRes(ns.map(n => names.reduce((m, a) => {
+        m[a] = n.getAttribute(a)
+        return m
+    }, {}))))
+    // getAttributesP backs GetAttribute/GetAttributes: poll until the element is present AND every
+    // REQUIRED named attribute is present (getAttribute !== null); AllowMissing names never block.
+    b.getAttributesP = poll((n, specs) => {
+        let result = {}, ready = true
+        for (const spec of specs) {
+            let { name, required } = parseNameSpec(spec)
+            let v = n.getAttribute(name)
+            if (required && v === null) ready = false
+            result[name] = v
+        }
+        return ready ? rRes(result) : { success: false }
+    })
     b.hasAttribute = one((n, a) => r(n.hasAttribute(a)))
     b.isFocused = one(n => r(n === document.activeElement, "DOM element is not focused"))
     b.getComputedStyle = one((n, p) => rRes(window.getComputedStyle(n)[p]))
@@ -650,11 +698,16 @@ if (!window["_biloba"]) {
         }
         return r(true)
     })
-    b.eachHasProperty = each((ns, p) => ns.length == 0 ? r(false) : r(ns.every(n => b.hasProperty(n, p).success)))
-    b.getProperty = one((n, p) => {
+    // eachHasProperty fails on an empty set (no elements to "each" over); result carries ns.length so
+    // the Go matcher can surface a clear "no elements matched" message rather than a vacuous pass.
+    b.eachHasProperty = each((ns, p) => { return { success: ns.length > 0 && ns.every(n => b.hasProperty(n, p).success), result: ns.length } })
+    // resolveProperty walks a dot-delimited property path on node n.  found reports whether the whole
+    // path resolved (the "defined" axis for two-axis polling); value is the (array/object-normalized)
+    // leaf, or null when the path doesn't resolve.
+    let resolveProperty = (n, p) => {
         let v = n
         for (const subP of p.split(".")) {
-            if (!(subP in v)) return rRes(null)
+            if (!(subP in v)) return { found: false, value: null }
             v = v[subP]
         }
         if (v !== null && v !== undefined && !Array.isArray(v) && (typeof v == "object") && (typeof v[Symbol.iterator] == "function")) {
@@ -662,14 +715,28 @@ if (!window["_biloba"]) {
         } else if (v instanceof DOMStringMap) {
             v = { ...v }
         }
-        return rRes(v)
-    })
+        return { found: true, value: v }
+    }
+    b.getProperty = one((n, p) => rRes(resolveProperty(n, p).value))
     b.getPropertyForEach = each((ns, p) => rRes(ns.map(n => b.getProperty(n, p).result)))
     b.getProperties = one((n, ps) => rRes(ps.reduce((m, p) => {
         m[p] = b.getProperty(n, p).result
         return m
     }, {})))
     b.getPropertiesForEach = each((ns, ps) => rRes(ns.map(n => b.getProperties(n, ps).result)))
+    // getPropertiesP backs GetProperty/GetProperties: poll until the element is present AND every
+    // REQUIRED named property is defined (the path resolves); AllowMissing names return null and never
+    // block.  The result map is keyed by the plain property name (matching Go's nameOf).
+    b.getPropertiesP = poll((n, specs) => {
+        let result = {}, ready = true
+        for (const spec of specs) {
+            let { name, required } = parseNameSpec(spec)
+            let resolved = resolveProperty(n, name)
+            if (required && !resolved.found) ready = false
+            result[name] = resolved.found ? resolved.value : null
+        }
+        return ready ? rRes(result) : { success: false }
+    })
     b.setProperty = one((n, p, v) => {
         p = p.split(".")
         for (const subP of p.slice(0, -1)) {
@@ -686,13 +753,17 @@ if (!window["_biloba"]) {
         }
         return r()
     })
-    b.invokeOn = one((n, f, ...args) => {
+    let invokeOnImpl = (n, f, ...args) => {
         if (!(f in n) || (typeof n[f] != "function")) return rErr(`element does not implement "${f}"`)
         return rRes(n[f](...args))
-    })
-    b.invokeOnEach = each((ns, f, ...args) => rRes(ns.map(n => b.invokeOn(n, f, ...args).result)))
-    b.invokeWith = one((n, script, ...args) => rRes(eval(script)(n, ...args)))
-    b.invokeWithEach = each((ns, script, ...args) => rRes(ns.map(n => b.invokeWith(n, script, ...args).result)))
+    }
+    b.invokeOn = one(invokeOnImpl)
+    b.invokeOnP = poll(invokeOnImpl) // InvokeOn: missing element retries; undefined method / throw fail fast
+    b.invokeOnEach = each((ns, f, ...args) => rRes(ns.map(n => invokeOnImpl(n, f, ...args).result)))
+    let invokeWithImpl = (n, script, ...args) => rRes(eval(script)(n, ...args))
+    b.invokeWith = one(invokeWithImpl)
+    b.invokeWithP = poll(invokeWithImpl) // InvokeWith: missing element retries; thrown JS fails fast
+    b.invokeWithEach = each((ns, script, ...args) => rRes(ns.map(n => invokeWithImpl(n, script, ...args).result)))
 
     b.outline = () => {
         const PRUNE_TAGS = new Set(["script", "style", "svg"])

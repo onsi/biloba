@@ -10,7 +10,7 @@ Every design decision traces back to one of these. When in doubt, weigh changes 
 
 1. **Performance via parallelization.** One shared Chrome process; each Ginkgo parallel process drives its own isolated *root tab* (`b`), reused between specs via `b.Prepare()`. Creating tabs is cheaper than creating browsers; reusing a tab is cheaper than creating one. The payoff is real — the suite runs in ~2s parallel vs ~10s serial.
 
-2. **Stability via pragmatism.** Biloba favors a good-enough simulation over realistic emulation. A click is `element.click()` after synchronous, atomic visibility/enabled checks run *in the browser* — not scroll-into-view + compute centroid + dispatch mouse events across multiple async round-trips. Atomicity in single-threaded JS is what kills flakiness. We knowingly trade away a class of realism bugs (occlusion, scroll) for speed and stability, and tell users they can drop to `chromedp` when they want the realistic path.
+2. **Stability via pragmatism.** Biloba favors a good-enough simulation over realistic emulation. A click is `element.click()` after synchronous, atomic visibility/enabled checks run *in the browser* — not scroll-into-view + compute centroid + dispatch mouse events across multiple async round-trips. Atomicity in single-threaded JS is what kills flakiness *within an attempt*; **poll-by-default** (every action/getter retries until the deadline — see the dual-API section) is what kills it *across* attempts. We knowingly trade away a class of realism bugs (occlusion, scroll) for speed and stability, and tell users they can drop to `chromedp` when they want the realistic path.
 
 3. **Conciseness via Ginkgo and Gomega.** Biloba does not try to be a standalone library or work outside Ginkgo. Errors become test failures (most methods don't return errors). It hooks Ginkgo for screenshots-on-failure and progress reports, and streams `console.log` to the `GinkgoWriter`.
 
@@ -23,14 +23,16 @@ Every design decision traces back to one of these. When in doubt, weigh changes 
 
 ## The dual immediate/matcher API convention
 
-This is the single most important pattern to preserve. Many DOM methods have **two forms** keyed on argument count:
+This is the single most important pattern to preserve. **Biloba polls by default** (the old "Biloba never polls" framing is retired). Many DOM methods have **two forms** keyed on argument count:
 
-- **Fully-applied → acts immediately, fails the test on error.** `b.Click("#go")`, `b.SetValue("#x", 3)`, `b.GetProperty(sel, "href")`.
-- **Under-applied → returns a Gomega matcher you poll.** `Eventually("#go").Should(b.Click())`, `Eventually("#x").Should(b.SetValue(3))`.
+- **Fully-applied → POLLS, then fails the test on timeout.** `b.Click("#go")`, `b.SetValue("#x", 3)`, `b.GetProperty(sel, "href")`. These build the method's own matcher and run it through `Eventually` internally via `b.pollOrImmediate(selector, matcher)` (in `polling.go`), bound to `b.gt` (not the global fail handler). `b.Immediate()` is the opt-in escape hatch that reverts to act-once / fail-fast (`Expect`, single evaluation). The wait is tunable per-call with `b.WithTimeout(d)` / `b.WithPolling(d)` / `b.WithContext(ctx)` — shallow clone-with-a-flag views, exactly like `b.Realistic()`.
+- **Under-applied → returns a Gomega matcher you poll.** `Eventually("#go").Should(b.Click())`, `Eventually("#x").Should(b.SetValue(3))`. The method calls `b.guardBareMatcher("Method")` here — you configure the `Eventually`/`Expect`, not the matcher, so `WithTimeout`/`Immediate`/etc. on this form is a hard error.
 
-Immediate methods call `b.gt.Helper()` then `b.gt.Fatalf(...)` on error. Matchers are built with `gcustom.MakeMatcher` and return `(bool, error)` (commonly via `bilobaJSResponse.MatcherResult()`), using `.WithMessage`/`.WithTemplate` for failure output. **Biloba itself never polls** — it returns matchers and lets the user wrap them in `Eventually`/`Consistently`.
+Matchers are built with `gcustom.MakeMatcher` and return `(bool, error)` (commonly via `bilobaJSResponse.MatcherResult()`), using `.WithMessage`/`.WithTemplate` for failure output. While polling, both `(false, nil)` (not ready) and `(false, err)` (genuine JS error) retry — errors surface inside Gomega's "Timed out after…" message at the deadline; only `Immediate()` fails fast on them.
 
-Also common: a `Foo`/`HaveFoo`/`EachHaveFoo` family — `Foo` acts on the **first** match, `FooForEach`/`EachHaveFoo` act on **all** matches (returning/asserting slices, empty when nothing matches). The "first vs. all" distinction is conveyed by the method name.
+**Not everything polls — the four-bucket model** (enforced by `b.guardConfig(name, allowed...)`): **polling** methods (dual actions + `Get*` value-getters) honor all four knobs; **waiting commands** (`Navigate`, screenshots) keep their own default deadline and honor only `WithTimeout`+`WithContext`; **snapshots** (`Current*ForEach`, `HasElement`, `Count`) and **one-shot mutations** (`SetCookie`, `Run`, …) reject every knob.
+
+Also common: a `Get*`/`Current*ForEach`/`*Immediately` family — `Get*` (singular) **polls** the **first** match and returns its value; `Current*ForEach` is a no-poll **snapshot** over **all** matches (returns slices, empty when nothing matches); `*Immediately` acts on **all** current matches without polling (the double-suffix length is an intentional "know what you're doing" smell). The matcher counterpart `EachHaveFoo` asserts over all matches and **fails on empty** (≥1 match AND all satisfy — a vacuous pass is a footgun). The "first vs. all" and "poll vs. snapshot" distinctions are conveyed by the method name.
 
 ## Testing
 

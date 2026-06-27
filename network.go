@@ -87,6 +87,7 @@ AllRequests() returns all requests observed by this tab since the last call to P
 Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
 */
 func (b *Biloba) AllRequests() Requests {
+	b.guardConfig("AllRequests")
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	out := make(Requests, len(b.requests))
@@ -269,6 +270,7 @@ Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn 
 */
 func (b *Biloba) StubRequest(url any, response StubResponse) {
 	b.gt.Helper()
+	b.guardConfig("StubRequest")
 	if response.Status == 0 {
 		response.Status = http.StatusOK
 	}
@@ -294,6 +296,7 @@ Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn 
 */
 func (b *Biloba) AbortRequest(url any) {
 	b.gt.Helper()
+	b.guardConfig("AbortRequest")
 	b.lock.Lock()
 	b.requestHandlers = append(b.requestHandlers, &requestHandler{matcher: matcherOrEqual(url), abort: true})
 	b.lock.Unlock()
@@ -331,6 +334,7 @@ Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn 
 */
 func (b *Biloba) ModifyRequest(url any) *RequestModification {
 	b.gt.Helper()
+	b.guardConfig("ModifyRequest")
 	mod := &RequestModification{}
 	b.lock.Lock()
 	b.requestHandlers = append(b.requestHandlers, &requestHandler{matcher: matcherOrEqual(url), modify: mod})
@@ -430,6 +434,7 @@ Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn 
 */
 func (b *Biloba) ModifyResponse(url any) *ResponseModification {
 	b.gt.Helper()
+	b.guardConfig("ModifyResponse")
 	mod := &ResponseModification{matcher: matcherOrEqual(url)}
 	b.lock.Lock()
 	b.responseHandlers = append(b.responseHandlers, mod)

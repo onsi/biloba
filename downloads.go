@@ -171,6 +171,7 @@ AllDownloads() returns all downloads associated with this tab
 Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
 */
 func (b *Biloba) AllDownloads() Downloads {
+	b.guardConfig("AllDownloads")
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	out := Downloads{}
@@ -186,6 +187,7 @@ AllCompleteDownloads() returns all downloads associated with this tab that are c
 Read https://onsi.github.io/biloba/#managing-downloads to learn more about managing Downloads in Biloba
 */
 func (b *Biloba) AllCompleteDownloads() Downloads {
+	b.guardConfig("AllCompleteDownloads")
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	out := Downloads{}
