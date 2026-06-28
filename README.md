@@ -126,7 +126,7 @@ Biloba is quite feature complete and in active development.  However, a 1.0 rele
 
 ### Poll by default
 
-Browsers are asynchronous, so Biloba's interactions and value-getters **poll by default**.  A fully-applied call like `tab.Click("#go")` or `tab.SetValue("#input", "hi")` retries — finding-and-acting atomically in the browser — until it succeeds or times out.  No more sprinkling `Eventually(...).Should(tab.Exist())` gates in front of every action: the action waits for you.
+Browsers are asynchronous, so Biloba's interactions and value-getters **poll by default**.  A fully-applied call like `tab.Click("#go")` or `tab.SetValue("#input", "hi")` retries — finding-and-acting atomically in the browser — until it succeeds or times out.
 
 When you want to make the wait explicit (to compose with `Consistently`, or assert on a richer condition), every interaction also has a matcher form you hand to Gomega:
 
