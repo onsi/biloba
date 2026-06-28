@@ -179,7 +179,7 @@ Here's a partial list:
 
 Biloba is maturing fast.  Send in a PR!  Or, if you prefer, just use [`chromedp`](https://github.com/chromedp/chromedp) directly to accomplish what you need.  Or drop down all the way to [`cdproto`](https://pkg.go.dev/github.com/chromedp/cdproto) to use the [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/) directly.   Every Biloba tab exposes its `chromedp` context via `b.Context` - so you can mix and match as needed.
 
-> Why should I use this thing when far more mature tools like [puppeteer](https://pptr.dev), [selenium](https://www.selenium.dev), and [capybara](https://github.com/teamcapybara/capybara) exist?"
+> Why should I use this thing when far more mature tools like [Playwright](https://playwright.dev), [puppeteer](https://pptr.dev), [selenium](https://www.selenium.dev), and [capybara](https://github.com/teamcapybara/capybara) exist?"
 
 If you're building something out in Go, using an LLM agent, happen to know and like Ginkgo, and/or want to experiment with a shiny new toy that's aiming to deliver performant non-flakey automated browser tests... Give Biloba a try - and start opening issues and sending in PRs!
 
@@ -434,7 +434,7 @@ Here are some of the ways Biloba integrates with Ginkgo and Gomega so you can fo
 
 5. Biloba polls by default.  Most DOM interactions keep retrying until they succeed (or time out), and any of them can also hand you a Gomega matcher that _you_ drive with `Eventually`/`Consistently`.
 
-	This means you rarely need a separate readiness check before acting.  A quick example: `b.Click("#submit")` keeps trying to click the element with `id` `submit` - it waits until that element exists, is visible, and is enabled, then clicks it once.  If you'd rather compose the polling yourself, drop the argument and `b.Click()` returns a matcher: `Eventually("#submit").Should(b.Click())`.
+	This means you rarely need a separate readiness check before acting.  A quick example: `b.Click("#submit")` keeps trying to click the element with `id` `submit` - it waits until that element exists, is visible, and is enabled, then clicks it once.  If you'd rather compose the polling yourself, drop the argument and `b.Click()` returns a matcher: `Eventually("#submit").Should(b.Click())` (this, by the way, is exactly what `b.Click("#submit")` is running for you under hte hood.)
 
 	We'll dive into all of this - the configuration knobs (`b.WithTimeout`/`b.WithPolling`/`b.WithContext`) and the `b.Immediate()` escape hatch - in the [Interacting with Elements](#interacting-with-elements) section below.
 
@@ -928,28 +928,14 @@ The intuition: a method polls (and accepts every knob) when it is *waiting for t
 
 ### Existence, Counting, Visibility, and Interactibility
 
-You can check if a tab has an element matching `selector` with:
-
-```go
-hasEl := b.HasElement(selector) //returns bool
-```
-
-`HasElement` is a **snapshot**: it reads the DOM once, right now, and returns a `bool` (it never polls, and rejects the `WithTimeout`/`Immediate` knobs).  It runs on the reusable root tab; to check a different tab, call `tab.HasElement(selector)`.  **The DOM method always operates on the tab it is invoked on.**
-
-It's common to want to wait until an element exists before taking some action on the page.  Since `HasElement` doesn't poll, you'd need to poll it yourself - which, with Gomega, could look like this:
-
-```go
-Eventually(b.HasElement).WithArguments(selector).Should(BeTrue())
-```
-
-...but that's wordy and hideous and will have the deeply unsatisfying failure message of `"Expected false to be true"`.  Instead you should use `b.Exist()` which returns a matcher:
+You can check if a tab has an element matching `selector` using  `b.Exist()` which returns a matcher:
 
 ```go
 Expect(selector).To(b.Exist()) // assert that the element is there right now
 Eventually(selector).Should(b.Exist()) // assert that the element exists, eventually
 ```
 
-if you want to assert the existing of `selector` on a different tab you would:
+if you want to assert the existence of `selector` on a different tab you would:
 
 ```go
 Eventually(selector).Should(tab.Exist())
@@ -957,7 +943,7 @@ Eventually(selector).Should(tab.Exist())
 
 note that we use `tab`'s `Exist()` matcher here instead of the reusable root tab `b`.
 
-Both `HasElement()` and `Exist()` succeed simply if the `selector` query returns an element.
+`Exist()` is as simple as it gets - it succeeds if the `selector` query returns an element.
 
 ---
 
@@ -967,14 +953,14 @@ You can count the number of elements that match a selector with:
 b.Count(selector)
 ```
 
-or - as a matcher:
+but be aware - this returns its result immediately without polling.  If you need to wait for the DOM to settle and make sure some concrete number of elemnts are present use `HaveCount()`:
 
 ```go
 Expect("a").To(b.HaveCount(7))
 Eventually("img.thumbnail").Should(b.HaveCount(BeNumerically(">", 10)))
 ```
 
-if no elements match the `selector`, `Count/HaveMatch` return `0`.  Obviously.
+if no elements match the `selector`, `Count/HaveCount` return `0`.  Obviously.
 
 ---
 
@@ -1110,24 +1096,26 @@ returns a slice of strings for all elements matching selector.  For example:
 list := b.CurrentInnerTextForEach("ol.movies li")
 ```
 
-will return the individual inner texts for each list element under all `<ol>`s with class `movies`.  If no elements are found `list` will be an empty slice.  The `Current*ForEach` getters are **snapshots** - they read the matches as they are *right now* and never poll.  When the elements appear asynchronously, gate on their count first with `Eventually("ol.movies li").Should(b.HaveCount(n))` and *then* read.
+will return the individual inner texts for each list element under all `<ol>`s with class `movies`.  If no elements are found `list` will be an empty slice.  The `Current*ForEach` getters are **snapshots** - they read the matches as they are *right now* and never poll.  When the elements appear asynchronously, gate on their count first with `Eventually("ol.movies li").Should(b.HaveCount(n))` and *then* read - but be careful to avoid flakes here as the DOM may have changed between the two atomic operations. 
 
 You can assert on the set of inner texts with `b.EachHaveInnerText()` like so:
 
 ```go
 Expect(selector).To(b.EachHaveInnerText("A", "B", "C")) //uses Gomega's HaveExactElements matcher to assert the texts match, in order
-Expect(selector).To(b.EachHaveInnerText(ContainElement("B"))) //passes the entire slice to the matcher
+Eventually(selector).Should(b.EachHaveInnerText(ContainElement("B"))) //passes the entire slice to the matcher
 ```
+
+use `b.EachHaveInnerText` with `Eventually` in lieu of `CurrentInnerTextForEach` if you want to poll and assert that the inner texts of these DOM elements eventually match your expectation - this approach gives you an atomic operation that is less susceptible to flakiness.
 
 Like every `Each*` matcher, `EachHaveInnerText` requires **at least one** match: it fails (rather than passing vacuously) when nothing matches, which keeps it honest under `Eventually`/`Consistently`.  To assert that *nothing* matches a selector, use `Eventually(selector).Should(b.HaveCount(0))` (or `ShouldNot(b.Exist())`) instead.
 
-**Two text-assertion recipes worth knowing** (both replace common `b.Run` text-scanning crutches):
+**Two text-assertion recipes worth knowing**:
 
 - *The ordered collection of an element group's text* - assert the visible text of every match, in document order - is exactly `EachHaveInnerText` with a slice (or `EachHaveTextContent` for the layout-independent variant): `Expect(".step").To(b.EachHaveInnerText("Pick", "Pay", "Done"))`.
 - *Negation - "no element (in this scope) says X"* - is cleanest as a [text locator](#selecting-by-locator) + `ShouldNot(b.Exist())`, rather than a JS scan.  Scope it with `.Within` when you only care about a region:
 
   ```go
-  Eventually(b.ByTextContains("Draft").Within("#published-list")).ShouldNot(b.Exist())
+  Consistently(b.ByTextContains("Draft").Within("#published-list")).ShouldNot(b.Exist())
   ```
 
 ---
@@ -1163,7 +1151,7 @@ Eventually(selector).Should(b.EachHaveClass("published"))
 
 A handful of additional matchers cover common assertions on the **first** element matching `selector`:
 
-`HaveAttribute()` asserts on an element's HTML _attribute_ (via `getAttribute`).  This is distinct from `HaveProperty` (below), which asserts on a javascript _property_ - the two frequently diverge (e.g. the `href` attribute is the raw `"/about"` whereas the `href` property is the resolved absolute URL).  Pass just a name to assert the attribute exists, or a name and an expected value (string or Gomega matcher):
+`HaveAttribute()` asserts on an element's HTML _attribute_ (via `getAttribute`).  This is distinct from `HaveProperty` ([below](#properties)), which asserts on a javascript _property_ - the two frequently diverge (e.g. the `href` attribute is the raw `"/about"` whereas the `href` property is the resolved absolute URL).  Pass just a name to assert the attribute exists, or a name and an expected value (string or Gomega matcher):
 
 ```go
 Eventually(selector).Should(b.HaveAttribute("href")) //the attribute is present
