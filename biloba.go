@@ -37,7 +37,7 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-const BILOBA_VERSION = "0.7.3"
+const BILOBA_VERSION = "0.8.0"
 
 // minimumSupportedChromeMajor is the oldest Chrome major version Biloba's behavior is known to
 // assume.  Biloba tracks (and CI continuously validates against) the latest stable Chrome, so this

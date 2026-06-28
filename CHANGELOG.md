@@ -1,3 +1,114 @@
+## 0.8.0
+
+### Poll by default (major change)
+
+Biloba now **polls by default**. Fully-applied DOM interactions and value-getters — `b.Click("#go")`, `b.SetValue("#x", 3)`, `b.GetProperty(sel, "value")`, and friends — retry (finding-and-acting atomically in the browser) until they succeed or time out, instead of acting once and immediately failing the test. The old "Biloba never polls" framing is retired.
+
+Why: immediate, act-once-and-fatal interactions were a pervasive flake footgun. Browsers are asynchronous; an action that fires a hair too early failed the spec even though the page was about to be ready. Polling is the safe default, so users (*cough* agents) no longer have to gate every action behind an `Eventually(...).Should(b.Exist())`.
+
+The opt-outs and config knobs are Gomega-style, modeled on `Realistic()` (shallow clone-with-a-flag, usable per-call):
+
+- `b.Immediate()` — act once / fail fast (the old immediate behavior), the explicit escape hatch.
+- `b.WithTimeout(d)` / `b.WithPolling(d)` / `b.WithContext(ctx)` — tune the underlying `Eventually`.
+
+Under the hood a polling call simply runs the method's own matcher through `Eventually` (bound to the tab); `Immediate()` runs it once through `Expect`. The under-applied matcher forms (`Eventually(sel).Should(b.Click())`) are unchanged — you still hand those to Gomega yourself.
+
+### Migration Guide
+
+A mechanical old → new map. Most suites only need the keyboard and rename changes; the behavior change below is source-compatible (same call sites, safer semantics).
+
+#### 1. Fully-applied calls now POLL
+
+No code change required, and most suites can now delete the readiness gates they used to put in front of actions. Every fully-applied interaction and value-getter retries instead of acting once:
+
+```go
+b.Click("#go")              // was: act once, Fatalf if not clickable.  now: poll until clickable
+b.SetValue("#x", 3)         // polls until present, then sets
+v := b.GetProperty(sel, "value") // polls until the element exists AND "value" is defined, then returns
+```
+
+This means you can go in and largely replace (e.g.) `Eventually("#go").Should(b.Click())` with `b.Click("#go")`.  🙌
+
+To get the **old act-once / fail-fast behavior**, opt out per-call with `Immediate()`:
+
+```go
+b.Immediate().Click("#go")        // act now; Fatalf immediately if not clickable
+b.Immediate().GetProperty(sel, "value")
+```
+
+#### 2. New config surface + the four-bucket model
+
+`WithTimeout` / `WithPolling` / `WithContext` / `Immediate` apply only to methods that poll. Misapplying config is now a **hard error** (it fails the test), per bucket:
+
+| Bucket | Examples | `WithTimeout`/`WithContext` | `WithPolling` | `Immediate` |
+|---|---|---|---|---|
+| Polling actions & getters | `Click`, `SetValue`, `GetProperty`, `Type`, `InvokeOn` | ✓ | ✓ | ✓ |
+| Waiting commands | `Navigate`, `Capture*Screenshot*` | ✓ (overrides own default) | hard error | hard error |
+| Snapshots | `Count`, `HasElement`, `Location`, `Title`, `Current*ForEach` | hard error | hard error | hard error |
+| One-shot mutations | `SetWindowSize`, `Handle*Dialogs`, `StubRequest`, `Run`/`RunAsync`, `*Immediately` | hard error | hard error | hard error |
+
+Configuring a call that resolves to a **bare matcher** (e.g. `b.WithTimeout(d).Click()` with no selector) is also a hard error — configure the `Eventually`, not the matcher.
+
+#### 3. Renames
+
+| Was | Now |
+|---|---|
+| `b.InnerText(sel)` | `b.GetInnerText(sel)` |
+| `b.TextContent(sel)` | `b.GetTextContent(sel)` |
+| `b.InnerTextForEach(sel)` | `b.CurrentInnerTextForEach(sel)` |
+| `b.TextContentForEach(sel)` | `b.CurrentTextContentForEach(sel)` |
+| `b.GetPropertyForEach(sel, name)` | `b.CurrentPropertyForEach(sel, name)` |
+| `b.GetPropertiesForEach(sel, names...)` | `b.CurrentPropertiesForEach(sel, names...)` |
+| `b.GetAttributeForEach(sel, name)` | `b.CurrentAttributeForEach(sel, name)` |
+| `b.ClickEach(sel)` | `b.ClickEachImmediately(sel)` |
+| `b.SetPropertyForEach(sel, name, v)` | `b.SetPropertyForEachImmediately(sel, name, v)` |
+| `b.InvokeOnEach(sel, ...)` | `b.InvokeOnEachImmediately(sel, ...)` |
+| `b.InvokeWithEach(sel, ...)` | `b.InvokeWithEachImmediately(sel, ...)` |
+
+Rule of thumb: a singular `Get*` getter **polls** ("wait for the one I asked about"); a plural `Current*ForEach` is a **pure snapshot** ("what's there right now", `nil` per missing). The `*Immediately` suffix on the plural actions is an intentional smell — they act on the current set, no-op on zero, and never poll; gate them yourself when you need a wait.
+
+#### 4. Keyboard split
+
+`SendKeys` is gone, split by intent:
+
+- **Selector-targeted** keystrokes move to `Type`, which now accepts named `Keys.*` (and mixes them with text and modifiers):
+  ```go
+  b.SendKeys("#input", biloba.Keys.Enter)   // OLD
+  b.Type("#input", biloba.Keys.Enter)       // NEW (polls)
+  b.Type("#input", "hello", biloba.Keys.Enter)
+  Eventually("#input").Should(b.Type(biloba.Keys.Enter)) // matcher form
+  ```
+  Note: the matcher form can't mix leading text with trailing keys (`b.Type("hello", biloba.Keys.Enter)` is read as the immediate form, selector `"hello"`). Use the immediate form (which now polls) for that case.
+- **Focus-free** sends (no selector — land on whatever's focused, else document/window for global hotkeys) move to `SendKeysToWindowImmediately`:
+  ```go
+  b.SendKeys(biloba.Keys.Escape)                 // OLD focus-free form
+  b.SendKeysToWindowImmediately(biloba.Keys.Escape) // NEW
+  ```
+  This one is immediate by nature — gate it with `Eventually(sel).Should(b.BeFocused())` when the target appears asynchronously.  Watch out, though - to _really_ avoid flakes you should probably `b.Type(sel, "hello")`.
+
+#### 5. `*Each` matchers now FAIL on empty
+
+`EachBeVisible`, `EachBeEnabled`, `EachHaveClass`, `EachHaveInnerText`, `EachHaveTextContent` (and `EachHaveProperty`, which already did) now require **at least one match** and that every match satisfy. A zero-match set is a **failure**, not a vacuous pass — a typo'd selector fails loudly. The no-arg `b.EachHaveInnerText()` / `b.EachHaveTextContent()` forms (which meant `BeEmpty()`) are **removed**. To assert no elements match, use:
+
+```go
+Eventually(sel).Should(b.HaveCount(0))   // (or: ShouldNot(b.Exist()))
+```
+
+#### 6. New symbols
+
+- `b.GetAttributes(sel, names...)` — multi-attribute sibling of `GetAttribute` (polls until present and every named attribute is defined).
+- `b.CurrentAttributesForEach(sel, names...)` and `b.CurrentValueForEach(sel)` — plural snapshot getters.
+- `b.AllowMissing("name")` — wrap a property/attribute name in `GetProperty`/`GetProperties`/`GetAttribute`/`GetAttributes` so the poll returns it as `nil` when absent instead of blocking forever.
+  - **Sharp edge:** a property that simply doesn't exist on the element type (e.g. `disabled` on a `<div>` — `"disabled" in div` is false) would otherwise block the two-axis poll forever. Wrap such absent-on-type names in `AllowMissing` to get the old nil/zero value back:
+    ```go
+    b.GetProperty(divSel, b.AllowMissing("disabled"))
+    ```
+  - `GetValue`/`GetInnerText`/`GetTextContent` have no "defined" axis (empty string is a valid value), so they never need `AllowMissing`.
+
+#### 7. Unchanged
+
+`Run` / `RunAsync` stay immediate and **fail-fast** (config on them is a hard error). A thrown JS error there is usually a real bug Biloba can't distinguish from "not ready", so it won't be masked by an auto-poll — keep using `RunErr`/`RunErrAsync` + `Eventually`, or `EvaluateTo`, for the polling paths. `Close` is unchanged.
+
 ## 0.7.3
 
 ### Features
