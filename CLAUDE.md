@@ -23,7 +23,7 @@ Every design decision traces back to one of these. When in doubt, weigh changes 
 
 ## The dual immediate/matcher API convention
 
-This is the single most important pattern to preserve. **Biloba polls by default** (the old "Biloba never polls" framing is retired). Many DOM methods have **two forms** keyed on argument count:
+This is the single most important pattern to preserve. **Biloba polls by default**. Many DOM methods have **two forms** keyed on argument count:
 
 - **Fully-applied → POLLS, then fails the test on timeout.** `b.Click("#go")`, `b.SetValue("#x", 3)`, `b.GetProperty(sel, "href")`. These build the method's own matcher and run it through `Eventually` internally via `b.pollOrImmediate(selector, matcher)` (in `polling.go`), bound to `b.gt` (not the global fail handler). `b.Immediate()` is the opt-in escape hatch that reverts to act-once / fail-fast (`Expect`, single evaluation). The wait is tunable per-call with `b.WithTimeout(d)` / `b.WithPolling(d)` / `b.WithContext(ctx)` — shallow clone-with-a-flag views, exactly like `b.Realistic()`.
 - **Under-applied → returns a Gomega matcher you poll.** `Eventually("#go").Should(b.Click())`, `Eventually("#x").Should(b.SetValue(3))`. The method calls `b.guardBareMatcher("Method")` here — you configure the `Eventually`/`Expect`, not the matcher, so `WithTimeout`/`Immediate`/etc. on this form is a hard error.
@@ -56,6 +56,8 @@ Repo-specific testing conventions (see `biloba_suite_test.go`):
 | Setup, config, Chrome lifecycle | `biloba.go` | `biloba_suite_test.go` |
 | DOM query/interaction methods & matchers | `dom.go` | `dom_test.go` |
 | Property get/set/match | `properties.go` | `properties_test.go` |
+| Geometry getters/matchers (BoundingBox/ScrollOffset/OffsetTopWithin) | `geometry.go` | `geometry_test.go` |
+| Poll-trajectory failure artifact | `probe_trajectory.go` | `probe_trajectory_internal_test.go` |
 | XPath DSL | `xpath.go` | `xpath_test.go` |
 | Tabs / spawned tabs | `tabs.go` | `tabs_test.go` |
 | Dialogs | `dialog_handling.go` | `dialog_handling_test.go` |

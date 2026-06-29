@@ -125,7 +125,9 @@ Read https://onsi.github.io/biloba/#running-arbitrary-javascript to learn more a
 func (b *Biloba) Run(script string, args ...any) any {
 	b.gt.Helper()
 	b.guardConfig("Run")
-	return b.run(script, args...)
+	res := b.run(script, args...)
+	b.recordProbe("Run "+script, res)
+	return res
 }
 
 // run is the unguarded substrate behind Run.  Internal callers (e.g. reloadBiloba on the polling hot
@@ -178,6 +180,7 @@ func (b *Biloba) RunAsync(script string, args ...any) any {
 	if err != nil {
 		b.gt.Fatalf("Failed to run async script:\n%s\n\n%s", script, err.Error())
 	}
+	b.recordProbe("RunAsync "+script, res)
 	return res
 }
 

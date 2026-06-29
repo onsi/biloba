@@ -99,6 +99,12 @@ Tune or opt out of poll-by-default. Each returns a lightweight view of the same 
 - `b.ValueLabel(label)` — wrap a `SetValue` arg to target a `<select>` option by its **visible label** instead of its value: `b.SetValue(sel, b.ValueLabel("Sonnet"))`. Multi-select: pass a slice whose entries are `ValueLabel`s (labels and raw values may be mixed). `<select>` only.
 - `b.HaveValue(value|matcher)` (matcher).
 
+## Geometry  (pollable layout reads — fold in layout-readiness; use instead of hand-rolled `b.Run` geometry)
+**Readiness**: getters poll until the element is present **AND** laid out (non-degenerate box, `width`/`height` > 0) — so you never read a zero box mid-layout. All return viewport-relative CSS pixels. Each getter has a `Have*` matcher counterpart for `Eventually(sel).Should(...)` when the value is converging.
+- `b.BoundingBox(selector)` → `Box{Top,Left,Width,Height,Bottom,Right,CenterX,CenterY}` (first; polls). / `b.HaveBoundingBox(matcher)` — matcher receives the `Box` (compose with Gomega's `HaveField`).
+- `b.ScrollOffset(selector)` → `ScrollOffset{Top,Left,MaxTop,MaxLeft}` (scroll container; `Top==MaxTop` ⇒ scrolled to bottom). / `b.HaveScrollOffset(matcher)`.
+- `b.OffsetTopWithin(selector, container)` → float64 (`element.top - container.top`; "scrolled near the top of the pane"). `b.OffsetLeftWithin(selector, container)` is the horizontal sibling. / `b.HaveOffsetTopWithin(container, value|matcher)`, `b.HaveOffsetLeftWithin(container, value|matcher)`.
+
 ## Clicking & interactions  (pragmatic simulations)
 - `b.Click(selector)` (dual) — visible+enabled, then `el.click()`.
 - `b.DblClick(selector)` (dual) — two clicks + `dblclick`. `b.RightClick(selector)` (dual) — `mousedown`/`mouseup`/`contextmenu`. `b.MiddleClick(selector)` (dual) — `mousedown`/`mouseup`/`auxclick`.

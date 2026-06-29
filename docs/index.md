@@ -1397,6 +1397,36 @@ p.Filter("id", Not(ContainSubstring("new-user"))) //returns `SliceOfProperties` 
 
 `Find` returns the matching `Properties` object or `nil` if none is found; `Filter` returns `SliceOfProperties` with matching elements (possibly empty if none matched).  This lets you fetch all the properties you might need to assert on and then efficiently dig through the `SliceOfProperties` in your test to make assertions.
 
+### Geometry
+
+Some specs need to assert on **layout**: where an element ended up, how far it sits from the top of a scroll container, whether a panel scrolled to the bottom.  The temptation is to reach for `b.Run` and a hand-rolled `getBoundingClientRect()` blob — but that read happens *once*, and layout settles asynchronously, so it's the single most common residual flake source (see [`biloba:flaky-specs`](#claude-code-skills)).  Biloba's geometry getters fold readiness in and poll by default, exactly like [`GetProperty`](#properties): they wait until the element is present **and actually laid out** (a non-degenerate box, `width` and `height` > 0) before reading, so you never measure a zero box mid-layout.
+
+`b.BoundingBox(selector)` returns the first match's viewport-relative `Box` (`Top`, `Left`, `Width`, `Height`, `Bottom`, `Right`, `CenterX`, `CenterY` — all CSS pixels):
+
+```go
+box := b.BoundingBox(".hero .sec")
+Ω(box.Width).Should(BeNumerically("==", 320))
+```
+
+`b.ScrollOffset(selector)` treats the match as a scroll container and returns its `ScrollOffset` (`Top`, `Left`, plus `MaxTop`/`MaxLeft`, the largest reachable offsets — so `Top == MaxTop` means "scrolled to the bottom").
+
+`b.OffsetTopWithin(selector, container)` returns how far the element's top sits below the container's top — `element.top - container.top` — which is the measurement a "scrolled near the top of the pane" spec actually wants.  `b.OffsetLeftWithin` is its horizontal sibling.
+
+Like the rest of the [dual API](#interacting-with-elements), each getter polls-and-reads-once and has a **matcher** counterpart you hand to `Eventually` when you want to assert on geometry that settles asynchronously — this is the form to reach for when the value is converging:
+
+```go
+// poll until the box is laid out and satisfies a sub-matcher (compose with Gomega's HaveField):
+Eventually(".hero .sec").Should(b.HaveBoundingBox(HaveField("Top", BeNumerically("<", 120))))
+Eventually(".scroller").Should(b.HaveScrollOffset(HaveField("Top", BeNumerically("==", 0))))
+
+// poll until the element settles near the top of its scroll container:
+Eventually(".hero .sec").Should(b.HaveOffsetTopWithin(".scroller", BeNumerically("<", 120)))
+```
+
+`HaveOffsetTopWithin`/`HaveOffsetLeftWithin` take the container plus an expected matcher (or a plain value, compared with `Equal`).  All of the getters honor `WithTimeout`/`WithPolling`/`WithContext` and `Immediate()`; the matcher forms are configured through the `Eventually`/`Expect` that polls them.
+
+> A geometry poll that times out *consistently* under load — not intermittently — usually means the **product** computed a position once and never reconciled, not a test that needs a wider timeout.  The DOM you're polling is real, but if the page never re-runs the computation `Eventually` can't save you: the value is stably wrong.  The [poll trajectory](#outline) attached on failure is the tell — a flat line is a product bug, a monotone approach is latency, a dip-then-rebound is a late reflow.
+
 ### Form Elements
 
 Biloba provides three methods to help you get and set the values of input elements. `b.GetValue` gets values, `b.SetValue` sets values, and `b.HaveValue` matches against values.  All three operate on the **first** element that matches their `selector`.
@@ -2927,6 +2957,7 @@ So a typical agent or CI run needs **zero configuration** — just run the suite
 - `BilobaConfigInlineScreenshots()` / `BilobaConfigInlineScreenshots(false)` — force the inline image blob on or off.
 - `BilobaConfigScreenshotsToDir(dir)` — write screenshots to `dir` (this also makes inline and on-disk complementary).
 - `BilobaConfigFailureScreenshots(false)` — turn failure screenshots off entirely.
+- `BilobaConfigPollTrajectory(false)` — turn off the [poll-trajectory](#outline) artifact (it is on by default for everyone).
 
 For example, a CI user who only wants screenshots in a specific folder sets `BilobaConfigScreenshotsToDir("./artifacts")` (or `BILOBA_SCREENSHOTS_DIR`) and *still* gets the automation default of outlines-on — they only overrode the directory.
 
@@ -2959,6 +2990,25 @@ When you're debugging a failure whose interesting DOM lands past the cap, overri
 **Attachment on failure.** Biloba can attach a DOM Outline for every open tab when a spec fails.  This gives you a readable, text-based view of the page state, which is especially useful in environments that cannot render images.  It is **off for an interactive human** (the screenshot is the more useful artifact) but **on automatically under CI or an AI agent**; force it either way with `BilobaConfigFailureOutlines()` / `BilobaConfigFailureOutlines(false)` (see [Failure artifacts](#failure-artifacts)).  When enabled, the entry appears under "DOM Outline for: '<title>'" in the Ginkgo report.
 
 **Console errors on failure.** Biloba streams the page's `console` output to the `GinkgoWriter` as it happens, but on a failure the originating `console.error` (say, the exception behind a React error boundary) is easily lost in the timeline.  So whenever a spec fails Biloba *also* replays every `console.error`/`console.assert` the page logged during the spec, gathered across all tabs, under **"Console errors logged before this failure"** at the **top** of the failure block - usually the fastest path to the root cause.  (This requires no configuration and rides along with the failure-artifact hook.)
+
+**Poll trajectory on failure.** When an `Eventually(...)` over a *polled read* times out, the message Gomega prints is a snapshot of the final value — `Timed out … Expected <int>: 120` — and that single number hides three completely different root causes:
+
+| What the polled value did over the deadline | Root cause | Fix |
+|---|---|---|
+| held at `587` across every poll | the product computed it once and never reconciled | fix the product |
+| `587 → 540 → … → 130`, didn't quite land | latency — it nearly made it | widen the timeout |
+| reached `~24`, then rebounded to `300` | a late reflow shoved it back | bounded `ResizeObserver` |
+
+The *trajectory* is the diagnosis, so Biloba records it.  Every polled read — a [`b.Run`](#running-arbitrary-javascript)/`b.RunAsync` evaluation, a value getter like [`b.GetProperty`](#properties), or a [geometry getter](#geometry) — appends its `(elapsed, value)` to a small per-tab recorder keyed by the probe.  Biloba tracks the **most recently polled entity** (when the probe changes, the prior series resolved and moved on), and on failure attaches that series, run-length-collapsed so a string of identical values folds into one row:
+
+```
+Poll trajectory
+Probe: Run document.querySelector("#card").getBoundingClientRect().top
+18 samples over 2.00s, 1 distinct values — flat (value never changed: the page is not re-evaluating this probe):
+  +0.00s  587   (held ×18 through +2.00s)
+```
+
+A flat line points straight at "compute-once product bug, no source-reading required"; a monotone staircase reads as latency; a dip-then-climb reveals the late reflow.  This is **on by default** and rides the same failure-artifact hook as the outline and screenshot (so a passing spec pays only a few nanoseconds per poll to record, and emits nothing).  Turn it off with `BilobaConfigPollTrajectory(false)`.
 
 You can also call `b.Outline()` directly in a spec to capture a snapshot at any point:
 

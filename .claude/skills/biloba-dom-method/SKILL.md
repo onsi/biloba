@@ -32,7 +32,7 @@ Keep checks atomic and pragmatic (e.g. visibility = non-zero offset, not occlusi
 
 ## Step 2 — add the Go wrapper
 
-The Go side calls `b.runBilobaHandler("<jsName>", selector, args...)`, which returns a `*bilobaJSResponse`. **Biloba polls by default** — the old "Biloba never polls" framing is retired. Internally Biloba builds its matcher form and runs it through Gomega for you (`polling.go`), so the fully-applied form *waits* instead of acting once. Pick the shape that matches the API.
+The Go side calls `b.runBilobaHandler("<jsName>", selector, args...)`, which returns a `*bilobaJSResponse`. **Biloba polls by default**. Internally Biloba builds its matcher form and runs it through Gomega for you (`polling.go`), so the fully-applied form *waits* instead of acting once. Pick the shape that matches the API.
 
 Use the typed result getters when returning a value: `r.ResultString()`, `r.ResultInt()`, `r.ResultBool()`, `r.ResultStringSlice()`, `r.ResultAnySlice()`, or `r.Result` (raw `any`).
 
@@ -96,6 +96,10 @@ func (b *Biloba) GetProperty(selector any, property any) any {
 }
 ```
 The get-handler is a **single atomic JS op** that returns `found + value` in one round-trip (no `Exist`-then-`get` race). "Success" means "element found"; the value may legitimately be `nil`.
+
+**Readiness can be more than "element found."** A getter may keep polling (`{success:false}` with no error) until the value is *usable*, not just present — the JS `poll(...)` combinator already retries on a missing element, and the handler adds its own gate on top. The two-axis property getters gate on "property defined"; the **geometry getters** (`geometry.go` / `boundingBoxP`/`scrollOffsetP`/`offsetWithinP` in `biloba.js`) gate on a *non-degenerate layout box* (`width`/`height` > 0), so a getter never reads a zero box mid-layout. They follow this exact `Get*` pattern plus a `Have*`-matcher counterpart (one decodes the struct into a closure var; the other runs a caller-supplied sub-matcher against the decoded struct/value), and they decode the JS map into a typed struct (`Box`/`ScrollOffset`) via a small `newBox`/`newScrollOffset` à la `newProperties`.
+
+**Recording for the poll-trajectory artifact (`probe_trajectory.go`).** Polling getters and `b.Run`/`b.RunAsync` call `b.recordProbe(probeKey(method, sel), value)` once they have a value, so a failing `Eventually` over that read can attach its `(elapsed, value)` trajectory. It's a no-op unless `BilobaConfigPollTrajectory` is on (default on) and costs ~nanoseconds. If you add a new polling getter, call `recordProbe` at the success point (see `geometry.go`).
 
 **Two-axis polling (`GetProperty`/`GetProperties`/`GetAttribute`/`GetAttributes`).** These poll until the element is present **and every named property/attribute is defined**. The name params widen `string`/`...string` → `any`/`...any` so each can be a bare `string` or an `AllowMissing`. `b.AllowMissing("name")` exempts one name from the "defined" axis — it comes back `nil` instead of blocking the poll. **Sharp edge:** a name the element type simply can't have (e.g. `disabled` on a `<div>`) would otherwise block the poll forever; it *must* be wrapped in `AllowMissing`. `GetValue`/`GetInnerText`/`GetTextContent` have no "defined" axis (empty string / unselected radio `""` is a valid value) — element-present only, no `AllowMissing`.
 

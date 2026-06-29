@@ -765,6 +765,36 @@ if (!window["_biloba"]) {
     b.invokeWithP = poll(invokeWithImpl) // InvokeWith: missing element retries; thrown JS fails fast
     b.invokeWithEach = each((ns, script, ...args) => rRes(ns.map(n => invokeWithImpl(n, script, ...args).result)))
 
+    // --- Geometry getters (pollable) ---------------------------------------------------------------
+    // boundingBoxP backs BoundingBox/HaveBoundingBox: poll until the element is present AND has a
+    // non-degenerate layout box (width>0 && height>0 - actually laid out, not merely in the DOM), then
+    // return its viewport-relative rectangle.  A zero-area box reports {success:false} (no error) so
+    // Eventually keeps waiting through layout, mirroring getPropertiesP's "present but not yet defined".
+    b.boundingBoxP = poll(n => {
+        let x = n.getBoundingClientRect()
+        if (x.width <= 0 || x.height <= 0) return { success: false }
+        return rRes({ top: x.top, left: x.left, width: x.width, height: x.height, bottom: x.bottom, right: x.right, centerX: x.left + x.width / 2, centerY: x.top + x.height / 2 })
+    })
+    // scrollOffsetP backs ScrollOffset/HaveScrollOffset: poll until the (scroll container) element is
+    // present, then report its current scroll position and the maximum scrollable offsets (scroll size
+    // minus client size) so a spec can assert "scrolled to / near the bottom" without hand-rolled JS.
+    b.scrollOffsetP = poll(n => rRes({ top: n.scrollTop, left: n.scrollLeft, maxTop: n.scrollHeight - n.clientHeight, maxLeft: n.scrollWidth - n.clientWidth }))
+    // offsetWithinP backs OffsetTopWithin/OffsetLeftWithin/HaveOffsetTopWithin: poll until BOTH the
+    // element and the container are present and the element has a non-degenerate box, then report the
+    // element's viewport offset minus the container's - i.e. how far below/right of the container's
+    // top-left edge the element currently sits (the "scrolled near the top of the pane" measurement).
+    // The container arrives as an already-encoded selector (Go encodes it) so sel() resolves it directly.
+    b.offsetWithinP = (s, containerSel) => {
+        let n = sel(s)
+        if (!n) return { success: false }
+        let c = sel(containerSel)
+        if (!c) return { success: false }
+        let nr = n.getBoundingClientRect()
+        if (nr.width <= 0 || nr.height <= 0) return { success: false }
+        let cr = c.getBoundingClientRect()
+        return rRes({ top: nr.top - cr.top, left: nr.left - cr.left })
+    }
+
     b.outline = () => {
         const PRUNE_TAGS = new Set(["script", "style", "svg"])
         const SELF_CLOSING = new Set(["area","base","br","col","embed","hr","img","input","link","meta","param","source","track","wbr"])

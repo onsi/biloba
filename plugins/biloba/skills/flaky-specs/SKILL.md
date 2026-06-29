@@ -30,6 +30,15 @@ Eventually(b.Run).WithArguments(`document.title`).Should(Equal("Ready"))        
 
 No wrapper closure is needed for a scalar/bool/string expression. Remember JSON-decoded numbers are **`float64`** — assert with `BeNumerically`, never `Equal(intLiteral)`.
 
+**For the geometry subclass, prefer the native getters over `b.Run` entirely.** `getBoundingClientRect`/`scrollTop`/offset reads are the most common `b.Run` blobs *and* the most race-prone — so Biloba provides pollable geometry getters that fold layout-readiness in (they wait until the element is present **and** has a non-degenerate box). Reach for these first; drop to `Eventually(b.Run)` only for geometry they don't cover:
+
+```go
+Eventually(".hero .sec").Should(b.HaveBoundingBox(HaveField("Top", BeNumerically("<", 120))))
+Eventually(".hero .sec").Should(b.HaveOffsetTopWithin(".scroller", BeNumerically("<", 120))) // "scrolled near the top"
+Eventually(".scroller").Should(b.HaveScrollOffset(HaveField("Top", BeNumerically("==", 0))))
+box := b.BoundingBox("#card")  // getter form: polls until laid out, returns Box{Top,Left,Width,Height,Bottom,Right,CenterX,CenterY}
+```
+
 **Interpolated / multi-line scripts.** `WithArguments` needs a pre-built string, so for an `fmt.Sprintf`-interpolated or multi-line expr, build the string first or wrap a one-line closure that returns the value:
 
 ```go
@@ -95,13 +104,17 @@ If your app renders **optimistically** and then a server frame (WS/poll) reconci
 
 ## Smell 4 — async-settling geometry / layout / document-order reads
 
-`getBoundingClientRect`, `scrollHeight`/`clientHeight` overflow checks, computed `display`/`getComputedStyle`, and `compareDocumentPosition` of rAF-injected nodes all settle **after the element exists**. A spec that gates on "element exists" and *then* reads geometry races the *measure* — a distinct category from "is it there yet." These are exactly the reads to wrap in `Eventually(b.Run)` (Smell 1): the element being present does not mean it's been laid out.
+`getBoundingClientRect`, `scrollHeight`/`clientHeight` overflow checks, computed `display`/`getComputedStyle`, and `compareDocumentPosition` of rAF-injected nodes all settle **after the element exists**. A spec that gates on "element exists" and *then* reads geometry races the *measure* — a distinct category from "is it there yet." The element being present does not mean it's been laid out.
+
+For the common box/scroll/offset reads, reach for the **native geometry getters** (Smell 1) — `b.BoundingBox`/`b.ScrollOffset`/`b.OffsetTopWithin` and their `Have*` matchers already wait for a non-degenerate box, so layout-readiness is folded in. Drop to `Eventually(b.Run)` only for measures they don't cover (`getComputedStyle`, `compareDocumentPosition`):
 
 ```go
-Eventually("#card").Should(b.Exist())                       // present...
-Eventually(b.Run).WithArguments(`document.querySelector("#card").offsetHeight`).
-    Should(BeNumerically("<=", 0.8*viewportH))              // ...but measure must still be polled
+Eventually("#card").Should(b.HaveBoundingBox(HaveField("Height", BeNumerically("<=", 0.8*viewportH))))
+Eventually(b.Run).WithArguments(`getComputedStyle(document.querySelector("#card")).display`).
+    Should(Equal("grid"))                                   // not covered by a getter → poll the b.Run read
 ```
+
+**The inverse case — a geometry poll that times out *consistently* (not intermittently).** Under load this looks identical to "needs a bigger timeout," but it usually means the **product** computed a position once and never reconciled — not a slow test. The DOM you're polling is real, but if the page never re-runs the computation `Eventually` can't save you: the value is *stably wrong*, so it sits above threshold for the whole deadline. The fix is product-side (rAF-settle until the value holds, plus a bounded `ResizeObserver` to catch growth-above-the-target after the rAF loop exits), **not** a wider timeout. This mirrors the optimistic-UI trap (Smell 3): `Eventually` on the DOM can't save you when the DOM *is* the optimistic copy — same shape, different axis. The **poll trajectory** Biloba attaches on failure (see `biloba:debug-failures`) is the tell: a flat line = product bug, a monotone approach = latency, a dip-then-rebound = a late reflow.
 
 ## Smell 5 — a two-axis getter polling forever on a property the element type doesn't have
 

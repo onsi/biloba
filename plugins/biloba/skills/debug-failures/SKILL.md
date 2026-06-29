@@ -1,6 +1,6 @@
 ---
 name: debug-failures
-description: See why a Biloba spec failed or flaked — the on-failure artifacts (DOM outline + screenshots), how Biloba auto-adapts to humans vs CI vs AI agents, the env vars and config knobs that surface them (BILOBA_SCREENSHOTS_DIR, BILOBA_INLINE_SCREENSHOTS, BILOBA_OUTLINE_MAX, BILOBA_INTERACTIVE, BilobaConfig*), attaching app/store state to a failure, and using b.Outline()/b.A11yOutline() to understand why a selector didn't match. Use when a browser spec is failing or flaky and you need visibility, or to configure failure output for CI/agents. For *preventing* flakes (single-shot reads, avoiding b.Immediate(), optimistic-UI) see biloba:flaky-specs.
+description: See why a Biloba spec failed or flaked — the on-failure artifacts (DOM outline + screenshots + poll trajectory of the timed-out read), how Biloba auto-adapts to humans vs CI vs AI agents, the env vars and config knobs that surface them (BILOBA_SCREENSHOTS_DIR, BILOBA_INLINE_SCREENSHOTS, BILOBA_OUTLINE_MAX, BILOBA_INTERACTIVE, BilobaConfig*), attaching app/store state to a failure, and using b.Outline()/b.A11yOutline() to understand why a selector didn't match. Use when a browser spec is failing or flaky and you need visibility, or to configure failure output for CI/agents. For *preventing* flakes (single-shot reads, avoiding b.Immediate(), optimistic-UI) see biloba:flaky-specs.
 ---
 
 # Debugging Biloba failures
@@ -30,6 +30,7 @@ Point the directory elsewhere (e.g. a CI artifact path) with `BILOBA_SCREENSHOTS
 - **Console errors** — if the page logged any `console.error`/`console.assert` before the failure, Biloba replays them under "Console errors logged before this failure" at the **top** of the failure block. On a JS crash (e.g. a React error boundary) this is usually the root cause — read it first, before the outline.
 - **Screenshot files** — `Read` the printed PNG path to see the rendered page at failure.
 - **DOM outline** — attached under "DOM Outline for: '<title>'" in the Ginkgo report. This is the primary tool for *why a selector didn't match*: it's the indented DOM (`<script>/<style>/<svg>` bodies pruned, whitespace collapsed, capped ~32 KB). If the region you need is past the cap (`... [truncated]`), raise or remove it with **`BILOBA_OUTLINE_MAX`**: a byte count (e.g. `BILOBA_OUTLINE_MAX=131072`) raises the cap; `0`/`off` disables truncation and dumps the whole DOM.
+- **Poll trajectory** — when the failure is an `Eventually(...)` over a *polled read* (a `b.Run`/`b.RunAsync` evaluation, a value getter, or a geometry getter) that timed out, Biloba attaches the `(elapsed, value)` series of that read under "Poll trajectory" (on by default; `BilobaConfigPollTrajectory(false)` to disable). Gomega's `Timed out … Expected <120>` only shows the *final* value; the trajectory shows what it did over the whole deadline, which **is** the diagnosis. Read the shape: a **flat** line (one row, `held ×N`) means the product computed the value once and never reconciled — a product bug, not a short timeout; a **monotone** staircase means latency (it nearly made it — widen the timeout); a **dip-then-rebound** means a late reflow shoved it back. This turns "read the product source to guess why the poll never converged" into "read the artifact and know." See `biloba:flaky-specs` Smell 4 for the product-side fix.
 
 Call them yourself at any point, not just on failure:
 
@@ -72,6 +73,7 @@ Each boolean takes an optional bool (no arg = `true`); automation only fills kno
 - `BilobaConfigFailureOutlines(...bool)` — force the DOM outline on/off.
 - `BilobaConfigInlineScreenshots(...bool)` — force the inline blob on/off.
 - `BilobaConfigFailureScreenshots(...bool)` — failure screenshots on/off (default on).
+- `BilobaConfigPollTrajectory(...bool)` — the poll-trajectory artifact on/off (default on).
 - `BilobaConfigProgressReportScreenshots(...bool)` — screenshots on Ginkgo progress reports (default on).
 - `BilobaConfigFailureScreenshotsSize(w,h)` / `BilobaConfigProgressReportScreenshotSize(w,h)`.
 - `BilobaConfigDebugLogging(...bool)` — stream all CDP traffic to the `GinkgoWriter` (verbose).

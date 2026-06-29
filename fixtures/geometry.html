@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Geometry</title>
+    <style>
+        html, body { margin: 0; padding: 0; }
+        /* a fixed-position scroll container with three stacked sections */
+        .scroller {
+            position: absolute;
+            top: 50px;
+            left: 20px;
+            width: 300px;
+            height: 200px;
+            overflow: auto;
+        }
+        .sec { height: 150px; }
+        #s0 { background: #fee; }
+        #s1 { background: #efe; }
+        #s2 { background: #eef; }
+        /* a plainly-positioned, known-size box */
+        #hero {
+            position: absolute;
+            top: 400px;
+            left: 30px;
+            width: 100px;
+            height: 80px;
+            background: gold;
+        }
+        /* starts with zero height (in the DOM but not laid out) until layoutLate() runs */
+        #late {
+            position: absolute;
+            top: 600px;
+            left: 30px;
+            width: 50px;
+            height: 0;
+            background: pink;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="scroller">
+        <div id="s0" class="sec">section 0</div>
+        <div id="s1" class="sec">section 1</div>
+        <div id="s2" class="sec">section 2</div>
+    </div>
+    <div id="hero"></div>
+    <div id="late"></div>
+    <script>
+        function layoutLate() { document.querySelector("#late").style.height = "40px" }
+        function scrollContainerTo(top) { document.querySelector(".scroller").scrollTop = top }
+    </script>
+</body>
+
+</html>

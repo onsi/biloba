@@ -447,6 +447,21 @@ func BilobaConfigFailureOutlines(enabled ...bool) func(*Biloba) {
 }
 
 /*
+Pass BilobaConfigPollTrajectory to [ConnectToChrome] to control whether Biloba records the (elapsed, value) trajectory of polled reads and attaches the most-recent series to the failure block.
+
+When an Eventually(...) over a polled read times out, the trajectory is the diagnosis: a flat line means the product computed a value once and never reconciled (a product bug, not a short timeout); a monotone approach means latency (it nearly made it); a dip-then-rebound means a late reflow shoved it back.  Biloba records the trajectory of the most-recently-polled entity (a [Biloba.Run]/[Biloba.RunAsync] script, or a value/geometry getter) and, on failure, attaches it run-length-collapsed so equal values fold into one row.
+
+It is on by default; BilobaConfigPollTrajectory(false) turns it off.
+
+See https://onsi.github.io/biloba/#failure-artifacts for the rest of the failure block.
+*/
+func BilobaConfigPollTrajectory(enabled ...bool) func(*Biloba) {
+	return func(b *Biloba) {
+		b.pollTrajectory = boolArg(enabled)
+	}
+}
+
+/*
 Pass BilobaConfigFailureScreenshotsSize to [ConnectToChrome] to set the size for the screenshots generated on failure
 */
 func BilobaConfigFailureScreenshotsSize(width, height int) func(*Biloba) {
@@ -758,6 +773,11 @@ type Biloba struct {
 	progressReportScreenshotWidth  int
 	progressReportScreenshotHeight int
 	screenshotsDir                 string
+
+	// pollTrajectory opts a suite into recording the (elapsed, value) trajectory of polled reads and
+	// attaching the most-recent series on failure (see BilobaConfigPollTrajectory).  Off by default.
+	pollTrajectory bool
+	probes         *probeRecorder // the most-recent-polled-entity trajectory recorder for this tab
 }
 
 // inlineScreenshotsEnabled returns true when inline-image output should be
@@ -792,6 +812,8 @@ func newBiloba(ginkgoT GinkgoTInterface) *Biloba {
 		failureScreenshots:        true,
 		progressReportScreenshots: true,
 		inlineScreenshots:         true,
+		pollTrajectory:            true,
+		probes:                    &probeRecorder{},
 	}
 	return b
 }
@@ -1073,6 +1095,17 @@ func (b *Biloba) attachFailureArtifactsIfFailed() {
 				}
 			}
 		}
+		if b.pollTrajectory {
+			for _, tab := range b.AllTabs() {
+				if trajectory := tab.probes.render(); trajectory != "" {
+					title := "Poll trajectory"
+					if !tab.isRootTab() {
+						title = fmt.Sprintf("Poll trajectory for tab: %s", tab.targetID)
+					}
+					b.gt.AddReportEntryVisibilityFailureOrVerbose(title, trajectory)
+				}
+			}
+		}
 		if !b.failureScreenshots {
 			return
 		}
@@ -1150,6 +1183,7 @@ func (b *Biloba) registerTabFor(c context.Context, cancel context.CancelFunc) *B
 	newG.ChromeConnection = b.ChromeConnection
 	newG.downloadDir = b.downloadDir
 	newG.root = b.root
+	newG.pollTrajectory = b.root.pollTrajectory
 	newG.close = cancel
 
 	// Probe the target to force chromedp to attach (Runtime.Enable et al.).  Two failure modes need
