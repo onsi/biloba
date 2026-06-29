@@ -1,3 +1,10 @@
+## 0.9.0
+
+## Features
+
+- Pollable geometry getters: `b.BoundingBox`/`b.ScrollOffset`/`b.OffsetTopWithin`/`b.OffsetLeftWithin` (and their `HaveBoundingBox`/`HaveScrollOffset`/`HaveOffsetTopWithin`/`HaveOffsetLeftWithin` matchers). They poll until the element is present *and* laid out (non-degenerate box), so you no longer hand-roll `getBoundingClientRect()` through `b.Run` — the #1 residual flake source.
+- Poll-trajectory failure artifact: on failure Biloba attaches the `(elapsed, value)` series of the most-recently-polled read (a `b.Run`/`b.RunAsync`, a value getter, or a geometry getter), run-length-collapsed. The shape is the diagnosis — flat = product computed-once, monotone = latency, dip-then-rebound = late reflow. On by default; `BilobaConfigPollTrajectory(false)` to disable.
+
 ## 0.8.0
 
 ### Poll by default (major change)
