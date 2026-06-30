@@ -689,7 +689,18 @@ if (!window["_biloba"]) {
     })
     b.hasAttribute = one((n, a) => r(n.hasAttribute(a)))
     b.isFocused = one(n => r(n === document.activeElement, "DOM element is not focused"))
-    b.getComputedStyle = one((n, p) => rRes(window.getComputedStyle(n)[p]))
+    // computedStyleValue resolves a computed CSS property.  getPropertyValue is the canonical resolver -
+    // it handles CSS custom properties ("--stage") and kebab-case names ("z-index").  When it yields ""
+    // we fall back to camelCase indexing so legacy camelCase names ("backgroundColor") still resolve.
+    let computedStyleValue = (n, p) => {
+        let cs = window.getComputedStyle(n)
+        let v = cs.getPropertyValue(p)
+        return (v === "" && (p in cs)) ? cs[p] : v
+    }
+    b.getComputedStyle = one((n, p) => rRes(computedStyleValue(n, p)))
+    // getComputedStyleP backs GetComputedStyle: poll until the element is present, then return the
+    // resolved value (custom properties included).
+    b.getComputedStyleP = poll((n, p) => rRes(computedStyleValue(n, p)))
     b.hasProperty = one((n, p) => {
         let v = n
         for (const subP of p.split(".")) {
@@ -793,6 +804,42 @@ if (!window["_biloba"]) {
         if (nr.width <= 0 || nr.height <= 0) return { success: false }
         let cr = c.getBoundingClientRect()
         return rRes({ top: nr.top - cr.top, left: nr.left - cr.left })
+    }
+    // boxOf normalizes a getBoundingClientRect into the {top,...,centerX,centerY} shape Go's newBox reads.
+    let boxOf = (x) => ({ top: x.top, left: x.left, width: x.width, height: x.height, bottom: x.bottom, right: x.right, centerX: x.left + x.width / 2, centerY: x.top + x.height / 2 })
+    // relativeBoxesP backs the pairwise geometry matchers (BeAbove/BeBelow/BeLeftOf/BeRightOf/Encloses/
+    // Overlaps) and GetGapBetween/HaveGapBetween: poll until BOTH elements are present and laid out
+    // (non-degenerate boxes), then read both viewport rectangles in a SINGLE eval so the relation is
+    // judged at one layout instant.  Splitting into two BoundingBox reads loses that atomicity - a
+    // mid-layout frame could satisfy neither-yet-both.  otherSel arrives already-encoded (Go encodes it).
+    b.relativeBoxesP = (s, otherSel) => {
+        let n = sel(s)
+        if (!n) return { success: false }
+        let o = sel(otherSel)
+        if (!o) return { success: false }
+        let nr = n.getBoundingClientRect(), or = o.getBoundingClientRect()
+        if (nr.width <= 0 || nr.height <= 0 || or.width <= 0 || or.height <= 0) return { success: false }
+        return rRes({ a: boxOf(nr), b: boxOf(or) })
+    }
+    // inViewportP backs BeInViewport: poll until the element is present and laid out, then report its
+    // rect alongside the layout viewport size so Go can test on-screen-ness (does the box intersect the
+    // visible window).  Distinct from isVisible, which only checks the element is rendered at all - an
+    // element can be laid out yet scrolled entirely out of view.
+    b.inViewportP = poll(n => {
+        let x = n.getBoundingClientRect()
+        if (x.width <= 0 || x.height <= 0) return { success: false }
+        return rRes({ top: x.top, left: x.left, bottom: x.bottom, right: x.right, vw: window.innerWidth, vh: window.innerHeight })
+    })
+    // documentOrderP backs BePrecededBy/BeFollowedBy: poll until BOTH elements are present, then return
+    // compareDocumentPosition of other relative to the element so Go can test precedes/follows in
+    // document order.  No layout gating - document order is structural, not geometric.  otherSel arrives
+    // already-encoded.
+    b.documentOrderP = (s, otherSel) => {
+        let n = sel(s)
+        if (!n) return { success: false }
+        let o = sel(otherSel)
+        if (!o) return { success: false }
+        return rRes(n.compareDocumentPosition(o))
     }
 
     b.outline = () => {

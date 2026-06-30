@@ -36,6 +36,25 @@
             height: 0;
             background: pink;
         }
+        /* pairwise-geometry boxes, all absolutely positioned for deterministic coordinates */
+        .pair { position: absolute; }
+        #above { top: 700px; left: 400px; width: 100px; height: 50px; background: #cdf; }   /* bottom 750 */
+        #below { top: 800px; left: 400px; width: 100px; height: 50px; background: #cfd; }   /* top 800 */
+        #leftbox  { top: 900px; left: 0;     width: 100px; height: 50px; background: #fdc; } /* right 100 */
+        #rightbox { top: 900px; left: 200px; width: 100px; height: 50px; background: #dcf; } /* left 200 */
+        #frame    { top: 1000px; left: 0;   width: 200px; height: 200px; background: #eee; }
+        #enclosed { top: 1050px; left: 50px; width: 50px;  height: 50px;  background: #999; } /* inside #frame */
+        #ovA { top: 1300px; left: 0;    width: 100px; height: 100px; background: rgba(200,0,0,0.4); }
+        #ovB { top: 1350px; left: 50px; width: 100px; height: 100px; background: rgba(0,0,200,0.4); } /* overlaps #ovA */
+        /* a card with a centered span: same vertical center line, different widths */
+        #card { top: 1600px; left: 100px; width: 200px; height: 80px; background: #efe; }
+        #span { top: 1620px; left: 150px; width: 100px; height: 40px; background: #ada; } /* centerX matches #card */
+        /* viewport cases: on-screen vs. scrolled far below / above the window */
+        #vp-on    { top: 10px;   left: 500px; width: 40px; height: 40px; background: teal; }
+        #vp-below { top: 6000px; left: 500px; width: 40px; height: 40px; background: navy; }
+        #vp-above { top: -500px; left: 500px; width: 40px; height: 40px; background: maroon; }
+        /* a design-token rail for computed-style reads */
+        #rail { position: relative; --stage: #DCE4E1; color: rgb(10, 20, 30); z-index: 7; }
     </style>
 </head>
 
@@ -47,9 +66,35 @@
     </div>
     <div id="hero"></div>
     <div id="late"></div>
+    <div id="above" class="pair"></div>
+    <div id="below" class="pair"></div>
+    <div id="leftbox" class="pair"></div>
+    <div id="rightbox" class="pair"></div>
+    <div id="frame" class="pair"></div>
+    <div id="enclosed" class="pair"></div>
+    <div id="ovA" class="pair"></div>
+    <div id="ovB" class="pair"></div>
+    <div id="card" class="pair"></div>
+    <div id="span" class="pair"></div>
+    <div id="vp-on" class="pair"></div>
+    <div id="vp-below" class="pair"></div>
+    <div id="vp-above" class="pair"></div>
+    <div id="rail">rail</div>
+    <div id="order"></div>
     <script>
         function layoutLate() { document.querySelector("#late").style.height = "40px" }
         function scrollContainerTo(top) { document.querySelector(".scroller").scrollTop = top }
+        // appendOrdered inserts the named ordered nodes into #order (used by the document-order specs;
+        // also exercises polling - a spec can append after asserting the node isn't there yet).
+        function appendOrdered() {
+            let o = document.querySelector("#order")
+            for (const id of ["o-first", "o-second", "o-third"]) {
+                let d = document.createElement("div")
+                d.id = id
+                d.textContent = id
+                o.appendChild(d)
+            }
+        }
     </script>
 </body>
 

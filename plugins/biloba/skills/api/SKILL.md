@@ -80,7 +80,7 @@ Tune or opt out of poll-by-default. Each returns a lightweight view of the same 
 - `b.CurrentInnerTextForEach(selector)` → []string (each; **snapshot**, no poll) / `b.EachHaveInnerText(value|matcher)` (matcher — **≥1 match AND all satisfy**; the no-arg `BeEmpty()` form is gone — assert none via `HaveCount(0)`). Same for `b.CurrentTextContentForEach` / `b.EachHaveTextContent(...)`.
 - `b.HaveClass(string|matcher)` (matcher) — string ⇒ "list contains"; matcher receives `[]string`. / `b.EachHaveClass(string)` (matcher) — **≥1 match AND all have the class** (fails on zero matches).
 - `b.HaveAttribute(name[, string|matcher])` (matcher) — HTML attribute via `getAttribute`.
-- `b.HaveComputedStyle(prop, string|matcher)` (matcher) — via `getComputedStyle`.
+- `b.HaveComputedStyle(prop, string|matcher)` (matcher) — via `getComputedStyle`; getter counterpart `b.GetComputedStyle(selector, prop)` → string (see Geometry).
 - `b.BeChecked()` (matcher) — checkbox/radio checked.
 - `b.BeFocused()` (matcher) — is `document.activeElement`.
 
@@ -101,9 +101,14 @@ Tune or opt out of poll-by-default. Each returns a lightweight view of the same 
 
 ## Geometry  (pollable layout reads — fold in layout-readiness; use instead of hand-rolled `b.Run` geometry)
 **Readiness**: getters poll until the element is present **AND** laid out (non-degenerate box, `width`/`height` > 0) — so you never read a zero box mid-layout. All return viewport-relative CSS pixels. Each getter has a `Have*` matcher counterpart for `Eventually(sel).Should(...)` when the value is converging.
-- `b.BoundingBox(selector)` → `Box{Top,Left,Width,Height,Bottom,Right,CenterX,CenterY}` (first; polls). / `b.HaveBoundingBox(matcher)` — matcher receives the `Box` (compose with Gomega's `HaveField`).
-- `b.ScrollOffset(selector)` → `ScrollOffset{Top,Left,MaxTop,MaxLeft}` (scroll container; `Top==MaxTop` ⇒ scrolled to bottom). / `b.HaveScrollOffset(matcher)`.
-- `b.OffsetTopWithin(selector, container)` → float64 (`element.top - container.top`; "scrolled near the top of the pane"). `b.OffsetLeftWithin(selector, container)` is the horizontal sibling. / `b.HaveOffsetTopWithin(container, value|matcher)`, `b.HaveOffsetLeftWithin(container, value|matcher)`.
+- `b.GetBoundingBox(selector)` → `Box{Top,Left,Width,Height,Bottom,Right,CenterX,CenterY}` (first; polls). / `b.HaveBoundingBox(matcher)` — matcher receives the `Box` (compose with Gomega's `HaveField`).
+- `b.GetScrollOffset(selector)` → `ScrollOffset{Top,Left,MaxTop,MaxLeft}` (scroll container; `Top==MaxTop` ⇒ scrolled to bottom). / `b.HaveScrollOffset(matcher)`.
+- `b.GetOffsetTopWithin(selector, container)` → float64 (`element.top - container.top`; "scrolled near the top of the pane"). `b.GetOffsetLeftWithin(selector, container)` is the horizontal sibling. / `b.HaveOffsetTopWithin(container, value|matcher)`, `b.HaveOffsetLeftWithin(container, value|matcher)`.
+- **Pairwise (element-to-element; both boxes read in one atomic frame — don't split into two `GetBoundingBox`es, that loses the single-frame poll):** `b.BeAbove(other)` (`subject.Bottom<=other.Top`), `b.BeBelow(other)`, `b.BeLeftOf(other)` (`subject.Right<=other.Left`), `b.BeRightOf(other)`, `b.Encloses(other)` (contains on all 4 edges), `b.Overlaps(other)` (boxes intersect) — all matchers: `Eventually(subjectSel).Should(b.BeAbove(otherSel))`.
+- `b.GetGapBetween(selector, other)` → `BoxDelta{Top,Left,Bottom,Right,Width,Height,CenterX,CenterY}` (subject minus other; first; polls — `CenterX~0` ⇒ shared center line, `Width~0` ⇒ same size). / `b.HaveGapBetween(other, value|matcher)` — matcher receives the `BoxDelta`.
+- `b.BeInViewport()` (matcher) — element is laid out **and** its box intersects the visible layout viewport (actually on screen; ≠ `BeVisible`, which is only "rendered"). Partial overlap counts.
+- `b.BePrecededBy(other)` / `b.BeFollowedBy(other)` (matchers) — document order via `compareDocumentPosition`.
+- `b.GetComputedStyle(selector, property)` → string (first; polls; resolved value via `getPropertyValue`, so kebab-case names and CSS custom properties like `--stage` resolve — the getter counterpart of `HaveComputedStyle`, for Go-side math on the value).
 
 ## Clicking & interactions  (pragmatic simulations)
 - `b.Click(selector)` (dual) — visible+enabled, then `el.click()`.

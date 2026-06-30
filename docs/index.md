@@ -1206,6 +1206,13 @@ Eventually(selector).Should(b.HaveComputedStyle("color", "rgb(255, 0, 0)"))
 Eventually(selector).Should(b.HaveComputedStyle("color", ContainSubstring("255")))
 ```
 
+When you need the resolved value itself — to do Go-side math on it (relative luminance, hex→RGB, resolving a design-token custom property) — reach for the getter counterpart `b.GetComputedStyle(selector, property)`.  It polls until the element is present and hands you the computed value as a string.  Property names follow `getPropertyValue` semantics (kebab-case, and CSS custom properties resolve too):
+
+```go
+hex := b.GetComputedStyle(".rail", "--stage")   // -> "#DCE4E1"
+z := b.GetComputedStyle(selector, "z-index")     // -> "7"
+```
+
 ### Properties
 
 Biloba provides a bunch of methods for getting, setting, and asserting on properties:
@@ -1401,16 +1408,16 @@ p.Filter("id", Not(ContainSubstring("new-user"))) //returns `SliceOfProperties` 
 
 Some specs need to assert on **layout**: where an element ended up, how far it sits from the top of a scroll container, whether a panel scrolled to the bottom.  The temptation is to reach for `b.Run` and a hand-rolled `getBoundingClientRect()` blob — but that read happens *once*, and layout settles asynchronously, so it's the single most common residual flake source (see [`biloba:flaky-specs`](#claude-code-skills)).  Biloba's geometry getters fold readiness in and poll by default, exactly like [`GetProperty`](#properties): they wait until the element is present **and actually laid out** (a non-degenerate box, `width` and `height` > 0) before reading, so you never measure a zero box mid-layout.
 
-`b.BoundingBox(selector)` returns the first match's viewport-relative `Box` (`Top`, `Left`, `Width`, `Height`, `Bottom`, `Right`, `CenterX`, `CenterY` — all CSS pixels):
+`b.GetBoundingBox(selector)` returns the first match's viewport-relative `Box` (`Top`, `Left`, `Width`, `Height`, `Bottom`, `Right`, `CenterX`, `CenterY` — all CSS pixels):
 
 ```go
-box := b.BoundingBox(".hero .sec")
+box := b.GetBoundingBox(".hero .sec")
 Ω(box.Width).Should(BeNumerically("==", 320))
 ```
 
-`b.ScrollOffset(selector)` treats the match as a scroll container and returns its `ScrollOffset` (`Top`, `Left`, plus `MaxTop`/`MaxLeft`, the largest reachable offsets — so `Top == MaxTop` means "scrolled to the bottom").
+`b.GetScrollOffset(selector)` treats the match as a scroll container and returns its `ScrollOffset` (`Top`, `Left`, plus `MaxTop`/`MaxLeft`, the largest reachable offsets — so `Top == MaxTop` means "scrolled to the bottom").
 
-`b.OffsetTopWithin(selector, container)` returns how far the element's top sits below the container's top — `element.top - container.top` — which is the measurement a "scrolled near the top of the pane" spec actually wants.  `b.OffsetLeftWithin` is its horizontal sibling.
+`b.GetOffsetTopWithin(selector, container)` returns how far the element's top sits below the container's top — `element.top - container.top` — which is the measurement a "scrolled near the top of the pane" spec actually wants.  `b.GetOffsetLeftWithin` is its horizontal sibling.
 
 Like the rest of the [dual API](#interacting-with-elements), each getter polls-and-reads-once and has a **matcher** counterpart you hand to `Eventually` when you want to assert on geometry that settles asynchronously — this is the form to reach for when the value is converging:
 
@@ -1424,6 +1431,43 @@ Eventually(".hero .sec").Should(b.HaveOffsetTopWithin(".scroller", BeNumerically
 ```
 
 `HaveOffsetTopWithin`/`HaveOffsetLeftWithin` take the container plus an expected matcher (or a plain value, compared with `Equal`).  All of the getters honor `WithTimeout`/`WithPolling`/`WithContext` and `Immediate()`; the matcher forms are configured through the `Eventually`/`Expect` that polls them.
+
+#### Element-to-element geometry
+
+Absolute boxes and offset-within-a-container cover "where is this element," but a great many layout assertions are *relational* — "the tab sits above its tile," "the frame encloses the tab," "this span centers within the card."  Reading two separate `GetBoundingBox`es and comparing in Go **loses the single-frame atomic poll**: the two boxes come back on different round-trips, so a mid-layout frame can satisfy neither-yet-both.  Biloba's pairwise matchers read **both** elements in one probe, so the relation is judged at a single layout instant:
+
+```go
+Eventually(tabSel).Should(b.BeAbove(tileSel))      // subject.Bottom <= other.Top
+Eventually(barSel).Should(b.BeBelow(toolsSel))     // subject.Top    >= other.Bottom
+Eventually(aSel).Should(b.BeLeftOf(bSel))           // subject.Right  <= other.Left
+Eventually(aSel).Should(b.BeRightOf(bSel))          // subject.Left   >= other.Right
+Eventually(frameSel).Should(b.Encloses(tabSel))     // subject contains other on all four edges
+Eventually(iconSel).Should(b.Overlaps(buttonSel))   // the two boxes intersect
+```
+
+For the numeric cases (centering, parity), the getter `b.GetGapBetween(selector, otherSelector)` returns a `BoxDelta` — the subject's box fields minus the other's (`Top`, `Left`, `Bottom`, `Right`, `Width`, `Height`, `CenterX`, `CenterY`).  `CenterX ~ 0` means the two share a vertical center line; `Width ~ 0` means they're the same size.  Its matcher counterpart `b.HaveGapBetween(otherSelector, matcher)` polls the delta:
+
+```go
+delta := b.GetGapBetween(spanSel, cardSel)
+Ω(delta.CenterX).Should(BeNumerically("~", 0, 1))
+
+Eventually(spanSel).Should(b.HaveGapBetween(cardSel, HaveField("CenterX", BeNumerically("~", 0, 1))))
+```
+
+#### On-screen-ness and document order
+
+`b.BeInViewport()` passes once the element is laid out **and** its box intersects the visible layout viewport — the "after the scroll the target is actually on screen" assertion.  It is distinct from `BeVisible`, which only checks the element is rendered at all (an element can be laid out yet scrolled entirely out of view):
+
+```go
+Eventually(noteSel).Should(b.BeInViewport())   // any overlap with the window counts
+```
+
+`b.BePrecededBy(otherSelector)` / `b.BeFollowedBy(otherSelector)` assert structural ordering via `compareDocumentPosition` — useful for "the note renders between section 1 and section 2," "the quiz box renders after the note," and other ordering checks on dynamically-inserted nodes:
+
+```go
+Eventually(noteSel).Should(b.BePrecededBy(section1Sel))
+Eventually(quizSel).Should(b.BeFollowedBy(noteSel))
+```
 
 > A geometry poll that times out *consistently* under load — not intermittently — usually means the **product** computed a position once and never reconciled, not a test that needs a wider timeout.  The DOM you're polling is real, but if the page never re-runs the computation `Eventually` can't save you: the value is stably wrong.  The [poll trajectory](#outline) attached on failure is the tell — a flat line is a product bug, a monotone approach is latency, a dip-then-rebound is a late reflow.
 

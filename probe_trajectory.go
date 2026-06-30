@@ -147,6 +147,8 @@ func renderProbeValue(value any) string {
 		return fmt.Sprintf("Box{Top:%g Left:%g Width:%g Height:%g}", v.Top, v.Left, v.Width, v.Height)
 	case ScrollOffset:
 		return fmt.Sprintf("ScrollOffset{Top:%g Left:%g MaxTop:%g MaxLeft:%g}", v.Top, v.Left, v.MaxTop, v.MaxLeft)
+	case BoxDelta:
+		return fmt.Sprintf("BoxDelta{Top:%g Left:%g CenterX:%g CenterY:%g Width:%g Height:%g}", v.Top, v.Left, v.CenterX, v.CenterY, v.Width, v.Height)
 	default:
 		return fmt.Sprintf("%v", v)
 	}

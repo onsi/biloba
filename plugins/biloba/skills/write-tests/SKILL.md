@@ -71,7 +71,10 @@ var _ = Describe("the search page", func() {
 | it's actually clickable (visible+enabled+topmost) | `b.BeClickable()` |
 | form value | `b.HaveValue(…)` (also `b.HaveSpawnedTab`, `b.HaveURL`, `b.HaveTitle`) |
 | a network request was made | `Eventually(b).Should(b.HaveMadeRequest(…))` |
-| layout / box / scroll position | `b.HaveBoundingBox(HaveField("Top", …))` / `b.HaveOffsetTopWithin(container, …)` / `b.HaveScrollOffset(…)` (getters: `b.BoundingBox`/`b.ScrollOffset`/`b.OffsetTopWithin`) |
+| layout / box / scroll position | `b.HaveBoundingBox(HaveField("Top", …))` / `b.HaveOffsetTopWithin(container, …)` / `b.HaveScrollOffset(…)` (getters: `b.GetBoundingBox`/`b.GetScrollOffset`/`b.GetOffsetTopWithin`) |
+| element A positioned relative to B | `b.BeAbove(other)` / `BeBelow` / `BeLeftOf` / `BeRightOf` / `b.Encloses(other)` / `b.Overlaps(other)` (numeric: `b.GetGapBetween(a, b)` → `BoxDelta`) |
+| on screen after a scroll / document order | `b.BeInViewport()` / `b.BePrecededBy(other)` / `b.BeFollowedBy(other)` |
+| resolved computed style value | `b.GetComputedStyle(selector, prop)` (getter; resolves custom properties) / `b.HaveComputedStyle(prop, …)` (matcher) |
 | an arbitrary JS expression | `Eventually(expr).Should(b.EvaluateTo(matcher))` |
 
 `EvaluateTo`/`Run` JSON-decode numbers to **float64** — assert with `BeNumerically("==", n)`, not `Equal(intLiteral)`.
@@ -225,7 +228,7 @@ Eventually(b.Run).WithArguments(`document.title`).Should(Equal("Done"))         
 
 For an interpolated/multi-line expr, pre-build the string (`expr := fmt.Sprintf(...)`; `Eventually(b.Run).WithArguments(expr)…`) or poll a closure that returns the decoded value. See `biloba:flaky-specs` for why single-shot reads flake.
 
-**Don't hand-roll `getBoundingClientRect`/`scrollTop` through `b.Run` — Biloba has pollable geometry getters** (`b.BoundingBox`/`b.ScrollOffset`/`b.OffsetTopWithin` + their `Have*` matchers) that wait for the element to be laid out (non-degenerate box) before reading. They're the idiomatic fix for the most race-prone class of `b.Run` reads → `biloba:api`.
+**Don't hand-roll `getBoundingClientRect`/`scrollTop` through `b.Run` — Biloba has pollable geometry getters** (`b.GetBoundingBox`/`b.GetScrollOffset`/`b.GetOffsetTopWithin` + their `Have*` matchers) that wait for the element to be laid out (non-degenerate box) before reading. Relational layout ("A above/encloses/overlaps B") has the pairwise matchers `b.BeAbove`/`BeBelow`/`BeLeftOf`/`BeRightOf`/`Encloses`/`Overlaps` and the `b.GetGapBetween` delta getter (both boxes read in one atomic frame); on-screen-ness has `b.BeInViewport()`, document order has `b.BePrecededBy`/`b.BeFollowedBy`, and resolved computed style has `b.GetComputedStyle`. They're the idiomatic fix for the most race-prone class of `b.Run` reads → `biloba:api`.
 
 ## Multi-tab flows
 

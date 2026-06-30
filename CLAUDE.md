@@ -56,7 +56,7 @@ Repo-specific testing conventions (see `biloba_suite_test.go`):
 | Setup, config, Chrome lifecycle | `biloba.go` | `biloba_suite_test.go` |
 | DOM query/interaction methods & matchers | `dom.go` | `dom_test.go` |
 | Property get/set/match | `properties.go` | `properties_test.go` |
-| Geometry getters/matchers (BoundingBox/ScrollOffset/OffsetTopWithin) | `geometry.go` | `geometry_test.go` |
+| Geometry getters/matchers (GetBoundingBox/GetScrollOffset/GetOffsetTopWithin, pairwise/viewport/document-order, GetComputedStyle) | `geometry.go` | `geometry_test.go` |
 | Poll-trajectory failure artifact | `probe_trajectory.go` | `probe_trajectory_internal_test.go` |
 | XPath DSL | `xpath.go` | `xpath_test.go` |
 | Tabs / spawned tabs | `tabs.go` | `tabs_test.go` |
