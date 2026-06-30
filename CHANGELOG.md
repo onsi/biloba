@@ -1,3 +1,16 @@
+## 0.10.0
+
+### Features
+
+- The geometry getters are now `Get`-prefixed for consistency with `GetProperty`/`GetAttribute`/`GetValue`: `b.GetBoundingBox`/`b.GetScrollOffset`/`b.GetOffsetTopWithin`/`b.GetOffsetLeftWithin` (the `Have*` matchers are unchanged).
+- Pairwise (element-to-element) geometry matchers: `b.BeAbove`/`b.BeBelow`/`b.BeLeftOf`/`b.BeRightOf`/`b.Encloses`/`b.Overlaps`. Each reads *both* elements in one atomic probe, so the relation is judged at a single layout instant — no more splitting into two `GetBoundingBox` reads and racing a mid-layout frame.
+- `b.GetGapBetween(a, b)` returns a `BoxDelta` (the subject's box fields minus the other's: `Top`/`Left`/`Bottom`/`Right`/`Width`/`Height`/`CenterX`/`CenterY`) for the numeric relational cases — `CenterX ~ 0` ⇒ shared center line, `Width ~ 0` ⇒ same size. Matcher counterpart: `b.HaveGapBetween(other, value|matcher)`.
+- `b.BeInViewport()` matcher: passes once the element is laid out *and* its box intersects the visible layout viewport (the "after the scroll the target is actually on screen" assertion) — distinct from `BeVisible`, which only checks the element is rendered.
+- Document-order matchers `b.BePrecededBy(other)` / `b.BeFollowedBy(other)` via `compareDocumentPosition` — assert structural ordering of dynamically-inserted nodes.
+- `b.GetComputedStyle(selector, property)` getter: the value counterpart of `HaveComputedStyle`, returning the resolved computed style as a string for Go-side math (relative luminance, hex→RGB). It resolves CSS custom properties (e.g. `--stage`) via `getPropertyValue`; `HaveComputedStyle` now resolves custom properties too.
+
+### Fixes
+
 ## 0.9.0
 
 ## Features
