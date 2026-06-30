@@ -782,6 +782,7 @@ b.Click(b.ByTextContains("Sign"))
 - **`b.ByPlaceholder(text)`** / **`b.ByPlaceholderContains(text)`** match the `<input>`/`<textarea>` by its `placeholder`.
 - **`b.ByAltText(text)`** / **`b.ByAltTextContains(text)`** match an element (e.g. an `<img>`) by its `alt` text.
 - **`b.ByTitle(text)`** / **`b.ByTitleContains(text)`** match an element by its `title` attribute.
+- **`b.ByCSS(selector)`** matches a **raw CSS selector** - the entry point that takes an arbitrary CSS selector *into* the Locator algebra below.  The other constructors are semantic; this one is structural, and exists so you can ordinally address or filter a CSS selector (`b.ByCSS(".figure-frame--story").Nth(1)` for "the second story frame") without dropping to a positional `:nth-of-type(2)` selector or to XPath.  Prefer the semantic constructors when they fit; reach for `ByCSS` when you genuinely need CSS structure and the composition.
 - **`b.ByTestID(id)`** matches an element by its test-id attribute.  The attribute name is the package variable `biloba.TestIDAttribute`, which defaults to `"data-testid"` (Playwright's convention).  If your app uses a different convention set it once, e.g. in a `SynchronizedBeforeSuite`:
 
 ```go
@@ -814,6 +815,9 @@ b.Click(b.ByRole("button").WithName("Delete").Within("#dialog"))
 b.ByRole("listitem").Within("#fruits").First()   // == .Nth(0)
 b.ByRole("listitem").Within("#fruits").Nth(2)    // the third match (0-based)
 b.ByRole("listitem").Within("#fruits").Last()    // the final match
+
+// start from CSS when you need structure: the second story frame, no :nth-of-type
+b.GetAttribute(b.ByCSS(".figure-frame--story").Nth(1), "data-frame-index")
 ```
 
 - **`.ContainingText(t)` / `.NotContainingText(t)`** keep (or drop) elements whose visible text contains `t`.
@@ -1415,6 +1419,13 @@ box := b.GetBoundingBox(".hero .sec")
 Ω(box.Width).Should(BeNumerically("==", 320))
 ```
 
+`Width`/`Height` (and `Bottom`/`Right`) are the **border-box**, straight from `getBoundingClientRect` — they include border and any scrollbar gutter.  When you want the *content area* of a scroll container — "how wide is the scroller, excluding its scrollbar" — read `ClientWidth`/`ClientHeight` on the same `Box` (the element's `clientWidth`/`clientHeight`: content + padding, border and scrollbar excluded):
+
+```go
+box := b.GetBoundingBox(".scroller")
+Ω(box.ClientWidth).Should(BeNumerically("<", box.Width))   // narrower by the scrollbar gutter
+```
+
 `b.GetScrollOffset(selector)` treats the match as a scroll container and returns its `ScrollOffset` (`Top`, `Left`, plus `MaxTop`/`MaxLeft`, the largest reachable offsets — so `Top == MaxTop` means "scrolled to the bottom").
 
 `b.GetOffsetTopWithin(selector, container)` returns how far the element's top sits below the container's top — `element.top - container.top` — which is the measurement a "scrolled near the top of the pane" spec actually wants.  `b.GetOffsetLeftWithin` is its horizontal sibling.
@@ -1459,14 +1470,22 @@ Eventually(spanSel).Should(b.HaveGapBetween(cardSel, HaveField("CenterX", BeNume
 `b.BeInViewport()` passes once the element is laid out **and** its box intersects the visible layout viewport — the "after the scroll the target is actually on screen" assertion.  It is distinct from `BeVisible`, which only checks the element is rendered at all (an element can be laid out yet scrolled entirely out of view):
 
 ```go
-Eventually(noteSel).Should(b.BeInViewport())   // any overlap with the window counts
+Eventually(noteSel).Should(b.BeInViewport())              // any overlap with the window counts
+Eventually(noteSel).Should(b.BeInViewport(b.Fully()))     // require the whole box on screen
 ```
 
-`b.BePrecededBy(otherSelector)` / `b.BeFollowedBy(otherSelector)` assert structural ordering via `compareDocumentPosition` — useful for "the note renders between section 1 and section 2," "the quiz box renders after the note," and other ordering checks on dynamically-inserted nodes:
+By default *any* overlap with the viewport passes (the element is partly on screen).  Pass `b.Fully()` to require the element be **entirely** within the viewport — all four edges on screen.
+
+`b.BePrecededBy(otherSelector)` / `b.BeFollowedBy(otherSelector)` assert structural ordering via `compareDocumentPosition` — useful for "the note renders between section 1 and section 2," "the quiz box renders after the note," and other ordering checks on dynamically-inserted nodes.  **Read the subject first to keep the direction straight:**
+
+> `Eventually(X).Should(b.BeFollowedBy(Y))` ⇔ **X precedes Y** in document order (X is followed by Y).
+> `Eventually(X).Should(b.BePrecededBy(Y))` ⇔ **X comes after Y** (X is preceded by Y).
+
+So "the quiz renders after the note" is `Eventually(noteSel).Should(b.BeFollowedBy(quizSel))` — the note is followed by the quiz:
 
 ```go
-Eventually(noteSel).Should(b.BePrecededBy(section1Sel))
-Eventually(quizSel).Should(b.BeFollowedBy(noteSel))
+Eventually(noteSel).Should(b.BePrecededBy(section1Sel))   // the note comes after section 1
+Eventually(noteSel).Should(b.BeFollowedBy(quizSel))       // the quiz comes after the note
 ```
 
 > A geometry poll that times out *consistently* under load — not intermittently — usually means the **product** computed a position once and never reconciled, not a test that needs a wider timeout.  The DOM you're polling is real, but if the page never re-runs the computation `Eventually` can't save you: the value is stably wrong.  The [poll trajectory](#outline) attached on failure is the tell — a flat line is a product bug, a monotone approach is latency, a dip-then-rebound is a late reflow.

@@ -68,6 +68,20 @@ type locatorFilter struct {
 // ---- leaf constructors -------------------------------------------------------------------------
 
 /*
+ByCSS(selector) returns a [Locator] that matches elements by a raw CSS selector.  It is the entry point that lets you take an arbitrary CSS selector into the Locator algebra - so you can ordinally address or filter it (.Nth/.First/.Last/.Within/.And/.Or/.Containing) the way the semantic By* constructors compose, without dropping to a positional :nth-of-type selector or to XPath:
+
+	b.GetAttribute(b.ByCSS(".figure-frame--story").Nth(1), "data-frame-index")  // the 2nd story frame
+	Eventually(b.ByCSS(".card").Within("#hero").First()).Should(b.BeVisible())
+
+Like the other leaves it pierces open shadow roots and preserves document order.  Prefer the semantic constructors ([Biloba.ByRole], [Biloba.ByText], ...) when they fit - reach for ByCSS when you genuinely need CSS structure inside the algebra.
+
+Read https://onsi.github.io/biloba/#selecting-dom-elements to learn more about selectors.
+*/
+func (b *Biloba) ByCSS(selector string) Locator {
+	return Locator{by: "css", value: selector}
+}
+
+/*
 ByRole(role) returns a [Locator] that matches elements with the given accessible role (e.g. "button", "link", "heading", "checkbox", "textbox").  Chain [Locator.WithName] (accessible name), [Locator.Level] (heading level), or an ARIA-state filter to narrow further:
 
 	b.Click(b.ByRole("button").WithName("Save"))
@@ -345,6 +359,8 @@ func (l Locator) payload() (map[string]any, error) {
 		if l.nameSet {
 			p["nameSet"], p["name"], p["nameMode"] = true, l.name, l.nameMode
 		}
+	case "css":
+		p["value"] = l.value
 	case "text", "label", "placeholder", "alttext", "title":
 		p["value"], p["valueMode"] = l.value, l.valueMode
 	case "testid":
@@ -412,6 +428,8 @@ func (l Locator) String() string {
 		if l.nameSet {
 			base += fmt.Sprintf(" name%s%q", op(l.nameMode), l.name)
 		}
+	case "css":
+		base = "css=" + l.value
 	case "text", "label", "placeholder", "alttext", "title":
 		base = fmt.Sprintf("%s%s%q", l.by, op(l.valueMode), l.value)
 	case "testid":

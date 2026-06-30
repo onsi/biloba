@@ -8,21 +8,29 @@ import (
 )
 
 /*
-Box is the viewport-relative layout rectangle of an element, returned by [Biloba.GetBoundingBox].  All
-fields are CSS pixels measured from the top-left of the viewport (so Top/Left already account for page
-scroll, exactly like getBoundingClientRect).  CenterX/CenterY are the box's center point.
+Box is the viewport-relative layout rectangle of an element, returned by [Biloba.GetBoundingBox].  Top,
+Left, Width, Height, Bottom, Right, CenterX, and CenterY are all CSS pixels measured from the top-left of
+the viewport (so Top/Left already account for page scroll, exactly like getBoundingClientRect).  CenterX/
+CenterY are the box's center point.
+
+Width/Height (and Bottom/Right) are the *border-box* - they include border and any scrollbar gutter,
+exactly like getBoundingClientRect.  ClientWidth/ClientHeight are the *client box* (clientWidth/clientHeight):
+the content area plus padding, with the scrollbar gutter excluded - the dimension a "how wide is the content
+area of this scroll container" assertion wants.
 
 Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
 */
 type Box struct {
-	Top     float64
-	Left    float64
-	Width   float64
-	Height  float64
-	Bottom  float64
-	Right   float64
-	CenterX float64
-	CenterY float64
+	Top          float64
+	Left         float64
+	Width        float64
+	Height       float64
+	Bottom       float64
+	Right        float64
+	CenterX      float64
+	CenterY      float64
+	ClientWidth  float64
+	ClientHeight float64
 }
 
 /*
@@ -40,21 +48,23 @@ type ScrollOffset struct {
 }
 
 func (box Box) String() string {
-	return fmt.Sprintf("Box{Top:%g Left:%g Width:%g Height:%g Bottom:%g Right:%g CenterX:%g CenterY:%g}",
-		box.Top, box.Left, box.Width, box.Height, box.Bottom, box.Right, box.CenterX, box.CenterY)
+	return fmt.Sprintf("Box{Top:%g Left:%g Width:%g Height:%g Bottom:%g Right:%g CenterX:%g CenterY:%g ClientWidth:%g ClientHeight:%g}",
+		box.Top, box.Left, box.Width, box.Height, box.Bottom, box.Right, box.CenterX, box.CenterY, box.ClientWidth, box.ClientHeight)
 }
 
 func newBox(input any) Box {
 	m := input.(map[string]any)
 	return Box{
-		Top:     toFloat64(m["top"]),
-		Left:    toFloat64(m["left"]),
-		Width:   toFloat64(m["width"]),
-		Height:  toFloat64(m["height"]),
-		Bottom:  toFloat64(m["bottom"]),
-		Right:   toFloat64(m["right"]),
-		CenterX: toFloat64(m["centerX"]),
-		CenterY: toFloat64(m["centerY"]),
+		Top:          toFloat64(m["top"]),
+		Left:         toFloat64(m["left"]),
+		Width:        toFloat64(m["width"]),
+		Height:       toFloat64(m["height"]),
+		Bottom:       toFloat64(m["bottom"]),
+		Right:        toFloat64(m["right"]),
+		CenterX:      toFloat64(m["centerX"]),
+		CenterY:      toFloat64(m["centerY"]),
+		ClientWidth:  toFloat64(m["clientWidth"]),
+		ClientHeight: toFloat64(m["clientHeight"]),
 	}
 }
 
@@ -513,20 +523,58 @@ func (b *Biloba) HaveGapBetween(otherSelector any, expected ...any) types.Gomega
 	}).WithTemplate("HaveGapBetween {{.Data.Other}} for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
 }
 
+// viewportConfig is the resolved configuration behind BeInViewport.
+type viewportConfig struct{ fully bool }
+
 /*
-BeInViewport() is a Gomega matcher that passes once the subject is laid out AND its box intersects the
-visible layout viewport - i.e. the element is actually on screen, not merely rendered somewhere off in a
-scrolled-away region.  This is the assertion a "after the scroll the target is visible" spec wants, and
-is distinct from [Biloba.BeVisible], which only checks the element is rendered at all:
+ViewportOption configures [Biloba.BeInViewport].  The only option is [Biloba.Fully]; pass it to require
+the element be entirely on screen rather than merely intersecting the viewport:
 
-	Eventually(noteSel).Should(b.BeInViewport())
-
-Partial visibility counts: any overlap with the viewport passes.  Because it returns a matcher you poll,
-configure the Eventually/Expect that wraps it.
+	Eventually(noteSel).Should(b.BeInViewport(b.Fully()))
 
 Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
 */
-func (b *Biloba) BeInViewport() types.GomegaMatcher {
+type ViewportOption func(*viewportConfig)
+
+/*
+Fully() is a [ViewportOption] for [Biloba.BeInViewport]: it tightens the match from "the box intersects
+the viewport" (the default - any overlap) to "the box sits entirely within the viewport" (all four edges
+on screen):
+
+	Eventually(noteSel).Should(b.BeInViewport(b.Fully()))
+
+Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
+*/
+func (b *Biloba) Fully() ViewportOption {
+	return func(c *viewportConfig) { c.fully = true }
+}
+
+/*
+BeInViewport(options...) is a Gomega matcher that passes once the subject is laid out AND its box
+intersects the visible layout viewport - i.e. the element is actually on screen, not merely rendered
+somewhere off in a scrolled-away region.  This is the assertion a "after the scroll the target is visible"
+spec wants, and is distinct from [Biloba.BeVisible], which only checks the element is rendered at all:
+
+	Eventually(noteSel).Should(b.BeInViewport())
+
+By default any overlap with the viewport passes (partial visibility counts).  Pass [Biloba.Fully] to
+require the element be entirely on screen (all four edges within the viewport):
+
+	Eventually(noteSel).Should(b.BeInViewport(b.Fully()))
+
+Because it returns a matcher you poll, configure the Eventually/Expect that wraps it.
+
+Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
+*/
+func (b *Biloba) BeInViewport(options ...ViewportOption) types.GomegaMatcher {
+	cfg := viewportConfig{}
+	for _, o := range options {
+		o(&cfg)
+	}
+	verb := "be within the viewport"
+	if cfg.fully {
+		verb = "be fully within the viewport"
+	}
 	data := map[string]any{}
 	return gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("inViewportP", selector)
@@ -542,9 +590,14 @@ func (b *Biloba) BeInViewport() types.GomegaMatcher {
 		vw, vh := toFloat64(m["vw"]), toFloat64(m["vh"])
 		data["Top"], data["Left"], data["Bottom"], data["Right"], data["VW"], data["VH"] = top, left, bottom, right, vw, vh
 		b.recordProbe(probeKey("BeInViewport", selector), Box{Top: top, Left: left, Bottom: bottom, Right: right})
-		onScreen := left < vw && right > 0 && top < vh && bottom > 0
+		var onScreen bool
+		if cfg.fully {
+			onScreen = left >= 0 && top >= 0 && right <= vw && bottom <= vh
+		} else {
+			onScreen = left < vw && right > 0 && top < vh && bottom > 0
+		}
 		return onScreen, nil
-	}).WithTemplate("Expected {{.Actual}} to {{if .Failure}}{{else}}NOT {{end}}be within the viewport.\n  element: top={{.Data.Top}} left={{.Data.Left}} bottom={{.Data.Bottom}} right={{.Data.Right}}\n  viewport: {{.Data.VW}}x{{.Data.VH}}", data)
+	}).WithTemplate("Expected {{.Actual}} to {{if .Failure}}{{else}}NOT {{end}}"+verb+".\n  element: top={{.Data.Top}} left={{.Data.Left}} bottom={{.Data.Bottom}} right={{.Data.Right}}\n  viewport: {{.Data.VW}}x{{.Data.VH}}", data)
 }
 
 // documentOrder reads the compareDocumentPosition bitmask of otherSelector relative to selector.  ok is
@@ -595,6 +648,9 @@ dynamically-inserted nodes:
 
 	Eventually(noteSel).Should(b.BePrecededBy(sectionSel))
 
+Read the subject first to keep the direction straight: Eventually(X).Should(b.BePrecededBy(Y)) means
+"X comes AFTER Y" (Y precedes X).  It is the exact inverse of [Biloba.BeFollowedBy].
+
 Because it returns a matcher you poll, configure the Eventually/Expect that wraps it.
 
 Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
@@ -608,6 +664,10 @@ BeFollowedBy(otherSelector) is the mirror of [Biloba.BePrecededBy]: it passes on
 follows the subject in document order (compareDocumentPosition reports FOLLOWING):
 
 	Eventually(quizSel).Should(b.BeFollowedBy(noteSel))
+
+Read the subject first to keep the direction straight: Eventually(X).Should(b.BeFollowedBy(Y)) means
+"X comes BEFORE Y" (X precedes Y).  So "the quiz renders after the note" is
+Eventually(noteSel).Should(b.BeFollowedBy(quizSel)) - the note is followed by the quiz.
 
 Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
 */

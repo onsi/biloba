@@ -31,6 +31,16 @@ var _ = Describe("Geometry getters and matchers", func() {
 			Ω(box.Height).Should(BeNumerically("~", 40, 1))
 		})
 
+		It("reports the border-excluded client box alongside the border-box", func() {
+			// #clientbox is border-box 100x60 with a 10px border, so its bounding Width/Height are
+			// 100x60 while clientWidth/clientHeight (border excluded) are 80x40.
+			box := b.GetBoundingBox("#clientbox")
+			Ω(box.Width).Should(BeNumerically("~", 100, 1))
+			Ω(box.Height).Should(BeNumerically("~", 60, 1))
+			Ω(box.ClientWidth).Should(BeNumerically("~", 80, 1))
+			Ω(box.ClientHeight).Should(BeNumerically("~", 40, 1))
+		})
+
 		It("fails fast under Immediate() when the element has a zero-area box", func() {
 			b.Immediate().GetBoundingBox("#late")
 			ExpectFailures(ContainSubstring("be present and laid out"))
@@ -173,6 +183,22 @@ var _ = Describe("Geometry getters and matchers", func() {
 
 		It("reports the element and viewport in its failure message", func() {
 			Ω(b.BeInViewport().FailureMessage("#vp-below")).Should(ContainSubstring("be within the viewport"))
+		})
+
+		Context("with b.Fully()", func() {
+			It("passes for an element wholly on screen", func() {
+				Eventually("#vp-on").Should(b.BeInViewport(b.Fully()))
+			})
+
+			It("fails for an element that only partly overlaps the viewport", func() {
+				// #vp-partial straddles the top edge: BeInViewport() passes, BeInViewport(b.Fully()) does not.
+				Eventually("#vp-partial").Should(b.BeInViewport())
+				Ω("#vp-partial").ShouldNot(b.BeInViewport(b.Fully()))
+			})
+
+			It("reports the fully-within phrasing in its failure message", func() {
+				Ω(b.BeInViewport(b.Fully()).FailureMessage("#vp-partial")).Should(ContainSubstring("be fully within the viewport"))
+			})
 		})
 	})
 

@@ -12,7 +12,7 @@ Assumes Biloba is already wired into the suite (`biloba:setup`) and you know the
 1. **Selecting elements.** Interactions and user-facing things → a **Locator** by role/name/text (`b.ByRole("button").WithName("Save")`, `b.ByText("Sign in")`), which doubles as an a11y guard. Structural/state hooks you own → **CSS on a stable `#id`/`[data-testid]`**, never a styling class.
 2. **Assert observable outcomes** — visible text, counts, URL/title, network effects — not internal class/structure.
 
-**Smells** to catch in your own draft (the wrong-from-generic-automation-muscle-memory moves): positional/styling-class CSS (`:nth-of-type`, `.btn-primary`); text-matching XPath where `b.ByText`/`b.ByRole().WithName` fits; reinventing a matcher with `b.Run` (`querySelectorAll(...).length` instead of `b.HaveCount`); IIFE-wrapping a script for `return` (use `b.RunAsync`); `SetValue` when you meant keystrokes (use `b.Type`); a **single-shot read** — `b.Run(expr, &x)` immediately followed by `Expect(x)` — which races any async settle (poll it: `Eventually(b.Run).WithArguments(expr)`; see flaky-specs below).
+**Smells** to catch in your own draft (the wrong-from-generic-automation-muscle-memory moves): positional/styling-class CSS (`:nth-of-type`, `.btn-primary` — to address "the Nth element matching a CSS selector," start from `b.ByCSS(sel).Nth(i)` instead); text-matching XPath where `b.ByText`/`b.ByRole().WithName` fits; reinventing a matcher with `b.Run` (`querySelectorAll(...).length` instead of `b.HaveCount`); IIFE-wrapping a script for `return` (use `b.RunAsync`); `SetValue` when you meant keystrokes (use `b.Type`); a **single-shot read** — `b.Run(expr, &x)` immediately followed by `Expect(x)` — which races any async settle (poll it: `Eventually(b.Run).WithArguments(expr)`; see flaky-specs below).
 
 ## The one pattern to internalize: dual, and poll-by-default
 
@@ -71,9 +71,9 @@ var _ = Describe("the search page", func() {
 | it's actually clickable (visible+enabled+topmost) | `b.BeClickable()` |
 | form value | `b.HaveValue(…)` (also `b.HaveSpawnedTab`, `b.HaveURL`, `b.HaveTitle`) |
 | a network request was made | `Eventually(b).Should(b.HaveMadeRequest(…))` |
-| layout / box / scroll position | `b.HaveBoundingBox(HaveField("Top", …))` / `b.HaveOffsetTopWithin(container, …)` / `b.HaveScrollOffset(…)` (getters: `b.GetBoundingBox`/`b.GetScrollOffset`/`b.GetOffsetTopWithin`) |
+| layout / box / scroll position | `b.HaveBoundingBox(HaveField("Top", …))` / `b.HaveOffsetTopWithin(container, …)` / `b.HaveScrollOffset(…)` (getters: `b.GetBoundingBox`/`b.GetScrollOffset`/`b.GetOffsetTopWithin`). `Box.Width`/`Height` = border-box; `Box.ClientWidth`/`ClientHeight` = scrollbar-excluded content box |
 | element A positioned relative to B | `b.BeAbove(other)` / `BeBelow` / `BeLeftOf` / `BeRightOf` / `b.Encloses(other)` / `b.Overlaps(other)` (numeric: `b.GetGapBetween(a, b)` → `BoxDelta`) |
-| on screen after a scroll / document order | `b.BeInViewport()` / `b.BePrecededBy(other)` / `b.BeFollowedBy(other)` |
+| on screen after a scroll / document order | `b.BeInViewport()` (partial; `b.BeInViewport(b.Fully())` = whole box on screen) / `b.BePrecededBy(other)` / `b.BeFollowedBy(other)` — read subject first: `Eventually(X).Should(b.BeFollowedBy(Y))` ⇔ X precedes Y |
 | resolved computed style value | `b.GetComputedStyle(selector, prop)` (getter; resolves custom properties) / `b.HaveComputedStyle(prop, …)` (matcher) |
 | an arbitrary JS expression | `Eventually(expr).Should(b.EvaluateTo(matcher))` |
 
@@ -93,7 +93,7 @@ b.SetValue(b.ByLabel("Email"), "jane@acme.com")   // Locator — a form control 
 b.Click(b.XPath("li").WithText("OK").Ancestor("ul"))// XPath — axis query no CSS/locator expresses
 ```
 
-**Locator constructors** (each text-valued one has a `*Contains` variant): `b.ByRole`, `b.ByText`, `b.ByLabel`, `b.ByPlaceholder`, `b.ByAltText`, `b.ByTitle`, `b.ByTestID` (attr = `biloba.TestIDAttribute`, default `data-testid`). Refine a role with `.WithName(n)`, `.Level(n)` (heading), or ARIA states `.Checked()`/`.Disabled()`/`.Expanded()`/`.Pressed()`/`.Selected()`.
+**Locator constructors** (each text-valued one has a `*Contains` variant): `b.ByRole`, `b.ByText`, `b.ByLabel`, `b.ByPlaceholder`, `b.ByAltText`, `b.ByTitle`, `b.ByTestID` (attr = `biloba.TestIDAttribute`, default `data-testid`), and `b.ByCSS(sel)` — raw CSS into the algebra (the structural escape hatch: ordinally/filter-address a CSS selector, e.g. `b.ByCSS(".story").Nth(1)`). Refine a role with `.WithName(n)`, `.Level(n)` (heading), or ARIA states `.Checked()`/`.Disabled()`/`.Expanded()`/`.Pressed()`/`.Selected()`.
 
 Locators **compose** — and the filters/combinators accept **any** selector (CSS/XPath/Locator), so pathways mix:
 
@@ -103,6 +103,7 @@ b.ByRole("listitem").Containing(b.ByText("Delete"))          // .Containing / .N
 b.ByRole("button").And(".primary")                           // .And / .Or — set intersection / union
 b.ByRole("button").WithName("Delete").Within("#dialog")      // .Within(scope)
 b.ByText("Item").Nth(2)                                      // .Nth(i)/.First()/.Last() — ordinal
+b.ByCSS(".story").Nth(1)                                     // raw CSS into the algebra (the 2nd .story)
 ```
 
 Locators **pierce open shadow roots automatically** (no `>>>`); CSS needs the `>>>` combinator (one boundary each, open shadow / same-origin iframe only); XPath crosses neither.

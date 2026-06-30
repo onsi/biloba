@@ -53,6 +53,10 @@
         #vp-on    { top: 10px;   left: 500px; width: 40px; height: 40px; background: teal; }
         #vp-below { top: 6000px; left: 500px; width: 40px; height: 40px; background: navy; }
         #vp-above { top: -500px; left: 500px; width: 40px; height: 40px; background: maroon; }
+        /* straddles the top edge: partly on screen (bottom 30 > 0) but not fully (top -10 < 0) */
+        #vp-partial { top: -10px; left: 500px; width: 40px; height: 40px; background: olive; }
+        /* a bordered box: border-box 100x60 (bounding Width/Height) vs client box 80x40 (border excluded) */
+        #clientbox { position: absolute; top: 1700px; left: 400px; width: 100px; height: 60px; border: 10px solid #333; box-sizing: border-box; background: #cef; }
         /* a design-token rail for computed-style reads */
         #rail { position: relative; --stage: #DCE4E1; color: rgb(10, 20, 30); z-index: 7; }
     </style>
@@ -79,6 +83,8 @@
     <div id="vp-on" class="pair"></div>
     <div id="vp-below" class="pair"></div>
     <div id="vp-above" class="pair"></div>
+    <div id="vp-partial" class="pair"></div>
+    <div id="clientbox"></div>
     <div id="rail">rail</div>
     <div id="order"></div>
     <script>

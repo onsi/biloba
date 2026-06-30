@@ -199,6 +199,28 @@ var _ = Describe("Role / text / label locators", func() {
 		})
 	})
 
+	Describe("ByCSS", func() {
+		It("takes a raw CSS selector into the locator algebra", func() {
+			Expect(b.ByCSS("#fruits li")).To(b.HaveCount(4))
+			Expect(b.GetInnerText(b.ByCSS("#fruits li").First())).To(Equal("Apple"))
+			Expect(b.GetInnerText(b.ByCSS("#fruits li").Nth(1))).To(Equal("Banana"))
+			Expect(b.GetInnerText(b.ByCSS("#fruits li").Last())).To(Equal("Date"))
+		})
+
+		It("composes with Within and the filters", func() {
+			Expect(b.ByCSS("li").Within("#products")).To(b.HaveCount(3))
+			Expect(b.GetInnerText(b.ByCSS("li").Within("#products").NotContaining(".del"))).To(ContainSubstring("Product 2"))
+		})
+
+		It("combines with semantic locators via And", func() {
+			Expect(b.GetInnerText(b.ByRole("button").And(b.ByCSS(".primary")))).To(Equal("Primary Action"))
+		})
+
+		It("matches nothing for an out-of-range ordinal", func() {
+			Expect(b.ByCSS("#fruits li").Nth(99)).NotTo(b.Exist())
+		})
+	})
+
 	Describe("Level (heading level)", func() {
 		It("matches a heading at a given level", func() {
 			Expect(b.GetInnerText(b.ByRole("heading").Level(1))).To(Equal("Locators"))

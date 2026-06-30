@@ -140,6 +140,8 @@ if (!window["_biloba"]) {
         } else if (q.by === "or") {
             let sets = q.operands.map(op => new Set(selEach(op)))
             matched = pool.filter(el => sets.some(s => s.has(el)))
+        } else if (q.by === "css") {
+            matched = pool.filter(el => el.matches(q.value))
         } else if (q.by === "role") {
             matched = pool.filter(el => roleOf(el) === q.role && (!q.nameSet || matchText(accessibleName(el), q.name, q.nameMode)))
         } else if (q.by === "label") {
@@ -784,7 +786,7 @@ if (!window["_biloba"]) {
     b.boundingBoxP = poll(n => {
         let x = n.getBoundingClientRect()
         if (x.width <= 0 || x.height <= 0) return { success: false }
-        return rRes({ top: x.top, left: x.left, width: x.width, height: x.height, bottom: x.bottom, right: x.right, centerX: x.left + x.width / 2, centerY: x.top + x.height / 2 })
+        return rRes(boxOf(n))
     })
     // scrollOffsetP backs ScrollOffset/HaveScrollOffset: poll until the (scroll container) element is
     // present, then report its current scroll position and the maximum scrollable offsets (scroll size
@@ -805,8 +807,10 @@ if (!window["_biloba"]) {
         let cr = c.getBoundingClientRect()
         return rRes({ top: nr.top - cr.top, left: nr.left - cr.left })
     }
-    // boxOf normalizes a getBoundingClientRect into the {top,...,centerX,centerY} shape Go's newBox reads.
-    let boxOf = (x) => ({ top: x.top, left: x.left, width: x.width, height: x.height, bottom: x.bottom, right: x.right, centerX: x.left + x.width / 2, centerY: x.top + x.height / 2 })
+    // boxOf normalizes an element into the {top,...,centerX,centerY,clientWidth,clientHeight} shape Go's
+    // newBox reads.  width/height/bottom/right come from getBoundingClientRect (border-box, includes the
+    // scrollbar gutter); clientWidth/clientHeight are the scrollbar-excluded client box.
+    let boxOf = (el) => { let x = el.getBoundingClientRect(); return { top: x.top, left: x.left, width: x.width, height: x.height, bottom: x.bottom, right: x.right, centerX: x.left + x.width / 2, centerY: x.top + x.height / 2, clientWidth: el.clientWidth, clientHeight: el.clientHeight } }
     // relativeBoxesP backs the pairwise geometry matchers (BeAbove/BeBelow/BeLeftOf/BeRightOf/Encloses/
     // Overlaps) and GetGapBetween/HaveGapBetween: poll until BOTH elements are present and laid out
     // (non-degenerate boxes), then read both viewport rectangles in a SINGLE eval so the relation is
@@ -819,7 +823,7 @@ if (!window["_biloba"]) {
         if (!o) return { success: false }
         let nr = n.getBoundingClientRect(), or = o.getBoundingClientRect()
         if (nr.width <= 0 || nr.height <= 0 || or.width <= 0 || or.height <= 0) return { success: false }
-        return rRes({ a: boxOf(nr), b: boxOf(or) })
+        return rRes({ a: boxOf(n), b: boxOf(o) })
     }
     // inViewportP backs BeInViewport: poll until the element is present and laid out, then report its
     // rect alongside the layout viewport size so Go can test on-screen-ness (does the box intersect the
