@@ -1,3 +1,11 @@
+## 0.11.0
+
+### Features
+
+- `b.ByCSS(selector)` — a raw-CSS Locator constructor, the entry point that takes an arbitrary CSS selector into the Locator algebra (`b.ByCSS(".story").Nth(1)` for "the 2nd", no `:nth-of-type`/XPath).
+- `Box` now carries `ClientWidth`/`ClientHeight` (the scrollbar-excluded client box) alongside the border-box `Width`/`Height` — for "content width of a scroll container" without dropping to `b.Run`.
+- `b.BeInViewport(b.Fully())` — `Fully()` tightens the viewport match from "any overlap" (the default) to "the whole box on screen."
+
 ## 0.10.0
 
 ### Features
