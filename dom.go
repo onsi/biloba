@@ -156,6 +156,30 @@ func (b *Biloba) HaveCount(expected any) types.GomegaMatcher {
 }
 
 /*
+HaveDistinctCount(attribute, expected) is a Gomega matcher that passes if the number of DISTINCT values the named HTML attribute takes across all elements matching selector matches expected.  expected can be an integer or a Gomega matcher.  Elements missing the attribute collapse into a single bucket.
+
+This is the assertion for "N unique things are present" when the DOM may transiently double-paint nodes that share a stable key - counting distinct data-* keys sees through the duplicates where [Biloba.HaveCount] would not:
+
+	Eventually(".mark").Should(tab.HaveDistinctCount("data-key", 3))
+	Eventually(".mark").Should(tab.HaveDistinctCount("data-key", BeNumerically(">=", 3)))
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+*/
+func (b *Biloba) HaveDistinctCount(attribute string, expected any) types.GomegaMatcher {
+	var data = map[string]any{"Attribute": attribute}
+	var matcher = matcherOrEqual(expected)
+	data["Matcher"] = matcher
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		r := b.runBilobaHandler("distinctCountByAttr", selector, attribute)
+		if r.Error() != nil {
+			return false, r.Error()
+		}
+		data["Result"] = r.ResultInt()
+		return matcher.Match(data["Result"])
+	}).WithTemplate("HaveDistinctCount \"{{.Data.Attribute}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+}
+
+/*
 BeVisible() is a Gomega matcher that passes if the first element returned by selector is visible.
 
 Use it like this:
@@ -455,6 +479,70 @@ func (b *Biloba) GetAttribute(selector any, name any) any {
 	}).WithMessage(fmt.Sprintf("have attribute %q", attr))
 	b.pollOrImmediate(selector, matcher)
 	return result
+}
+
+/*
+GetJSONAttribute(selector, attribute, out) reads a JSON-valued HTML attribute from the first element matching selector, parses it, and decodes the result into out (which must be a pointer - a *struct, *map, *[]T, or *any, exactly like the pointer form of [Biloba.Run]):
+
+	var state struct{ Open bool `json:"open"`; Count int `json:"count"` }
+	b.GetJSONAttribute("#widget", "data-widget-state", &state)
+
+GetJSONAttribute polls by default: it waits until an element matching selector is present, the attribute is set, AND its value parses as JSON, then decodes it - so you never read a half-rendered blob.  Malformed JSON that never becomes valid fails the spec at the timeout.  Configure the wait with WithTimeout/WithPolling/WithContext, or opt into act-once/fail-fast with Immediate().  To assert on the decoded value, prefer the matcher form [Biloba.HaveJSONAttribute].
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+Read https://onsi.github.io/biloba/#properties to learn more about working with properties and attributes
+*/
+func (b *Biloba) GetJSONAttribute(selector any, attribute string, out any) {
+	b.gt.Helper()
+	matcher := gcustom.MakeMatcher(func(sel any) (bool, error) {
+		r := b.runBilobaHandler("getAttributesP", sel, []any{attribute})
+		if r.Error() != nil {
+			return false, r.Error()
+		}
+		if !r.Success {
+			return false, nil // element absent or attribute not yet set -> retry
+		}
+		raw, ok := newProperties(r.Result).Get(attribute).(string)
+		if !ok {
+			return false, nil
+		}
+		if err := json.Unmarshal([]byte(raw), out); err != nil {
+			return false, fmt.Errorf("attribute %q is not valid JSON: %w", attribute, err)
+		}
+		return true, nil
+	}).WithMessage(fmt.Sprintf("have JSON-parseable attribute %q", attribute))
+	b.pollOrImmediate(selector, matcher)
+}
+
+/*
+HaveJSONAttribute(attribute, matcher) is a Gomega matcher that passes if the named HTML attribute of the first element matching selector parses as JSON AND the decoded value satisfies matcher.  The decoded value is what encoding/json produces for an interface{} target (objects become map[string]any, arrays []any, numbers float64), so compose it with Gomega/gstruct matchers:
+
+	Eventually("#widget").Should(b.HaveJSONAttribute("data-widget-state", HaveKeyWithValue("open", true)))
+	Eventually("#widget").Should(b.HaveJSONAttribute("data-widget-state", gstruct.MatchKeys(gstruct.IgnoreExtras, gstruct.Keys{"count": BeNumerically(">", 0)})))
+
+An absent attribute or malformed JSON does not satisfy the matcher (it retries under Eventually).  Because it returns a matcher you poll, configure the Eventually/Expect that wraps it.
+
+Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+Read https://onsi.github.io/biloba/#properties to learn more about working with properties and attributes
+*/
+func (b *Biloba) HaveJSONAttribute(attribute string, matcher types.GomegaMatcher) types.GomegaMatcher {
+	data := map[string]any{"Attribute": attribute, "Matcher": matcher}
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		r := b.runBilobaHandler("getAttribute", selector, attribute)
+		if r.Error() != nil {
+			return false, r.Error()
+		}
+		raw, ok := r.Result.(string)
+		if !ok {
+			return false, nil // attribute absent -> retry / fail
+		}
+		var decoded any
+		if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+			return false, fmt.Errorf("attribute %q is not valid JSON: %w", attribute, err)
+		}
+		data["Result"] = decoded
+		return matcher.Match(decoded)
+	}).WithTemplate("HaveJSONAttribute \"{{.Data.Attribute}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
 }
 
 /*
@@ -1421,24 +1509,98 @@ func (b *Biloba) Hover(args ...any) types.GomegaMatcher {
 	return b.pointerInteraction("hover", "be hoverable", args, b.performHover)
 }
 
+// scrollConfig accumulates the optional knobs for ScrollIntoView: an explicit scroll container and a
+// top offset.  An empty config takes the native element.scrollIntoView() path.
+type scrollConfig struct {
+	container    any
+	hasContainer bool
+	offset       float64
+	hasOffset    bool
+}
+
 /*
-ScrollIntoView() scrolls the first element matching selector into view (via the element's scrollIntoView()).
+ScrollOption configures [Biloba.ScrollIntoView].  Build a container override with [Biloba.WithinScroller] and a top offset with [Biloba.AtTopOffset], then pass them after the selector (or, in the matcher form, in place of it):
 
-When invoked with a selector, tab.ScrollIntoView("#footer") polls by default until the element is present, then scrolls it into view - failing the spec if it never appears before the timeout.  Opt out with [Biloba.Immediate], or tune the wait with [Biloba.WithTimeout]/[Biloba.WithPolling]/[Biloba.WithContext].
+	b.ScrollIntoView("#row", b.WithinScroller(".pane"), b.AtTopOffset(96))
 
-When invoked with no arguments, tab.ScrollIntoView() returns a Gomega matcher so you can poll until an element is present to scroll to:
+Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
+*/
+type ScrollOption func(*scrollConfig)
 
-	Eventually("#footer").Should(tab.ScrollIntoView())
+/*
+WithinScroller(container) is a [ScrollOption] for [Biloba.ScrollIntoView]: it scrolls the given container (any CSS/XPath/Locator) rather than letting the browser pick the nearest scrollable ancestor:
+
+	b.ScrollIntoView("#row", b.WithinScroller(".virtual-list"))
+
+Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
+*/
+func (b *Biloba) WithinScroller(container any) ScrollOption {
+	return func(c *scrollConfig) { c.container, c.hasContainer = container, true }
+}
+
+/*
+AtTopOffset(px) is a [ScrollOption] for [Biloba.ScrollIntoView]: it lands the target px CSS pixels below the scroll container's top edge instead of flush against it - the "clear the sticky header" case:
+
+	b.ScrollIntoView("#section", b.AtTopOffset(96))   // 96px of breathing room above the section
+
+Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
+*/
+func (b *Biloba) AtTopOffset(px float64) ScrollOption {
+	return func(c *scrollConfig) { c.offset, c.hasOffset = px, true }
+}
+
+/*
+ScrollIntoView() scrolls the first element matching selector into view.  With no options it delegates to the element's native scrollIntoView(); pass [ScrollOption]s to take control of the scroll:
+
+	b.ScrollIntoView("#footer")                                       // native scroll-into-view
+	b.ScrollIntoView("#row", b.WithinScroller(".pane"))               // scroll a specific container
+	b.ScrollIntoView("#section", b.AtTopOffset(96))                   // land 96px below the container top
+
+The scroll is instant and deterministic - no smooth animation, no stability wait - which is the same fast-track tradeoff as Biloba's other interactions; drop to [Biloba.Realistic] (or the realistic click/scroll paths) when you need the animated, occlusion-aware version.
+
+When invoked with a selector, ScrollIntoView polls by default until the element (and any [Biloba.WithinScroller] container) is present, then scrolls it - failing the spec if that never happens before the timeout.  Opt out with [Biloba.Immediate], or tune the wait with [Biloba.WithTimeout]/[Biloba.WithPolling]/[Biloba.WithContext].
+
+When invoked with no selector (options are still allowed), ScrollIntoView returns a Gomega matcher so you can poll until an element is present to scroll to:
+
+	Eventually("#footer").Should(b.ScrollIntoView())
+	Eventually("#section").Should(b.ScrollIntoView(b.AtTopOffset(96)))
 
 Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
 */
 func (b *Biloba) ScrollIntoView(args ...any) types.GomegaMatcher {
 	b.gt.Helper()
-	matcher := gcustom.MakeMatcher(func(selector any) (bool, error) {
-		return b.runBilobaHandler("scrollIntoView", selector).MatcherResult()
-	}).WithMessage("be scrollable into view")
+	var cfg scrollConfig
+	var selector any
+	immediate, start := false, 0
 	if len(args) > 0 {
-		b.pollOrImmediate(args[0], matcher)
+		if _, ok := args[0].(ScrollOption); !ok {
+			selector, immediate, start = args[0], true, 1
+		}
+	}
+	for _, a := range args[start:] {
+		o, ok := a.(ScrollOption)
+		if !ok {
+			b.gt.Fatalf("ScrollIntoView: expected a selector or a scroll option (b.WithinScroller/b.AtTopOffset), got %T", a)
+			return nil
+		}
+		o(&cfg)
+	}
+	matcher := gcustom.MakeMatcher(func(selector any) (bool, error) {
+		opts := map[string]any{}
+		if cfg.hasContainer {
+			enc, err := encodeSelector(cfg.container)
+			if err != nil {
+				return false, err
+			}
+			opts["container"] = enc
+		}
+		if cfg.hasOffset {
+			opts["hasOffset"], opts["offset"] = true, cfg.offset
+		}
+		return b.runBilobaHandler("scrollIntoViewP", selector, opts).MatcherResult()
+	}).WithMessage("be scrollable into view")
+	if immediate {
+		b.pollOrImmediate(selector, matcher)
 		return nil
 	}
 	b.guardBareMatcher("ScrollIntoView")

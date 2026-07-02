@@ -259,6 +259,19 @@ func (l Locator) NotContaining(selector any) Locator {
 	return l.addFilter(locatorFilter{kind: "contains", selector: selector, negate: true})
 }
 
+/*
+NotWithin(scope) narrows the [Locator] to elements that are NOT descendants of any element matching scope (any CSS/XPath/Locator).  It is the complement of [Locator.Within] and composes with the document-order matchers to express "follows Y in the flow, and is not nested inside it":
+
+	Eventually(b.ByText("Continue").NotWithin("#quiz")).Should(b.BePrecededBy("#quiz"))
+
+Because [Biloba.BePrecededBy]/[Biloba.BeFollowedBy] report document order alone (X anywhere after Y, including inside it), scoping the subject with NotWithin is how you say "after Y but not contained by Y".
+
+Read https://onsi.github.io/biloba/#selecting-dom-elements to learn more about selectors.
+*/
+func (l Locator) NotWithin(scope any) Locator {
+	return l.addFilter(locatorFilter{kind: "within", selector: scope, negate: true})
+}
+
 // ---- set combination ---------------------------------------------------------------------------
 
 /*
@@ -390,7 +403,7 @@ func (l Locator) payload() (map[string]any, error) {
 			switch f.kind {
 			case "containsText":
 				fm["value"], fm["mode"] = f.value, f.mode
-			case "contains":
+			case "contains", "within":
 				enc, err := encodeSelector(f.selector)
 				if err != nil {
 					return nil, err
@@ -456,6 +469,8 @@ func (l Locator) String() string {
 		}
 		if f.kind == "containsText" {
 			base += fmt.Sprintf(" %scontainsText%q", not, f.value)
+		} else if f.kind == "within" {
+			base += fmt.Sprintf(" %swithin(%s)", not, describeSelector(f.selector))
 		} else {
 			base += fmt.Sprintf(" %scontaining(%s)", not, describeSelector(f.selector))
 		}

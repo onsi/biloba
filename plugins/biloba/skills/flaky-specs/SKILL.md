@@ -61,6 +61,8 @@ rg ', &(\w+)\)' -n          # every "…, &x)" — incl. the orphan close-line o
 
 — then for each captured var, check whether an `Expect(x)`/`Ω(x)` follows within a few lines (that's the single-shot read). The decode target, not the `b.Run(` token, is the reliable anchor.
 
+**A Biloba matcher poll retries *through a remount* — only your own `b.Run` reads need null-guards.** A common hand-roll defends against a node that gets torn down and re-created (a portal migration, a list re-key) with `document.querySelector(sel)?.dataset.side ?? ''` and a comment claiming a Biloba getter "hard-fails across the remount." Under poll-by-default that's legacy folklore: `Eventually(sel).Should(b.HaveProperty("dataset.side", "left"))` **re-resolves `sel` from scratch every tick**, so it simply retries through the gap — no cached node, nothing to null-guard, no special handling. The null-guard is only needed in *your own* `b.Run`/`Eventually(b.Run)` closure, because there you hold a node reference that a remount invalidates. So: reach for the matcher (`HaveProperty`/`HaveAttribute`/`GetProperty`) and delete the guard; keep the guard only inside a raw `b.Run` read you couldn't express as a matcher.
+
 ## Smell 2 — reaching for `b.Immediate()` and reintroducing the race
 
 `b.Click(sel)`, `b.Tap(sel)`, `b.SelectText(sel)`, `b.SetValue(sel, …)` — every fully-applied action now **polls until the element is ready, acts exactly once, then stops.** This is the default, and it is what keeps these flake-free: a `b.Click("#go")` written right after a re-render, a list load, or a card injection simply *waits* for the element instead of racing it. **Write the plain fully-applied form and move on.**
@@ -84,6 +86,23 @@ Eventually(func(g Gomega) {
 ```
 
 This is the rare case where reaching for `Immediate()` is correct and deliberate: you want to keep re-asserting against a value that may reconcile away, and the *outer* `Eventually` is the poll. (Everywhere else, prefer the plain poll-by-default form — Smell 2.)
+
+> **Name the nested-double-poll smell.** Inside an `Eventually(func(g Gomega){...})` closure the `.Immediate()` is *load-bearing*, not optional. Writing the plain **polling** `b.SetValue("#qty", 3)` there (without `.Immediate()`) still works — so it slips review — but it runs `SetValue`'s *own* nested poll on every iteration of the outer poll: a poll inside a poll. It's wasteful and it muddies failure output (the inner poll's timeout, not your assertion's). The rule: **an action inside a polling closure must be `b.Immediate()`.** If you're not inside a closure, don't use a closure *or* `Immediate()` — just write the fully-applied `b.SetValue("#qty", 3)` and let it poll once.
+
+**State-guarded toggles: use `b.ClickWhen`, never a hand-rolled check-then-click.** The specific trap: an element that may boot in one of two states (a card open-or-collapsed, a disclosure) and you must ensure it ends open. The *obvious* hand-roll —
+
+```go
+Eventually(func() bool {                       // WRONG — re-clicks every tick, oscillates
+    if b.HasElement(".card.collapsed") { b.Immediate().Click(".card") }
+    return !b.HasElement(".card.collapsed")
+}).Should(BeTrue())
+```
+
+— re-clicks on **every** poll tick, so a tick that lands between the click and the class swap toggles the card right back shut. This is the exact oscillation poll-by-default exists to prevent, reintroduced by hand. Use the primitive built for it, which clicks **at most once** while the guard matches and then waits (without re-clicking) for it to clear:
+
+```go
+b.ClickWhen(".card", ".card.collapsed")   // open iff collapsed; no-op if already open; no double-toggle
+```
 
 **The poll-by-default action does not check occlusion — keep an explicit `BeClickable` gate when an overlay may cover the target.** `b.Click(sel)` polls on visible + enabled, but a fast click is `element.click()`; it does **not** verify the element is the topmost thing at its center, so it will happily "click" through a modal/overlay sitting on top. When occlusion is possible, gate with `Eventually(sel).Should(b.BeClickable())` (which adds the topmost-at-center check) before acting, or use `b.Realistic()` (which refuses to click through an overlay). Poll-by-default alone won't catch it.
 

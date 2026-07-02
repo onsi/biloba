@@ -59,6 +59,10 @@
         #clientbox { position: absolute; top: 1700px; left: 400px; width: 100px; height: 60px; border: 10px solid #333; box-sizing: border-box; background: #cef; }
         /* a design-token rail for computed-style reads */
         #rail { position: relative; --stage: #DCE4E1; color: rgb(10, 20, 30); z-index: 7; }
+        /* a design token defined at document scope so a detached probe inherits it, plus an element
+           that paints with it (for GetResolvedColor / the Color matcher) */
+        :root { --tok-teal: #14b8a6; }
+        #swatch { position: absolute; top: 1800px; left: 400px; width: 20px; height: 20px; color: var(--tok-teal); background: var(--tok-teal); }
     </style>
 </head>
 
@@ -86,6 +90,7 @@
     <div id="vp-partial" class="pair"></div>
     <div id="clientbox"></div>
     <div id="rail">rail</div>
+    <div id="swatch"></div>
     <div id="order"></div>
     <script>
         function layoutLate() { document.querySelector("#late").style.height = "40px" }

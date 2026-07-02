@@ -74,6 +74,13 @@
     <li id="opt-2" role="option" aria-selected="true">Option 2</li>
   </ul>
 
+  <!-- Follows-in-flow, not nested: "Continue" appears BOTH nested inside #quiz and as a sibling AFTER
+       it.  ByText("Continue").NotWithin("#quiz") keeps only the sibling, which follows #quiz in flow. -->
+  <section id="quiz">
+    Question <span>Continue</span>
+  </section>
+  <button id="after-quiz">Continue</button>
+
   <!-- Open shadow root containing a button with an accessible name -->
   <shadow-card id="card"></shadow-card>
   <script>

@@ -810,6 +810,7 @@ b.ByRole("button").WithName("Save").Or(b.ByRole("button").WithName("Submit"))
 
 // scope: restrict to descendants of a matching container (any selector)
 b.Click(b.ByRole("button").WithName("Delete").Within("#dialog"))
+b.ByText("Continue").NotWithin("#quiz")   // ...and its complement: exclude matches nested in a container
 
 // ordinal: a single element by index among the matches
 b.ByRole("listitem").Within("#fruits").First()   // == .Nth(0)
@@ -824,6 +825,7 @@ b.GetAttribute(b.ByCSS(".figure-frame--story").Nth(1), "data-frame-index")
 - **`.Containing(sel)` / `.NotContaining(sel)`** keep (or drop) elements that have a descendant matching `sel`.
 - **`.And(sel)` / `.Or(sel)`** intersect / union with another selector.
 - **`.Within(scope)`** restricts matches to descendants of an element matching `scope`.  If `scope` matches nothing the locator matches nothing - the clean way to disambiguate "the Save button *in this dialog*".
+- **`.NotWithin(scope)`** is its complement: it drops matches that *are* nested inside `scope`.  This is what you compose with the [document-order matchers](#geometry) to express "follows Y in the flow, and is **not** nested inside it" - since `BePrecededBy`/`BeFollowedBy` report document order alone (X anywhere after Y, *including inside it*), scoping the subject with `NotWithin` is how you exclude the nested case: `Expect(b.ByText("Continue").NotWithin("#quiz")).To(b.BePrecededBy("#quiz"))`.
 - **`.Nth(i)` / `.First()` / `.Last()`** pick a single element by ordinal (out-of-range → no match).
 
 Because the combinators accept any pathway, you can write things like `b.ByRole("button").And(".primary")` or `b.ByRole("listitem").Containing(b.ByText("Delete")).Within("#cart")` - reaching for whichever pathway reads best at each step.
@@ -965,6 +967,13 @@ Eventually("img.thumbnail").Should(b.HaveCount(BeNumerically(">", 10)))
 ```
 
 if no elements match the `selector`, `Count/HaveCount` return `0`.  Obviously.
+
+Sometimes the raw count over-counts: a DOM that transiently double-paints a node re-renders the same logical thing twice, and `HaveCount(3)` flakes against a stray fourth copy.  When the nodes carry a stable key (a `data-*` attribute), assert on the number of **distinct** keys instead with `b.HaveDistinctCount(attribute, expected)` - it counts the distinct values the attribute takes across all matches (`expected` is an integer or a Gomega matcher):
+
+```go
+Eventually(".mark").Should(b.HaveDistinctCount("data-key", 3))            // three unique keys, duplicates and all
+Eventually(".mark").Should(b.HaveDistinctCount("data-key", BeNumerically(">=", 3)))
+```
 
 ---
 
@@ -1189,6 +1198,24 @@ a.GetString("href") // "/about"
 Expect(b.CurrentAttributeForEach(".notice", "data-name")).To(HaveExactElements("henry", "bob", BeNil()))
 ```
 
+When an attribute holds a **JSON blob** - a widget serializing its state into `data-widget-state`, say - decode it in one step instead of hand-rolling a `Run` + `JSON.parse`.  `b.GetJSONAttribute(selector, attribute, &out)` polls until the element is present, the attribute is set, **and** its value parses as JSON, then decodes into `out` (a pointer, exactly like the pointer form of [`b.Run`](#running-arbitrary-javascript)).  Because it's a matcher poll under the hood, it retries cleanly through a mid-render change - you never read a half-written blob:
+
+```go
+var state struct {
+	Open  bool `json:"open"`
+	Count int  `json:"count"`
+}
+b.GetJSONAttribute("#widget", "data-widget-state", &state)
+```
+
+Its matcher sibling `b.HaveJSONAttribute(attribute, matcher)` parses the attribute and hands the decoded value (a `map[string]any`/`[]any`/`float64`, as `encoding/json` produces for an `interface{}`) to `matcher`, so it composes with Gomega and `gstruct`:
+
+```go
+Eventually("#widget").Should(b.HaveJSONAttribute("data-widget-state", HaveKeyWithValue("open", true)))
+Eventually("#widget").Should(b.HaveJSONAttribute("data-widget-state",
+	gstruct.MatchKeys(gstruct.IgnoreExtras, gstruct.Keys{"count": BeNumerically(">", 0)})))
+```
+
 `BeChecked()` asserts that a checkbox or radio button is checked (it's sugar for `b.HaveProperty("checked", true)`):
 
 ```go
@@ -1216,6 +1243,29 @@ When you need the resolved value itself — to do Go-side math on it (relative l
 hex := b.GetComputedStyle(".rail", "--stage")   // -> "#DCE4E1"
 z := b.GetComputedStyle(selector, "z-index")     // -> "7"
 ```
+
+When the value is **numeric** and you were only going to strip the `px` and `parseFloat` it, skip the dance: `b.GetComputedStyleNumeric(selector, property)` returns the leading number as a `float64` (`"16px"` → `16`, a unitless `z-index` → `7`), and `b.HaveComputedStyleNumeric(property, expected)` is its matcher counterpart (a plain number compares with `BeNumerically`, so `7` matches the `float64` the getter produces).  A non-numeric value (`"none"`, `"auto"`) fails rather than waiting:
+
+```go
+pad := b.GetComputedStyleNumeric("#card", "padding-top")   // 24
+Eventually("#panel").Should(b.HaveComputedStyleNumeric("width", BeNumerically(">", 320)))
+```
+
+**Comparing colors** across syntaxes is its own small trap: a design token resolves to a `var()` chain while `getComputedStyle` yields a resolved `rgb(...)`, so a naive string compare fails even when the colors are identical.  `b.GetResolvedColor(color)` normalizes *any* CSS `<color>` — named, hex, or a `var(--token)` chain (resolved against the document's custom properties) — to canonical `rgb()`/`rgba()`:
+
+```go
+b.GetResolvedColor("var(--tok-teal)")   // -> "rgb(20, 184, 166)"
+b.GetResolvedColor("teal")              // -> "rgb(0, 128, 128)"
+```
+
+And `b.Color(x)` is a matcher that normalizes **both** sides before comparing — pass it as the expected argument to `HaveComputedStyle` so a token matches a computed color regardless of how each is written:
+
+```go
+Eventually(".leader path").Should(b.HaveComputedStyle("stroke", b.Color("var(--tok-teal)")))
+Expect(".badge").To(b.HaveComputedStyle("background-color", b.Color("#14b8a6")))
+```
+
+`GetResolvedColor` is a one-shot snapshot (it doesn't touch the DOM under test and rejects the poll knobs); `GetComputedStyleNumeric` polls like the other getters.
 
 ### Properties
 
@@ -1819,6 +1869,24 @@ Eventually("#footer").Should(b.ScrollIntoView())
 ```
 
 `b.Blur` is handy for firing commit-on-blur handlers after a `SetValue` - `b.SetValue("#name", "New"); b.Blur("#name")` - since `SetValue` no longer blurs text inputs for you.  A blur event only fires if the element is actually focused; `SetValue` leaves the text input focused, so that pairing works.
+
+Bare `ScrollIntoView` delegates to the browser's native `scrollIntoView()`.  Two `ScrollOption`s take control of the scroll when you need it — this is the deterministic, *instant* middle ground between the no-scroll fast track and the full `Realistic()` scroll:
+
+```go
+b.ScrollIntoView("#row", b.WithinScroller(".virtual-list"))   // scroll a specific container, not the nearest ancestor
+b.ScrollIntoView("#section", b.AtTopOffset(96))               // land the target 96px below the container top
+b.ScrollIntoView("#section", b.WithinScroller(".pane"), b.AtTopOffset(96))
+```
+
+`b.WithinScroller(container)` scrolls the given container (any CSS/XPath/Locator) rather than letting the browser pick; `b.AtTopOffset(px)` lands the target `px` pixels below the container's top edge instead of flush against it — the "clear the sticky header" case.  Options work in the matcher form too (`Eventually("#section").Should(b.ScrollIntoView(b.AtTopOffset(96)))`).  It pairs naturally with [`b.BeInViewport()`](#geometry) as the assertion half.  This is a good-enough, occlusion-*un*aware scroll; when you need the animated, hit-tested version, drop to [realistic interactions](#realistic-interactions).
+
+Sometimes the thing you actually need isn't "scroll to it" but "**click it only if it's in a particular state**" — a card that may boot open or collapsed, a disclosure you want open regardless of its starting point.  The obvious hand-roll — a check-then-click loop inside `Eventually` — re-clicks on every poll tick and *oscillates* (a tick landing between the click and the state swap toggles it right back).  `b.ClickWhen(selector, guardSelector)` is the safe primitive: it clicks `selector` **at most once** while `guardSelector` matches, then waits (without re-clicking) for the guard to clear.
+
+```go
+b.ClickWhen(".card", ".card.collapsed")   // open the card iff it booted collapsed; no-op if already open
+```
+
+`guardSelector` expresses "the click is still needed" — typically the same element in the state you want to leave.  If the guard never matched, `ClickWhen` is an immediate no-op success; if it never clears after the single click, the spec fails at the timeout.  It polls by default and honors the realistic fork.  See [`biloba:flaky-specs`](#claude-code-skills) for why the hand-rolled version is the trap `ClickWhen` exists to remove.
 
 `Hover` is, like `Click`, a pragmatic simulation: it synchronously dispatches the pointer/mouse events associated with hovering (`pointerover`, `mouseover`, `pointerenter`, `mouseenter`, `mousemove`).  This triggers JavaScript hover handlers - for example a menu that opens on `mouseenter` - but it does **not** activate CSS `:hover` styling, which only responds to a real pointer.  If you need to exercise CSS `:hover`, use [realistic interactions](#realistic-interactions) (or drop down to chromedp's input domain yourself).
 

@@ -36,7 +36,7 @@ var _ = Describe("Role / text / label locators", func() {
 		})
 
 		It("matches all elements of a role when no name is given", func() {
-			Expect(b.ByRole("button")).To(b.HaveCount(14))
+			Expect(b.ByRole("button")).To(b.HaveCount(15))
 		})
 
 		It("flows through actions (Click)", func() {
@@ -93,6 +93,23 @@ var _ = Describe("Role / text / label locators", func() {
 		It("matches nothing when the scope is not found", func() {
 			Expect(b.ByRole("button").WithName("Delete").Within("#nope")).To(b.HaveCount(0))
 			Expect(b.ByRole("button").WithName("Delete").Within("#nope")).NotTo(b.Exist())
+		})
+	})
+
+	Describe("NotWithin", func() {
+		It("excludes matches nested inside the scope", func() {
+			// "Continue" text appears both inside #quiz (a span) and as a sibling button after it
+			Expect(b.ByText("Continue")).To(b.HaveCount(2))
+			Expect(b.ByText("Continue").NotWithin("#quiz")).To(b.HaveCount(1))
+			Expect(b.GetProperty(b.ByText("Continue").NotWithin("#quiz"), "tagName")).To(Equal("BUTTON"))
+		})
+
+		It("composes with the document-order matchers to mean follows-in-flow-not-nested", func() {
+			// the surviving match is the sibling button, which follows #quiz in document order
+			Expect(b.ByText("Continue").NotWithin("#quiz")).To(b.BePrecededBy("#quiz"))
+			// the nested span would (wrongly) also be "preceded by" #quiz on document order alone -
+			// NotWithin is what removes it from consideration
+			Expect(b.ByText("Continue").NotWithin("#quiz")).NotTo(b.BeFollowedBy("#quiz"))
 		})
 	})
 

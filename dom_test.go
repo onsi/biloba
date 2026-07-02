@@ -1082,6 +1082,61 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 	})
 
+	Describe("GetJSONAttribute and HaveJSONAttribute", func() {
+		It("decodes a JSON attribute into a struct", func() {
+			var state struct {
+				Open   bool     `json:"open"`
+				Count  int      `json:"count"`
+				Labels []string `json:"labels"`
+			}
+			b.GetJSONAttribute("#widget", "data-widget-state", &state)
+			Ω(state.Open).Should(BeTrue())
+			Ω(state.Count).Should(Equal(3))
+			Ω(state.Labels).Should(ConsistOf("a", "b"))
+		})
+
+		It("decodes into a map too", func() {
+			var m map[string]any
+			b.GetJSONAttribute("#widget", "data-widget-state", &m)
+			Ω(m).Should(HaveKeyWithValue("count", 3.0))
+		})
+
+		It("polls until the attribute is present and valid, tolerating a re-render", func() {
+			b.Run("setTimeout(() => document.getElementById('widget-mutate').click(), 40)")
+			var m map[string]any
+			// poll until the mutation has landed (count flips 3 -> 7)
+			Eventually("#widget").Should(b.HaveJSONAttribute("data-widget-state", HaveKeyWithValue("count", 7.0)))
+			b.GetJSONAttribute("#widget", "data-widget-state", &m)
+			Ω(m).Should(HaveKeyWithValue("open", false))
+		})
+
+		It("matches with a composed matcher", func() {
+			Eventually("#widget").Should(b.HaveJSONAttribute("data-widget-state", HaveKeyWithValue("open", true)))
+			Expect("#widget").NotTo(b.HaveJSONAttribute("data-widget-state", HaveKeyWithValue("open", false)))
+		})
+
+		It("times out (poll-by-default) when the element never exists", func() {
+			var m map[string]any
+			b.WithTimeout(time.Millisecond*60).GetJSONAttribute("#non-existing", "data-widget-state", &m)
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring("have JSON-parseable attribute"),
+			))
+		})
+	})
+
+	Describe("HaveDistinctCount", func() {
+		It("counts distinct attribute values across matches", func() {
+			Expect(".mark").To(b.HaveCount(4))
+			Expect(".mark").To(b.HaveDistinctCount("data-key", 3))
+			Eventually(".mark").Should(b.HaveDistinctCount("data-key", BeNumerically("<", 4)))
+		})
+
+		It("does not match the wrong count", func() {
+			Expect(".mark").NotTo(b.HaveDistinctCount("data-key", 4))
+		})
+	})
+
 	Describe("GetAttributes", func() {
 		It("returns the requested raw attributes defined on the element", func() {
 			a := b.GetAttributes("#link", "href", "data-role")

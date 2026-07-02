@@ -3,6 +3,7 @@ package biloba
 import (
 	"fmt"
 
+	"github.com/onsi/gomega"
 	"github.com/onsi/gomega/gcustom"
 	"github.com/onsi/gomega/types"
 )
@@ -708,4 +709,129 @@ func (b *Biloba) GetComputedStyle(selector any, property string) string {
 	}).WithMessage("be present (so its computed style can be read)")
 	b.pollOrImmediate(selector, matcher)
 	return result
+}
+
+// resolveColorErr normalizes any CSS <color> (including a var(--token) chain, resolved against the
+// document's custom properties via a detached probe) to the browser's canonical "rgb(...)"/"rgba(...)"
+// form, or returns an error if the input is not a valid color.  It is the shared substrate behind
+// GetResolvedColor and the Color matcher.
+func (b *Biloba) resolveColorErr(color string) (string, error) {
+	r := &bilobaJSResponse{}
+	if _, err := b.RunErr(b.JSFunc("_biloba.resolveColor").Invoke(color), r); err != nil {
+		return "", err
+	}
+	if r.Error() != nil {
+		return "", r.Error()
+	}
+	return r.ResultString(), nil
+}
+
+/*
+GetResolvedColor(color) normalizes any CSS <color> string to the browser's canonical resolved form ("rgb(...)" or "rgba(...)"), using a detached probe.  It resolves a design-token var() chain too (the probe inherits the document's custom properties), so you can compare a token against a computed color without hand-rolling a throwaway <span>:
+
+	b.GetResolvedColor("var(--tok-teal)")   // -> "rgb(20, 184, 166)"
+	b.GetResolvedColor("teal")              // -> "rgb(0, 128, 128)"
+
+GetResolvedColor is a one-shot snapshot: it does not poll and does not touch the DOM under test.  Configuring it (WithTimeout/WithPolling/WithContext/Immediate) is a hard error.  An invalid color fails the spec.  To assert that a computed style equals a color regardless of syntax, prefer the [Biloba.Color] matcher, which normalizes both sides.
+
+Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
+*/
+func (b *Biloba) GetResolvedColor(color string) string {
+	b.gt.Helper()
+	b.guardConfig("GetResolvedColor")
+	resolved, err := b.resolveColorErr(color)
+	if err != nil {
+		b.gt.Fatalf("Failed to resolve color %q:\n%s", color, err.Error())
+		return ""
+	}
+	return resolved
+}
+
+/*
+Color(expected) is a Gomega matcher that normalizes BOTH the actual value it receives and expected to the browser's canonical "rgb(...)"/"rgba(...)" form before comparing - so a design-token var() chain matches a computed rgb() color regardless of how each side is written.  It is meant to be passed as the expected argument to [Biloba.HaveComputedStyle]:
+
+	Eventually(".leader path").Should(b.HaveComputedStyle("stroke", b.Color("var(--tok-teal)")))
+	Expect(".badge").To(b.HaveComputedStyle("background-color", b.Color("#14b8a6")))
+
+Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
+*/
+func (b *Biloba) Color(expected string) types.GomegaMatcher {
+	data := map[string]any{"Expected": expected}
+	return gcustom.MakeMatcher(func(actual any) (bool, error) {
+		actualStr, ok := actual.(string)
+		if !ok {
+			return false, fmt.Errorf("Color matcher expects a string, got %T", actual)
+		}
+		normActual, err := b.resolveColorErr(actualStr)
+		if err != nil {
+			return false, err
+		}
+		normExpected, err := b.resolveColorErr(expected)
+		if err != nil {
+			return false, err
+		}
+		data["NormActual"], data["NormExpected"] = normActual, normExpected
+		return normActual == normExpected, nil
+	}).WithTemplate("Expected color {{.Actual}} ({{.Data.NormActual}}) {{.To}} equal {{.Data.Expected}} ({{.Data.NormExpected}})", data)
+}
+
+/*
+GetComputedStyleNumeric(selector, property) returns the leading numeric part of the resolved computed CSS value of property on the first element matching selector, as a float64 - the parseFloat of the value, so "16px" comes back as 16 and "1.5" as 1.5.  It erases the strip-"px"-and-parse dance you'd otherwise hand-roll around [Biloba.GetComputedStyle]:
+
+	pad := b.GetComputedStyleNumeric("#card", "padding-top")   // 24 (from "24px")
+
+GetComputedStyleNumeric polls by default until the element is present.  A non-numeric value ("none", "auto") fails the spec rather than waiting.  Configure the wait with WithTimeout/WithPolling/WithContext, or opt into act-once/fail-fast with Immediate().  To assert on the number, prefer the matcher form [Biloba.HaveComputedStyleNumeric].
+
+Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
+*/
+func (b *Biloba) GetComputedStyleNumeric(selector any, property string) float64 {
+	b.gt.Helper()
+	var result float64
+	matcher := gcustom.MakeMatcher(func(sel any) (bool, error) {
+		r := b.runBilobaHandler("getComputedStyleNumericP", sel, property)
+		if r.Error() != nil {
+			return false, r.Error()
+		}
+		if !r.Success {
+			return false, nil
+		}
+		result = toFloat64(r.Result)
+		b.recordProbe(probeKey("GetComputedStyleNumeric:"+property, sel), result)
+		return true, nil
+	}).WithMessage("be present with a numeric computed style")
+	b.pollOrImmediate(selector, matcher)
+	return result
+}
+
+/*
+HaveComputedStyleNumeric(property, expected) is the numeric counterpart of [Biloba.HaveComputedStyle]: it parses the computed value of property with parseFloat (so "16px" -> 16) and passes if the resulting number satisfies expected, which may be a number or a Gomega matcher:
+
+	Eventually("#panel").Should(b.HaveComputedStyleNumeric("width", BeNumerically(">", 320)))
+	Expect("#card").To(b.HaveComputedStyleNumeric("padding-top", 24))
+
+A non-numeric computed value is a hard failure.  Because it returns a matcher you poll, configure the Eventually/Expect that wraps it.
+
+Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
+*/
+func (b *Biloba) HaveComputedStyleNumeric(property string, expected any) types.GomegaMatcher {
+	// numeric values compare with BeNumerically (not Equal) so a plain int expected matches the float64
+	// the getter produces (Equal(7) would reject float64(7)).
+	matcher, ok := expected.(types.GomegaMatcher)
+	if !ok {
+		matcher = gomega.BeNumerically("==", expected)
+	}
+	data := map[string]any{"Property": property, "Matcher": matcher}
+	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		r := b.runBilobaHandler("getComputedStyleNumericP", selector, property)
+		if r.Error() != nil {
+			return false, r.Error()
+		}
+		if !r.Success {
+			return false, nil
+		}
+		value := toFloat64(r.Result)
+		data["Result"] = value
+		b.recordProbe(probeKey("HaveComputedStyleNumeric:"+property, selector), value)
+		return matcher.Match(value)
+	}).WithTemplate("HaveComputedStyleNumeric \"{{.Data.Property}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
 }

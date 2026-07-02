@@ -14,7 +14,7 @@ Three pathways, all flow through every method/matcher. **CSS is the default** (t
 - **CSS string** (`"#id"`, `".cls"`, `:has()`); `>>>` pierces open shadow roots / same-origin iframes (one boundary per `>>>`). **XPath** via `b.XPath(...)` (see `biloba:xpath`) — does **not** pierce shadow/iframe.
 - **Locator constructors** (all have a `*Contains` variant where text-valued): `b.ByRole(role)`; `b.ByText(t)`/`b.ByTextContains(t)`; `b.ByLabel(t)`/`b.ByLabelContains(t)`; `b.ByPlaceholder(t)`; `b.ByAltText(t)`; `b.ByTitle(t)`; `b.ByTestID(id)` (attr = `biloba.TestIDAttribute`, default `"data-testid"`); `b.ByCSS(selector)` — raw CSS into the algebra (the only *structural* constructor; use to ordinally/filter-address a CSS selector, e.g. `b.ByCSS(".story").Nth(1)` for "the 2nd", instead of `:nth-of-type` or XPath).
 - **Role refinements**: `.WithName(n)`/`.WithNameContains(n)` (accessible name); `.Level(n)` (heading level); ARIA-state filters `.Checked()`/`.Disabled()`/`.Expanded()`/`.Pressed()`/`.Selected()`.
-- **Composition** (all accept any CSS/XPath/Locator): `.ContainingText(t)`/`.NotContainingText(t)`; `.Containing(sel)`/`.NotContaining(sel)`; `.And(sel)`/`.Or(sel)` (intersection/union); `.Within(scope)`; `.Nth(i)`/`.First()`/`.Last()`. Example: `b.ByRole("listitem").Containing(b.ByText("Delete")).Within("#cart").First()`.
+- **Composition** (all accept any CSS/XPath/Locator): `.ContainingText(t)`/`.NotContainingText(t)`; `.Containing(sel)`/`.NotContaining(sel)`; `.And(sel)`/`.Or(sel)` (intersection/union); `.Within(scope)`/`.NotWithin(scope)` (descendants-of / not-descendants-of — `NotWithin` composes with `BePrecededBy`/`BeFollowedBy` for "follows in flow, not nested"); `.Nth(i)`/`.First()`/`.Last()`. Example: `b.ByRole("listitem").Containing(b.ByText("Delete")).Within("#cart").First()`.
 - Locators **pierce open shadow roots** automatically (no `>>>` needed). Accname covers aria-labelledby/aria-label/`<label>`/alt/placeholder/value/text/figcaption/caption/title.
 
 ## Lifecycle / config
@@ -69,6 +69,7 @@ Tune or opt out of poll-by-default. Each returns a lightweight view of the same 
 - `b.HasElement(selector)` → bool (first).
 - `b.Exist()` (matcher) — element matches.
 - `b.Count(selector)` → int / `b.HaveCount(int|matcher)` (matcher).
+- `b.HaveDistinctCount(attribute, int|matcher)` (matcher) — count of **distinct** values `attribute` takes across matches (dedupe transient double-painted nodes by a stable `data-*` key).
 - `b.BeVisible()` (matcher) — non-zero `offsetWidth`/`offsetHeight`. / `b.EachBeVisible()` (matcher) — **≥1 match AND all visible** (fails on zero matches).
 - `b.BeEnabled()` (matcher) — `!el.disabled`. / `b.EachBeEnabled()` (matcher) — **≥1 match AND all enabled** (fails on zero matches).
 - `b.BeClickable()` (matcher) — visible + enabled + topmost at its center (deterministic occlusion guard; opt-in, `Click` does **not** run it).
@@ -90,6 +91,7 @@ Tune or opt out of poll-by-default. Each returns a lightweight view of the same 
 - `b.GetProperties(selector, ...names)` → `Properties` (first; polls); getters `GetString/GetInt/GetFloat64/GetBool/GetStringSlice`.
 - `b.GetAttribute(selector, name)` → any (first; polls; raw `getAttribute` markup, not the resolved property) / `b.GetAttributes(selector, ...names)` → `Properties` (first; polls).
 - `b.AllowMissing(name)` — wrap a name passed to the four two-axis getters (`GetProperty`/`GetProperties`/`GetAttribute`/`GetAttributes`) so absent ⇒ `nil`, doesn't block the poll. No effect elsewhere.
+- `b.GetJSONAttribute(selector, attribute, &out)` (first; polls until present, set, **and** parses as JSON, then decodes into the `out` pointer — a `*struct`/`*map`/`*any`). / `b.HaveJSONAttribute(attribute, matcher)` (matcher) — parses the attribute and hands the decoded value (`map[string]any`/`[]any`/`float64`, à la `encoding/json` into `any`) to `matcher`; composes with `gstruct`.
 - **Snapshot plural getters (no poll; `nil` for absent; gate presence first with `Eventually(sel).Should(b.HaveCount(n))`):** `b.CurrentPropertyForEach(selector, name)` → []any, `b.CurrentPropertiesForEach(selector, ...names)` → `SliceOfProperties` (getters return slices; `.Get(key)`, `.Find(key, val|matcher)`, `.Filter(key, val|matcher)`), `b.CurrentAttributeForEach(selector, name)` → []any, `b.CurrentAttributesForEach(selector, ...names)` → `SliceOfProperties`.
 - `b.SetPropertyForEachImmediately(selector, name, value)` — set on **all** matches now, no poll (the `Immediately` suffix is the "know what you're doing" smell). / `b.EachHaveProperty(name[, ...])` (matcher — ≥1 match AND all satisfy).
 
@@ -109,6 +111,8 @@ Tune or opt out of poll-by-default. Each returns a lightweight view of the same 
 - `b.BeInViewport(options...)` (matcher) — element is laid out **and** its box intersects the visible layout viewport (actually on screen; ≠ `BeVisible`, which is only "rendered"). Partial overlap counts by default; pass `b.Fully()` to require the whole box on screen (all 4 edges within the viewport).
 - `b.BePrecededBy(other)` / `b.BeFollowedBy(other)` (matchers) — document order via `compareDocumentPosition`. **Read the subject first:** `Eventually(X).Should(b.BeFollowedBy(Y))` ⇔ **X precedes Y**; `Eventually(X).Should(b.BePrecededBy(Y))` ⇔ **X comes after Y**. ("Quiz renders after the note" = `Eventually(noteSel).Should(b.BeFollowedBy(quizSel))`.)
 - `b.GetComputedStyle(selector, property)` → string (first; polls; resolved value via `getPropertyValue`, so kebab-case names and CSS custom properties like `--stage` resolve — the getter counterpart of `HaveComputedStyle`, for Go-side math on the value).
+- `b.GetComputedStyleNumeric(selector, property)` → float64 (first; polls; leading number of the computed value via `parseFloat`, so `"16px"`→`16`; non-numeric value fails). / `b.HaveComputedStyleNumeric(property, number|matcher)` (matcher; a plain number compares with `BeNumerically`).
+- `b.GetResolvedColor(color)` → string (**one-shot snapshot**, no selector, no poll) — normalizes any CSS `<color>` incl. a `var(--token)` chain to canonical `rgb()`/`rgba()`. / `b.Color(color)` (matcher) — normalizes **both** sides to `rgb()` before comparing; pass as the expected to `HaveComputedStyle`: `b.HaveComputedStyle("stroke", b.Color("var(--tok-teal)"))`.
 
 ## Clicking & interactions  (pragmatic simulations)
 - `b.Click(selector)` (dual) — visible+enabled, then `el.click()`.
@@ -118,7 +122,9 @@ Tune or opt out of poll-by-default. Each returns a lightweight view of the same 
 - `b.DragTo(source, target)` (dual) — pointer-based drag (`pointerdown`/`move`/`up`); drives @dnd-kit-style DnD, not native HTML5 `draggable`. Matcher subject is the source: `Eventually(src).Should(b.DragTo(tgt))`.
 - `b.ScrollWheel(selector, deltaX, deltaY)` (dual; matcher form `b.ScrollWheel(deltaX, deltaY)`) — `wheel` event then scrolls nearest scrollable ancestor (realistic: real CDP wheel); +deltaY=down, +deltaX=right.
 - `b.ClickEachImmediately(selector)` — click all visible+enabled matches now, no poll (the `Immediately` suffix flags the no-readiness-fold smell; gate presence first).
-- `b.Focus(selector)` (dual) / `b.Blur(selector)` (dual) / `b.Hover(selector)` (dual; fires pointer/mouse events, not CSS `:hover`) / `b.ScrollIntoView(selector)` (dual).
+- `b.ClickWhen(selector, guardSelector)` — **state-guarded, idempotent** click: clicks `selector` **at most once** while `guardSelector` matches, then waits (no re-click) for the guard to clear. Polls. The safe way to force a maybe-already-in-state toggle without the classic re-click oscillation (`biloba:flaky-specs`). No-op success if the guard never matched.
+- `b.Focus(selector)` (dual) / `b.Blur(selector)` (dual) / `b.Hover(selector)` (dual; fires pointer/mouse events, not CSS `:hover`).
+- `b.ScrollIntoView(selector, ...ScrollOption)` (dual) — bare = native `scrollIntoView()`; options: `b.WithinScroller(container)` (scroll a specific container, not the nearest ancestor), `b.AtTopOffset(px)` (land the target `px` below the container top — "clear the sticky header"). Instant/deterministic, occlusion-*un*aware (use `Realistic()` for the animated, hit-tested scroll).
 - `b.SelectText(selector)` (dual) — select all of the element's text as a real `window.getSelection()` range, dispatching `mouseup` (drives highlight→menu/annotation UIs).
 - `b.SelectRange(selector, start, end)` (dual; matcher form `b.SelectRange(start, end)`) — select chars `[start, end)` across the element's text nodes; same range+mouseup. Read back with `Eventually("window.getSelection().toString()").Should(b.EvaluateTo(…))`.
 - `b.ClearSelection()` — clear any active selection (no matcher).

@@ -234,3 +234,51 @@ func (b *Biloba) performHover(selector any, _ pointerConfig) (bool, error) {
 	}
 	return b.runBilobaHandler("hover", selector).MatcherResult()
 }
+
+/*
+ClickWhen(selector, guardSelector) is the state-guarded, idempotent click: it clicks the element matching selector at most once WHILE an element matching guardSelector is present, and the poll ends once guardSelector stops matching.  guardSelector expresses "the click is still needed" - typically the same element in the state you want to leave:
+
+	b.ClickWhen(".card", ".card.collapsed")   // open the card only if it booted collapsed; no-op if already open
+
+This is the safe way to force a maybe-already-in-state toggle.  The obvious hand-roll - a check-then-click loop inside Eventually - re-clicks on every poll tick and oscillates: a tick landing between the click and the state swap clicks the toggle right back.  ClickWhen fires the click exactly once per observed "still needed" state and then waits (without re-clicking) for the guard to clear, so a settling class-swap can't be double-toggled.  If the guard never clears after the single click it fails at the timeout.
+
+ClickWhen polls by default (honoring WithTimeout/WithPolling/WithContext, and the realistic fork).  Immediate() clicks once iff the guard currently matches, then asserts the guard cleared - failing fast if it did not.  When the guard never matched to begin with, ClickWhen is an immediate no-op success (the element is already in the desired state).
+
+Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
+*/
+func (b *Biloba) ClickWhen(selector, guardSelector any) {
+	b.gt.Helper()
+	clicked := false
+	guardMatches := func() (bool, error) {
+		guard := b.runBilobaHandler("exists", guardSelector)
+		return guard.Success, guard.Error()
+	}
+	matcher := gcustom.MakeMatcher(func(sel any) (bool, error) {
+		matches, err := guardMatches()
+		if err != nil {
+			return false, err
+		}
+		if !matches {
+			return true, nil // guard cleared (or never matched) -> desired state reached
+		}
+		if !clicked {
+			didClick, err := b.performClick(sel, pointerConfig{})
+			if err != nil {
+				return false, err
+			}
+			if !didClick {
+				return false, nil // present but not clickable yet; retry without latching
+			}
+			clicked = true
+			// re-check the guard now: a synchronous toggle clears it in this same evaluation (so
+			// Immediate() can succeed), while an async swap leaves it set and we wait below.
+			matches, err = guardMatches()
+			if err != nil {
+				return false, err
+			}
+			return !matches, nil
+		}
+		return false, nil // already clicked once; wait for the guard to clear, do NOT re-click
+	}).WithMessage("no longer match the guard selector after being clicked")
+	b.pollOrImmediate(selector, matcher)
+}

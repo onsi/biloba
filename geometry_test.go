@@ -1,6 +1,8 @@
 package biloba_test
 
 import (
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -239,6 +241,83 @@ var _ = Describe("Geometry getters and matchers", func() {
 		It("fails fast under Immediate() when the element is missing", func() {
 			b.Immediate().GetComputedStyle("#nope", "color")
 			ExpectFailures(ContainSubstring("be present"))
+		})
+	})
+
+	Describe("ScrollIntoView with options", func() {
+		It("scrolls a specific container so the target lands at its top", func() {
+			// #s1 sits 150px down inside .scroller; scrolling the container brings it to the top
+			b.ScrollIntoView("#s1", b.WithinScroller(".scroller"))
+			Eventually("#s1").Should(b.HaveOffsetTopWithin(".scroller", BeNumerically("~", 0, 1)))
+		})
+
+		It("honors a top offset (landing the target below the container top)", func() {
+			b.ScrollIntoView("#s1", b.WithinScroller(".scroller"), b.AtTopOffset(20))
+			Eventually("#s1").Should(b.HaveOffsetTopWithin(".scroller", BeNumerically("~", 20, 1)))
+		})
+
+		It("finds the nearest scrollable ancestor when no container is given", func() {
+			b.ScrollIntoView("#s1", b.AtTopOffset(10))
+			Eventually("#s1").Should(b.HaveOffsetTopWithin(".scroller", BeNumerically("~", 10, 1)))
+		})
+
+		It("can be used as a matcher with options", func() {
+			Eventually("#s1").Should(b.ScrollIntoView(b.AtTopOffset(20)))
+			Eventually("#s1").Should(b.HaveOffsetTopWithin(".scroller", BeNumerically("~", 20, 1)))
+		})
+
+		It("times out (poll-by-default) if a requested container never appears", func() {
+			b.WithTimeout(time.Millisecond*60).ScrollIntoView("#s1", b.WithinScroller("#no-such-scroller"))
+			ExpectFailures(ContainSubstring("Timed out after"))
+		})
+	})
+
+	Describe("GetResolvedColor and the Color matcher", func() {
+		It("normalizes a named color to rgb()", func() {
+			Ω(b.GetResolvedColor("teal")).Should(Equal("rgb(0, 128, 128)"))
+		})
+
+		It("resolves a design-token var() chain", func() {
+			Ω(b.GetResolvedColor("var(--tok-teal)")).Should(Equal("rgb(20, 184, 166)"))
+		})
+
+		It("fails the spec on an invalid color", func() {
+			b.GetResolvedColor("not-a-color")
+			ExpectFailures(ContainSubstring("not a valid CSS color"))
+		})
+
+		It("is a hard error to configure it (it is a one-shot snapshot)", func() {
+			b.WithTimeout(time.Second).GetResolvedColor("teal")
+			ExpectFailures(ContainSubstring("GetResolvedColor does not support WithTimeout"))
+		})
+
+		It("matches a computed color against a token, normalizing both sides", func() {
+			Eventually("#swatch").Should(b.HaveComputedStyle("color", b.Color("var(--tok-teal)")))
+			Expect("#swatch").To(b.HaveComputedStyle("background-color", b.Color("#14b8a6")))
+		})
+
+		It("does not match a different color", func() {
+			Eventually("#swatch").ShouldNot(b.HaveComputedStyle("color", b.Color("red")))
+		})
+	})
+
+	Describe("GetComputedStyleNumeric and HaveComputedStyleNumeric", func() {
+		It("parses the leading numeric part of a px value", func() {
+			Ω(b.GetComputedStyleNumeric("#hero", "width")).Should(BeNumerically("~", 100, 1))
+		})
+
+		It("reads a unitless numeric value", func() {
+			Ω(b.GetComputedStyleNumeric("#rail", "z-index")).Should(BeNumerically("==", 7))
+		})
+
+		It("fails the spec when the value is not numeric", func() {
+			b.Immediate().GetComputedStyleNumeric("#rail", "color")
+			ExpectFailures(ContainSubstring("not numeric"))
+		})
+
+		It("backs the matcher form", func() {
+			Eventually("#hero").Should(b.HaveComputedStyleNumeric("width", BeNumerically(">", 50)))
+			Expect("#rail").To(b.HaveComputedStyleNumeric("z-index", 7))
 		})
 	})
 })

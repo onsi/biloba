@@ -167,6 +167,18 @@
         <input id="blur-tracker" type="text">
     </div>
 
+    <!-- A JSON-valued attribute for GetJSONAttribute/HaveJSONAttribute -->
+    <div id="widget" data-widget-state='{"open":true,"count":3,"labels":["a","b"]}'></div>
+    <button id="widget-mutate" onclick="document.getElementById('widget').setAttribute('data-widget-state', JSON.stringify({open:false,count:7,labels:[]}))">mutate widget</button>
+
+    <!-- Repeated data-key marks for HaveDistinctCount: 4 elements, 3 distinct keys -->
+    <div id="marks">
+        <span class="mark" data-key="alpha"></span>
+        <span class="mark" data-key="alpha"></span>
+        <span class="mark" data-key="beta"></span>
+        <span class="mark" data-key="gamma"></span>
+    </div>
+
     <script>
         window.clickedHiddenButton = false
         document.getElementById("hidden-button").addEventListener("click", () => window.clickedHiddenButton = true)

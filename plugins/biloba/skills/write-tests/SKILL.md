@@ -31,7 +31,7 @@ Most DOM methods have **two forms keyed on argument count** — and the key thin
   Eventually("#title").Should(b.HaveInnerText("Welcome"))
   ```
 
-**Poll-by-default is the whole point.** A fully-applied `b.Click(sel)` **polls until the element exists and is clickable (visible + enabled), dispatches exactly one atomic click on the first success, then succeeds and stops.** It does *not* re-act on later polls, so it is **safe even on a toggle** — there is no oscillation, because the successful action ends the poll. This is what makes Biloba flake-resistant: there is no "fired a frame too early" race to design around. Write `b.Click("#go")` and move on.
+**Poll-by-default is the whole point.** A fully-applied `b.Click(sel)` **polls until the element exists and is clickable (visible + enabled), dispatches exactly one atomic click on the first success, then succeeds and stops.** It does *not* re-act on later polls, so it is **safe even on a toggle** — there is no oscillation, because the successful action ends the poll. This is what makes Biloba flake-resistant: there is no "fired a frame too early" race to design around. Write `b.Click("#go")` and move on. (The *different* case — "click only **if** it's in state X," e.g. ensure a maybe-collapsed card ends open — is `b.ClickWhen(sel, guardSel)`, **not** a hand-rolled check-then-click loop, which *does* oscillate; see flaky-specs.)
 
 **Tune the poll, or opt out, with `*Biloba` clones** (shallow, à la `Realistic()`): `b.WithTimeout(5*time.Second).Click("#go")`, `b.WithPolling(d)`, `b.WithContext(ctx)`. `b.Immediate().Click("#go")` opts into the old act-once/fail-fast behavior — **you almost never want it**; it reintroduces the classic race. Misapplying config (e.g. `WithPolling` on a snapshot, or any config on the bare matcher form) is a hard error — see `biloba:api` for the four-bucket rule.
 
@@ -65,16 +65,18 @@ var _ = Describe("the search page", func() {
 | Want to assert… | Matcher |
 |---|---|
 | element is present / visible | `b.Exist()` / `b.BeVisible()` |
-| how many match | `b.HaveCount(BeNumerically(">", 0))` |
+| how many match | `b.HaveCount(BeNumerically(">", 0))` (distinct by a key: `b.HaveDistinctCount("data-key", 3)`) |
 | visible text | `b.HaveInnerText("…")` / `b.HaveText(…)` (textContent) |
-| a DOM/JS property | `b.HaveProperty("href", …)` / `b.HaveClass("active")` |
+| a DOM/JS property | `b.HaveProperty("href", …)` / `b.HaveClass("active")` (JSON-valued attr: `b.HaveJSONAttribute("data-state", HaveKeyWithValue(…))` / getter `b.GetJSONAttribute(sel, attr, &out)`) |
 | it's actually clickable (visible+enabled+topmost) | `b.BeClickable()` |
 | form value | `b.HaveValue(…)` (also `b.HaveSpawnedTab`, `b.HaveURL`, `b.HaveTitle`) |
 | a network request was made | `Eventually(b).Should(b.HaveMadeRequest(…))` |
 | layout / box / scroll position | `b.HaveBoundingBox(HaveField("Top", …))` / `b.HaveOffsetTopWithin(container, …)` / `b.HaveScrollOffset(…)` (getters: `b.GetBoundingBox`/`b.GetScrollOffset`/`b.GetOffsetTopWithin`). `Box.Width`/`Height` = border-box; `Box.ClientWidth`/`ClientHeight` = scrollbar-excluded content box |
 | element A positioned relative to B | `b.BeAbove(other)` / `BeBelow` / `BeLeftOf` / `BeRightOf` / `b.Encloses(other)` / `b.Overlaps(other)` (numeric: `b.GetGapBetween(a, b)` → `BoxDelta`) |
 | on screen after a scroll / document order | `b.BeInViewport()` (partial; `b.BeInViewport(b.Fully())` = whole box on screen) / `b.BePrecededBy(other)` / `b.BeFollowedBy(other)` — read subject first: `Eventually(X).Should(b.BeFollowedBy(Y))` ⇔ X precedes Y |
-| resolved computed style value | `b.GetComputedStyle(selector, prop)` (getter; resolves custom properties) / `b.HaveComputedStyle(prop, …)` (matcher) |
+| resolved computed style value | `b.GetComputedStyle(selector, prop)` (getter; resolves custom properties) / `b.HaveComputedStyle(prop, …)` (matcher); numeric: `b.GetComputedStyleNumeric` / `b.HaveComputedStyleNumeric`; color across syntaxes: `b.HaveComputedStyle(prop, b.Color("var(--tok)"))` / `b.GetResolvedColor(x)` |
+| scroll a target into view (instant) | `b.ScrollIntoView(sel)` — options `b.WithinScroller(container)`, `b.AtTopOffset(px)` |
+| click only if in a given state (toggle) | `b.ClickWhen(sel, guardSel)` — clicks once while `guardSel` matches, no double-toggle |
 | an arbitrary JS expression | `Eventually(expr).Should(b.EvaluateTo(matcher))` |
 
 `EvaluateTo`/`Run` JSON-decode numbers to **float64** — assert with `BeNumerically("==", n)`, not `Equal(intLiteral)`.

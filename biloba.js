@@ -167,6 +167,9 @@ if (!window["_biloba"]) {
             } else if (f.kind === "contains") {
                 let targets = selEach(f.selector)
                 matched = matched.filter(el => targets.some(t => t !== el && el.contains(t)) !== f.negate)
+            } else if (f.kind === "within") {
+                let scopes = selEach(f.selector)
+                matched = matched.filter(el => scopes.some(s => s !== el && s.contains(el)) !== f.negate)
             }
         }
         // 4. heading level, 5. ARIA states, 6. ordinal.
@@ -266,6 +269,10 @@ if (!window["_biloba"]) {
     }
     b.exists = s => r(!!sel(s))
     b.count = each(ns => rRes(ns.length))
+    // distinctCountByAttr backs HaveDistinctCount: the number of DISTINCT values the named attribute
+    // takes across all matches (elements lacking the attribute collapse into one `null` bucket).  Use
+    // it to dedupe transient double-painted nodes keyed by a stable data-* attribute.
+    b.distinctCountByAttr = each((ns, attr) => rRes(new Set(ns.map(n => n.getAttribute(attr))).size))
     b.isVisible = one(n => r(n.offsetWidth > 0 || n.offsetHeight > 0 || n.offsetParent != null, "DOM element is not visible"))
     b.isEnabled = one(n => r(!n.disabled, "DOM element is not enabled"))
     // eachIsVisible/eachIsEnabled fail (not vacuously pass) when no elements match: a "every element
@@ -373,6 +380,34 @@ if (!window["_biloba"]) {
         return r()
     })
     b.scrollIntoView = one(n => { n.scrollIntoView(); return r() })
+    // scrollIntoViewP backs ScrollIntoView: with no options it delegates to the native
+    // n.scrollIntoView().  Given a container (WithinScroller) it scrolls THAT element; given a top
+    // offset (AtTopOffset) it lands the target `offset` CSS pixels below the scroller's top edge
+    // (the "under the sticky header" case) rather than flush at the top.  Instant - no smooth scroll,
+    // no stability wait; that is the deliberate fast-track tradeoff.  Like other actions a missing
+    // target is a fast-fail error (one()); a requested-but-absent container reports {success:false} so
+    // the poll keeps waiting.
+    b.scrollIntoViewP = one((n, opts) => {
+        opts = opts || {}
+        let hasOffset = !!opts.hasOffset, offset = opts.offset || 0
+        let scroller
+        if (opts.container) {
+            scroller = sel(opts.container)
+            if (!scroller) return { success: false }
+        } else if (!hasOffset) {
+            n.scrollIntoView()
+            return r()
+        } else {
+            let scrollable = (el) => { let s = getComputedStyle(el); return /(auto|scroll)/.test(s.overflowY) && el.scrollHeight > el.clientHeight }
+            let el = n.parentElement
+            while (el && el != document.body && !scrollable(el)) el = el.parentElement
+            scroller = (el && scrollable(el)) ? el : document.scrollingElement
+        }
+        let isRoot = scroller === document.scrollingElement || scroller === document.documentElement || scroller === document.body
+        let base = isRoot ? 0 : scroller.getBoundingClientRect().top
+        scroller.scrollTop = scroller.scrollTop + (n.getBoundingClientRect().top - base) - offset
+        return r()
+    })
     // dispatchSelection points window.getSelection() at range and fires mouseup on n so
     // selection-driven UIs (floating "highlight → menu" toolbars and the like) react.  selectionchange
     // fires automatically off the getSelection() mutation; the mouseup is the pragmatic touch that
@@ -703,6 +738,30 @@ if (!window["_biloba"]) {
     // getComputedStyleP backs GetComputedStyle: poll until the element is present, then return the
     // resolved value (custom properties included).
     b.getComputedStyleP = poll((n, p) => rRes(computedStyleValue(n, p)))
+    // getComputedStyleNumericP backs GetComputedStyleNumeric/HaveComputedStyleNumeric: poll until the
+    // element is present, then return the leading numeric part of the resolved value (parseFloat, so
+    // "16px" -> 16, "1.5" -> 1.5).  A non-numeric value ("none", "auto") is a hard error, not a
+    // wait-forever, so the caller fails fast with a clear message instead of timing out.
+    b.getComputedStyleNumericP = poll((n, p) => {
+        let raw = computedStyleValue(n, p)
+        let v = parseFloat(raw)
+        if (isNaN(v)) return rErr(`computed style "${p}" is "${raw}", which is not numeric`)
+        return rRes(v)
+    })
+    // resolveColor normalizes any CSS <color> (including a var(--token) chain, which inherits the
+    // document's custom properties through a detached probe appended to <body>) to the browser's
+    // canonical resolved form ("rgb(...)"/"rgba(...)").  It has no selector - callers invoke it
+    // directly.  An unparseable color is an error (the browser leaves style.color untouched).
+    b.resolveColor = (input) => {
+        let probe = document.createElement("span")
+        probe.style.color = input
+        if (probe.style.color === "") return rErr(`"${input}" is not a valid CSS color`)
+        probe.style.display = "none"
+        document.body.appendChild(probe)
+        let resolved = getComputedStyle(probe).color
+        document.body.removeChild(probe)
+        return rRes(resolved)
+    }
     b.hasProperty = one((n, p) => {
         let v = n
         for (const subP of p.split(".")) {
