@@ -6,8 +6,6 @@
         #menu { display: none; }
         #menu.open { display: block; }
         #spacer { height: 3000px; }
-        .card { width: 200px; height: 60px; background: #eef; }
-        .card.collapsed { height: 20px; background: #fee; }
     </style>
 </head>
 <body>
@@ -26,13 +24,6 @@
          onmouseenter="document.getElementById('menu').classList.add('open')">Hover me</div>
     <div id="menu">Menu Contents</div>
 
-    <!-- State-guarded toggle cards for ClickWhen.  #toggle-async swaps its 'collapsed' class one tick
-         AFTER the click (mimicking a real re-render), so a naive re-clicking loop would double-toggle it
-         back shut - ClickWhen must click exactly once and then wait. -->
-    <div id="toggle-async" class="card collapsed">Async Card</div>
-    <div id="toggle-sync" class="card collapsed">Sync Card</div>
-    <div id="toggle-open" class="card">Already Open</div>
-
     <div id="spacer"></div>
     <div id="footer">Footer</div>
 
@@ -41,20 +32,6 @@
             const names = [...input.files].map(f => f.name).join(", ")
             document.getElementById(targetID).innerText = names
         }
-        // clicking #toggle-async flips its 'collapsed' class asynchronously (after a tick), and counts
-        // clicks so a spec can prove ClickWhen fired exactly once (no double-toggle).
-        window._asyncClicks = 0
-        document.getElementById('toggle-async').addEventListener('click', function () {
-            window._asyncClicks++
-            setTimeout(() => this.classList.toggle('collapsed'), 30)
-        })
-        // #toggle-sync flips 'collapsed' synchronously on click (so ClickWhen resolves in one evaluation)
-        document.getElementById('toggle-sync').addEventListener('click', function () {
-            this.classList.toggle('collapsed')
-        })
-        // #toggle-open boots already open; a guard that never matches must leave it un-clicked.
-        window._openClicks = 0
-        document.getElementById('toggle-open').addEventListener('click', () => window._openClicks++)
     </script>
 </body>
 </html>

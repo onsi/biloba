@@ -1880,14 +1880,6 @@ b.ScrollIntoView("#section", b.WithinScroller(".pane"), b.AtTopOffset(96))
 
 `b.WithinScroller(container)` scrolls the given container (any CSS/XPath/Locator) rather than letting the browser pick; `b.AtTopOffset(px)` lands the target `px` pixels below the container's top edge instead of flush against it — the "clear the sticky header" case.  Options work in the matcher form too (`Eventually("#section").Should(b.ScrollIntoView(b.AtTopOffset(96)))`).  It pairs naturally with [`b.BeInViewport()`](#geometry) as the assertion half.  This is a good-enough, occlusion-*un*aware scroll; when you need the animated, hit-tested version, drop to [realistic interactions](#realistic-interactions).
 
-Sometimes the thing you actually need isn't "scroll to it" but "**click it only if it's in a particular state**" — a card that may boot open or collapsed, a disclosure you want open regardless of its starting point.  The obvious hand-roll — a check-then-click loop inside `Eventually` — re-clicks on every poll tick and *oscillates* (a tick landing between the click and the state swap toggles it right back).  `b.ClickWhen(selector, guardSelector)` is the safe primitive: it clicks `selector` **at most once** while `guardSelector` matches, then waits (without re-clicking) for the guard to clear.
-
-```go
-b.ClickWhen(".card", ".card.collapsed")   // open the card iff it booted collapsed; no-op if already open
-```
-
-`guardSelector` expresses "the click is still needed" — typically the same element in the state you want to leave.  If the guard never matched, `ClickWhen` is an immediate no-op success; if it never clears after the single click, the spec fails at the timeout.  It polls by default and honors the realistic fork.  See [`biloba:flaky-specs`](#claude-code-skills) for why the hand-rolled version is the trap `ClickWhen` exists to remove.
-
 `Hover` is, like `Click`, a pragmatic simulation: it synchronously dispatches the pointer/mouse events associated with hovering (`pointerover`, `mouseover`, `pointerenter`, `mouseenter`, `mousemove`).  This triggers JavaScript hover handlers - for example a menu that opens on `mouseenter` - but it does **not** activate CSS `:hover` styling, which only responds to a real pointer.  If you need to exercise CSS `:hover`, use [realistic interactions](#realistic-interactions) (or drop down to chromedp's input domain yourself).
 
 ### Selecting Text

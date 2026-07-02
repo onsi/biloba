@@ -100,43 +100,6 @@ var _ = Describe("First-class interactions", func() {
 		})
 	})
 
-	Describe("ClickWhen", func() {
-		It("clicks exactly once while the guard matches, then waits for it to clear (no double-toggle)", func() {
-			Expect("#toggle-async").To(b.HaveClass("collapsed"))
-			b.ClickWhen("#toggle-async", "#toggle-async.collapsed")
-			// on return the guard has cleared - the async class swap has happened...
-			Expect("#toggle-async").NotTo(b.HaveClass("collapsed"))
-			// ...and the click fired exactly once despite the 30ms settle window and polling
-			Expect("window._asyncClicks").To(b.EvaluateTo(1.0))
-			// give any errant re-click a chance to land, then re-confirm it stayed open and single-clicked
-			Consistently("#toggle-async").ShouldNot(b.HaveClass("collapsed"))
-			Expect("window._asyncClicks").To(b.EvaluateTo(1.0))
-		})
-
-		It("is a no-op when the guard never matches (already in the desired state)", func() {
-			Expect("#toggle-open").NotTo(b.HaveClass("collapsed"))
-			b.ClickWhen("#toggle-open", "#toggle-open.collapsed")
-			Expect("window._openClicks").To(b.EvaluateTo(0.0))
-		})
-
-		It("clicks once under Immediate() when the guard clears synchronously", func() {
-			Expect("#toggle-sync").To(b.HaveClass("collapsed"))
-			b.Immediate().ClickWhen("#toggle-sync", "#toggle-sync.collapsed")
-			Expect("#toggle-sync").NotTo(b.HaveClass("collapsed"))
-		})
-
-		It("times out if the guard never clears after the click", func() {
-			// guard the click on a selector that stays present regardless of the click, so the guard
-			// never clears and the poll must give up (having clicked exactly once).
-			b.WithTimeout(time.Millisecond * 120).ClickWhen("#toggle-async", "#toggle-async")
-			ExpectFailures(SatisfyAll(
-				ContainSubstring("Timed out after"),
-				ContainSubstring("no longer match the guard selector"),
-			))
-			Expect("window._asyncClicks").To(b.EvaluateTo(1.0))
-		})
-	})
-
 	Describe("SetUpload", func() {
 		It("attaches a file to a file input and fires change", func() {
 			path, err := filepath.Abs("./fixtures/upload-sample.txt")

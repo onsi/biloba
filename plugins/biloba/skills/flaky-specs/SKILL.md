@@ -89,20 +89,12 @@ This is the rare case where reaching for `Immediate()` is correct and deliberate
 
 > **Name the nested-double-poll smell.** Inside an `Eventually(func(g Gomega){...})` closure the `.Immediate()` is *load-bearing*, not optional. Writing the plain **polling** `b.SetValue("#qty", 3)` there (without `.Immediate()`) still works — so it slips review — but it runs `SetValue`'s *own* nested poll on every iteration of the outer poll: a poll inside a poll. It's wasteful and it muddies failure output (the inner poll's timeout, not your assertion's). The rule: **an action inside a polling closure must be `b.Immediate()`.** If you're not inside a closure, don't use a closure *or* `Immediate()` — just write the fully-applied `b.SetValue("#qty", 3)` and let it poll once.
 
-**State-guarded toggles: use `b.ClickWhen`, never a hand-rolled check-then-click.** The specific trap: an element that may boot in one of two states (a card open-or-collapsed, a disclosure) and you must ensure it ends open. The *obvious* hand-roll —
+**A conditional interaction is a spec smell — fix your spec's state determinism, not the click.** When you catch yourself writing "click X *only if* it's in state S" — a `HasElement`/branch before an action, an `if collapsed { click }` inside `Eventually`, any *guarded* or *conditional* interaction — stop. **It means the spec doesn't know its own state**, and in a controlled browser test it always can. Branching to paper over that uncertainty is the wrong layer; worse, it's an active flake source (a check-then-act loop re-clicks on every poll tick and *oscillates* a toggle right back). The fix is **upstream determinism**, not a guarded click:
 
-```go
-Eventually(func() bool {                       // WRONG — re-clicks every tick, oscillates
-    if b.HasElement(".card.collapsed") { b.Immediate().Click(".card") }
-    return !b.HasElement(".card.collapsed")
-}).Should(BeTrue())
-```
+- **Own your fixture.** If the uncertainty comes from inherited state (a shared `Ordered` block whose earlier specs left a disclosure open-or-closed), create your *own* fresh element in a known state instead of grabbing whatever already exists — the conditional deletes itself.
+- **Barrier on the authoritative signal.** If it comes from an optimistic-UI reconcile window (the DOM might still blink back to its pre-confirmation state), wait for the *server-authoritative* fold to land before interacting (Smell 3), then a plain `b.Click` + `Eventually(HaveClass)` is deterministic.
 
-— re-clicks on **every** poll tick, so a tick that lands between the click and the class swap toggles the card right back shut. This is the exact oscillation poll-by-default exists to prevent, reintroduced by hand. Use the primitive built for it, which clicks **at most once** while the guard matches and then waits (without re-clicking) for it to clear:
-
-```go
-b.ClickWhen(".card", ".card.collapsed")   // open iff collapsed; no-op if already open; no double-toggle
-```
+**The idempotence corollary** (why there's no `ClickWhen`-style primitive to reach for): the sanctioned set-and-confirm idiom re-fires its action every poll iteration, which is safe **iff the action is idempotent**. `SetValue("#x", 3)` is idempotent — re-running it converges. A **toggle click is not** — re-running it oscillates. So the very composition shape that's correct for `SetValue` is a flake for a conditional toggle click. That asymmetry is the tell: a spec that *needs* a guarded, non-idempotent interaction is a spec that hasn't pinned its own state. Pin the state.
 
 **The poll-by-default action does not check occlusion — keep an explicit `BeClickable` gate when an overlay may cover the target.** `b.Click(sel)` polls on visible + enabled, but a fast click is `element.click()`; it does **not** verify the element is the topmost thing at its center, so it will happily "click" through a modal/overlay sitting on top. When occlusion is possible, gate with `Eventually(sel).Should(b.BeClickable())` (which adds the topmost-at-center check) before acting, or use `b.Realistic()` (which refuses to click through an overlay). Poll-by-default alone won't catch it.
 

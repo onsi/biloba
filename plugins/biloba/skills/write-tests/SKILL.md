@@ -31,7 +31,7 @@ Most DOM methods have **two forms keyed on argument count** — and the key thin
   Eventually("#title").Should(b.HaveInnerText("Welcome"))
   ```
 
-**Poll-by-default is the whole point.** A fully-applied `b.Click(sel)` **polls until the element exists and is clickable (visible + enabled), dispatches exactly one atomic click on the first success, then succeeds and stops.** It does *not* re-act on later polls, so it is **safe even on a toggle** — there is no oscillation, because the successful action ends the poll. This is what makes Biloba flake-resistant: there is no "fired a frame too early" race to design around. Write `b.Click("#go")` and move on. (The *different* case — "click only **if** it's in state X," e.g. ensure a maybe-collapsed card ends open — is `b.ClickWhen(sel, guardSel)`, **not** a hand-rolled check-then-click loop, which *does* oscillate; see flaky-specs.)
+**Poll-by-default is the whole point.** A fully-applied `b.Click(sel)` **polls until the element exists and is clickable (visible + enabled), dispatches exactly one atomic click on the first success, then succeeds and stops.** It does *not* re-act on later polls, so it is **safe even on a toggle** — there is no oscillation, because the successful action ends the poll. This is what makes Biloba flake-resistant: there is no "fired a frame too early" race to design around. Write `b.Click("#go")` and move on. (What is *not* safe is a **conditional** interaction — "click X only if it's in state S." Reaching for a guard/branch means the spec doesn't know its own state; fix that determinism upstream rather than branching — see flaky-specs.)
 
 **Tune the poll, or opt out, with `*Biloba` clones** (shallow, à la `Realistic()`): `b.WithTimeout(5*time.Second).Click("#go")`, `b.WithPolling(d)`, `b.WithContext(ctx)`. `b.Immediate().Click("#go")` opts into the old act-once/fail-fast behavior — **you almost never want it**; it reintroduces the classic race. Misapplying config (e.g. `WithPolling` on a snapshot, or any config on the bare matcher form) is a hard error — see `biloba:api` for the four-bucket rule.
 
@@ -76,7 +76,6 @@ var _ = Describe("the search page", func() {
 | on screen after a scroll / document order | `b.BeInViewport()` (partial; `b.BeInViewport(b.Fully())` = whole box on screen) / `b.BePrecededBy(other)` / `b.BeFollowedBy(other)` — read subject first: `Eventually(X).Should(b.BeFollowedBy(Y))` ⇔ X precedes Y |
 | resolved computed style value | `b.GetComputedStyle(selector, prop)` (getter; resolves custom properties) / `b.HaveComputedStyle(prop, …)` (matcher); numeric: `b.GetComputedStyleNumeric` / `b.HaveComputedStyleNumeric`; color across syntaxes: `b.HaveComputedStyle(prop, b.Color("var(--tok)"))` / `b.GetResolvedColor(x)` |
 | scroll a target into view (instant) | `b.ScrollIntoView(sel)` — options `b.WithinScroller(container)`, `b.AtTopOffset(px)` |
-| click only if in a given state (toggle) | `b.ClickWhen(sel, guardSel)` — clicks once while `guardSel` matches, no double-toggle |
 | an arbitrary JS expression | `Eventually(expr).Should(b.EvaluateTo(matcher))` |
 
 `EvaluateTo`/`Run` JSON-decode numbers to **float64** — assert with `BeNumerically("==", n)`, not `Equal(intLiteral)`.
