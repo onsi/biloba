@@ -1,3 +1,14 @@
+## 0.12.0
+
+### Features
+
+- `b.ScrollIntoView` now accepts `ScrollOption`s: `b.WithinScroller(container)` to scroll a specific container and `b.AtTopOffset(px)` to land the target N pixels below the container top (the "under the sticky header" case).
+- `b.GetResolvedColor(color)` normalizes any CSS `<color>` (including a `var(--token)` chain) to canonical `rgb()`; `b.Color(x)` is a matcher that normalizes both sides before comparing, so `HaveComputedStyle("stroke", b.Color("var(--tok-teal)"))` works.
+- `b.GetJSONAttribute(sel, attr, &out)` polls until a JSON-valued attribute is present and parses, decoding into `out`; `b.HaveJSONAttribute(attr, matcher)` is the matcher sibling.
+- `Locator.NotWithin(scope)` narrows a locator to elements NOT nested inside `scope` - composes with `BePrecededBy`/`BeFollowedBy` to express "follows in flow, not nested".
+- `b.HaveDistinctCount(attr, n)` asserts on the number of distinct values an attribute takes across matches (dedupe transient double-painted nodes by a stable key).
+- `b.GetComputedStyleNumeric(sel, prop)` returns the leading numeric part of a computed style as a `float64`; `b.HaveComputedStyleNumeric(prop, expected)` is the matcher sibling.
+
 ## 0.11.0
 
 ### Features
