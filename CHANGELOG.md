@@ -1,3 +1,9 @@
+## 0.12.1
+
+### Fixes
+
+- Renamed `b.GetResolvedColor` → `b.NormalizeColor` (it takes no selector and reads no element of the page under test — it's a pure color-string transform, not a getter) and the `b.Color(x)` matcher → `b.MatchColor(x)` (matches Gomega's `Match*` matcher convention).
+
 ## 0.12.0
 
 ### Features
