@@ -1251,21 +1251,21 @@ pad := b.GetComputedStyleNumeric("#card", "padding-top")   // 24
 Eventually("#panel").Should(b.HaveComputedStyleNumeric("width", BeNumerically(">", 320)))
 ```
 
-**Comparing colors** across syntaxes is its own small trap: a design token resolves to a `var()` chain while `getComputedStyle` yields a resolved `rgb(...)`, so a naive string compare fails even when the colors are identical.  `b.GetResolvedColor(color)` normalizes *any* CSS `<color>` — named, hex, or a `var(--token)` chain (resolved against the document's custom properties) — to canonical `rgb()`/`rgba()`:
+**Comparing colors** across syntaxes is its own small trap: a design token resolves to a `var()` chain while `getComputedStyle` yields a resolved `rgb(...)`, so a naive string compare fails even when the colors are identical.  `b.NormalizeColor(color)` normalizes *any* CSS `<color>` — named, hex, or a `var(--token)` chain (resolved against the document's `:root`-scoped custom properties) — to canonical `rgb()`/`rgba()`.  It takes no selector and reads no element of the page under test — it's a pure transform of a color string (the `var()` resolution works by briefly appending a throwaway `<span>` to `<body>` and reading its computed color):
 
 ```go
-b.GetResolvedColor("var(--tok-teal)")   // -> "rgb(20, 184, 166)"
-b.GetResolvedColor("teal")              // -> "rgb(0, 128, 128)"
+b.NormalizeColor("var(--tok-teal)")   // -> "rgb(20, 184, 166)"
+b.NormalizeColor("teal")              // -> "rgb(0, 128, 128)"
 ```
 
-And `b.Color(x)` is a matcher that normalizes **both** sides before comparing — pass it as the expected argument to `HaveComputedStyle` so a token matches a computed color regardless of how each is written:
+And `b.MatchColor(x)` is a matcher that normalizes **both** sides before comparing — pass it as the expected argument to `HaveComputedStyle` so a token matches a computed color regardless of how each is written:
 
 ```go
-Eventually(".leader path").Should(b.HaveComputedStyle("stroke", b.Color("var(--tok-teal)")))
-Expect(".badge").To(b.HaveComputedStyle("background-color", b.Color("#14b8a6")))
+Eventually(".leader path").Should(b.HaveComputedStyle("stroke", b.MatchColor("var(--tok-teal)")))
+Expect(".badge").To(b.HaveComputedStyle("background-color", b.MatchColor("#14b8a6")))
 ```
 
-`GetResolvedColor` is a one-shot snapshot (it doesn't touch the DOM under test and rejects the poll knobs); `GetComputedStyleNumeric` polls like the other getters.
+`NormalizeColor` is a one-shot snapshot (a pure transform that rejects the poll knobs); `GetComputedStyleNumeric` polls like the other getters.
 
 ### Properties
 

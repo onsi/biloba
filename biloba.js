@@ -748,11 +748,11 @@ if (!window["_biloba"]) {
         if (isNaN(v)) return rErr(`computed style "${p}" is "${raw}", which is not numeric`)
         return rRes(v)
     })
-    // resolveColor normalizes any CSS <color> (including a var(--token) chain, which inherits the
-    // document's custom properties through a detached probe appended to <body>) to the browser's
+    // normalizeColor normalizes any CSS <color> (including a var(--token) chain, which inherits the
+    // document's custom properties through a throwaway probe appended to <body>) to the browser's
     // canonical resolved form ("rgb(...)"/"rgba(...)").  It has no selector - callers invoke it
     // directly.  An unparseable color is an error (the browser leaves style.color untouched).
-    b.resolveColor = (input) => {
+    b.normalizeColor = (input) => {
         let probe = document.createElement("span")
         probe.style.color = input
         if (probe.style.color === "") return rErr(`"${input}" is not a valid CSS color`)

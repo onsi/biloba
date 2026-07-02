@@ -711,13 +711,13 @@ func (b *Biloba) GetComputedStyle(selector any, property string) string {
 	return result
 }
 
-// resolveColorErr normalizes any CSS <color> (including a var(--token) chain, resolved against the
-// document's custom properties via a detached probe) to the browser's canonical "rgb(...)"/"rgba(...)"
+// normalizeColorErr normalizes any CSS <color> (including a var(--token) chain, resolved against the
+// document's custom properties via a throwaway probe) to the browser's canonical "rgb(...)"/"rgba(...)"
 // form, or returns an error if the input is not a valid color.  It is the shared substrate behind
-// GetResolvedColor and the Color matcher.
-func (b *Biloba) resolveColorErr(color string) (string, error) {
+// NormalizeColor and the MatchColor matcher.
+func (b *Biloba) normalizeColorErr(color string) (string, error) {
 	r := &bilobaJSResponse{}
-	if _, err := b.RunErr(b.JSFunc("_biloba.resolveColor").Invoke(color), r); err != nil {
+	if _, err := b.RunErr(b.JSFunc("_biloba.normalizeColor").Invoke(color), r); err != nil {
 		return "", err
 	}
 	if r.Error() != nil {
@@ -727,46 +727,46 @@ func (b *Biloba) resolveColorErr(color string) (string, error) {
 }
 
 /*
-GetResolvedColor(color) normalizes any CSS <color> string to the browser's canonical resolved form ("rgb(...)" or "rgba(...)"), using a detached probe.  It resolves a design-token var() chain too (the probe inherits the document's custom properties), so you can compare a token against a computed color without hand-rolling a throwaway <span>:
+NormalizeColor(color) normalizes any CSS <color> string to the browser's canonical resolved form ("rgb(...)" or "rgba(...)").  It takes no selector and reads no element of the DOM under test - it is a pure transform of a color string.  It resolves a design-token var() chain too, by briefly appending a throwaway <span> to <body> and reading its computed color, so the token resolves against the document's :root-scoped custom properties (a property scoped only to some other subtree would not resolve this way):
 
-	b.GetResolvedColor("var(--tok-teal)")   // -> "rgb(20, 184, 166)"
-	b.GetResolvedColor("teal")              // -> "rgb(0, 128, 128)"
+	b.NormalizeColor("var(--tok-teal)")   // -> "rgb(20, 184, 166)"
+	b.NormalizeColor("teal")              // -> "rgb(0, 128, 128)"
 
-GetResolvedColor is a one-shot snapshot: it does not poll and does not touch the DOM under test.  Configuring it (WithTimeout/WithPolling/WithContext/Immediate) is a hard error.  An invalid color fails the spec.  To assert that a computed style equals a color regardless of syntax, prefer the [Biloba.Color] matcher, which normalizes both sides.
+NormalizeColor is a one-shot snapshot: it does not poll.  Configuring it (WithTimeout/WithPolling/WithContext/Immediate) is a hard error.  An invalid color fails the spec.  To assert that a computed style equals a color regardless of syntax, prefer the [Biloba.MatchColor] matcher, which normalizes both sides.
 
 Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
 */
-func (b *Biloba) GetResolvedColor(color string) string {
+func (b *Biloba) NormalizeColor(color string) string {
 	b.gt.Helper()
-	b.guardConfig("GetResolvedColor")
-	resolved, err := b.resolveColorErr(color)
+	b.guardConfig("NormalizeColor")
+	resolved, err := b.normalizeColorErr(color)
 	if err != nil {
-		b.gt.Fatalf("Failed to resolve color %q:\n%s", color, err.Error())
+		b.gt.Fatalf("Failed to normalize color %q:\n%s", color, err.Error())
 		return ""
 	}
 	return resolved
 }
 
 /*
-Color(expected) is a Gomega matcher that normalizes BOTH the actual value it receives and expected to the browser's canonical "rgb(...)"/"rgba(...)" form before comparing - so a design-token var() chain matches a computed rgb() color regardless of how each side is written.  It is meant to be passed as the expected argument to [Biloba.HaveComputedStyle]:
+MatchColor(expected) is a Gomega matcher that normalizes BOTH the actual value it receives and expected to the browser's canonical "rgb(...)"/"rgba(...)" form before comparing - so a design-token var() chain matches a computed rgb() color regardless of how each side is written.  It is meant to be passed as the expected argument to [Biloba.HaveComputedStyle]:
 
-	Eventually(".leader path").Should(b.HaveComputedStyle("stroke", b.Color("var(--tok-teal)")))
-	Expect(".badge").To(b.HaveComputedStyle("background-color", b.Color("#14b8a6")))
+	Eventually(".leader path").Should(b.HaveComputedStyle("stroke", b.MatchColor("var(--tok-teal)")))
+	Expect(".badge").To(b.HaveComputedStyle("background-color", b.MatchColor("#14b8a6")))
 
 Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
 */
-func (b *Biloba) Color(expected string) types.GomegaMatcher {
+func (b *Biloba) MatchColor(expected string) types.GomegaMatcher {
 	data := map[string]any{"Expected": expected}
 	return gcustom.MakeMatcher(func(actual any) (bool, error) {
 		actualStr, ok := actual.(string)
 		if !ok {
-			return false, fmt.Errorf("Color matcher expects a string, got %T", actual)
+			return false, fmt.Errorf("MatchColor expects a string, got %T", actual)
 		}
-		normActual, err := b.resolveColorErr(actualStr)
+		normActual, err := b.normalizeColorErr(actualStr)
 		if err != nil {
 			return false, err
 		}
-		normExpected, err := b.resolveColorErr(expected)
+		normExpected, err := b.normalizeColorErr(expected)
 		if err != nil {
 			return false, err
 		}

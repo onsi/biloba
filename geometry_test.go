@@ -272,32 +272,32 @@ var _ = Describe("Geometry getters and matchers", func() {
 		})
 	})
 
-	Describe("GetResolvedColor and the Color matcher", func() {
+	Describe("NormalizeColor and the MatchColor matcher", func() {
 		It("normalizes a named color to rgb()", func() {
-			Ω(b.GetResolvedColor("teal")).Should(Equal("rgb(0, 128, 128)"))
+			Ω(b.NormalizeColor("teal")).Should(Equal("rgb(0, 128, 128)"))
 		})
 
 		It("resolves a design-token var() chain", func() {
-			Ω(b.GetResolvedColor("var(--tok-teal)")).Should(Equal("rgb(20, 184, 166)"))
+			Ω(b.NormalizeColor("var(--tok-teal)")).Should(Equal("rgb(20, 184, 166)"))
 		})
 
 		It("fails the spec on an invalid color", func() {
-			b.GetResolvedColor("not-a-color")
+			b.NormalizeColor("not-a-color")
 			ExpectFailures(ContainSubstring("not a valid CSS color"))
 		})
 
 		It("is a hard error to configure it (it is a one-shot snapshot)", func() {
-			b.WithTimeout(time.Second).GetResolvedColor("teal")
-			ExpectFailures(ContainSubstring("GetResolvedColor does not support WithTimeout"))
+			b.WithTimeout(time.Second).NormalizeColor("teal")
+			ExpectFailures(ContainSubstring("NormalizeColor does not support WithTimeout"))
 		})
 
 		It("matches a computed color against a token, normalizing both sides", func() {
-			Eventually("#swatch").Should(b.HaveComputedStyle("color", b.Color("var(--tok-teal)")))
-			Expect("#swatch").To(b.HaveComputedStyle("background-color", b.Color("#14b8a6")))
+			Eventually("#swatch").Should(b.HaveComputedStyle("color", b.MatchColor("var(--tok-teal)")))
+			Expect("#swatch").To(b.HaveComputedStyle("background-color", b.MatchColor("#14b8a6")))
 		})
 
 		It("does not match a different color", func() {
-			Eventually("#swatch").ShouldNot(b.HaveComputedStyle("color", b.Color("red")))
+			Eventually("#swatch").ShouldNot(b.HaveComputedStyle("color", b.MatchColor("red")))
 		})
 	})
 
