@@ -1,3 +1,76 @@
+## 0.13.0
+
+## Breaking Changes
+
+- `b.Location()` is now `b.GetLocation()` and `b.Title()` is now `b.GetTitle()`.  Both are now
+  *polling* getters (they honor `WithTimeout`/`WithPolling`/`WithContext`/`Immediate`), and the
+  `Get` prefix is how Biloba spells a polling getter.  Rename call sites; there are no aliases.
+
+## Features
+
+- `b.HoldResponse(url)` holds a matching response hostage so you can force an arrival order and
+  turn an optimistic-UI reconciliation race into a deterministic red-then-green test.  `Await()`
+  blocks until a response is intercepted (and hands it to you), `Release()` lets it through
+  unchanged, `Count()` reports how many matched.  Held responses are force-released at the end of
+  the spec, so a failing spec can never wedge the tab.  It replaces a hand-rolled channel + atomic
+  first-only counter + pass-through echo + interception gate - four things that were each easy to
+  get subtly wrong.
+- `b.GetJSValue(expression, &optionalTypedTarget)` polls a JavaScript expression - typically a
+  `window.__x` path your app writes to - until it is defined, then returns it.  This is the blessed
+  *app-state barrier*: proof the browser actually processed something.  The DOM only shows the
+  optimistic value a click handler set synchronously, and a Go-side HTTP read bypasses the tab's
+  event loop entirely - neither proves your client folded the response.  The optional pointer
+  decodes into a concrete type, dodging the JSON `float64` gotcha.
+
+## Fixes
+
+- `b.GetLocation`/`b.GetTitle`/`b.HaveURL`/`b.HaveTitle` no longer fail the spec on a *transient*
+  CDP error.  Previously any chromedp error called `Fatalf`, so a Ginkgo `Fail` panicked out of an
+  `Eventually(b.Location)` instead of counting as a failed attempt - which defeats the entire point
+  of polling a URL.  It bit exactly where you most want to poll one: a live full-page navigation
+  legitimately throws `Inspected target navigated or closed (-32000)` while the target is swapped
+  (measured at ~0.03% of reads under contention).  A transient error is now a retryable miss and
+  only surfaces if it never clears by the deadline.
+- Enabling network interception now also disables the browser cache for the tab (restored by
+  `Prepare()`).  `ModifyResponse(...).Using(...)` could be handed a *stale cached body* - the origin
+  server was never contacted on a second fetch of a `max-age` resource, yet the handler ran and saw
+  the cached payload.
+
+## Failure output
+
+Three new on-failure diagnostics.  All are diagnostic only: none changes whether a spec passes, and
+none says anything unless the spec fails.
+
+- **Detached-node signal.**  A selector that resolved and then had its node replaced (or its
+  identifying attribute swapped in place) used to fail identically to "never matched".  Now the
+  failure says: `Selector "#row-4" matched 6x during this poll (+0.00s to +0.41s) then stopped
+  matching - the node was likely replaced, or its identifying attribute changed in place.`
+- **Occluded clicks.**  Plain `b.Click` stays occlusion-blind by design and still succeeds - but a
+  swallowed click fails *downstream*, pointing nowhere useful.  Every click now records a hit-test
+  and reports it only on failure, naming the occluder and pointing at `b.BeClickable()` /
+  `b.Realistic().Click()`.
+- **`AllowMissing`'s sharp edge is now self-explaining.**  When a two-axis getter times out because
+  the *property* never became defined (rather than the element never appearing), the message says
+  the element was present the whole time, names the undefined property, and suggests the exact
+  `b.AllowMissing("...")` call to copy.
+- Document-order matcher failures (`BePrecededBy`/`BeFollowedBy`) now report the order they
+  *actually* observed ("Actually: #note comes BEFORE #section", including containment), so a
+  reversed order assertion is self-correcting rather than merely confusing.
+- **A network handler that never ran because an earlier one claimed its URL now says so**, naming
+  both registration sites.  Handlers are first-match-wins, so a later handler for an already-claimed
+  URL is dead code - previously silent dead code, which is what made the `Ordered`-container trap
+  below so hard to diagnose.  Reported only when a handler never fired *and* was shadowed, so a
+  catch-all that loses one URL to a specific stub while claiming others stays quiet.
+
+## Docs
+
+- `ModifyResponse`'s first-match-wins contract is now documented, along with the trap it creates:
+  `Prepare()` is what clears handlers, so inside an `Ordered` container (where a
+  `BeforeEach(..., OncePerOrdered)` does not run between the `It`s) handlers **accumulate** and an
+  identical handler registered by a later spec is silently dead code.  The signature is distinctive:
+  an interception gate that times out only when run with the rest of the suite and passes when
+  focused alone.
+
 ## 0.12.1
 
 ### Fixes
