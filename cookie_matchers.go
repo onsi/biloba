@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/onsi/gomega"
 	"github.com/onsi/gomega/format"
 	"github.com/onsi/gomega/gcustom"
 	"github.com/onsi/gomega/types"
@@ -14,6 +15,8 @@ CookieMatcher is a chainable Gomega matcher returned by [Biloba.HaveCookie].  It
 
 	Expect(b).To(b.HaveCookie("session").WithValue("abc123").WithPath("/"))
 
+Chain [CookieMatcher.Capture] to keep the [Cookie] that satisfied the assertion.
+
 Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
 */
 type CookieMatcher struct {
@@ -21,6 +24,7 @@ type CookieMatcher struct {
 	fieldMatchers   []cookieFieldMatcher
 	matchingCookies []Cookie
 	allCookies      []Cookie
+	captureTarget   any
 }
 
 type cookieFieldMatcher struct {
@@ -38,6 +42,11 @@ HaveCookie() returns a [CookieMatcher] that passes if the tab passed to the asse
 Chain WithValue/WithPath/WithDomain/WithSameSite/WithSecure/WithHTTPOnly to further constrain the same cookie:
 
 	Expect(b).To(b.HaveCookie("session").WithValue("abc123").WithPath("/").WithSecure())
+
+Chain [CookieMatcher.Capture] to keep the cookie that satisfied the assertion:
+
+	var cookie biloba.Cookie
+	Eventually(b).Should(b.HaveCookie("session").Capture(&cookie))
 
 Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
 */
@@ -144,7 +153,34 @@ func (m *CookieMatcher) withField(field string, expected any, value func(Cookie)
 	return &CookieMatcher{
 		nameMatcher:   m.nameMatcher,
 		fieldMatchers: fieldMatchers,
+		captureTarget: m.captureTarget,
 	}
+}
+
+/*
+Capture(&target) records the [Cookie] this matcher matches into target as a side effect of a successful
+match, so you can poll for the cookie you care about and keep it - in one read:
+
+	var cookie biloba.Cookie
+	Eventually(b).Should(b.HaveCookie("session").WithSecure().Capture(&cookie))
+	Expect(cookie.Value).To(HavePrefix("v2."))
+
+Capture composes with the WithX refinements in either order - they all constrain the same cookie, and
+the captured cookie is the one that satisfied every refinement.
+
+Capture writes only when the matcher matches, so nothing is captured under ShouldNot/NotTo.  target
+must be a non-nil pointer; Biloba decodes into it the way encoding/json does, and a genuine type
+mismatch fails the assertion immediately rather than waiting out the timeout.
+
+Like [ValueMatcher.Capture] it returns a NEW matcher and leaves the receiver alone, so a query held in
+a variable can be reused with different targets.
+
+Read https://onsi.github.io/biloba/#capturing-values-from-matchers to learn more about capturing values
+*/
+func (m *CookieMatcher) Capture(target any) *CookieMatcher {
+	captured := *m
+	captured.captureTarget = target
+	return &captured
 }
 
 func (m *CookieMatcher) Match(actual any) (bool, error) {
@@ -175,6 +211,11 @@ func (m *CookieMatcher) Match(actual any) (bool, error) {
 			}
 		}
 		if allFieldsMatch {
+			if m.captureTarget != nil {
+				if err := decodeCapture(cookie, m.captureTarget); err != nil {
+					return false, gomega.StopTrying(err.Error())
+				}
+			}
 			return true, nil
 		}
 	}
@@ -224,14 +265,19 @@ HaveNumCookies() is a Gomega matcher that passes if the number of cookies on the
 	Expect(b).To(b.HaveNumCookies(2))
 	Expect(b).To(b.HaveNumCookies(BeNumerically(">", 0)))
 
+It returns a [ValueMatcher], so you can [ValueMatcher.Capture] the count that satisfied the assertion:
+
+	var n int
+	Eventually(b).Should(b.HaveNumCookies(BeNumerically(">", 0)).Capture(&n))
+
 Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
 */
-func (b *Biloba) HaveNumCookies(expected any) types.GomegaMatcher {
+func (b *Biloba) HaveNumCookies(expected any) *ValueMatcher {
 	var data = map[string]any{}
 	var matcher = matcherOrEqual(expected)
 	data["Matcher"] = matcher
-	return gcustom.MakeMatcher(func(actual *Biloba) (bool, error) {
+	return capturableResult(gcustom.MakeMatcher(func(actual *Biloba) (bool, error) {
 		data["Result"] = len(actual.GetCookies())
 		return matcher.Match(data["Result"])
-	}).WithTemplate("HaveNumCookies:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}).WithTemplate("HaveNumCookies:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
 }

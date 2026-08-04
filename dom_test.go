@@ -908,6 +908,38 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(match).Should(BeFalse())
 			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
 		})
+
+		It("errors - in both directions - when the element has no checked property at all", func() {
+			// #check-boxes is the <div> that WRAPS the checkboxes (the same mistake as selecting the
+			// enclosing <label>).  It can never be checked, so reading its undefined `checked` and
+			// flattening it to false would make ShouldNot(b.BeChecked()) pass forever.
+			match, err := b.BeChecked().Match("#check-boxes")
+			Ω(match).Should(BeFalse())
+			Ω(err).Should(MatchError(SatisfyAll(
+				ContainSubstring(`<div#check-boxes> has no "checked" property`),
+				ContainSubstring("did you select the label or wrapper rather than the input?"),
+				ContainSubstring("selector: #check-boxes"),
+			)))
+
+			failure := ""
+			g := NewGomega(func(message string, callerSkip ...int) { failure = message })
+			g.Expect("#check-boxes").ShouldNot(b.BeChecked())
+			Ω(failure).Should(ContainSubstring(`has no "checked" property`))
+		})
+
+		It("keeps an unchecked input a plain non-match, not an error", func() {
+			// the distinction that matters: #blue IS a checkbox, it just isn't checked.  That must stay
+			// an honest, error-free ShouldNot.
+			match, err := b.BeChecked().Match("#blue")
+			Ω(match).Should(BeFalse())
+			Ω(err).ShouldNot(HaveOccurred())
+			Ω("#blue").ShouldNot(b.BeChecked())
+
+			// ...and a checked one still matches
+			match, err = b.BeChecked().Match("#red")
+			Ω(match).Should(BeTrue())
+			Ω(err).ShouldNot(HaveOccurred())
+		})
 	})
 
 	Describe("BeFocused", func() {
@@ -1337,6 +1369,37 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Expect(".notice").To(b.EachHaveProperty("dataset.name", ContainElement("bob")))
 			Expect(".notice").NotTo(b.EachHaveProperty("dataset.name", ContainElement("john")))
 			Expect("input").To(b.EachHaveProperty("tagName", HaveEach("INPUT")))
+		})
+
+		It("captures the values off the existence-only form too", func() {
+			// the existence-only form used to leave a Capture target at its zero value - a vacuity in
+			// the very feature built to fix vacuities.  It now hands back the same slice the
+			// value-matching form does.
+			var texts []string
+			Ω("#list li").Should(b.EachHaveProperty("innerText").Capture(&texts))
+			Ω(texts).Should(Equal([]string{"First Things", "Second Things", "Third Things"}))
+
+			var viaValues []string
+			Ω("#list li").Should(b.EachHaveProperty("innerText", ContainElement("First Things")).Capture(&viaValues))
+			Ω(viaValues).Should(Equal(texts))
+
+			// nothing is captured when the matcher does not match
+			var untouched []string
+			Ω(".notice").ShouldNot(b.EachHaveProperty("dataset.name").Capture(&untouched))
+			Ω(untouched).Should(BeEmpty())
+		})
+
+		It("still tells 'undefined' apart from 'defined but null'", func() {
+			// the third .notice has no data-name AT ALL: the value form reports it as nil, but the
+			// existence-only form must still fail - undefined is not "defined but null"...
+			Ω(".notice").Should(b.EachHaveProperty("dataset.name", "henry", "bob", nil))
+			Ω(".notice").ShouldNot(b.EachHaveProperty("dataset.name"))
+
+			// ...while onclick IS defined on every element and is null until a handler is assigned, so
+			// the existence-only form passes and captures the nulls
+			var handlers []any
+			Ω("#list li").Should(b.EachHaveProperty("onclick").Capture(&handlers))
+			Ω(handlers).Should(HaveExactElements(BeNil(), BeNil(), BeNil()))
 		})
 
 		It("fails (does not pass vacuously) when no elements match the selector", func() {
@@ -1999,6 +2062,288 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(b.XPath().WithText(`"Something magic"al""!!'`)).Should(b.HaveProperty("dataset.name", "White-Castle"))
 			Ω(b.XPath().WithTextContains(`"Something magic"al""!!'`)).Should(b.HaveProperty("dataset.name", "White-Castle"))
 			Ω(b.XPath().WithTextStartsWith(`"Something magic"al""!!'`)).Should(b.HaveProperty("dataset.name", "White-Castle"))
+		})
+	})
+
+	Describe("capturing values off the DOM matchers", func() {
+		It("captures the count HaveCount observed", func() {
+			var n int
+			Ω(".notice").Should(b.HaveCount(BeNumerically(">", 1)).Capture(&n))
+			Ω(n).Should(Equal(3))
+		})
+
+		It("captures the distinct count HaveDistinctCount observed", func() {
+			var n int
+			Ω(".mark").Should(b.HaveDistinctCount("data-key", BeNumerically("<", 4)).Capture(&n))
+			Ω(n).Should(Equal(3))
+		})
+
+		It("captures the text the text matchers observed", func() {
+			var innerText, textContent, text string
+			Ω("#hello").Should(b.HaveInnerText(ContainSubstring("Biloba")).Capture(&innerText))
+			Ω(innerText).Should(Equal("Hello Biloba!"))
+
+			Ω("#hello").Should(b.HaveTextContent(ContainSubstring("Biloba")).Capture(&textContent))
+			Ω(textContent).Should(Equal("Hello Biloba!"))
+
+			// HaveText captures the whitespace-normalized form it actually matched on
+			Ω("#spacey-text").Should(b.HaveText(HavePrefix("Hello")).Capture(&text))
+			Ω(text).Should(Equal("Hello there Biloba!"))
+		})
+
+		It("captures the classList HaveClass observed", func() {
+			var classes []string
+			Ω("#classy").Should(b.HaveClass("dog").Capture(&classes))
+			Ω(classes).Should(ConsistOf("dog", "cat"))
+		})
+
+		It("captures the value HaveValue and HaveComputedStyle observed", func() {
+			var value string
+			Ω("#text-input").Should(b.HaveValue("initial value").Capture(&value))
+			Ω(value).Should(Equal("initial value"))
+
+			var color string
+			Ω("#styled").Should(b.HaveComputedStyle("color", "rgb(255, 0, 0)").Capture(&color))
+			Ω(color).Should(Equal("rgb(255, 0, 0)"))
+		})
+
+		It("captures the decoded value HaveJSONAttribute observed - straight into a struct", func() {
+			var state struct {
+				Open   bool     `json:"open"`
+				Count  int      `json:"count"`
+				Labels []string `json:"labels"`
+			}
+			Ω("#widget").Should(b.HaveJSONAttribute("data-widget-state", HaveKeyWithValue("open", true)).Capture(&state))
+			Ω(state.Open).Should(BeTrue())
+			Ω(state.Count).Should(Equal(3))
+			Ω(state.Labels).Should(Equal([]string{"a", "b"}))
+		})
+
+		It("captures the value the value-matching HaveAttribute/HaveProperty forms observed", func() {
+			var role string
+			Ω("#link").Should(b.HaveAttribute("data-role", "nav").Capture(&role))
+			Ω(role).Should(Equal("nav"))
+
+			var name string
+			Ω(".notice").Should(b.HaveProperty("dataset.name", "henry").Capture(&name))
+			Ω(name).Should(Equal("henry"))
+		})
+
+		It("captures from the bare-existence HaveAttribute form", func() {
+			var role string
+			Ω("#link").Should(b.HaveAttribute("data-role").Capture(&role))
+			Ω(role).Should(Equal("nav"))
+
+			var href string
+			Ω("#link").Should(b.HaveAttribute("href").Capture(&href))
+			Ω(href).Should(Equal("/about"))
+		})
+
+		It("keeps the bare-existence HaveAttribute form on presence, not truthiness", func() {
+			// #yellow is `disabled` - the attribute is present with an empty value, which still matches
+			var disabled string
+			Ω("#yellow").Should(b.HaveAttribute("disabled").Capture(&disabled))
+			Ω(disabled).Should(Equal(""))
+
+			Ω("#link").ShouldNot(b.HaveAttribute("data-missing"))
+		})
+
+		It("captures from the bare-existence HaveProperty form", func() {
+			var flavor string
+			Ω(".notice").Should(b.HaveProperty("flavor").Capture(&flavor))
+			Ω(flavor).Should(Equal("strawberry"))
+
+			// a javascript number captured into an *int is an int, not a float64
+			var count int
+			Ω(".notice").Should(b.HaveProperty("count").Capture(&count))
+			Ω(count).Should(Equal(3))
+		})
+
+		It("keeps the bare-existence HaveProperty form on presence, not truthiness", func() {
+			// "hidden" is defined on every HTMLElement and is false here - defined-but-falsy still matches
+			var hidden bool
+			Ω(".notice").Should(b.HaveProperty("hidden").Capture(&hidden))
+			Ω(hidden).Should(BeFalse())
+
+			Ω(".notice").ShouldNot(b.HaveProperty("non-existing"))
+		})
+
+		It("still errors, rather than silently retrying, when the element does not exist", func() {
+			match, err := b.HaveAttribute("href").Match("#non-existing")
+			Ω(match).Should(BeFalse())
+			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
+
+			match, err = b.HaveProperty("tagName").Match("#non-existing")
+			Ω(match).Should(BeFalse())
+			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
+		})
+
+		It("captures the slice over all matches from the Each* matchers", func() {
+			var texts []string
+			Ω("#list li").Should(b.EachHaveInnerText(ContainElement("First Things")).Capture(&texts))
+			Ω(texts).Should(Equal([]string{"First Things", "Second Things", "Third Things"}))
+
+			var contents []string
+			Ω("#list li").Should(b.EachHaveTextContent(HaveLen(3)).Capture(&contents))
+			Ω(contents).Should(HaveLen(3))
+
+			var names []string
+			Ω(".notice").Should(b.EachHaveProperty("dataset.name", ContainElement("bob")).Capture(&names))
+			Ω(names).Should(HaveExactElements("henry", "bob", ""))
+
+			var classLists [][]string
+			Ω(".each-vis").Should(b.EachHaveClass("tagged").Capture(&classLists))
+			Ω(classLists).Should(HaveLen(3))
+			Ω(classLists[2]).Should(ConsistOf("each-vis", "tagged", "hidden"))
+		})
+
+		It("captures nothing under ShouldNot", func() {
+			var text string
+			Ω("#hello").ShouldNot(b.HaveInnerText("nope").Capture(&text))
+			Ω(text).Should(BeEmpty())
+
+			var n int
+			Ω(".notice").ShouldNot(b.HaveCount(17).Capture(&n))
+			Ω(n).Should(BeZero())
+
+			var classes []string
+			Ω("#classy").ShouldNot(b.HaveClass("hippo").Capture(&classes))
+			Ω(classes).Should(BeNil())
+		})
+
+		It("captures the value from the attempt that finally passed", func() {
+			// the class changes stage-a -> stage-b -> stage-c while we poll; only the last attempt
+			// matches, and that is the classList Capture must hand back
+			b.Run(`document.getElementById("counter").className = "stage-a"
+				setTimeout(() => { document.getElementById("counter").className = "stage-b" }, 150)
+				setTimeout(() => { document.getElementById("counter").className = "stage-c" }, 300)`)
+			Ω("#counter").Should(b.HaveClass("stage-a"))
+
+			var classes []string
+			Eventually("#counter").WithTimeout(time.Second * 5).WithPolling(time.Millisecond * 10).Should(b.HaveClass("stage-c").Capture(&classes))
+			Ω(classes).Should(Equal([]string{"stage-c"}))
+		})
+
+		It("fails fast - it does not wait out the timeout - when the capture target cannot hold the value", func() {
+			// "nav" can never decode into an *int, so Capture stops the poll immediately rather than
+			// burning the (long) timeout
+			var wrongType int
+			failure := ""
+			g := NewGomega(func(message string, callerSkip ...int) { failure = message })
+
+			start := time.Now()
+			g.Eventually("#link").WithTimeout(time.Second * 10).WithPolling(time.Millisecond * 10).Should(b.HaveAttribute("data-role", "nav").Capture(&wrongType))
+			Ω(time.Since(start)).Should(BeNumerically("<", time.Second*2))
+
+			Ω(failure).Should(ContainSubstring("Told to stop trying"))
+			Ω(failure).Should(ContainSubstring("Capture cannot decode the observed value into *int"))
+			Ω(wrongType).Should(BeZero())
+		})
+
+		It("explains itself on the synchronous Expect path too, without the polling preamble", func() {
+			// StopTrying is only special to Eventually; under Ω(...).Should(...) Gomega renders the bare
+			// message.  That is the form users hit first, so pin that it still says what went wrong.
+			var wrongType int
+			failure := ""
+			g := NewGomega(func(message string, callerSkip ...int) { failure = message })
+
+			g.Expect("#link").Should(b.HaveAttribute("data-role", "nav").Capture(&wrongType))
+
+			Ω(failure).Should(ContainSubstring("Capture cannot decode the observed value into *int"))
+			Ω(failure).ShouldNot(ContainSubstring("Told to stop trying"))
+			Ω(wrongType).Should(BeZero())
+		})
+
+	})
+
+	Describe("decoding a getter's result into an optional trailing pointer", func() {
+		It("decodes GetProperty into the type you ask for", func() {
+			// a javascript number arrives as a float64; the *int gets 3, not float64(3)
+			var count int
+			Ω(b.GetProperty(".notice", "count", &count)).Should(Equal(3.0))
+			Ω(count).Should(Equal(3))
+
+			var width int
+			b.GetProperty(".notice", "offsetWidth", &width)
+			Ω(width).Should(Equal(200))
+
+			var tagName string
+			b.GetProperty(".notice", "tagName", &tagName)
+			Ω(tagName).Should(Equal("DIV"))
+
+			var classes []string
+			b.GetProperty(".notice", "classList", &classes)
+			Ω(classes).Should(Equal([]string{"notice"}))
+		})
+
+		It("decodes GetAttribute into the type you ask for", func() {
+			var role, href string
+			Ω(b.GetAttribute("#link", "data-role", &role)).Should(Equal("nav"))
+			Ω(role).Should(Equal("nav"))
+
+			b.GetAttribute("#link", "href", &href)
+			Ω(href).Should(Equal("/about"))
+		})
+
+		It("decodes GetValue into the type you ask for", func() {
+			var checked bool
+			Ω(b.GetValue("#red", &checked)).Should(BeTrue())
+			Ω(checked).Should(BeTrue())
+
+			var text string
+			b.GetValue("#text-input", &text)
+			Ω(text).Should(Equal("initial value"))
+		})
+
+		It("decodes the Current*ForEach snapshots into the slice type you ask for", func() {
+			var keys []string
+			Ω(b.CurrentAttributeForEach(".mark", "data-key", &keys)).Should(HaveLen(4))
+			Ω(keys).Should(Equal([]string{"alpha", "alpha", "beta", "gamma"}))
+
+			var tags []string
+			b.CurrentPropertyForEach(".mark", "tagName", &tags)
+			Ω(tags).Should(Equal([]string{"SPAN", "SPAN", "SPAN", "SPAN"}))
+
+			var checks []bool
+			b.CurrentValueForEach("#check-boxes input[type='checkbox']", &checks)
+			Ω(checks).Should(Equal([]bool{true, false, false, false}))
+		})
+
+		It("fails - exactly once, and only after the poll has succeeded - on a genuine type mismatch", func() {
+			var n int
+			Ω(b.GetProperty(".notice", "tagName", &n)).Should(Equal("DIV"))
+			Ω(n).Should(BeZero())
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("GetProperty could not decode into the pointer you provided"),
+				ContainSubstring("Capture cannot decode the observed value into *int"),
+			))
+		})
+
+		It("fails on a type mismatch in the snapshot getters too", func() {
+			var ns []int
+			b.CurrentAttributeForEach(".mark", "data-key", &ns)
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("CurrentAttributeForEach could not decode into the pointer you provided"),
+				ContainSubstring("Capture cannot decode the observed value into *[]int"),
+			))
+		})
+
+		It("rejects a non-pointer decode target", func() {
+			Ω(b.GetProperty(".notice", "count", 17)).Should(BeNil())
+			ExpectFailures("GetProperty requires a non-nil pointer to decode into, got int")
+
+			var nilPointer *string
+			Ω(b.GetAttribute("#link", "href", nilPointer)).Should(BeNil())
+			ExpectFailures("GetAttribute requires a non-nil pointer to decode into, got *string")
+		})
+
+		It("rejects more than one trailing argument", func() {
+			var a, c string
+			Ω(b.GetValue("#text-input", &a, &c)).Should(BeNil())
+			ExpectFailures("GetValue accepts at most one trailing pointer to decode into, but got 2 extra arguments")
+
+			Ω(b.CurrentValueForEach("#text-input", &a, &c)).Should(BeNil())
+			ExpectFailures("CurrentValueForEach accepts at most one trailing pointer to decode into, but got 2 extra arguments")
 		})
 	})
 })

@@ -112,7 +112,12 @@ m := b.EachBeVisible()
 
 - **Counting:** `Eventually(sel).Should(b.HaveCount(7))` (or `b.HaveCount(BeNumerically(">", 10))`) — not `b.Run("...querySelectorAll(sel).length", &n)`.
 - **Attributes/properties:** `b.GetAttribute`/`b.GetProperty` (or the `b.HaveAttribute`/`b.HaveProperty` matchers) — not `getAttribute`/property reads in JS.
-- **Text:** `b.HaveInnerText`/`b.HaveTextContent`; the ordered text of a group is `Expect(".step").To(b.EachHaveInnerText("Pick", "Pay", "Done"))`. For **negation** ("nothing here says X"), use a text locator + `ShouldNot(b.Exist())`: `Eventually(b.ByTextContains("Draft").Within("#published-list")).ShouldNot(b.Exist())` — not a JS text scan.
+- **Text:** `b.HaveInnerText`/`b.HaveTextContent`; the ordered text of a group is `Expect(".step").To(b.EachHaveInnerText("Pick", "Pay", "Done"))`. For **negation** ("nothing here says X"), use a text locator + `ShouldNot(b.Exist())` — but **anchor the scope first**, because a `Within`/`Containing` whose scope doesn't resolve matches *nothing*, so the negation passes instantly and permanently against a page that never rendered the scope:
+  ```go
+  Eventually("#published-list").Should(b.Exist())                                   // the scope is real…
+  Eventually(b.ByTextContains("Draft").Within("#published-list")).ShouldNot(b.Exist()) // …so this means something
+  ```
+- **Capturing a value you also assert on:** `Eventually(sel).Should(b.HaveAttribute("data-id", Not(BeEmpty())).Capture(&id))` — one read. Asserting and *then* calling the getter is two reads of a page that may have changed in between. Under `ShouldNot` nothing is captured (by design), so a spec that needs the value uses a `Should`.
 - **Dismissing a popover/menu (click-away):** `b.Click(sel, b.At(x, y))` is the blessed idiom — target a background region and offset onto the backdrop: `b.Click("body", b.At(5, 5))`.
 
 **Never put a side effect in an `Eventually`/`Consistently` body** — the body re-runs every poll, so a `b.Click` inside it rapid-fires clicks before state settles (a real footgun for cycling controls like a 3-way toggle). The body must be idempotent. To drive a cycling control to a target state, click *once* then wait for the change before reconsidering:

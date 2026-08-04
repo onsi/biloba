@@ -159,6 +159,84 @@ var _ = Describe("Javascript", func() {
 			Ω(match).Should(BeFalse())
 			Ω(err).Should(MatchError("Failed to run script:\n1+\n\nexception \"Uncaught\" (0:2): SyntaxError: Unexpected end of input"))
 		})
+
+		Describe("capturing the evaluated value", func() {
+			type foldEntry struct {
+				Fidelity string
+				Seq      int
+			}
+
+			It("captures the value from the winning read, decoded into a typed target", func() {
+				// the motivating case: gate on a condition AND keep the value that satisfied it, without
+				// a second read of an expression whose value may have moved on in between
+				b.Run(`window.__biloba_fold_log = [{fidelity: "shape", seq: 1}]`)
+				b.Run(`setTimeout(() => { window.__biloba_fold_log.push({fidelity: "text", seq: 2}) }, 50)`)
+
+				var log []foldEntry
+				Eventually(`window.__biloba_fold_log`).Should(b.EvaluateTo(ContainElement(HaveKeyWithValue("fidelity", "text"))).Capture(&log))
+				Ω(log).Should(HaveLen(2))
+				Ω(log[0]).Should(Equal(foldEntry{Fidelity: "shape", Seq: 1}))
+				Ω(log[1]).Should(Equal(foldEntry{Fidelity: "text", Seq: 2}))
+			})
+
+			It("decodes a JavaScript number into a typed target, dodging the float64 gotcha", func() {
+				b.Run(`window.__biloba_capture_num = 3`)
+				var n int
+				Eventually(`window.__biloba_capture_num`).Should(b.EvaluateTo(BeNumerically("==", 3)).Capture(&n))
+				Ω(n).Should(Equal(3)) //int(3), not float64(3)
+			})
+
+			It("reads the expression exactly once - the whole point of Capture", func() {
+				//a getter that counts its reads; the trailing null keeps Run's completion value
+				//JSON-serializable (defineProperty returns window, which is circular)
+				b.Run(`
+					window.__biloba_capture_reads = 0
+					Object.defineProperty(window, "__biloba_capture_counted", {
+						configurable: true,
+						get: () => { window.__biloba_capture_reads++; return ["a"] },
+					})
+					null
+				`)
+
+				var values []string
+				Eventually(`window.__biloba_capture_counted`).Should(b.EvaluateTo(HaveLen(1)).Capture(&values))
+				Ω(values).Should(Equal([]string{"a"}))
+				Ω(b.Run(`window.__biloba_capture_reads`)).Should(BeNumerically("==", 1))
+			})
+
+			It("does not capture under ShouldNot", func() {
+				b.Run(`window.__biloba_capture_str = "hello"`)
+				var s string
+				Ω(`window.__biloba_capture_str`).ShouldNot(b.EvaluateTo("goodbye").Capture(&s))
+				Ω(s).Should(BeEmpty())
+			})
+
+			It("leaves the failure message untouched", func() {
+				b.Run("var a = 0")
+				var n int
+				matcher := b.EvaluateTo(5.0).Capture(&n)
+				match, err := matcher.Match(`a += 1`)
+				Ω(match).Should(BeFalse())
+				Ω(err).ShouldNot(HaveOccurred())
+				Ω(matcher.FailureMessage(`a += 1`)).Should(Equal("Return value for script:\na += 1\nFailed with:\nExpected\n    <float64>: 1\nto equal\n    <float64>: 5"))
+				Ω(n).Should(BeZero())
+			})
+
+			It("fails fast - it does not wait out the timeout - when the capture target cannot hold the value", func() {
+				b.Run(`window.__biloba_capture_wrong = "not-a-number"`)
+				var wrongType int
+				failure := ""
+				g := NewGomega(func(message string, callerSkip ...int) { failure = message })
+
+				start := time.Now()
+				g.Eventually(`window.__biloba_capture_wrong`).WithTimeout(time.Second * 10).WithPolling(time.Millisecond * 10).Should(b.EvaluateTo("not-a-number").Capture(&wrongType))
+				Ω(time.Since(start)).Should(BeNumerically("<", time.Second*2))
+
+				Ω(failure).Should(ContainSubstring("Told to stop trying"))
+				Ω(failure).Should(ContainSubstring("Capture cannot decode the observed value into *int"))
+				Ω(wrongType).Should(BeZero())
+			})
+		})
 	})
 
 	Describe("GetJSValue", func() {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/onsi/gomega"
@@ -148,20 +149,25 @@ Use it like this:
 	Expect("div.comment").To(tab.HaveCount(3))
 	Eventually("div.comment").Should(tab.HaveCount(BeNumerically(">", 5)))
 
+It returns a [ValueMatcher], so you can keep the count that satisfied the assertion:
+
+	var n int
+	Eventually("div.comment").Should(tab.HaveCount(BeNumerically(">", 5)).Capture(&n))
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
-func (b *Biloba) HaveCount(expected any) types.GomegaMatcher {
+func (b *Biloba) HaveCount(expected any) *ValueMatcher {
 	var data = map[string]any{}
 	var matcher = matcherOrEqual(expected)
 	data["Matcher"] = matcher
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("count", selector)
 		if r.Error() != nil {
 			return false, r.Error()
 		}
 		data["Result"] = r.ResultInt()
 		return matcher.Match(data["Result"])
-	}).WithTemplate("HaveCount for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}).WithTemplate("HaveCount for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
 }
 
 /*
@@ -172,20 +178,22 @@ This is the assertion for "N unique things are present" when the DOM may transie
 	Eventually(".mark").Should(tab.HaveDistinctCount("data-key", 3))
 	Eventually(".mark").Should(tab.HaveDistinctCount("data-key", BeNumerically(">=", 3)))
 
+It returns a [ValueMatcher], so you can keep the distinct count that satisfied the assertion with .Capture(&n).
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
-func (b *Biloba) HaveDistinctCount(attribute string, expected any) types.GomegaMatcher {
+func (b *Biloba) HaveDistinctCount(attribute string, expected any) *ValueMatcher {
 	var data = map[string]any{"Attribute": attribute}
 	var matcher = matcherOrEqual(expected)
 	data["Matcher"] = matcher
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("distinctCountByAttr", selector, attribute)
 		if r.Error() != nil {
 			return false, r.Error()
 		}
 		data["Result"] = r.ResultInt()
 		return matcher.Match(data["Result"])
-	}).WithTemplate("HaveDistinctCount \"{{.Data.Attribute}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}).WithTemplate("HaveDistinctCount \"{{.Data.Attribute}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
 }
 
 /*
@@ -314,10 +322,12 @@ Use it like this:
 	Expect("div.comment").To(tab.HaveInnerText("hello world"))
 	Expect("div.comment").To(tab.HaveInnerText(HaveSuffix("world")))
 
+It returns a [ValueMatcher], so you can keep the innerText that satisfied the assertion with .Capture(&text).
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DO
 M
 */
-func (b *Biloba) HaveInnerText(expected any) types.GomegaMatcher {
+func (b *Biloba) HaveInnerText(expected any) *ValueMatcher {
 	return b.HaveProperty("innerText", expected)
 }
 
@@ -341,10 +351,12 @@ Use it like this:
 	//equivalent to, but tidier than
 	Eventually(tab.CurrentInnerTextForEach).WithArgument("div.comment").Should(ContainElement("new comment"))
 
+It returns a [ValueMatcher], so you can keep the slice of innerTexts that satisfied the assertion with .Capture(&texts).
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DO
 M
 */
-func (b *Biloba) EachHaveInnerText(args ...any) types.GomegaMatcher {
+func (b *Biloba) EachHaveInnerText(args ...any) *ValueMatcher {
 	return b.EachHaveProperty("innerText", args...)
 }
 
@@ -372,9 +384,11 @@ Use it like this:
 	Eventually("div.comment").Should(tab.HaveTextContent("hello world"))
 	Eventually("div.comment").Should(tab.HaveTextContent(ContainSubstring("world")))
 
+It returns a [ValueMatcher], so you can keep the textContent that satisfied the assertion with .Capture(&text).
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
-func (b *Biloba) HaveTextContent(expected any) types.GomegaMatcher {
+func (b *Biloba) HaveTextContent(expected any) *ValueMatcher {
 	return b.HaveProperty("textContent", expected)
 }
 
@@ -398,9 +412,11 @@ Use it like this:
 	//equivalent to, but tidier than
 	Eventually(tab.CurrentTextContentForEach).WithArgument("div.comment").Should(ContainElement("new comment"))
 
+It returns a [ValueMatcher], so you can keep the slice of textContents that satisfied the assertion with .Capture(&texts).
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
-func (b *Biloba) EachHaveTextContent(args ...any) types.GomegaMatcher {
+func (b *Biloba) EachHaveTextContent(args ...any) *ValueMatcher {
 	return b.EachHaveProperty("textContent", args...)
 }
 
@@ -416,11 +432,20 @@ Wrap the property name in [Biloba.AllowMissing] to make an undefined property a 
 
 Dot-delimited properties are also supported.  Configure the wait with WithTimeout/WithPolling/WithContext, or opt into act-once/fail-fast with Immediate().
 
+Pass an optional trailing pointer to have the value decoded into a Go type for you (same rules as [ValueMatcher.Capture], so a JavaScript number lands in an *int as an int rather than a float64).  The value is still returned as before:
+
+	var width int
+	tab.GetProperty("#row", "offsetWidth", &width)   // width == 3, not float64(3)
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#properties to learn more about working with properties
 */
-func (b *Biloba) GetProperty(selector any, property any) any {
+func (b *Biloba) GetProperty(selector any, property any, args ...any) any {
 	b.gt.Helper()
+	target, ok := b.decodeTarget("GetProperty", args)
+	if !ok {
+		return nil
+	}
 	name := nameOf(property)
 	var result any
 	data := map[string]any{}
@@ -436,7 +461,9 @@ func (b *Biloba) GetProperty(selector any, property any) any {
 		result = newProperties(r.Result).Get(name)
 		return true, nil
 	}).WithTemplate(undefinedAxisTemplate("property", fmt.Sprintf("have property %q", name)), data)
-	b.pollOrImmediate(selector, matcher)
+	if b.pollOrImmediate(selector, matcher) {
+		b.decodeResult("GetProperty", target, result)
+	}
 	return result
 }
 
@@ -446,16 +473,28 @@ CurrentPropertyForEach(selector, property) returns a snapshot of the requested p
 Unlike the singular [Biloba.GetProperty], CurrentPropertyForEach does not poll - it captures what is present right now.  Gate on the matches being present first (e.g. Eventually(selector).Should(b.HaveCount(n))) when they appear asynchronously.
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
+Pass an optional trailing pointer to have the slice decoded into a Go type for you (same rules as [ValueMatcher.Capture]):
+
+	var names []string
+	tab.CurrentPropertyForEach(".notice", "dataset.name", &names)
+
 Read https://onsi.github.io/biloba/#properties to learn more about working with properties
 */
-func (b *Biloba) CurrentPropertyForEach(selector any, property string) []any {
+func (b *Biloba) CurrentPropertyForEach(selector any, property string, args ...any) []any {
 	b.gt.Helper()
 	b.guardConfig("CurrentPropertyForEach")
+	target, ok := b.decodeTarget("CurrentPropertyForEach", args)
+	if !ok {
+		return nil
+	}
 	r := b.runBilobaHandler("getPropertyForEach", selector, property)
 	if r.Error() != nil {
 		b.gt.Fatalf("Failed to get property \"%s\" for each:\n%s", property, r.Error())
+		return r.ResultAnySlice()
 	}
-	return r.ResultAnySlice()
+	values := r.ResultAnySlice()
+	b.decodeResult("CurrentPropertyForEach", target, values)
+	return values
 }
 
 /*
@@ -470,11 +509,20 @@ GetAttribute polls by default: it waits until an element matching selector is pr
 
 Configure the wait with WithTimeout/WithPolling/WithContext, or opt into act-once/fail-fast with Immediate().
 
+Pass an optional trailing pointer to have the value decoded into a Go type for you (same rules as [ValueMatcher.Capture]), so you don't have to type-assert.  The value is still returned as before:
+
+	var id string
+	tab.GetAttribute(".figure-frame", "data-block-id", &id)
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#properties to learn more about working with properties and attributes
 */
-func (b *Biloba) GetAttribute(selector any, name any) any {
+func (b *Biloba) GetAttribute(selector any, name any, args ...any) any {
 	b.gt.Helper()
+	target, ok := b.decodeTarget("GetAttribute", args)
+	if !ok {
+		return nil
+	}
 	attr := nameOf(name)
 	var result any
 	data := map[string]any{}
@@ -490,7 +538,9 @@ func (b *Biloba) GetAttribute(selector any, name any) any {
 		result = newProperties(r.Result).Get(attr)
 		return true, nil
 	}).WithTemplate(undefinedAxisTemplate("attribute", fmt.Sprintf("have attribute %q", attr)), data)
-	b.pollOrImmediate(selector, matcher)
+	if b.pollOrImmediate(selector, matcher) {
+		b.decodeResult("GetAttribute", target, result)
+	}
 	return result
 }
 
@@ -535,12 +585,17 @@ HaveJSONAttribute(attribute, matcher) is a Gomega matcher that passes if the nam
 
 An absent attribute or malformed JSON does not satisfy the matcher (it retries under Eventually).  Because it returns a matcher you poll, configure the Eventually/Expect that wraps it.
 
+It returns a [ValueMatcher], so you can keep the decoded value that satisfied the assertion - decoded straight into your own type:
+
+	var state struct{ Open bool `json:"open"`; Count int `json:"count"` }
+	Eventually("#widget").Should(b.HaveJSONAttribute("data-widget-state", HaveKeyWithValue("open", true)).Capture(&state))
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#properties to learn more about working with properties and attributes
 */
-func (b *Biloba) HaveJSONAttribute(attribute string, matcher types.GomegaMatcher) types.GomegaMatcher {
+func (b *Biloba) HaveJSONAttribute(attribute string, matcher types.GomegaMatcher) *ValueMatcher {
 	data := map[string]any{"Attribute": attribute, "Matcher": matcher}
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("getAttribute", selector, attribute)
 		if r.Error() != nil {
 			return false, r.Error()
@@ -555,7 +610,7 @@ func (b *Biloba) HaveJSONAttribute(attribute string, matcher types.GomegaMatcher
 		}
 		data["Result"] = decoded
 		return matcher.Match(decoded)
-	}).WithTemplate("HaveJSONAttribute \"{{.Data.Attribute}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}).WithTemplate("HaveJSONAttribute \"{{.Data.Attribute}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
 }
 
 /*
@@ -563,17 +618,29 @@ CurrentAttributeForEach(selector, name) returns a snapshot of the named HTML att
 
 Unlike the singular [Biloba.GetAttribute], CurrentAttributeForEach does not poll - it captures what is present right now.  Gate on the matches being present first (e.g. Eventually(selector).Should(b.HaveCount(n))) when they appear asynchronously.
 
+Pass an optional trailing pointer to have the slice decoded into a Go type for you (same rules as [ValueMatcher.Capture]):
+
+	var hrefs []string
+	tab.CurrentAttributeForEach("a", "href", &hrefs)
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#properties to learn more about working with properties and attributes
 */
-func (b *Biloba) CurrentAttributeForEach(selector any, name string) []any {
+func (b *Biloba) CurrentAttributeForEach(selector any, name string, args ...any) []any {
 	b.gt.Helper()
 	b.guardConfig("CurrentAttributeForEach")
+	target, ok := b.decodeTarget("CurrentAttributeForEach", args)
+	if !ok {
+		return nil
+	}
 	r := b.runBilobaHandler("getAttributeForEach", selector, name)
 	if r.Error() != nil {
 		b.gt.Fatalf("Failed to get attribute \"%s\" for each:\n%s", name, r.Error())
+		return r.ResultAnySlice()
 	}
-	return r.ResultAnySlice()
+	values := r.ResultAnySlice()
+	b.decodeResult("CurrentAttributeForEach", target, values)
+	return values
 }
 
 /*
@@ -587,31 +654,49 @@ When invoked with two arguments, it only passes if the value of the specified pr
 
 	Eventually("div.comment").Should(tab.HaveProperty("dataset.poster", "Jane"))
 
+Both forms return a [ValueMatcher], so you can keep the property value that satisfied the assertion - including the existence-only form:
+
+	var poster string
+	Eventually("div.comment").Should(tab.HaveProperty("dataset.poster").Capture(&poster))
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#properties to learn more about working with properties
 */
-func (b *Biloba) HaveProperty(property string, expected ...any) types.GomegaMatcher {
+func (b *Biloba) HaveProperty(property string, expected ...any) *ValueMatcher {
 	var data = map[string]any{}
 	data["Property"] = property
 	if len(expected) == 0 {
-		return gcustom.MakeMatcher(func(selector any) (bool, error) {
-			r := b.runBilobaHandler("hasProperty", selector, property)
+		return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
+			// getPropertiesP (rather than the boolean hasProperty) so the value is available to
+			// Capture.  Its "ready" axis is the same `in`-chain check hasProperty performs, so this
+			// remains presence - NOT truthiness: a property defined as false/0/""/null still matches.
+			// poll() reports a missing element as a silent retry, so we restore one()'s error here to
+			// keep the matcher's semantics identical to hasProperty's.
+			r := b.runBilobaHandler("getPropertiesP", selector, []any{property})
 			if r.Error() != nil {
 				return false, r.Error()
 			}
-			return r.Success, nil
-		}).WithTemplate("Expected {{.Actual}} {{.To}} have property \"{{.Data.Property}}\"", data)
+			if !r.Success {
+				delete(data, "Result")
+				if r.Found != nil && !*r.Found {
+					return false, notFoundSelectorError(selector)
+				}
+				return false, nil
+			}
+			data["Result"] = newProperties(r.Result).Get(property)
+			return true, nil
+		}).WithTemplate("Expected {{.Actual}} {{.To}} have property \"{{.Data.Property}}\"", data), data)
 	} else {
 		var matcher = matcherOrEqual(expected[0])
 		data["Matcher"] = matcher
-		return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
 			r := b.runBilobaHandler("getProperty", selector, property)
 			if r.Error() != nil {
 				return false, r.Error()
 			}
 			data["Result"] = r.Result
 			return matcher.Match(data["Result"])
-		}).WithTemplate("HaveProperty \"{{.Data.Property}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+		}).WithTemplate("HaveProperty \"{{.Data.Property}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
 	}
 }
 
@@ -630,21 +715,33 @@ Alternatively, you can pass a Gomega matcher as a single expected argument after
 
 	Eventually("div.comment").Should(tabEach.HaveProperty("dataset.poster", ContainElement("George")))
 
+Both forms return a [ValueMatcher], so you can keep the slice of property values that satisfied the assertion - the existence-only form hands back the same []any the value-matching form does:
+
+	var posters []string
+	Eventually("div.comment").Should(tab.EachHaveProperty("dataset.poster", ContainElement("George")).Capture(&posters))
+	Eventually("div.comment").Should(tab.EachHaveProperty("dataset.poster").Capture(&posters))
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#properties to learn more about working with properties
 */
-func (b *Biloba) EachHaveProperty(property string, expected ...any) types.GomegaMatcher {
+func (b *Biloba) EachHaveProperty(property string, expected ...any) *ValueMatcher {
 	var data = map[string]any{}
 	data["Property"] = property
 	if len(expected) == 0 {
-		return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
+			// the handler returns {count, values}: count drives the fail-on-empty message, values is the
+			// per-element slice Capture hands back (the same slice the value-matching form produces).
+			// It resolves the values itself rather than reading getPropertyForEach so it can still tell
+			// "undefined" from "defined but null" - the only question this form asks.
 			r := b.runBilobaHandler("eachHasProperty", selector, property)
 			if r.Error() != nil {
 				return false, r.Error()
 			}
-			data["Empty"] = r.ResultInt() == 0
+			m, _ := r.Result.(map[string]any)
+			data["Empty"] = toInt(m["count"]) == 0
+			data["Result"] = m["values"]
 			return r.Success, nil
-		}).WithTemplate("{{if .Data.Empty}}"+eachEmptyTemplate+"{{else}}Expected each {{.Actual}} {{.To}} each have property \"{{.Data.Property}}\"{{end}}", data)
+		}).WithTemplate("{{if .Data.Empty}}"+eachEmptyTemplate+"{{else}}Expected each {{.Actual}} {{.To}} each have property \"{{.Data.Property}}\"{{end}}", data), data)
 	} else {
 		var matcher types.GomegaMatcher
 		if x, ok := expected[0].(types.GomegaMatcher); ok && len(expected) == 1 {
@@ -654,7 +751,7 @@ func (b *Biloba) EachHaveProperty(property string, expected ...any) types.Gomega
 		}
 
 		data["Matcher"] = matcher
-		return gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
 			r := b.runBilobaHandler("getPropertyForEach", selector, property)
 			if r.Error() != nil {
 				return false, r.Error()
@@ -669,7 +766,7 @@ func (b *Biloba) EachHaveProperty(property string, expected ...any) types.Gomega
 			}
 			data["Empty"] = false
 			return matcher.Match(data["Result"])
-		}).WithTemplate("{{if .Data.Empty}}"+eachEmptyTemplate+"{{else}}EachHaveProperty \"{{.Data.Property}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}{{end}}", data)
+		}).WithTemplate("{{if .Data.Empty}}"+eachEmptyTemplate+"{{else}}EachHaveProperty \"{{.Data.Property}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}{{end}}", data), data)
 	}
 }
 
@@ -871,11 +968,20 @@ Biloba rationalizes the behavior of all input, select, and textarea elements so 
 
 GetValue polls by default: it waits until an element matching selector is present, then returns its value.  An empty string (or an unselected radio group's "") is a valid value - GetValue does not wait for the value to become non-empty.  Configure the wait with WithTimeout/WithPolling/WithContext, or opt into act-once/fail-fast with Immediate().
 
+Pass an optional trailing pointer to have the value decoded into a Go type for you (same rules as [ValueMatcher.Capture]), so you don't have to type-assert.  The value is still returned as before:
+
+	var checked bool
+	tab.GetValue("#box", &checked)
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#form-elements to learn more about working with form elements
 */
-func (b *Biloba) GetValue(selector any) any {
+func (b *Biloba) GetValue(selector any, args ...any) any {
 	b.gt.Helper()
+	target, ok := b.decodeTarget("GetValue", args)
+	if !ok {
+		return nil
+	}
 	var result any
 	matcher := gcustom.MakeMatcher(func(sel any) (bool, error) {
 		r := b.runBilobaHandler("getValueP", sel)
@@ -888,7 +994,9 @@ func (b *Biloba) GetValue(selector any) any {
 		result = r.Result
 		return true, nil
 	}).WithMessage("have a value")
-	b.pollOrImmediate(selector, matcher)
+	if b.pollOrImmediate(selector, matcher) {
+		b.decodeResult("GetValue", target, result)
+	}
 	return result
 }
 
@@ -897,17 +1005,29 @@ CurrentValueForEach(selector) returns a snapshot []any of the rationalized form/
 
 Unlike [Biloba.GetValue], CurrentValueForEach does not poll - it captures whatever is present right now.  Gate on the matches being present first (e.g. Eventually(selector).Should(b.HaveCount(n))) when they appear asynchronously.
 
+Pass an optional trailing pointer to have the slice decoded into a Go type for you (same rules as [ValueMatcher.Capture]):
+
+	var values []string
+	tab.CurrentValueForEach("input[type='text']", &values)
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#form-elements to learn more about working with form elements
 */
-func (b *Biloba) CurrentValueForEach(selector any) []any {
+func (b *Biloba) CurrentValueForEach(selector any, args ...any) []any {
 	b.gt.Helper()
 	b.guardConfig("CurrentValueForEach")
+	target, ok := b.decodeTarget("CurrentValueForEach", args)
+	if !ok {
+		return nil
+	}
 	r := b.runBilobaHandler("getValueForEach", selector)
 	if r.Error() != nil {
 		b.gt.Fatalf("Failed to get value for each:\n%s", r.Error())
+		return r.ResultAnySlice()
 	}
-	return r.ResultAnySlice()
+	values := r.ResultAnySlice()
+	b.decodeResult("CurrentValueForEach", target, values)
+	return values
 }
 
 /*
@@ -922,21 +1042,23 @@ For example:
 	Expect("select").To(tab.HaveValue("obi-wan")) //here obi-wan is the value of the selected option
 	Expect("select.multi-select").To(tab.HaveValue(ConsistOf("obi-wan", "leia", "han"))) //here we assert that these three options are selected
 
+It returns a [ValueMatcher], so you can keep the value that satisfied the assertion with .Capture(&value).
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 Read https://onsi.github.io/biloba/#form-elements to learn more about working with form elements
 */
-func (b *Biloba) HaveValue(expected any) types.GomegaMatcher {
+func (b *Biloba) HaveValue(expected any) *ValueMatcher {
 	var data = map[string]any{}
 	var matcher = matcherOrEqual(expected)
 	data["Matcher"] = matcher
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("getValue", selector)
 		if r.Error() != nil {
 			return false, r.Error()
 		}
 		data["Result"] = r.Result
 		return matcher.Match(data["Result"])
-	}).WithTemplate("HaveValue for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}).WithTemplate("HaveValue for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
 }
 
 /*
@@ -1101,32 +1223,36 @@ func namesOf(specs []any) []string {
 /*
 HaveClass returns a Gomega matcher to assert that the first element matching selector has the expected class.
 
+It returns a [ValueMatcher], so you can keep the element's full classList ([]string) with .Capture(&classes).
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
-func (b *Biloba) HaveClass(expected string) types.GomegaMatcher {
+func (b *Biloba) HaveClass(expected string) *ValueMatcher {
 	var data = map[string]any{}
 	var matcher = gomega.ContainElement(expected)
 	data["Matcher"] = matcher
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("getProperty", selector, "classList")
 		if r.Error() != nil {
 			return false, r.Error()
 		}
 		data["Result"] = r.ResultStringSlice()
 		return matcher.Match(data["Result"])
-	}).WithTemplate("HaveClass for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}).WithTemplate("HaveClass for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
 }
 
 /*
 EachHaveClass returns a Gomega matcher that passes if there is at least one element matching selector and every such element has the expected class.  It fails when no elements match.
 
+It returns a [ValueMatcher], so you can keep every match's classList with .Capture(&classLists) (e.g. into a *[][]string).
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
-func (b *Biloba) EachHaveClass(expected string) types.GomegaMatcher {
+func (b *Biloba) EachHaveClass(expected string) *ValueMatcher {
 	var data = map[string]any{}
 	var matcher = gomega.HaveEach(gomega.ContainElement(expected))
 	data["Matcher"] = matcher
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("getPropertyForEach", selector, "classList")
 		if r.Error() != nil {
 			return false, r.Error()
@@ -1138,7 +1264,7 @@ func (b *Biloba) EachHaveClass(expected string) types.GomegaMatcher {
 		}
 		data["Empty"] = false
 		return matcher.Match(data["Result"])
-	}).WithTemplate("{{if .Data.Empty}}"+eachEmptyTemplate+"{{else}}EachHaveClass for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}{{end}}", data)
+	}).WithTemplate("{{if .Data.Empty}}"+eachEmptyTemplate+"{{else}}EachHaveClass for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}{{end}}", data), data)
 }
 
 /*
@@ -1151,20 +1277,22 @@ Use it like this:
 	Expect("div.comment").To(tab.HaveText("hello world"))
 	Expect("div.comment").To(tab.HaveText(HaveSuffix("world")))
 
+It returns a [ValueMatcher], so you can keep the text that satisfied the assertion with .Capture(&text) - that's the whitespace-normalized form it actually matched on.
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
-func (b *Biloba) HaveText(expected any) types.GomegaMatcher {
+func (b *Biloba) HaveText(expected any) *ValueMatcher {
 	var data = map[string]any{}
 	var matcher = matcherOrEqual(expected)
 	data["Matcher"] = matcher
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("getProperty", selector, "innerText")
 		if r.Error() != nil {
 			return false, r.Error()
 		}
 		data["Result"] = normalizeWhitespace(r.ResultString())
 		return matcher.Match(data["Result"])
-	}).WithTemplate("HaveText for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}).WithTemplate("HaveText for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
 }
 
 /*
@@ -1179,30 +1307,44 @@ When invoked with a name and an expected value, it only passes if the value of t
 	Eventually("a").Should(tab.HaveAttribute("href", "/about"))
 	Eventually("a").Should(tab.HaveAttribute("href", HaveSuffix("about")))
 
+Both forms return a [ValueMatcher], so you can keep the attribute value that satisfied the assertion - including the existence-only form:
+
+	var blockID string
+	Eventually(".figure-frame").Should(tab.HaveAttribute("data-block-id").Capture(&blockID))
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
-func (b *Biloba) HaveAttribute(name string, expected ...any) types.GomegaMatcher {
+func (b *Biloba) HaveAttribute(name string, expected ...any) *ValueMatcher {
 	var data = map[string]any{}
 	data["Name"] = name
 	if len(expected) == 0 {
-		return gcustom.MakeMatcher(func(selector any) (bool, error) {
-			r := b.runBilobaHandler("hasAttribute", selector, name)
+		return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
+			// getAttribute (rather than the boolean hasAttribute) so the value is available to
+			// Capture.  getAttribute returns null exactly when hasAttribute is false, so this stays
+			// presence - NOT truthiness: an attribute present with an empty value still matches.
+			// Both handlers are one()-based, so a missing element errors identically.
+			r := b.runBilobaHandler("getAttribute", selector, name)
 			if r.Error() != nil {
 				return false, r.Error()
 			}
-			return r.Success, nil
-		}).WithTemplate("Expected {{.Actual}} {{.To}} have attribute \"{{.Data.Name}}\"", data)
+			if r.Result == nil {
+				delete(data, "Result")
+				return false, nil
+			}
+			data["Result"] = r.Result
+			return true, nil
+		}).WithTemplate("Expected {{.Actual}} {{.To}} have attribute \"{{.Data.Name}}\"", data), data)
 	}
 	var matcher = matcherOrEqual(expected[0])
 	data["Matcher"] = matcher
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("getAttribute", selector, name)
 		if r.Error() != nil {
 			return false, r.Error()
 		}
 		data["Result"] = r.Result
 		return matcher.Match(data["Result"])
-	}).WithTemplate("HaveAttribute \"{{.Data.Name}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}).WithTemplate("HaveAttribute \"{{.Data.Name}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
 }
 
 /*
@@ -1213,15 +1355,16 @@ Use it like this:
 	Expect("input[type='checkbox']").To(tab.BeChecked())
 	Eventually("input[type='radio']").Should(tab.BeChecked())
 
+The selector must resolve to the input itself.  An element that has no "checked" property at all - the wrapping <label> or <div> is the usual culprit - is an error, in both directions: ShouldNot(tab.BeChecked()) will not quietly pass against an element that could never be checked.
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
 func (b *Biloba) BeChecked() types.GomegaMatcher {
 	return gcustom.MakeMatcher(func(selector any) (bool, error) {
-		r := b.runBilobaHandler("getProperty", selector, "checked")
-		if r.Error() != nil {
-			return false, r.Error()
-		}
-		return r.ResultBool(), nil
+		// isChecked (not getProperty) so an element with no "checked" property is an ERROR rather than
+		// an undefined that toBool() flattens to false - otherwise ShouldNot(b.BeChecked()) passes
+		// forever when the selector picked up the label instead of the input.
+		return b.runBilobaHandler("isChecked", selector).MatcherResult()
 	}).WithMessage("be checked")
 }
 
@@ -1249,21 +1392,23 @@ Use it like this:
 	Expect("div.notice").To(tab.HaveComputedStyle("display", "none"))
 	Eventually("div.notice").Should(tab.HaveComputedStyle("color", "rgb(255, 0, 0)"))
 
+It returns a [ValueMatcher], so you can keep the resolved value that satisfied the assertion with .Capture(&color).
+
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
-func (b *Biloba) HaveComputedStyle(property string, expected any) types.GomegaMatcher {
+func (b *Biloba) HaveComputedStyle(property string, expected any) *ValueMatcher {
 	var data = map[string]any{}
 	data["Property"] = property
 	var matcher = matcherOrEqual(expected)
 	data["Matcher"] = matcher
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("getComputedStyle", selector, property)
 		if r.Error() != nil {
 			return false, r.Error()
 		}
 		data["Result"] = r.Result
 		return matcher.Match(data["Result"])
-	}).WithTemplate("HaveComputedStyle \"{{.Data.Property}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}).WithTemplate("HaveComputedStyle \"{{.Data.Property}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
 }
 
 /*
@@ -1936,6 +2081,55 @@ func (b *Biloba) InvokeWithEachImmediately(selector string, callableScript strin
 		return nil
 	}
 	return r.ResultAnySlice()
+}
+
+// notFoundSelectorError reproduces, in Go, the "could not find DOM element matching selector: <sel>"
+// error biloba.js's one() combinator raises for a missing element.  The existence-only matchers read
+// through poll()-based handlers now (so the value they observed is available to Capture), and poll()
+// reports a missing element as a silent retry - this keeps their fail-on-missing-element semantics
+// byte-identical to the boolean handlers they replaced.
+func notFoundSelectorError(selector any) error {
+	encoded, err := encodeSelector(selector)
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("could not find DOM element matching selector: %s", encoded[1:])
+}
+
+// decodeTarget validates the optional trailing decode pointer the value getters accept
+// (GetProperty/GetAttribute/GetValue and the Current*ForEach snapshots).  It returns the pointer - nil
+// when the caller didn't ask for a decode - and false when the arguments are malformed, which is a
+// hard error: more than one trailing argument, or something that isn't a non-nil pointer, can never
+// become right.
+func (b *Biloba) decodeTarget(method string, args []any) (any, bool) {
+	b.gt.Helper()
+	if len(args) == 0 {
+		return nil, true
+	}
+	if len(args) > 1 {
+		b.gt.Fatalf("%s accepts at most one trailing pointer to decode into, but got %d extra arguments", method, len(args))
+		return nil, false
+	}
+	value := reflect.ValueOf(args[0])
+	if args[0] == nil || value.Kind() != reflect.Pointer || value.IsNil() {
+		b.gt.Fatalf("%s requires a non-nil pointer to decode into, got %T", method, args[0])
+		return nil, false
+	}
+	return args[0], true
+}
+
+// decodeResult writes the value a getter just read into the caller's optional trailing pointer using
+// decodeCapture - the same coercion rules as [ValueMatcher.Capture], so a JavaScript number lands in
+// an *int as an int.  It runs only after the read has succeeded, and a genuine type mismatch is a hard
+// error rather than something to retry (it will never come true).
+func (b *Biloba) decodeResult(method string, target any, value any) {
+	b.gt.Helper()
+	if target == nil {
+		return
+	}
+	if err := decodeCapture(value, target); err != nil {
+		b.gt.Fatalf("%s could not decode into the pointer you provided:\n%s", method, err.Error())
+	}
 }
 
 func normalizeWhitespace(s string) string {

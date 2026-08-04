@@ -9,7 +9,6 @@ import (
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/onsi/gomega/gcustom"
-	"github.com/onsi/gomega/types"
 )
 
 /*
@@ -21,20 +20,27 @@ EvaluateTo can be passed a Gomega matcher to assert against the returned value f
 
 Note: the returned value is JSON-decoded, so JavaScript numbers come back as float64.  b.EvaluateTo(1) (an int) will therefore fail against a returned float64(1) - prefer a numeric matcher like BeNumerically("==", 1).
 
+EvaluateTo returns a [ValueMatcher], so you can [ValueMatcher.Capture] the value that satisfied the assertion instead of re-reading the expression with a second call (a second read of a page that may have changed in between):
+
+	var log []FoldEntry
+	Eventually(`window.__foldLog`).Should(b.EvaluateTo(ContainElement(HaveKeyWithValue("fidelity", "text"))).Capture(&log))
+
+Note the asymmetry: the matcher you pass in is applied to the raw JSON-decoded value (maps and float64s), while Capture decodes into the Go type you asked for - so the float64 caveat above goes away for the value you keep.
+
 Read https://onsi.github.io/biloba/#running-arbitrary-javascript to learn more about running JavaScript in Biloba
 */
-func (b *Biloba) EvaluateTo(expected any) types.GomegaMatcher {
+func (b *Biloba) EvaluateTo(expected any) *ValueMatcher {
 	var data = map[string]any{}
 	var matcher = matcherOrEqual(expected)
 	data["Matcher"] = matcher
-	return gcustom.MakeMatcher(func(script string) (bool, error) {
+	return capturableResult(gcustom.MakeMatcher(func(script string) (bool, error) {
 		r, err := b.RunErr(script)
 		if err != nil {
 			return false, fmt.Errorf("Failed to run script:\n%s\n\n%w", script, err)
 		}
 		data["Result"] = r
 		return matcher.Match(data["Result"])
-	}).WithTemplate("Return value for script:\n{{.Actual}}\nFailed with:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}).WithTemplate("Return value for script:\n{{.Actual}}\nFailed with:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
 }
 
 /*

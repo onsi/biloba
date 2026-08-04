@@ -156,7 +156,7 @@ HighFidelityHeadless opts out of Biloba's default lightweight chrome-headless-sh
 
 By default Biloba favors pragmatism over realism: it drives chrome-headless-shell, the lightweight //content-based headless build, which is dramatically faster and parallelizes across processes.  Pass HighFidelityHeadless to [SpinUpChrome] when you need the realism of the full browser (precise compositing/rendering, extensions, etc.) and are willing to pay for it in speed.
 
-Read https://onsi.github.io/biloba/#headless-fidelity to learn more
+Read https://onsi.github.io/biloba/#headless-fidelity-chrome-headless-shell-by-default to learn more
 */
 func HighFidelityHeadless() SpinUpOption {
 	return func(c *spinUpConfig) { c.highFidelity = true }
@@ -165,7 +165,7 @@ func HighFidelityHeadless() SpinUpOption {
 /*
 AutoInstallHeadlessShell tells [SpinUpChrome] to download chrome-headless-shell (via Chrome for Testing) into Biloba's cache if it cannot be found locally, instead of failing with installation instructions.  Biloba never downloads anything by default; opt in to auto-install for zero-config setups such as ephemeral CI.  Has no effect under [HighFidelityHeadless].
 
-Read https://onsi.github.io/biloba/#headless-fidelity to learn more
+Read https://onsi.github.io/biloba/#headless-fidelity-chrome-headless-shell-by-default to learn more
 */
 func AutoInstallHeadlessShell() SpinUpOption {
 	return func(c *spinUpConfig) { c.autoInstall = true }
@@ -174,7 +174,7 @@ func AutoInstallHeadlessShell() SpinUpOption {
 /*
 HeadlessShellPath explicitly points Biloba at a chrome-headless-shell binary, bypassing the search.  You can also set the BILOBA_CHROME_HEADLESS_SHELL environment variable.
 
-Read https://onsi.github.io/biloba/#headless-fidelity to learn more
+Read https://onsi.github.io/biloba/#headless-fidelity-chrome-headless-shell-by-default to learn more
 */
 func HeadlessShellPath(path string) SpinUpOption {
 	return func(c *spinUpConfig) { c.headlessShellPath = path }
@@ -437,7 +437,7 @@ Pass BilobaConfigFailureOutlines to [ConnectToChrome] to control whether Biloba 
 
 When a human is driving, outlines are off by default (the screenshot is the more useful artifact); under automation (CI or an AI agent) Biloba turns them on automatically.  Set this explicitly to override that default in either direction: BilobaConfigFailureOutlines() forces them on for an interactive run, BilobaConfigFailureOutlines(false) forces them off under automation.
 
-See https://onsi.github.io/biloba/#failure-artifacts for how the human/automation defaults are resolved.
+See https://onsi.github.io/biloba/#failure-artifacts-humans-ci-and-agents for how the human/automation defaults are resolved.
 */
 func BilobaConfigFailureOutlines(enabled ...bool) func(*Biloba) {
 	return func(b *Biloba) {
@@ -453,7 +453,7 @@ When an Eventually(...) over a polled read times out, the trajectory is the diag
 
 It is on by default; BilobaConfigPollTrajectory(false) turns it off.
 
-See https://onsi.github.io/biloba/#failure-artifacts for the rest of the failure block.
+See https://onsi.github.io/biloba/#failure-artifacts-humans-ci-and-agents for the rest of the failure block.
 */
 func BilobaConfigPollTrajectory(enabled ...bool) func(*Biloba) {
 	return func(b *Biloba) {

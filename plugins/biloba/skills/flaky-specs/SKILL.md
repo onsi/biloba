@@ -1,6 +1,6 @@
 ---
 name: flaky-specs
-description: Diagnose and prevent flaky Biloba specs — tests that pass locally but fail in CI, fail intermittently under `ginkgo -p`, or fail "somewhere else" than the line that's actually wrong. Biloba polls by default, so the headline rule is "don't reach for b.Immediate()"; the residual smells — single-shot `b.Run(expr,&x)` reads, the non-polling SendKeysToWindowImmediately/`*Immediately` verbs, optimistic-UI/server-reconciliation traps (the DOM is the optimistic copy AND a Go-side HTTP read bypasses the browser — barrier on app state with b.GetJSValue, force the arrival order with b.HoldResponse), async-settling geometry/layout/document-order reads (incl. a backwards order assertion that passes silently), AllowMissing for absent-on-type properties, network handlers accumulating across an Ordered container, and gating on a DOM anchor instead of the URL. Use when a browser spec is flaky, nondeterministic, order-dependent, or load-sensitive, or when reviewing a suite for latent races.
+description: Diagnose and prevent flaky Biloba specs — tests that pass locally but fail in CI, fail intermittently under `ginkgo -p`, or fail "somewhere else" than the line that's actually wrong. Biloba polls by default, so the headline rule is "don't reach for b.Immediate()"; the residual smells — single-shot `b.Run(expr,&x)` reads and gate-then-re-read pairs (fix with .Capture), the non-polling SendKeysToWindowImmediately/`*Immediately` verbs, optimistic-UI/server-reconciliation traps (the DOM is the optimistic copy AND a Go-side HTTP read bypasses the browser — barrier on app state with b.GetJSValue, but only against a lazily-created path; force the arrival order with b.HoldResponse + Limit/ReleaseNext), async-settling geometry/layout/document-order reads (incl. a backwards order assertion that passes silently), AllowMissing for absent-on-type properties, network handlers accumulating across an Ordered container (silent in both the timing-out and the silently-green direction), vacuous assertions that can never fail (an unresolved locator scope, BeNetworkIdle before the request starts, an empty Current*ForEach under a negation), and gating on a DOM anchor instead of the URL. Use when a browser spec is flaky, nondeterministic, order-dependent, or load-sensitive, or when reviewing a suite for latent races.
 ---
 
 # Avoiding & fixing flaky Biloba specs
@@ -60,6 +60,22 @@ rg ', &(\w+)\)' -n          # every "…, &x)" — incl. the orphan close-line o
 ```
 
 — then for each captured var, check whether an `Expect(x)`/`Ω(x)` follows within a few lines (that's the single-shot read). The decode target, not the `b.Run(` token, is the reliable anchor.
+
+**The subtler sibling: gate-then-re-read.** Not a single-shot read — *two* reads, which is worse, because the first one looks like a guard:
+
+```go
+Eventually(".figure-frame").Should(b.HaveAttribute("data-block-id", Not(BeEmpty())))  // read #1: it's set
+id := b.GetAttribute(".figure-frame", "data-block-id")                                // read #2: …of what?
+```
+
+Between the assertion and the getter the page can re-render, re-key the list, or swap the node — so the value you carry forward is one nothing ever asserted on (classic TOCTOU). **`.Capture(&x)` collapses it to one read**: every value-reading matcher writes what it observed on the successful match.
+
+```go
+var blockID string
+Eventually(".figure-frame").Should(b.HaveAttribute("data-block-id", Not(BeEmpty())).Capture(&blockID))
+```
+
+It decodes into your Go type (no `float64` type-assert dance) and writes only on a match — so under `ShouldNot` nothing is captured. Same idea for the `any`-returning getters: `b.GetProperty("#row", "offsetWidth", &n)` takes an optional trailing pointer instead of a type assertion.
 
 **A Biloba matcher poll retries *through a remount* — only your own `b.Run` reads need null-guards.** A common hand-roll defends against a node that gets torn down and re-created (a portal migration, a list re-key) with `document.querySelector(sel)?.dataset.side ?? ''` and a comment claiming a Biloba getter "hard-fails across the remount." Under poll-by-default that's legacy folklore: `Eventually(sel).Should(b.HaveProperty("dataset.side", "left"))` **re-resolves `sel` from scratch every tick**, so it simply retries through the gap — no cached node, nothing to null-guard, no special handling. The null-guard is only needed in *your own* `b.Run`/`Eventually(b.Run)` closure, because there you hold a node reference that a remount invalidates. So: reach for the matcher (`HaveProperty`/`HaveAttribute`/`GetProperty`) and delete the guard; keep the guard only inside a raw `b.Run` read you couldn't express as a matcher.
 
@@ -126,6 +142,21 @@ b.GetJSValue("window.__storeLog", &log)   // polls until defined — i.e. until 
 
 `b.GetJSValue(expr[, &ptr])` polls until `expr` is **defined**, retrying through both `undefined` and a *thrown* error — a `ReferenceError` for a global the app hasn't created yet is a not-ready condition, not a bug — so you can install the probe and barrier on it without racing its creation. `null` is a legitimate value and returns immediately; the optional pointer decodes into a concrete type (and dodges the JSON-`float64` gotcha).
 
+> **The `??=` above is load-bearing — and this is the trap inside the fix.** That comment ("polls until defined — i.e. until the fold really happened") is true *only* because the log is created **lazily, by the subscriber**, so "defined" and "at least one fold happened" are the same event. `GetJSValue` gates on definedness and nothing else. Point it at a log the app creates **eagerly** — `this.__log = []` in the store constructor, which is the natural implementation for any log that's part of the product rather than a test fixture (a ring buffer has to be live for a real session) — and it is defined from page load: the barrier returns `[]` on the first tick and gates **nothing**. The spec goes green, in a barrier whose entire purpose was to be the signal that can't be faked, and it never flakes, so nothing ever draws attention to it. Vacuous, permanently.
+>
+> **For an eagerly-created path, barrier on the *predicate* instead** — one read, one poll, typed result:
+>
+> ```go
+> var log []FoldEntry
+> Eventually(`window.__storeLog`).Should(b.EvaluateTo(ContainElement(HaveKeyWithValue("state", "saved"))).Capture(&log))
+> ```
+>
+> Note the asymmetry: `EvaluateTo` hands its sub-matcher the **raw JSON-decoded** value (an `[]any` of `map[string]any` — match with `HaveKeyWithValue`, not `HaveField`), while `Capture` gives you the typed `[]FoldEntry`.
+>
+> **Rule of thumb:** if you didn't write the `??=` yourself in the line above, check how the path is created before trusting `GetJSValue` as a barrier.
+
+**Counter-indication: `GetJSValue` is the wrong tool wherever *absence is meaningful*.** Because it waits for existence, it cannot express a probe where the global being missing is a valid reading — a write ledger missing on `about:blank` between navigations (missing means *quiet*, not "wait"); `window.__renderErrors` missing on a page that never booted the app (missing means *no errors*); a flag planted before a JS-only tab switch where the assertion is that it **survived** (waiting for it inverts the test); a baseline count taken *before* the action. Those stay `b.Run` with a defensive coalesce — `b.Run("window.__ledger ?? null")` — and that is correct, not a smell to convert.
+
 ### Force the arrival order with `b.HoldResponse` — don't hope for it
 
 The bug in an optimistic-UI reconciliation is almost always an *ordering* bug: a stale response landing after a newer local write and clobbering it. It reproduces naturally at maybe 1% — which means **"I ran it 30 times and it was green" proves nothing**, and a fix "verified" that way is unverified. The only honest test is one that *forces* the order:
@@ -144,7 +175,18 @@ b.GetJSValue("window.__storeLog", &log)             // and barrier on the fold, 
 
 This replaces the usual hand-roll — a channel plus an atomic first-only counter plus a pass-through echo plus a separate gate proving interception even happened — with a handful of lines. `Await` honors `WithTimeout`/`WithContext` set on the tab you build the hold from (`b.WithTimeout(d).HoldResponse(url)`) and otherwise waits 30s; `Count()` is a snapshot but safe to poll (`Eventually(hold.Count)`); every hold is force-released at spec end and by `Prepare()`, so a failing spec can never wedge the tab for the specs after it.
 
-**Its one sharp edge:** matching is **tab-wide and URL-based**, so a hold can catch a response belonging to an *earlier page load* — a URL substring does not identify a page generation. If the flow navigates, scope it to a dedicated `b.NewTab()` (handler lists are per-tab) or assert `Count()` to prove you held the response you meant.
+**Know the default before you design the ordering: a hold freezes EVERY matching response, not just the first.** The second request to the same URL is frozen too, and a bare `Release()` frees them all *and* disarms the hold. So if the ordering you're testing is "response #1 is still in flight while response #2 lands," the default can never produce it — cap the hold and let the overflow through:
+
+```go
+hold := b.HoldResponse(ContainSubstring("/api/save")).Limit(1)
+b.Click("#save"); hold.Await()                            // #1 is held…
+b.Click("#save"); Eventually(hold.Count).Should(Equal(2)) // …#2 passes straight through and lands
+hold.Release()                                            // now the stale #1 lands, last
+```
+
+To step responses through one at a time while keeping the hold armed, use `hold.ReleaseNext()` (releases the oldest still held; fails loudly when nothing is held — a release with nothing to release means your sequencing is off) or `hold.Release(r)` with the response `Await()` handed you. `Await()` always returns the **oldest response still held**, so `Await`/`ReleaseNext`/`Await` walks them in arrival order.
+
+**Its one sharp edge:** matching is **tab-wide and URL-based**, so a hold can catch a response belonging to an *earlier page load* — a URL substring does not identify a page generation. If the flow navigates, scope it to a dedicated `b.NewTab()` (handler lists are per-tab) or assert `Count()` to prove you held the response you meant. And because handlers are first-match-wins, a **second `HoldResponse` for a URL an earlier one already claims is dead code** — re-arm the hold you already have with `ReleaseNext` rather than registering another (Smell 6).
 
 ## Smell 4 — async-settling geometry / layout / document-order reads
 
@@ -185,7 +227,7 @@ b.GetProperties("#user", "dataset.firstName", b.AllowMissing("dataset.middleName
 
 (`GetValue`/`GetInnerText`/`GetTextContent` have no "defined" axis — empty string / unselected-radio `""` is a valid value — so they poll on presence only and never need `AllowMissing`.)
 
-A flip-side, *anti*-flake improvement to know about: the `Each*` matchers (`EachBeVisible`/`EachBeEnabled`/`EachHaveClass`/`EachHaveInnerText`/`EachHaveProperty`/…) now **fail on zero matches** ("≥1 match AND all satisfy") rather than passing vacuously. So `Eventually(sel).Should(b.EachBeVisible())` correctly *waits for the elements to appear* instead of passing instantly against an empty set — a former silent false-positive is now a real poll. To assert that nothing matches, use `Eventually(sel).Should(b.HaveCount(0))` or `ShouldNot(b.Exist())` (the old no-arg `EachHaveInnerText()`/`EachHaveTextContent()` "is empty" forms are gone).
+A flip-side, *anti*-flake improvement to know about: the `Each*` matchers (`EachBeVisible`/`EachBeEnabled`/`EachHaveClass`/`EachHaveInnerText`/`EachHaveProperty`/…) now **fail on zero matches** ("≥1 match AND all satisfy") rather than passing vacuously. So `Eventually(sel).Should(b.EachBeVisible())` correctly *waits for the elements to appear* instead of passing instantly against an empty set — a former silent false-positive is now a real poll. To assert that nothing matches, use `Eventually(sel).Should(b.HaveCount(0))` or `ShouldNot(b.Exist())` — not the no-arg `EachHaveInnerText()`/`EachHaveTextContent()`, which no longer mean "every text is empty" (they now assert the property is *defined* on every match, and hand you the slice via `.Capture`).
 
 ## Smell 6 — network handlers accumulating across an `Ordered` container (order-dependence, not flake)
 
@@ -193,11 +235,88 @@ Network handlers (`StubRequest`/`AbortRequest`/`ModifyRequest`/`ModifyResponse`/
 
 **The signature is distinctive, so learn the detector verbatim: a spec whose interception gate times out only when run with the rest of the suite, and passes when focused alone → check what ran before it in the same process, before diagnosing anything else.** It presents exactly like a flake or a too-short timeout, and it is neither.
 
-**Biloba now tells you outright** — you don't have to reason your way there. When a spec fails, a handler that never fired *and* was shadowed by an earlier one is reported with **both registration sites**, so the dead handler and the one that claimed its URL are named for you (see `biloba:debug-failures`). Read that note before believing a timeout is a race.
+**Shadowing is silent in BOTH directions — and the green direction is the dangerous one.** The timeout above is the presentation you'll notice. The other presentation is a spec that **passes**, because the leftover handler did something reasonable-looking with the response.
+
+The shape to recognize is a **stateful** handler — one whose behavior depends on a counter it keeps:
+
+```go
+b.ModifyResponse(url).Using(func(r biloba.InterceptedResponse) biloba.StubResponse {
+    if atomic.AddInt32(&intercepted, 1) == 1 { /* hold/mangle only the first */ }
+    return passthrough
+})
+```
+
+Registered in an earlier `It`, that handler's counter is already at 1 by the time a later `It` registers its identical one. The later handler is dead code (first-match-wins); the leftover claims the response and — because its counter has moved on — **passes it through untouched**. The page behaves normally, nothing hangs, and the only casualty is the later spec's own counter, which stays 0. **"The hold worked" is exactly what a shadowed hold looks like from the app's side**, so nothing about the app's behavior can tell you. The assertion that catches it is the one on your own interception state:
+
+```go
+Eventually(hold.Count).Should(Equal(1))                                  // prove YOUR hold ran
+Eventually(func() int32 { return atomic.LoadInt32(&intercepted) }).Should(Equal(int32(1))) // …or your handler
+```
+
+Assert it in every spec that installs a handler it depends on. It costs one line and it is the difference between "the interception happened" and "something didn't visibly break."
+
+**Biloba now tells you outright** — you don't have to reason your way there. When a spec fails, a handler that never fired *and* was shadowed by an earlier one is reported with **both registration sites**, so the dead handler and the one that claimed its URL are named for you (see `biloba:debug-failures`). Read that note before believing a timeout is a race. (Note the limit: it reports on **failure**, so the silently-green presentation above still needs your own `Count` assertion to surface.)
 
 Two fixes:
 - **Drive both orderings from a single `It`.** Usually reads better as a spec anyway ("A-then-B and B-then-A both converge" is one behavior).
 - **Give the holding spec its own `b.NewTab()`.** Handler lists are per-tab, so a fresh tab starts with an empty one.
+
+## Smell 7 — the assertion that cannot fail (vacuous green)
+
+A flake at least tells you something. These pass **every time, forever**, against a page that is completely broken — and they are usually written *as the guard against exactly that breakage*. Where Biloba could make the vacuous case loud it has (see the end of this section); the rest are inherent to what the constructs mean, so you have to know them and anchor around them.
+
+**A locator scope that doesn't resolve matches nothing.** `.Within(...)`/`.Containing(...)` narrow to descendants of the scope — so when the scope never renders, the locator matches zero elements and every *negative* assertion on it is satisfied instantly:
+
+```go
+// passes instantly and permanently if #published-list never renders — the white-screen
+// failure this guard exists to catch:
+Consistently(b.ByTextContains("Draft").Within("#published-list")).ShouldNot(b.Exist())
+```
+
+The anchored form is two lines and means what you meant:
+
+```go
+Eventually("#published-list").Should(b.Exist())                                        // the scope is real…
+Consistently(b.ByTextContains("Draft").Within("#published-list")).ShouldNot(b.Exist())  // …so this bites
+```
+
+**`BeNetworkIdle` passes before your request has started.** It means "zero requests in flight *right now*", with no quiet period — so `b.Click("#refresh")` followed by `Eventually(b).Should(b.BeNetworkIdle())` can be satisfied at t=0, before the click's fetch ever left the page. Anchor it on the request first:
+
+```go
+b.Click("#refresh")
+Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/refresh")))  // it started…
+Eventually(b).Should(b.BeNetworkIdle())                                    // …and now it's done
+```
+
+**A `Current*ForEach` snapshot returns an empty slice when nothing matches** — which satisfies a *negated* collection assertion: `Ω(b.CurrentInnerTextForEach(".row")).ShouldNot(ContainElement("Draft"))` passes against zero rows. These getters don't poll, so you already owe them a presence gate for timing; the same gate is what keeps a negative honest:
+
+```go
+Eventually(".row").Should(b.HaveCount(3))
+Ω(b.CurrentInnerTextForEach(".row")).ShouldNot(ContainElement("Draft"))
+```
+
+(Positive collection assertions are safer — Gomega's `HaveEach` errors on an empty slice, and Biloba's `Each*` matchers fail on zero matches. It's the negations that need the gate.)
+
+**Two of this family Biloba could fix, and did** — both were negations satisfied by an element that wasn't there:
+- **`ShouldNot(b.BeChecked())` on the wrong node.** Selecting the wrapping `<label>`/`<div>` instead of the `<input>` used to read a missing `checked` property, coerce `undefined` to `false`, and pass forever against something that could never be checked. An element with no `checked` property at all is now an **error**, so that mis-selection fails loudly.
+- **`ShouldNot(b.BeInViewport())` (and the other geometry matchers) on an element that never rendered.** A missing element is now an **error** rather than a plain non-match, so the negation can't be satisfied by absence; the pairwise/offset probes even name *which* selector went missing (subject, container, or other). Nothing about waiting changes: under `Eventually` an error is a failed attempt, and a present-but-zero-area box is still a silent retry, so the positive direction keeps polling through late layout exactly as before.
+
+(In both cases the *positive* assertion was never vacuous — it's the negation that was.)
+
+**The geometry change takes a real spec with it, so know the replacement idiom.** Gomega counts an assertion satisfied only when the matcher gives the desired answer **and** doesn't error — in *either* direction — so an erroring matcher can't satisfy `ShouldNot` even when the absence is exactly what you were waiting for. The wait-for-teardown spec is the casualty:
+
+```go
+/* === used to pass the moment the toast left the DOM; now it times out === */
+Eventually("#toast").ShouldNot(b.BeInViewport())
+
+/* === assert disappearance with the matchers that are ABOUT existence === */
+Eventually("#toast").ShouldNot(b.Exist())
+Eventually("#toast").Should(b.HaveCount(0))
+```
+
+Same for `HaveBoundingBox`, `HaveScrollOffset`, `HaveOffsetTopWithin`/`HaveOffsetLeftWithin`, `HaveGapBetween`, the pairwise matchers, and any `Consistently(sel).ShouldNot(...)` where `sel` is conditionally rendered. The rule that falls out: **`Exist`/`HaveCount` answer "is it there?"; the geometry matchers answer "where is it?" and presuppose it's there.** That's how `BeVisible`/`BeEnabled`/`BeClickable` have always behaved, so the convention is now uniform instead of split.
+
+The rest of this family lives with its smell: the **eagerly-created app-state barrier** (Smell 3), the **inverted document-order assertion** (Smell 4), and the **shadowed stateful handler** (Smell 6). The common tell is an assertion whose subject can be *empty or absent* and whose form treats empty-or-absent as success. When you write one, ask: what would make this fail? If the answer is "nothing, if the page never rendered," anchor it.
 
 ## Gate on a DOM readiness anchor, not on the URL
 
@@ -217,4 +336,4 @@ A useful non-flake fact, since the opposite is easy to assume: **fast-track `b.C
 
 ## The throughline, restated
 
-Every smell above is one read at one instant — or one signal that doesn't mean what it looks like it means. Gate readiness, poll outcomes, barrier on a signal only the browser could have produced, and force the orderings you're claiming to test instead of hoping for them. And note the corollary the smells share: the two worst outcomes here aren't red specs — they're a spec that's **silently vacuous** (Smell 3's DOM/HTTP traps, Smell 4's inverted order assertion) and a spec that's **silently dead** (Smell 6's shadowed handler). Neither announces itself, so both are worth grepping for proactively rather than waiting on. When you've localized a flake but need to *see* the state at failure (full DOM, console errors, poll trajectory, app-store snapshot), go to `biloba:debug-failures`.
+Every smell above is one read at one instant — or one signal that doesn't mean what it looks like it means. Gate readiness, poll outcomes, barrier on a signal only the browser could have produced, and force the orderings you're claiming to test instead of hoping for them. And note the corollary the smells share: the two worst outcomes here aren't red specs — they're a spec that's **silently vacuous** (Smell 3's DOM/HTTP traps and its eagerly-created barrier, Smell 4's inverted order assertion, all of Smell 7) and a spec that's **silently dead** (Smell 6's shadowed handler, in both its timing-out and its passing form). Neither announces itself, so both are worth grepping for proactively rather than waiting on. When you've localized a flake but need to *see* the state at failure (full DOM, console errors, poll trajectory, app-store snapshot), go to `biloba:debug-failures`.

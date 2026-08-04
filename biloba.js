@@ -236,10 +236,17 @@ if (!window["_biloba"]) {
     // poll-trajectory recorder so a failure can distinguish "never matched" from "matched, then stopped
     // matching" (the detached-node signature).  Purely diagnostic - nothing branches on it.
     let withFound = (result, found) => { result.found = found; return result }
+    // ann renders a selector the way a failure message should show it: the "s"/"x"/"a" encoding prefix
+    // dropped, introduced by a colon so it reads as a trailing clause.
+    let ann = (s) => (typeof s == "string" ? ": " + s.slice(1) : "")
+    // notFound is THE missing-element error - the one one() raises - factored out so the hand-rolled
+    // multi-selector probes can raise the identical message.  label names WHICH selector went missing
+    // when a handler takes more than one ("other "/"container "), so the failure points somewhere.
+    let notFound = (s, label) => rErr("could not find DOM element matching " + (label || "") + "selector" + ann(s))
     let one = (...chain) => (s, ...args) => {
         let n = sel(s)
-        let errAnnotation = (typeof s == "string" ? ": " + s.slice(1) : "")
-        if (!n) return withFound(rErr("could not find DOM element matching selector" + errAnnotation), false)
+        let errAnnotation = ann(s)
+        if (!n) return withFound(notFound(s), false)
         for (let i = 0; i < chain.length - 1; i++) {
             let r = chain[i](n, ...args)
             if (!r.success) return withFound(!!r.error ? r : rErr(r.guard + errAnnotation), true)
@@ -250,7 +257,7 @@ if (!window["_biloba"]) {
     }
     let each = (cb) => (s, ...args) => {
         let ns = selEach(s)
-        let errAnnotation = (typeof s == "string" ? ": " + s.slice(1) : "")
+        let errAnnotation = ann(s)
 
         let result = cb(ns, ...args)
         if (!!result.error) result.error = result.error + errAnnotation
@@ -261,10 +268,15 @@ if (!window["_biloba"]) {
     // Go-side matcher RETRIES (Eventually) until the element shows up.  A genuine guard failure or thrown
     // error still surfaces as an error (fail fast).  The final callback may itself return {success:false}
     // (no error) to keep the poll waiting - e.g. a required-but-not-yet-defined property.
+    //
+    // Reach for poll() only when a MISSING element is genuinely "not ready yet" for the caller.  A handler
+    // that backs a MATCHER must use one() instead: Gomega counts an assertion satisfied only when the
+    // match result is the desired one AND there is no error, so a silent {success:false} makes
+    // ShouldNot(<matcher>) pass instantly against a selector that never matches - a vacuous pass.
     let poll = (...chain) => (s, ...args) => {
         let n = sel(s)
         if (!n) return { success: false, found: false } // not found -> retry, NOT an error
-        let errAnnotation = (typeof s == "string" ? ": " + s.slice(1) : "")
+        let errAnnotation = ann(s)
         for (let i = 0; i < chain.length - 1; i++) {
             let r = chain[i](n, ...args)
             if (!r.success) return withFound(!!r.error ? r : rErr(r.guard + errAnnotation), true)
@@ -760,6 +772,15 @@ if (!window["_biloba"]) {
     })
     b.hasAttribute = one((n, a) => r(n.hasAttribute(a)))
     b.isFocused = one(n => r(n === document.activeElement, "DOM element is not focused"))
+    // isChecked backs BeChecked.  An element with no `checked` property AT ALL - the classic "I selected
+    // the wrapping <label>/<div>, not the <input>" mistake - is an ERROR, not merely "not checked":
+    // reading the missing property and coercing undefined to false would make ShouldNot(b.BeChecked())
+    // pass forever against an element that could never be checked.  A real input answers normally,
+    // whether or not it is checked.
+    b.isChecked = one(n => {
+        if (!("checked" in n)) return rErr(`${describeEl(n)} has no "checked" property (did you select the label or wrapper rather than the input?) for selector`)
+        return r(n.checked === true, "DOM element is not checked")
+    })
     // computedStyleValue resolves a computed CSS property.  getPropertyValue is the canonical resolver -
     // it handles CSS custom properties ("--stage") and kebab-case names ("z-index").  When it yields ""
     // we fall back to camelCase indexing so legacy camelCase names ("backgroundColor") still resolve.
@@ -772,11 +793,14 @@ if (!window["_biloba"]) {
     // getComputedStyleP backs GetComputedStyle: poll until the element is present, then return the
     // resolved value (custom properties included).
     b.getComputedStyleP = poll((n, p) => rRes(computedStyleValue(n, p)))
-    // getComputedStyleNumericP backs GetComputedStyleNumeric/HaveComputedStyleNumeric: poll until the
-    // element is present, then return the leading numeric part of the resolved value (parseFloat, so
-    // "16px" -> 16, "1.5" -> 1.5).  A non-numeric value ("none", "auto") is a hard error, not a
-    // wait-forever, so the caller fails fast with a clear message instead of timing out.
-    b.getComputedStyleNumericP = poll((n, p) => {
+    // getComputedStyleNumericP backs GetComputedStyleNumeric/HaveComputedStyleNumeric: once the element
+    // is present, return the leading numeric part of the resolved value (parseFloat, so "16px" -> 16,
+    // "1.5" -> 1.5).  A non-numeric value ("none", "auto") is a hard error, not a wait-forever, so the
+    // caller fails fast with a clear message instead of timing out.  one() (not poll()) so a MISSING
+    // element errors: HaveComputedStyleNumeric is a matcher, and its documented sibling
+    // HaveComputedStyle reads through the one()-based getComputedStyle - both must reject
+    // ShouldNot(...) against an element that never exists rather than pass vacuously.
+    b.getComputedStyleNumericP = one((n, p) => {
         let raw = computedStyleValue(n, p)
         let v = parseFloat(raw)
         if (isNaN(v)) return rErr(`computed style "${p}" is "${raw}", which is not numeric`)
@@ -804,9 +828,6 @@ if (!window["_biloba"]) {
         }
         return r(true)
     })
-    // eachHasProperty fails on an empty set (no elements to "each" over); result carries ns.length so
-    // the Go matcher can surface a clear "no elements matched" message rather than a vacuous pass.
-    b.eachHasProperty = each((ns, p) => { return { success: ns.length > 0 && ns.every(n => b.hasProperty(n, p).success), result: ns.length } })
     // resolveProperty walks a dot-delimited property path on node n.  found reports whether the whole
     // path resolved (the "defined" axis for two-axis polling); value is the (array/object-normalized)
     // leaf, or null when the path doesn't resolve.
@@ -825,6 +846,17 @@ if (!window["_biloba"]) {
     }
     b.getProperty = one((n, p) => rRes(resolveProperty(n, p).value))
     b.getPropertyForEach = each((ns, p) => rRes(ns.map(n => b.getProperty(n, p).result)))
+    // eachHasProperty backs the existence-only form of EachHaveProperty.  It resolves the property on
+    // every match itself (rather than delegating to getPropertyForEach) because it needs BOTH axes of
+    // resolveProperty: `found` is what distinguishes "undefined" from "defined but null", and that
+    // distinction IS the question the existence-only form asks.  result carries {count, values}: count
+    // lets the Go matcher fail on an empty set with a clear "no elements matched" message rather than a
+    // vacuous pass, and values - the very same []any the value-matching form produces - is what
+    // .Capture() hands back.
+    b.eachHasProperty = each((ns, p) => {
+        let resolved = ns.map(n => resolveProperty(n, p))
+        return { success: ns.length > 0 && resolved.every(x => x.found), result: { count: ns.length, values: resolved.map(x => x.value) } }
+    })
     b.getProperties = one((n, ps) => rRes(ps.reduce((m, p) => {
         m[p] = b.getProperty(n, p).result
         return m
@@ -875,29 +907,38 @@ if (!window["_biloba"]) {
     b.invokeWithEach = each((ns, script, ...args) => rRes(ns.map(n => invokeWithImpl(n, script, ...args).result)))
 
     // --- Geometry getters (pollable) ---------------------------------------------------------------
-    // boundingBoxP backs BoundingBox/HaveBoundingBox: poll until the element is present AND has a
+    // Every geometry probe splits ABSENT from NOT-YET-LAID-OUT, and the split is load-bearing:
+    //   - element absent          -> an ERROR (the same message one() raises).  These probes back
+    //                                matchers, and Gomega only counts an assertion satisfied when the
+    //                                match result is the desired one AND there is no error - so without
+    //                                the error, ShouldNot(b.BeInViewport()) would pass INSTANTLY against
+    //                                an element that never rendered.  The error keeps the negation honest
+    //                                in both directions (and, under Eventually, still just retries).
+    //   - present but degenerate -> {success:false}, no error - "not ready yet", so the POSITIVE
+    //     (a zero-area box)          direction keeps polling through late layout exactly as before.
+    // boundingBoxP backs BoundingBox/HaveBoundingBox: wait until the element is present AND has a
     // non-degenerate layout box (width>0 && height>0 - actually laid out, not merely in the DOM), then
-    // return its viewport-relative rectangle.  A zero-area box reports {success:false} (no error) so
-    // Eventually keeps waiting through layout, mirroring getPropertiesP's "present but not yet defined".
-    b.boundingBoxP = poll(n => {
+    // return its viewport-relative rectangle.
+    b.boundingBoxP = one(n => {
         let x = n.getBoundingClientRect()
         if (x.width <= 0 || x.height <= 0) return { success: false }
         return rRes(boxOf(n))
     })
-    // scrollOffsetP backs ScrollOffset/HaveScrollOffset: poll until the (scroll container) element is
-    // present, then report its current scroll position and the maximum scrollable offsets (scroll size
-    // minus client size) so a spec can assert "scrolled to / near the bottom" without hand-rolled JS.
-    b.scrollOffsetP = poll(n => rRes({ top: n.scrollTop, left: n.scrollLeft, maxTop: n.scrollHeight - n.clientHeight, maxLeft: n.scrollWidth - n.clientWidth }))
-    // offsetWithinP backs OffsetTopWithin/OffsetLeftWithin/HaveOffsetTopWithin: poll until BOTH the
+    // scrollOffsetP backs ScrollOffset/HaveScrollOffset: once the (scroll container) element is present,
+    // report its current scroll position and the maximum scrollable offsets (scroll size minus client
+    // size) so a spec can assert "scrolled to / near the bottom" without hand-rolled JS.
+    b.scrollOffsetP = one(n => rRes({ top: n.scrollTop, left: n.scrollLeft, maxTop: n.scrollHeight - n.clientHeight, maxLeft: n.scrollWidth - n.clientWidth }))
+    // offsetWithinP backs OffsetTopWithin/OffsetLeftWithin/HaveOffsetTopWithin: wait until BOTH the
     // element and the container are present and the element has a non-degenerate box, then report the
     // element's viewport offset minus the container's - i.e. how far below/right of the container's
     // top-left edge the element currently sits (the "scrolled near the top of the pane" measurement).
     // The container arrives as an already-encoded selector (Go encodes it) so sel() resolves it directly.
+    // Either endpoint being absent is an error that names WHICH selector went missing.
     b.offsetWithinP = (s, containerSel) => {
         let n = sel(s)
-        if (!n) return { success: false }
+        if (!n) return notFound(s)
         let c = sel(containerSel)
-        if (!c) return { success: false }
+        if (!c) return notFound(containerSel, "container ")
         let nr = n.getBoundingClientRect()
         if (nr.width <= 0 || nr.height <= 0) return { success: false }
         let cr = c.getBoundingClientRect()
@@ -912,33 +953,35 @@ if (!window["_biloba"]) {
     // (non-degenerate boxes), then read both viewport rectangles in a SINGLE eval so the relation is
     // judged at one layout instant.  Splitting into two BoundingBox reads loses that atomicity - a
     // mid-layout frame could satisfy neither-yet-both.  otherSel arrives already-encoded (Go encodes it).
+    // Either endpoint being absent is an error that names WHICH selector went missing; a present-but-
+    // degenerate box on either side stays a silent retry.
     b.relativeBoxesP = (s, otherSel) => {
         let n = sel(s)
-        if (!n) return { success: false }
+        if (!n) return notFound(s)
         let o = sel(otherSel)
-        if (!o) return { success: false }
+        if (!o) return notFound(otherSel, "other ")
         let nr = n.getBoundingClientRect(), or = o.getBoundingClientRect()
         if (nr.width <= 0 || nr.height <= 0 || or.width <= 0 || or.height <= 0) return { success: false }
         return rRes({ a: boxOf(n), b: boxOf(o) })
     }
-    // inViewportP backs BeInViewport: poll until the element is present and laid out, then report its
-    // rect alongside the layout viewport size so Go can test on-screen-ness (does the box intersect the
-    // visible window).  Distinct from isVisible, which only checks the element is rendered at all - an
-    // element can be laid out yet scrolled entirely out of view.
-    b.inViewportP = poll(n => {
+    // inViewportP backs BeInViewport: once the element is present and laid out, report its rect alongside
+    // the layout viewport size so Go can test on-screen-ness (does the box intersect the visible window).
+    // Distinct from isVisible, which only checks the element is rendered at all - an element can be laid
+    // out yet scrolled entirely out of view.
+    b.inViewportP = one(n => {
         let x = n.getBoundingClientRect()
         if (x.width <= 0 || x.height <= 0) return { success: false }
         return rRes({ top: x.top, left: x.left, bottom: x.bottom, right: x.right, vw: window.innerWidth, vh: window.innerHeight })
     })
-    // documentOrderP backs BePrecededBy/BeFollowedBy: poll until BOTH elements are present, then return
+    // documentOrderP backs BePrecededBy/BeFollowedBy: once BOTH elements are present, return
     // compareDocumentPosition of other relative to the element so Go can test precedes/follows in
     // document order.  No layout gating - document order is structural, not geometric.  otherSel arrives
-    // already-encoded.
+    // already-encoded.  Either endpoint being absent is an error that names WHICH selector went missing.
     b.documentOrderP = (s, otherSel) => {
         let n = sel(s)
-        if (!n) return { success: false }
+        if (!n) return notFound(s)
         let o = sel(otherSel)
-        if (!o) return { success: false }
+        if (!o) return notFound(otherSel, "other ")
         return rRes(n.compareDocumentPosition(o))
     }
 

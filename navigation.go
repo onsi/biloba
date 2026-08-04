@@ -10,7 +10,6 @@ import (
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 	"github.com/onsi/gomega/gcustom"
-	"github.com/onsi/gomega/types"
 )
 
 // navigationTimeout bounds a single navigation so a wedged target can't hang the whole suite.  Real
@@ -166,20 +165,25 @@ HaveURL(expected) is a Gomega matcher that matches against the current tab's [Bi
 
 expected can be a string (exact match) or a Gomega matcher.  Like GetLocation, a transient CDP error while reading the location is a retryable miss under Eventually rather than an immediate failure.
 
+HaveURL returns a [ValueMatcher], so you can [ValueMatcher.Capture] the url that satisfied the assertion:
+
+	var url string
+	Eventually(b).Should(b.HaveURL(HaveSuffix("/done")).Capture(&url))
+
 Read https://onsi.github.io/biloba/#navigation to learn more about navigation
 */
-func (b *Biloba) HaveURL(expected any) types.GomegaMatcher {
+func (b *Biloba) HaveURL(expected any) *ValueMatcher {
 	var data = map[string]any{}
 	var matcher = matcherOrEqual(expected)
 	data["Matcher"] = matcher
-	return gcustom.MakeMatcher(func(tab *Biloba) (bool, error) {
+	return capturableResult(gcustom.MakeMatcher(func(tab *Biloba) (bool, error) {
 		location, err := tab.location()
 		if err != nil {
 			return false, err
 		}
 		data["Result"] = location
 		return matcher.Match(data["Result"])
-	}).WithTemplate("HaveURL:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}).WithTemplate("HaveURL:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
 }
 
 /*
@@ -234,18 +238,23 @@ HaveTitle(expected) is a Gomega matcher that matches against the current tab's [
 
 expected can be a string (exact match) or a Gomega matcher.  Like GetTitle, a transient CDP error while reading the title is a retryable miss under Eventually rather than an immediate failure.
 
+HaveTitle returns a [ValueMatcher], so you can [ValueMatcher.Capture] the title that satisfied the assertion:
+
+	var title string
+	Eventually(b).Should(b.HaveTitle(HavePrefix("Nav-")).Capture(&title))
+
 Read https://onsi.github.io/biloba/#navigation to learn more about navigation
 */
-func (b *Biloba) HaveTitle(expected any) types.GomegaMatcher {
+func (b *Biloba) HaveTitle(expected any) *ValueMatcher {
 	var data = map[string]any{}
 	var matcher = matcherOrEqual(expected)
 	data["Matcher"] = matcher
-	return gcustom.MakeMatcher(func(tab *Biloba) (bool, error) {
+	return capturableResult(gcustom.MakeMatcher(func(tab *Biloba) (bool, error) {
 		title, err := tab.title()
 		if err != nil {
 			return false, err
 		}
 		data["Result"] = title
 		return matcher.Match(data["Result"])
-	}).WithTemplate("HaveTitle:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}).WithTemplate("HaveTitle:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
 }

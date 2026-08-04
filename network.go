@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -549,9 +550,22 @@ func (m *ResponseModification) resolve(original InterceptedResponse) StubRespons
 // inheriting Gomega's 1s default, and honors WithTimeout/WithContext.
 var holdResponseTimeout = 30 * time.Second
 
+// heldEntry is one response this hold took ownership of.  Each entry owns its own release channel so
+// responses can be released one at a time (see ResponseHold.Release/ReleaseNext) rather than all at
+// once.  released is the single source of truth for "has this entry's channel been closed?" - closing
+// is always funneled through releaseEntry so a terminal Release followed by forceRelease can never
+// double-close.  Matches that passed straight through because the hold was at its Limit never become
+// entries: the hold never held them.
+type heldEntry struct {
+	response InterceptedResponse
+	release  chan struct{}
+	released bool
+}
+
 /*
 ResponseHold is the handle returned by [Biloba.HoldResponse].  It lets a spec block a matching
-response in flight, wait for it to arrive, count how many have matched, and then let them through.
+response in flight, wait for it to arrive, count how many have matched, and then let them through -
+all of them, or one at a time.
 
 Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
 */
@@ -560,12 +574,12 @@ type ResponseHold struct {
 	matcher types.GomegaMatcher
 
 	lock     sync.Mutex
-	count    int                   // every matching response intercepted so far
-	held     []InterceptedResponse // the responses this hold has intercepted, oldest first
-	blocked  int                   // how many goroutines are currently parked inside the hold
-	released bool
-	release  chan struct{} // closed by Release: parked responses proceed, future ones pass straight through
-	notify   chan struct{} // closed-and-replaced on every arrival so Await can wake without polling
+	count    int           // every matching response intercepted so far, held or not
+	limit    int           // at most this many responses may be held concurrently (0 = unlimited)
+	held     []*heldEntry  // every response this hold has taken ownership of, oldest first (released ones included)
+	blocked  int           // how many goroutines are currently parked inside the hold
+	released bool          // a bare Release() was called: the hold is terminal and holds nothing further
+	notify   chan struct{} // closed-and-replaced on every arrival, and when a bare Release goes terminal, so Await can wake without polling
 }
 
 /*
@@ -581,11 +595,18 @@ forcing an arrival order when testing optimistic-UI reconciliation:
 	hold.Release()                          // now let the stale response land
 	Expect(hold.Count()).To(Equal(1))
 
+By default a hold is all-or-nothing: it freezes EVERY matching response, not just the first, and a
+bare Release() frees all of them at once and stops holding future matches.  So a second request to
+the same URL is frozen too - if you need it to fly past while the first stays held, cap the hold with
+[ResponseHold.Limit].  To let held responses go one at a time (and keep the hold armed) use
+[ResponseHold.ReleaseNext] or pass the response to [ResponseHold.Release].
+
 HoldResponse builds on [Biloba.ModifyResponse], so the same rules apply: it is scoped to the tab,
 cleared by Prepare(), and participates in the same first-match-wins handler list.  Matching is
 tab-wide and URL-based, so a hold can catch a response belonging to an *earlier* page load - a URL
 substring does not identify a page generation.  Scope it (drive the flow in a dedicated b.NewTab())
-or assert Count() when that matters.
+or assert Count() when that matters.  First-match-wins also means a second HoldResponse for a URL an
+earlier one already claims is dead code: re-arm the hold you have with ReleaseNext instead.
 
 A held response is a real Chrome pause, so Biloba force-releases every hold at the end of the spec
 (and again in Prepare()) - a failing spec can never wedge the tab for the specs that follow.
@@ -599,7 +620,6 @@ func (b *Biloba) HoldResponse(url any) *ResponseHold {
 	h := &ResponseHold{
 		b:       b,
 		matcher: matcherOrEqual(url),
-		release: make(chan struct{}),
 		notify:  make(chan struct{}),
 	}
 	mod := &ResponseModification{matcher: h.matcher, hold: h, using: h.intercept, prov: newHandlerProvenance("HoldResponse", "response")}
@@ -611,6 +631,43 @@ func (b *Biloba) HoldResponse(url any) *ResponseHold {
 	return h
 }
 
+/*
+Limit caps how many matching responses this hold may freeze at the same time.  While n are already
+held, further matches pass straight through to the page untouched (they still count).  Limit(1) is
+what makes "hold response #1 while response #2 lands" expressible - the ordering a default hold can
+never produce, since it freezes #2 as well:
+
+	hold := b.HoldResponse(ContainSubstring("/api/save")).Limit(1)
+	b.Click("#save")                                 // the first save's response is held
+	hold.Await()
+	b.Click("#save")                                 // the second save's response flies past and lands
+	Eventually(hold.Count).Should(Equal(2))
+	hold.Release()                                   // now the FIRST response lands, last
+
+Releasing a held response frees up capacity, so the next match is held again.  n must be at least 1;
+by default a hold is unlimited.
+
+Two edges worth knowing: the hold starts intercepting the moment [Biloba.HoldResponse] returns, so a
+response already in flight when the chained .Limit(n) runs can be held before the cap is set (only
+reachable if you register a hold against traffic that is already moving).  And the cap applies to
+matches as they arrive - lowering it later never releases responses already held, and raising it never
+retroactively holds anything that has already passed through.
+
+Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
+*/
+func (h *ResponseHold) Limit(n int) *ResponseHold {
+	h.b.gt.Helper()
+	h.b.guardConfig("Limit", knobTimeout, knobContext)
+	if n < 1 {
+		h.b.gt.Fatalf("HoldResponse(...).Limit(%d) is invalid - a hold must be allowed to hold at least one response.\nPass a limit of 1 or more, or drop Limit entirely to hold every matching response.", n)
+		return h
+	}
+	h.lock.Lock()
+	h.limit = n
+	h.lock.Unlock()
+	return h
+}
+
 // intercept is the ResponseModification transform HoldResponse registers.  It runs on the goroutine
 // handleResponseStagePause spun up for this paused response (never on the CDP event loop, and never
 // while holding b.lock) so parking here blocks nothing but this one response.
@@ -619,16 +676,26 @@ func (h *ResponseHold) intercept(r InterceptedResponse) StubResponse {
 
 	h.lock.Lock()
 	h.count++
-	h.held = append(h.held, r)
-	close(h.notify)
-	h.notify = make(chan struct{})
+	if h.limit > 0 && h.holdingCount() >= h.limit {
+		// at capacity: this match was never this hold's business.  It passes straight through and is
+		// not recorded as an entry - Await must not hand back a response the hold never held.
+		h.lock.Unlock()
+		return passthrough
+	}
+	entry := &heldEntry{response: r, release: make(chan struct{})}
+	h.held = append(h.held, entry)
+	h.signal()
 	if h.released {
+		// terminal: the hold is done holding, but the entry is still recorded so a post-Release Await
+		// keeps returning the first intercepted response rather than blocking forever.
+		h.releaseEntry(entry)
 		h.lock.Unlock()
 		return passthrough
 	}
 	h.blocked++
-	release := h.release
 	h.lock.Unlock()
+	// the entry was appended, and the decision to park was made, under the same lock hold - so a
+	// concurrent release can always see this entry and close its channel.  No wakeup can be lost.
 
 	defer func() {
 		h.lock.Lock()
@@ -637,15 +704,51 @@ func (h *ResponseHold) intercept(r InterceptedResponse) StubResponse {
 	}()
 
 	select {
-	case <-release:
+	case <-entry.release:
 	case <-h.b.Context.Done(): // the tab is going away - never hang the suite waiting on a dead tab
 	}
 	return passthrough
 }
 
+// holdingCount is how many entries are still frozen.  Must be called with h.lock held.
+func (h *ResponseHold) holdingCount() int {
+	n := 0
+	for _, e := range h.held {
+		if !e.released {
+			n++
+		}
+	}
+	return n
+}
+
+// releaseEntry frees one held response.  It is the only place an entry's channel is closed, so it can
+// safely be called on an entry that is already released.  Must be called with h.lock held.
+func (h *ResponseHold) releaseEntry(e *heldEntry) {
+	if e.released {
+		return
+	}
+	e.released = true
+	close(e.release)
+}
+
+// signal wakes every Await parked on the current notify channel.  Must be called with h.lock held.
+func (h *ResponseHold) signal() {
+	close(h.notify)
+	h.notify = make(chan struct{})
+}
+
 /*
-Await blocks until this hold has intercepted a matching response, then returns it so the spec can
-assert on it.  It returns immediately if one has already arrived.
+Await blocks until this hold is holding a matching response, then returns the oldest one it is still
+holding so the spec can assert on it.  It returns immediately if one is already held.  Responses that
+passed straight through because the hold was at its [ResponseHold.Limit] were never held, so Await
+skips them; after a bare Release() (which ends the hold) Await returns the first response the hold
+intercepted rather than blocking.
+
+Release one response and Await again to wait for the NEXT one:
+
+	hold.Await()       // the first GET /home
+	hold.ReleaseNext()
+	hold.Await()       // blocks until the second GET /home is held
 
 Await is a waiting command: it keeps its own generous default deadline and honors WithTimeout and
 WithContext (set them on the tab you build the hold from - b.WithTimeout(d).HoldResponse(url)).
@@ -665,8 +768,15 @@ func (h *ResponseHold) Await() InterceptedResponse {
 
 	for {
 		h.lock.Lock()
-		if len(h.held) > 0 {
-			response := h.held[0]
+		if entry := h.oldestHeld(); entry != nil {
+			response := entry.response
+			h.lock.Unlock()
+			return response
+		}
+		if h.released && len(h.held) > 0 {
+			// backward compatibility: a terminally-released hold holds nothing, but Await has always
+			// handed back the first response it intercepted.
+			response := h.held[0].response
 			h.lock.Unlock()
 			return response
 		}
@@ -682,19 +792,104 @@ func (h *ResponseHold) Await() InterceptedResponse {
 	}
 }
 
+// oldestHeld returns the oldest entry that is still frozen, or nil.  Must be called with h.lock held.
+func (h *ResponseHold) oldestHeld() *heldEntry {
+	for _, e := range h.held {
+		if !e.released {
+			return e
+		}
+	}
+	return nil
+}
+
 /*
-Release lets every response this hold is currently holding through to the page, unchanged, and stops
-holding future matches (they pass straight through).  It is idempotent and safe to call when nothing
-is held.
+Release lets held responses through to the page, unchanged.
+
+Called with no arguments it is terminal: every response currently held goes through AND the hold
+stops holding future matches (they pass straight through).  It is idempotent and safe to call when
+nothing is held.
+
+Called with responses (as returned by [ResponseHold.Await]) it releases only those, and the hold
+stays armed - the next matching response is held just like the first:
+
+	first := hold.Await()
+	...
+	hold.Release(first)   // only this one lands; the hold is still armed
+
+Releasing a response this hold is not currently holding fails the spec.  Responses are matched by
+value, oldest first, since two byte-identical held responses are genuinely indistinguishable.
 
 Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
 */
-func (h *ResponseHold) Release() {
+func (h *ResponseHold) Release(responses ...InterceptedResponse) {
 	h.b.gt.Helper()
 	// WithTimeout/WithContext are legal on the tab a hold is built from (they configure Await) so
 	// they can't be rejected here; WithPolling/Immediate were already rejected by HoldResponse.
 	h.b.guardConfig("Release", knobTimeout, knobContext)
-	h.release_()
+	if len(responses) == 0 {
+		h.release_()
+		return
+	}
+	for _, response := range responses {
+		h.releaseResponse(response)
+	}
+}
+
+/*
+ReleaseNext lets the oldest response this hold is still holding through to the page, unchanged, and
+leaves the hold armed so the next matching response is held too.  Use it to step responses through
+one at a time:
+
+	hold.Await()
+	hold.ReleaseNext()
+
+It fails the spec when nothing is currently held - a release that finds nothing to release means the
+spec's sequencing is off, and that should be loud.  Await first.
+
+Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
+*/
+func (h *ResponseHold) ReleaseNext() {
+	h.b.gt.Helper()
+	h.b.guardConfig("ReleaseNext", knobTimeout, knobContext)
+	h.lock.Lock()
+	if entry := h.oldestHeld(); entry != nil {
+		h.releaseEntry(entry)
+		h.lock.Unlock()
+		return
+	}
+	count := h.count
+	h.lock.Unlock()
+	// never fail while holding h.lock - gt.Fatalf does not return in a real spec.
+	h.b.gt.Fatalf("ReleaseNext() was called but this hold is not holding any responses with URL matching %s\n%d matching response(s) have been intercepted so far.\nAwait() until a response is actually being held before you release it.", h.description(), count)
+}
+
+// releaseResponse frees the oldest still-held entry equal to response.  InterceptedResponse is a
+// plain value struct users may assert on, so it carries no identity of its own - value equality,
+// oldest first, is the honest resolution: two byte-identical held responses are indistinguishable.
+func (h *ResponseHold) releaseResponse(response InterceptedResponse) {
+	h.b.gt.Helper()
+	h.lock.Lock()
+	everHeld := false
+	for _, e := range h.held {
+		if !reflect.DeepEqual(e.response, response) {
+			continue
+		}
+		everHeld = true
+		if !e.released {
+			h.releaseEntry(e)
+			h.lock.Unlock()
+			return
+		}
+	}
+	count, holding := h.count, h.holdingCount()
+	h.lock.Unlock()
+
+	// never fail while holding h.lock - gt.Fatalf does not return in a real spec.
+	if everHeld {
+		h.b.gt.Fatalf("Release() was passed a response that this hold has already released:\n%s\nThis hold has intercepted %d matching response(s) and is currently holding %d.", format.Object(response, 1), count, holding)
+		return
+	}
+	h.b.gt.Fatalf("Release() was passed a response that this hold has never held:\n%s\nThis hold has intercepted %d matching response(s) with URL matching %s and is currently holding %d.\nRelease() only accepts responses returned by Await().", format.Object(response, 1), count, h.description(), holding)
 }
 
 func (h *ResponseHold) release_() {
@@ -704,13 +899,18 @@ func (h *ResponseHold) release_() {
 		return
 	}
 	h.released = true
-	close(h.release)
+	for _, e := range h.held {
+		h.releaseEntry(e)
+	}
+	h.signal()
 	h.lock.Unlock()
 }
 
 /*
-Count returns how many matching responses this hold has intercepted so far.  It is a snapshot - it
-takes no poll-config knobs - but it is safe to poll:
+Count returns how many matching responses this hold has intercepted so far - every match, whether it
+was held or passed straight through (because the hold was at its [ResponseHold.Limit], or already
+released).  It is a snapshot - it takes no poll-config knobs - but it is safe to poll, which is how a
+spec waits for a passed-through response to have reached the interceptor:
 
 	Eventually(hold.Count).Should(Equal(1))
 
@@ -726,8 +926,9 @@ func (h *ResponseHold) description() string {
 	return normalizeWhitespace(h.matcher.FailureMessage(""))
 }
 
-// forceRelease is the deadlock backstop: it releases everything and then waits (briefly) for the
-// parked goroutines to actually hand their responses back to Chrome.  It runs as a DeferCleanup
+// forceRelease is the deadlock backstop: it releases everything - every entry, however it was
+// released so far, and every match still to come - and then waits (briefly) for the parked
+// goroutines to actually hand their responses back to Chrome.  It runs as a DeferCleanup
 // registered by HoldResponse and again from Prepare(), so neither a failing spec nor a panic can
 // leave a Fetch pause outstanding and wedge the tab for every spec that follows.
 func (h *ResponseHold) forceRelease() {

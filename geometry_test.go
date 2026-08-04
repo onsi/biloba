@@ -3,8 +3,10 @@ package biloba_test
 import (
 	"time"
 
+	"github.com/onsi/biloba"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega/types"
 )
 
 var _ = Describe("Geometry getters and matchers", func() {
@@ -94,9 +96,14 @@ var _ = Describe("Geometry getters and matchers", func() {
 			Eventually("#s2").Should(b.HaveOffsetTopWithin(".scroller", BeNumerically("~", 50, 2)))
 		})
 
-		It("fails fast under Immediate() when the container is missing", func() {
+		It("fails fast under Immediate() when the container is missing, naming the container selector", func() {
 			b.Immediate().GetOffsetTopWithin("#s2", ".nope")
-			ExpectFailures(ContainSubstring("be present and laid out within its container"))
+			ExpectFailures(ContainSubstring("could not find DOM element matching container selector: .nope"))
+		})
+
+		It("fails fast under Immediate() when the element itself is missing", func() {
+			b.Immediate().GetOffsetTopWithin("#nope", ".scroller")
+			ExpectFailures(ContainSubstring("could not find DOM element matching selector: #nope"))
 		})
 	})
 
@@ -164,9 +171,9 @@ var _ = Describe("Geometry getters and matchers", func() {
 			Ω(m.FailureMessage("#span")).Should(ContainSubstring("HaveGapBetween"))
 		})
 
-		It("fails fast under Immediate() when the other element is missing", func() {
+		It("fails fast under Immediate() when the other element is missing, naming the other selector", func() {
 			b.Immediate().GetGapBetween("#span", ".nope")
-			ExpectFailures(ContainSubstring("be present and laid out alongside the other element"))
+			ExpectFailures(ContainSubstring("could not find DOM element matching other selector: .nope"))
 		})
 	})
 
@@ -341,6 +348,261 @@ var _ = Describe("Geometry getters and matchers", func() {
 		It("backs the matcher form", func() {
 			Eventually("#hero").Should(b.HaveComputedStyleNumeric("width", BeNumerically(">", 50)))
 			Expect("#rail").To(b.HaveComputedStyleNumeric("z-index", 7))
+		})
+	})
+
+	Describe("a missing element is an error, not a vacuous ShouldNot", func() {
+		// The geometry probes split "element absent" from "element present but not yet laid out": absent
+		// is an ERROR, present-but-degenerate stays a silent retry.  Gomega counts an assertion satisfied
+		// only when the match result is the desired one AND there is no error - so without that error
+		// ShouldNot(<geometry matcher>) passes INSTANTLY against a selector that never matches, and a
+		// regression guard like Ω("#toast").ShouldNot(b.BeInViewport()) goes green on a page that never
+		// rendered #toast at all.  Every spec below pins BOTH directions: Match errors, and the negation
+		// therefore fails rather than passing vacuously.
+		const missing = "could not find DOM element matching selector: #nope"
+		const missingOther = "could not find DOM element matching other selector: #nope"
+		const missingContainer = "could not find DOM element matching container selector: #nope"
+
+		var failure string
+		var g Gomega
+
+		BeforeEach(func() {
+			failure = ""
+			g = NewGomega(func(message string, callerSkip ...int) { failure = message })
+		})
+
+		// expectHonest asserts that m errors on selector, and that the NEGATION fails because of it.
+		// The ShouldNot leg runs through a capturing Gomega - that is the leg that used to pass
+		// vacuously, so it is the leg worth pinning.
+		expectHonest := func(selector any, m types.GomegaMatcher, expected string) {
+			GinkgoHelper()
+			match, err := m.Match(selector)
+			Ω(match).Should(BeFalse())
+			Ω(err).Should(MatchError(expected))
+
+			failure = ""
+			g.Expect(selector).ShouldNot(m)
+			Ω(failure).Should(ContainSubstring(expected), "ShouldNot(...) passed vacuously against %v", selector)
+		}
+
+		It("BeInViewport", func() {
+			expectHonest("#nope", b.BeInViewport(), missing)
+			expectHonest("#nope", b.BeInViewport(b.Fully()), missing)
+		})
+
+		It("HaveBoundingBox", func() {
+			expectHonest("#nope", b.HaveBoundingBox(HaveField("Width", BeNumerically(">", 0))), missing)
+		})
+
+		It("HaveScrollOffset", func() {
+			expectHonest("#nope", b.HaveScrollOffset(HaveField("Top", BeNumerically(">=", 0))), missing)
+		})
+
+		It("HaveComputedStyleNumeric", func() {
+			expectHonest("#nope", b.HaveComputedStyleNumeric("width", BeNumerically(">", 0)), missing)
+		})
+
+		It("HaveOffsetTopWithin / HaveOffsetLeftWithin", func() {
+			expectHonest("#nope", b.HaveOffsetTopWithin(".scroller", BeNumerically(">", 0)), missing)
+			expectHonest("#nope", b.HaveOffsetLeftWithin(".scroller", BeNumerically(">=", 0)), missing)
+			// ...and a missing CONTAINER says so, rather than blaming the element that is right there
+			expectHonest("#s2", b.HaveOffsetTopWithin("#nope", BeNumerically(">", 0)), missingContainer)
+			expectHonest("#s2", b.HaveOffsetLeftWithin("#nope", BeNumerically(">=", 0)), missingContainer)
+		})
+
+		It("the pairwise relational matchers", func() {
+			expectHonest("#nope", b.BeAbove("#below"), missing)
+			expectHonest("#nope", b.BeBelow("#above"), missing)
+			expectHonest("#nope", b.BeLeftOf("#rightbox"), missing)
+			expectHonest("#nope", b.BeRightOf("#leftbox"), missing)
+			expectHonest("#nope", b.Encloses("#enclosed"), missing)
+			expectHonest("#nope", b.Overlaps("#ovB"), missing)
+		})
+
+		It("the pairwise relational matchers name the OTHER selector when it is the missing one", func() {
+			expectHonest("#above", b.BeAbove("#nope"), missingOther)
+			expectHonest("#below", b.BeBelow("#nope"), missingOther)
+			expectHonest("#leftbox", b.BeLeftOf("#nope"), missingOther)
+			expectHonest("#rightbox", b.BeRightOf("#nope"), missingOther)
+			expectHonest("#frame", b.Encloses("#nope"), missingOther)
+			expectHonest("#ovA", b.Overlaps("#nope"), missingOther)
+		})
+
+		It("HaveGapBetween", func() {
+			expectHonest("#nope", b.HaveGapBetween("#card", HaveField("Top", BeNumerically(">", 0))), missing)
+			expectHonest("#span", b.HaveGapBetween("#nope", HaveField("Top", BeNumerically(">", 0))), missingOther)
+		})
+
+		It("BePrecededBy / BeFollowedBy", func() {
+			b.Run("appendOrdered()")
+			Eventually("#o-first").Should(b.Exist())
+			expectHonest("#nope", b.BePrecededBy("#o-first"), missing)
+			expectHonest("#nope", b.BeFollowedBy("#o-first"), missing)
+			expectHonest("#o-first", b.BePrecededBy("#nope"), missingOther)
+			expectHonest("#o-first", b.BeFollowedBy("#nope"), missingOther)
+		})
+
+		It("keeps 'present but not yet laid out' a silent retry, so the positive direction still polls", func() {
+			// #late IS in the DOM, with height:0 until layoutLate() runs.  That must stay
+			// {success:false}/no error - turning it into an error would break polling through late
+			// layout, which is the whole reason these matchers exist.
+			m := b.HaveBoundingBox(HaveField("Height", BeNumerically(">", 0)))
+			match, err := m.Match("#late")
+			Ω(match).Should(BeFalse())
+			Ω(err).ShouldNot(HaveOccurred())
+
+			relational := b.BeAbove("#late")
+			match, err = relational.Match("#hero")
+			Ω(match).Should(BeFalse())
+			Ω(err).ShouldNot(HaveOccurred())
+
+			b.Run("setTimeout(layoutLate, 50)")
+			Eventually("#late").Should(b.HaveBoundingBox(HaveField("Height", BeNumerically(">", 0))))
+			Eventually("#hero").Should(b.BeAbove("#late"))
+		})
+
+		It("keeps a laid-out element that is merely off screen a plain non-match for BeInViewport", func() {
+			// the distinction that matters: #vp-below exists and is laid out, it is just scrolled away.
+			// THAT is an honest ShouldNot - no error, and it passes without waiting.
+			match, err := b.BeInViewport().Match("#vp-below")
+			Ω(match).Should(BeFalse())
+			Ω(err).ShouldNot(HaveOccurred())
+			Ω("#vp-below").ShouldNot(b.BeInViewport())
+		})
+
+		It("no longer lets a REMOVED element satisfy ShouldNot - assert disappearance with Exist instead", func() {
+			// This is the migration hazard of the change, and it is deliberate.  A spec that waited for
+			// teardown with Eventually(sel).ShouldNot(b.BeInViewport()) used to pass the moment the node
+			// left the DOM; it now fails, because a missing element is an error and an errored matcher is
+			// never counted as satisfied in EITHER direction.  "Not in the viewport" is a claim about an
+			// element that is THERE - so disappearance belongs to the matchers that are about existence.
+			Ω("#hero").Should(b.BeInViewport())
+			b.Run(`document.querySelector("#hero").remove()`)
+
+			match, err := b.BeInViewport().Match("#hero")
+			Ω(match).Should(BeFalse())
+			Ω(err).Should(MatchError("could not find DOM element matching selector: #hero"))
+
+			failure = ""
+			g.Expect("#hero").ShouldNot(b.BeInViewport())
+			Ω(failure).ShouldNot(BeEmpty(), "ShouldNot(BeInViewport) passed vacuously against a removed element")
+
+			// ...and the replacement idiom, which answers the question that was actually being asked
+			Eventually("#hero").ShouldNot(b.Exist())
+			Eventually("#hero").Should(b.HaveCount(0))
+		})
+	})
+
+	Describe("capturing values off the geometry matchers", func() {
+		It("captures the Box that satisfied HaveBoundingBox", func() {
+			var box biloba.Box
+			Eventually("#hero").Should(b.HaveBoundingBox(HaveField("Width", BeNumerically(">", 50))).Capture(&box))
+			Ω(box.Width).Should(BeNumerically("~", 100, 1))
+			Ω(box.Height).Should(BeNumerically("~", 80, 1))
+			Ω(box.Top).Should(BeNumerically("~", 400, 1))
+		})
+
+		It("captures the box from the attempt that finally passed", func() {
+			// #late has no box until layoutLate() runs - the captured Box must be the laid-out one,
+			// not the degenerate box from an earlier polling attempt.
+			b.Run("setTimeout(layoutLate, 100)")
+			var box biloba.Box
+			Eventually("#late").Should(b.HaveBoundingBox(HaveField("Height", BeNumerically(">", 0))).Capture(&box))
+			Ω(box.Height).Should(BeNumerically("~", 40, 1))
+		})
+
+		It("captures the ScrollOffset that satisfied HaveScrollOffset", func() {
+			b.Run("scrollContainerTo(120)")
+			var offset biloba.ScrollOffset
+			Eventually(".scroller").Should(b.HaveScrollOffset(HaveField("Top", BeNumerically(">", 0))).Capture(&offset))
+			Ω(offset.Top).Should(BeNumerically("==", 120))
+			Ω(offset.MaxTop).Should(BeNumerically("~", 250, 1))
+		})
+
+		It("captures the float64 offset that satisfied HaveOffsetTopWithin", func() {
+			var top float64
+			Eventually("#s2").Should(b.HaveOffsetTopWithin(".scroller", BeNumerically(">", 0)).Capture(&top))
+			Ω(top).Should(BeNumerically("~", 300, 1))
+		})
+
+		It("captures the float64 offset that satisfied HaveOffsetLeftWithin", func() {
+			// seeded with a sentinel: the offset here is legitimately ~0, and 0 is also float64's zero
+			// value - so without the sentinel this spec would pass just as happily if Capture never wrote.
+			left := -999.0
+			Eventually("#s0").Should(b.HaveOffsetLeftWithin(".scroller", BeNumerically("~", 0, 1)).Capture(&left))
+			Ω(left).Should(BeNumerically("~", 0, 1))
+		})
+
+		It("refuses to bridge one Biloba struct into a different one rather than silently half-filling", func() {
+			// BoxDelta's fields are a strict SUBSET of Box's, so DisallowUnknownFields cannot catch this
+			// and a JSON bridge would "succeed", leaving ClientWidth/ClientHeight at zero.  Capture names
+			// both types instead of half-filling.
+			var box biloba.Box
+			failure := ""
+			g := NewGomega(func(message string, callerSkip ...int) { failure = message })
+
+			g.Expect("#span").Should(b.HaveGapBetween("#card", HaveField("Top", BeNumerically(">", -10000))).Capture(&box))
+
+			Ω(failure).Should(ContainSubstring("biloba.BoxDelta"))
+			Ω(failure).Should(ContainSubstring("biloba.Box"))
+			Ω(box).Should(BeZero())
+		})
+
+		It("captures the BoxDelta that satisfied HaveGapBetween", func() {
+			var delta biloba.BoxDelta
+			Eventually("#span").Should(b.HaveGapBetween("#card", HaveField("CenterX", BeNumerically("~", 0, 1))).Capture(&delta))
+			Ω(delta.Top).Should(BeNumerically("~", 20, 1))
+			Ω(delta.Width).Should(BeNumerically("~", -100, 1))
+		})
+
+		It("captures the number that satisfied HaveComputedStyleNumeric", func() {
+			var width float64
+			Eventually("#hero").Should(b.HaveComputedStyleNumeric("width", BeNumerically(">", 50)).Capture(&width))
+			Ω(width).Should(BeNumerically("~", 100, 1))
+		})
+
+		It("decodes the captured number into the Go type you asked for", func() {
+			// z-index is observed as float64(7); capturing into an *int must land 7, not float64(7)
+			var z int
+			Expect("#rail").To(b.HaveComputedStyleNumeric("z-index", 7).Capture(&z))
+			Ω(z).Should(Equal(7))
+		})
+
+		It("does not capture when the matcher does not match", func() {
+			var box biloba.Box
+			m := b.HaveBoundingBox(HaveField("Width", BeNumerically("==", 999))).Capture(&box)
+			match, err := m.Match("#hero")
+			Ω(err).ShouldNot(HaveOccurred())
+			Ω(match).Should(BeFalse())
+			Ω(box).Should(Equal(biloba.Box{}))
+
+			// and the failure message is unchanged by the presence of a capture target
+			Ω(m.FailureMessage("#hero")).Should(ContainSubstring("HaveBoundingBox for #hero:"))
+		})
+
+		It("does not capture under ShouldNot", func() {
+			var box biloba.Box
+			var width float64
+			Ω("#hero").ShouldNot(b.HaveBoundingBox(HaveField("Width", BeNumerically("==", 999))).Capture(&box))
+			Ω("#hero").ShouldNot(b.HaveComputedStyleNumeric("width", BeNumerically("==", 999)).Capture(&width))
+			Ω(box).Should(Equal(biloba.Box{}))
+			Ω(width).Should(BeNumerically("==", 0))
+		})
+
+		It("fails fast - it does not wait out the timeout - when the capture target cannot hold the value", func() {
+			// the observed value is a number; capturing it into a *string can never come true, so
+			// Capture stops the poll immediately rather than burning the (long) timeout.
+			var wrongType string
+			failure := ""
+			g := NewGomega(func(message string, callerSkip ...int) { failure = message })
+
+			start := time.Now()
+			g.Eventually("#rail").WithTimeout(time.Second * 10).WithPolling(time.Millisecond * 10).Should(b.HaveComputedStyleNumeric("z-index", 7).Capture(&wrongType))
+			Ω(time.Since(start)).Should(BeNumerically("<", time.Second*2))
+
+			Ω(failure).Should(ContainSubstring("Told to stop trying"))
+			Ω(failure).Should(ContainSubstring("Capture cannot decode the observed value into *string"))
+			Ω(wrongType).Should(BeEmpty())
 		})
 	})
 })

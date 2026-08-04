@@ -411,6 +411,200 @@ var _ = Describe("Observing the network", func() {
 			Eventually("#status").Should(b.HaveInnerText("200"))
 		})
 
+		Describe("holding several responses", func() {
+			// The fixture funnels every response into the same #status/#body, so once two responses are
+			// in flight the DOM alone cannot say which of them landed when - and landing ORDER is the
+			// entire point of these specs.  fetchPath drives the fixture's doFetch (so the page still
+			// visibly reacts to each response) and records the path in window.__landed at the moment
+			// that response actually lands.
+			fetchPath := func(path string) {
+				GinkgoHelper()
+				b.Run(fmt.Sprintf(`void doFetch(%q).then(() => window.__landed.push(%q))`, path, path))
+			}
+
+			BeforeEach(func() {
+				b.Run(`window.__landed = []`)
+			})
+
+			It("holds every matching response by default, and a bare Release frees them all at once", func() {
+				hold := b.HoldResponse(ContainSubstring("/api/echo"))
+
+				fetchPath("/api/echo/one")
+				hold.Await()
+				fetchPath("/api/echo/two")
+				Eventually(hold.Count).Should(Equal(2))
+
+				// the default hold is all-or-nothing: the SECOND response is frozen too
+				Consistently("#status", 100*time.Millisecond).Should(b.HaveInnerText(""))
+				Expect(`window.__landed.join(",")`).To(b.EvaluateTo(""))
+
+				hold.Release()
+				Eventually(`window.__landed.slice().sort().join(",")`).Should(b.EvaluateTo("/api/echo/one,/api/echo/two"))
+			})
+
+			It("holds at most Limit(n) responses at a time - the rest fly past while the held one stays frozen", func() {
+				hold := b.HoldResponse(ContainSubstring("/api/echo")).Limit(1)
+
+				fetchPath("/api/echo/one")
+				first := hold.Await()
+				Expect(first.Body).To(ContainSubstring("/api/echo/one"))
+
+				// the hold is at capacity, so this one is never held: it lands while the first is frozen
+				fetchPath("/api/echo/two")
+				Eventually("#body").Should(b.HaveInnerText(ContainSubstring("/api/echo/two")))
+				Expect(`window.__landed.join(",")`).To(b.EvaluateTo("/api/echo/two"))
+
+				// every match still counts, but Await keeps returning the one actually being held
+				Expect(hold.Count()).To(Equal(2))
+				Expect(hold.Await()).To(Equal(first))
+				Consistently("#body", 100*time.Millisecond).Should(b.HaveInnerText(ContainSubstring("/api/echo/two")))
+
+				// ...and now the FIRST response lands LAST - the ordering a default hold cannot produce
+				hold.Release()
+				Eventually("#body").Should(b.HaveInnerText(ContainSubstring("/api/echo/one")))
+				Expect(`window.__landed.join(",")`).To(b.EvaluateTo("/api/echo/two,/api/echo/one"))
+			})
+
+			It("frees up capacity as held responses are released", func() {
+				hold := b.HoldResponse(ContainSubstring("/api/echo")).Limit(1)
+
+				fetchPath("/api/echo/one")
+				hold.Await()
+				hold.ReleaseNext()
+				Eventually("#body").Should(b.HaveInnerText(ContainSubstring("/api/echo/one")))
+
+				// the hold is back under its limit, so the next match is held again rather than let by
+				fetchPath("/api/echo/two")
+				Expect(hold.Await().Body).To(ContainSubstring("/api/echo/two"))
+				Consistently("#body", 100*time.Millisecond).Should(b.HaveInnerText(""))
+
+				hold.ReleaseNext()
+				Eventually("#body").Should(b.HaveInnerText(ContainSubstring("/api/echo/two")))
+				Expect(`window.__landed.join(",")`).To(b.EvaluateTo("/api/echo/one,/api/echo/two"))
+			})
+
+			It("releases just the response it is passed, and stays armed", func() {
+				hold := b.HoldResponse(ContainSubstring("/api/echo"))
+
+				fetchPath("/api/echo/one")
+				first := hold.Await()
+				fetchPath("/api/echo/two")
+				Eventually(hold.Count).Should(Equal(2))
+
+				hold.Release(first)
+				Eventually("#body").Should(b.HaveInnerText(ContainSubstring("/api/echo/one")))
+				// the second response is untouched by that release - still frozen
+				Consistently("#body", 100*time.Millisecond).Should(b.HaveInnerText(ContainSubstring("/api/echo/one")))
+
+				second := hold.Await()
+				Expect(second.Body).To(ContainSubstring("/api/echo/two"))
+				hold.Release(second)
+				Eventually("#body").Should(b.HaveInnerText(ContainSubstring("/api/echo/two")))
+
+				// and the hold is still armed - a targeted Release is not terminal
+				fetchPath("/api/echo/three")
+				Expect(hold.Await().Body).To(ContainSubstring("/api/echo/three"))
+				Consistently("#body", 100*time.Millisecond).Should(b.HaveInnerText(""))
+				hold.Release()
+				Eventually("#body").Should(b.HaveInnerText(ContainSubstring("/api/echo/three")))
+			})
+
+			It("releases the oldest held response with ReleaseNext", func() {
+				hold := b.HoldResponse(ContainSubstring("/api/echo"))
+
+				fetchPath("/api/echo/one")
+				hold.Await()
+				fetchPath("/api/echo/two")
+				Eventually(hold.Count).Should(Equal(2))
+
+				hold.ReleaseNext()
+				Eventually("#body").Should(b.HaveInnerText(ContainSubstring("/api/echo/one")))
+				// Await now returns the oldest response still being held
+				Expect(hold.Await().Body).To(ContainSubstring("/api/echo/two"))
+
+				hold.ReleaseNext()
+				Eventually("#body").Should(b.HaveInnerText(ContainSubstring("/api/echo/two")))
+				Expect(`window.__landed.join(",")`).To(b.EvaluateTo("/api/echo/one,/api/echo/two"))
+			})
+
+			It("can hold, release, and then hold the NEXT response for the same URL", func() {
+				hold := b.HoldResponse(ContainSubstring("/api/echo"))
+
+				fetchPath("/api/echo/one")
+				Expect(hold.Await().Body).To(ContainSubstring("/api/echo/one"))
+				hold.ReleaseNext()
+				Eventually("#body").Should(b.HaveInnerText(ContainSubstring("/api/echo/one")))
+
+				// the same hold re-arms - Await blocks until the NEXT response is being held
+				fetchPath("/api/echo/two")
+				second := hold.Await()
+				Expect(second.Body).To(ContainSubstring("/api/echo/two"))
+				Consistently("#body", 100*time.Millisecond).Should(b.HaveInnerText(""))
+
+				hold.Release(second)
+				Eventually("#body").Should(b.HaveInnerText(ContainSubstring("/api/echo/two")))
+				Expect(hold.Count()).To(Equal(2))
+			})
+
+			It("fails when asked to release a response it is not holding", func() {
+				hold := b.HoldResponse(ContainSubstring("/api/echo"))
+				fetchPath("/api/echo/one")
+				first := hold.Await()
+
+				hold.Release(biloba.InterceptedResponse{Status: 200, Body: "never happened", Headers: map[string]string{}})
+				ExpectFailures(SatisfyAll(
+					ContainSubstring("Release() was passed a response that this hold has never held"),
+					ContainSubstring("never happened"),
+					ContainSubstring("only accepts responses returned by Await()"),
+				))
+
+				hold.Release(first)
+				Eventually("#body").Should(b.HaveInnerText(ContainSubstring("/api/echo/one")))
+
+				hold.Release(first)
+				ExpectFailures(ContainSubstring("Release() was passed a response that this hold has already released"))
+			})
+
+			It("fails when ReleaseNext is called with nothing held", func() {
+				hold := b.HoldResponse(ContainSubstring("/api/echo"))
+				hold.ReleaseNext()
+				ExpectFailures(SatisfyAll(
+					ContainSubstring("ReleaseNext() was called but this hold is not holding any responses with URL matching"),
+					ContainSubstring("0 matching response(s) have been intercepted so far."),
+					ContainSubstring("Await() until a response is actually being held"),
+				))
+			})
+
+			It("rejects a Limit below 1", func() {
+				b.HoldResponse(ContainSubstring("/api/echo")).Limit(0)
+				ExpectFailures(SatisfyAll(
+					ContainSubstring("Limit(0) is invalid"),
+					ContainSubstring("hold at least one response"),
+				))
+			})
+
+			Describe("deadlock safety with per-response releases", Ordered, func() {
+				It("can leave one response individually released and another still held", func() {
+					hold := b.HoldResponse(ContainSubstring("/api/echo"))
+					fetchPath("/api/echo/one")
+					first := hold.Await()
+					fetchPath("/api/echo/two")
+					Eventually(hold.Count).Should(Equal(2))
+
+					hold.Release(first)
+					Eventually("#body").Should(b.HaveInnerText(ContainSubstring("/api/echo/one")))
+					// the second is deliberately never released: forceRelease must free it without
+					// tripping over the entry that was already released individually
+				})
+
+				It("does not wedge the tab for the spec that follows", func() {
+					// Prepare() does not run between Ordered Its, so this exercises the DeferCleanup path
+					b.Click("#fetch")
+					Eventually("#status").Should(b.HaveInnerText("200"))
+				})
+			})
+		})
+
 		It("fails the spec with a directive message when Await times out", func() {
 			b.WithTimeout(60 * time.Millisecond).HoldResponse(ContainSubstring("/api/never-requested")).Await()
 			ExpectFailures(SatisfyAll(

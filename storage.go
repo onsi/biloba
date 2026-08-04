@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/onsi/gomega/gcustom"
-	"github.com/onsi/gomega/types"
 )
 
 /*
@@ -163,19 +162,23 @@ func (s *Storage) Length() int {
 	return length
 }
 
-func haveStorageItem(name string, get func(*Biloba) *Storage, key string, expected ...any) types.GomegaMatcher {
+func haveStorageItem(name string, get func(*Biloba) *Storage, key string, expected ...any) *ValueMatcher {
 	var data = map[string]any{}
 	data["Name"] = name
 	data["Key"] = key
 	if len(expected) == 0 {
-		return gcustom.MakeMatcher(func(actual *Biloba) (bool, error) {
-			_, found := get(actual).GetAll()[key]
+		//the existence-only form has no sub-matcher (and so no data["Result"] for its template) - stash
+		//the item's value in a local so Capture can still hand back what was found
+		var observed any
+		return capturable(gcustom.MakeMatcher(func(actual *Biloba) (bool, error) {
+			value, found := get(actual).GetAll()[key]
+			observed = value
 			return found, nil
-		}).WithTemplate("Expected {{.Data.Name}} {{.To}} have item with key \"{{.Data.Key}}\"", data)
+		}).WithTemplate("Expected {{.Data.Name}} {{.To}} have item with key \"{{.Data.Key}}\"", data), func() any { return observed })
 	}
 	var matcher = matcherOrEqual(expected[0])
 	data["Matcher"] = matcher
-	return gcustom.MakeMatcher(func(actual *Biloba) (bool, error) {
+	return capturableResult(gcustom.MakeMatcher(func(actual *Biloba) (bool, error) {
 		all := get(actual).GetAll()
 		value, found := all[key]
 		data["Found"] = found
@@ -184,7 +187,7 @@ func haveStorageItem(name string, get func(*Biloba) *Storage, key string, expect
 			return false, nil
 		}
 		return matcher.Match(value)
-	}).WithTemplate("{{.Data.Name}} item \"{{.Data.Key}}\":\n{{if not .Data.Found}}Expected {{.Data.Name}} to have an item with key \"{{.Data.Key}}\"{{else if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}).WithTemplate("{{.Data.Name}} item \"{{.Data.Key}}\":\n{{if not .Data.Found}}Expected {{.Data.Name}} to have an item with key \"{{.Data.Key}}\"{{else if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
 }
 
 /*
@@ -194,9 +197,14 @@ HaveLocalStorageItem() is a Gomega matcher that operates against the tab passed 
 	Expect(b).To(b.HaveLocalStorageItem("user", "Joe"))
 	Eventually(b).Should(b.HaveLocalStorageItem("count", BeNumerically(">", 0)))
 
+It returns a [ValueMatcher], so you can [ValueMatcher.Capture] the stored value that satisfied the assertion:
+
+	var count int
+	Eventually(b).Should(b.HaveLocalStorageItem("count", BeNumerically(">", 0)).Capture(&count))
+
 Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
 */
-func (b *Biloba) HaveLocalStorageItem(key string, expected ...any) types.GomegaMatcher {
+func (b *Biloba) HaveLocalStorageItem(key string, expected ...any) *ValueMatcher {
 	return haveStorageItem("localStorage", func(tab *Biloba) *Storage { return tab.LocalStorage() }, key, expected...)
 }
 
@@ -206,36 +214,45 @@ HaveSessionStorageItem() is a Gomega matcher that operates against the tab passe
 	Expect(b).To(b.HaveSessionStorageItem("user"))
 	Expect(b).To(b.HaveSessionStorageItem("user", "Joe"))
 
+It returns a [ValueMatcher], so you can [ValueMatcher.Capture] the stored value that satisfied the assertion.
+
 Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
 */
-func (b *Biloba) HaveSessionStorageItem(key string, expected ...any) types.GomegaMatcher {
+func (b *Biloba) HaveSessionStorageItem(key string, expected ...any) *ValueMatcher {
 	return haveStorageItem("sessionStorage", func(tab *Biloba) *Storage { return tab.SessionStorage() }, key, expected...)
 }
 
-func haveNumStorageItems(name string, get func(*Biloba) *Storage, expected any) types.GomegaMatcher {
+func haveNumStorageItems(name string, get func(*Biloba) *Storage, expected any) *ValueMatcher {
 	var data = map[string]any{}
 	var matcher = matcherOrEqual(expected)
 	data["Matcher"] = matcher
-	return gcustom.MakeMatcher(func(actual *Biloba) (bool, error) {
+	return capturableResult(gcustom.MakeMatcher(func(actual *Biloba) (bool, error) {
 		data["Result"] = get(actual).Length()
 		return matcher.Match(data["Result"])
-	}).WithTemplate("HaveNum"+name+"Items:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}).WithTemplate("HaveNum"+name+"Items:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
 }
 
 /*
 HaveNumLocalStorageItems() is a Gomega matcher that passes if the number of items in localStorage matches expected.  expected may be an int (exact match) or a Gomega matcher.
 
+It returns a [ValueMatcher], so you can [ValueMatcher.Capture] the count that satisfied the assertion:
+
+	var n int
+	Eventually(b).Should(b.HaveNumLocalStorageItems(BeNumerically(">", 1)).Capture(&n))
+
 Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
 */
-func (b *Biloba) HaveNumLocalStorageItems(expected any) types.GomegaMatcher {
+func (b *Biloba) HaveNumLocalStorageItems(expected any) *ValueMatcher {
 	return haveNumStorageItems("LocalStorage", func(tab *Biloba) *Storage { return tab.LocalStorage() }, expected)
 }
 
 /*
 HaveNumSessionStorageItems() is a Gomega matcher that passes if the number of items in sessionStorage matches expected.  expected may be an int (exact match) or a Gomega matcher.
 
+It returns a [ValueMatcher], so you can [ValueMatcher.Capture] the count that satisfied the assertion.
+
 Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cookies and storage
 */
-func (b *Biloba) HaveNumSessionStorageItems(expected any) types.GomegaMatcher {
+func (b *Biloba) HaveNumSessionStorageItems(expected any) *ValueMatcher {
 	return haveNumStorageItems("SessionStorage", func(tab *Biloba) *Storage { return tab.SessionStorage() }, expected)
 }

@@ -166,6 +166,36 @@ var _ = Describe("Navigation", func() {
 			defer biloba.SetTransientReadErrorForTest(failNTimes(3))()
 			Eventually(b).Should(b.HaveURL(fixtureServer + "/nav-a.html"))
 		})
+
+		It("captures the url that satisfied the assertion", func() {
+			b.Navigate(fixtureServer + "/nav-a.html")
+			var url string
+			Eventually(b).Should(b.HaveURL(HaveSuffix("nav-a.html")).Capture(&url))
+			Ω(url).Should(Equal(fixtureServer + "/nav-a.html"))
+		})
+
+		It("captures the url from the winning poll, not an earlier one", func() {
+			b.Navigate(fixtureServer + "/nav-a.html")
+			Eventually("#to-b").Should(b.Click())
+			var url string
+			Eventually(b).Should(b.HaveURL(HaveSuffix("nav-b.html")).Capture(&url))
+			Ω(url).Should(Equal(fixtureServer + "/nav-b.html"))
+		})
+
+		It("does not capture under ShouldNot", func() {
+			b.Navigate(fixtureServer + "/nav-a.html")
+			var url string
+			Ω(b).ShouldNot(b.HaveURL(HaveSuffix("nav-b.html")).Capture(&url))
+			Ω(url).Should(BeEmpty())
+		})
+
+		It("still treats a transient CDP error as a retryable miss when capturing", func() {
+			b.Navigate(fixtureServer + "/nav-a.html")
+			defer biloba.SetTransientReadErrorForTest(failNTimes(3))()
+			var url string
+			Eventually(b).Should(b.HaveURL(fixtureServer + "/nav-a.html").Capture(&url))
+			Ω(url).Should(Equal(fixtureServer + "/nav-a.html"))
+		})
 	})
 
 	Describe("HaveTitle", func() {
@@ -180,6 +210,28 @@ var _ = Describe("Navigation", func() {
 			b.Navigate(fixtureServer + "/nav-a.html")
 			defer biloba.SetTransientReadErrorForTest(failNTimes(3))()
 			Eventually(b).Should(b.HaveTitle("Nav-A Testpage"))
+		})
+
+		It("captures the title that satisfied the assertion", func() {
+			b.Navigate(fixtureServer + "/nav-a.html")
+			var title string
+			Eventually(b).Should(b.HaveTitle(HavePrefix("Nav-A")).Capture(&title))
+			Ω(title).Should(Equal("Nav-A Testpage"))
+		})
+
+		It("does not capture under ShouldNot", func() {
+			b.Navigate(fixtureServer + "/nav-a.html")
+			var title string
+			Ω(b).ShouldNot(b.HaveTitle("Nav-B Testpage").Capture(&title))
+			Ω(title).Should(BeEmpty())
+		})
+
+		It("still treats a transient CDP error as a retryable miss when capturing", func() {
+			b.Navigate(fixtureServer + "/nav-a.html")
+			defer biloba.SetTransientReadErrorForTest(failNTimes(3))()
+			var title string
+			Eventually(b).Should(b.HaveTitle("Nav-A Testpage").Capture(&title))
+			Ω(title).Should(Equal("Nav-A Testpage"))
 		})
 	})
 

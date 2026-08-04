@@ -125,11 +125,16 @@ The matcher receives the [Box] value, so compose it with Gomega's HaveField:
 Because it returns a matcher you poll, configure the Eventually/Expect that wraps it - knobs on the
 Biloba view (WithTimeout/Immediate/...) are not honored here.
 
+It returns a [ValueMatcher], so you can keep the [Box] that satisfied the assertion:
+
+	var box biloba.Box
+	Eventually(".hero .sec").Should(b.HaveBoundingBox(HaveField("Width", BeNumerically(">", 100))).Capture(&box))
+
 Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
 */
-func (b *Biloba) HaveBoundingBox(matcher types.GomegaMatcher) types.GomegaMatcher {
+func (b *Biloba) HaveBoundingBox(matcher types.GomegaMatcher) *ValueMatcher {
 	data := map[string]any{"Matcher": matcher}
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("boundingBoxP", selector)
 		if r.Error() != nil {
 			return false, r.Error()
@@ -141,7 +146,7 @@ func (b *Biloba) HaveBoundingBox(matcher types.GomegaMatcher) types.GomegaMatche
 		data["Result"] = box
 		b.recordProbe(probeKey("HaveBoundingBox", selector), box)
 		return matcher.Match(box)
-	}).WithTemplate("HaveBoundingBox for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}).WithTemplate("HaveBoundingBox for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
 }
 
 /*
@@ -184,11 +189,16 @@ which receives the [ScrollOffset] value:
 
 Because it returns a matcher you poll, configure the Eventually/Expect that wraps it.
 
+It returns a [ValueMatcher], so you can keep the [ScrollOffset] that satisfied the assertion:
+
+	var offset biloba.ScrollOffset
+	Eventually(".scroller").Should(b.HaveScrollOffset(HaveField("Top", BeNumerically(">", 0))).Capture(&offset))
+
 Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
 */
-func (b *Biloba) HaveScrollOffset(matcher types.GomegaMatcher) types.GomegaMatcher {
+func (b *Biloba) HaveScrollOffset(matcher types.GomegaMatcher) *ValueMatcher {
 	data := map[string]any{"Matcher": matcher}
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("scrollOffsetP", selector)
 		if r.Error() != nil {
 			return false, r.Error()
@@ -200,7 +210,7 @@ func (b *Biloba) HaveScrollOffset(matcher types.GomegaMatcher) types.GomegaMatch
 		data["Result"] = offset
 		b.recordProbe(probeKey("HaveScrollOffset", selector), offset)
 		return matcher.Match(offset)
-	}).WithTemplate("HaveScrollOffset for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}).WithTemplate("HaveScrollOffset for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
 }
 
 // offsetWithin is the shared substrate behind GetOffsetTopWithin/GetOffsetLeftWithin: it polls until both
@@ -260,11 +270,11 @@ func (b *Biloba) GetOffsetLeftWithin(selector, container any) float64 {
 }
 
 // haveOffsetWithin is the shared substrate behind HaveOffsetTopWithin/HaveOffsetLeftWithin.
-func (b *Biloba) haveOffsetWithin(name, axis string, container any, expected ...any) types.GomegaMatcher {
+func (b *Biloba) haveOffsetWithin(name, axis string, container any, expected ...any) *ValueMatcher {
 	encodedContainer, encErr := encodeSelector(container)
 	matcher := matcherOrEqual(firstOrNil(expected))
 	data := map[string]any{"Name": name, "Matcher": matcher}
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
 		if encErr != nil {
 			return false, encErr
 		}
@@ -279,7 +289,7 @@ func (b *Biloba) haveOffsetWithin(name, axis string, container any, expected ...
 		data["Result"] = value
 		b.recordProbe(probeKey(name, selector), value)
 		return matcher.Match(value)
-	}).WithTemplate("{{.Data.Name}} for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}).WithTemplate("{{.Data.Name}} for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
 }
 
 /*
@@ -292,9 +302,14 @@ it passes once the first element matching selector is laid out within container 
 
 Because it returns a matcher you poll, configure the Eventually/Expect that wraps it.
 
+It returns a [ValueMatcher], so you can keep the offset that satisfied the assertion:
+
+	var top float64
+	Eventually(".hero .sec").Should(b.HaveOffsetTopWithin(".scroller", BeNumerically("<", 120)).Capture(&top))
+
 Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
 */
-func (b *Biloba) HaveOffsetTopWithin(container any, expected ...any) types.GomegaMatcher {
+func (b *Biloba) HaveOffsetTopWithin(container any, expected ...any) *ValueMatcher {
 	return b.haveOffsetWithin("HaveOffsetTopWithin", "top", container, expected...)
 }
 
@@ -304,7 +319,7 @@ asserting on (element.left - container.left).
 
 Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
 */
-func (b *Biloba) HaveOffsetLeftWithin(container any, expected ...any) types.GomegaMatcher {
+func (b *Biloba) HaveOffsetLeftWithin(container any, expected ...any) *ValueMatcher {
 	return b.haveOffsetWithin("HaveOffsetLeftWithin", "left", container, expected...)
 }
 
@@ -503,12 +518,17 @@ Gomega matcher or a plain value (compared with Equal):
 
 Because it returns a matcher you poll, configure the Eventually/Expect that wraps it.
 
+It returns a [ValueMatcher], so you can keep the [BoxDelta] that satisfied the assertion:
+
+	var delta biloba.BoxDelta
+	Eventually(spanSel).Should(b.HaveGapBetween(cardSel, HaveField("CenterX", BeNumerically("~", 0, 1))).Capture(&delta))
+
 Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
 */
-func (b *Biloba) HaveGapBetween(otherSelector any, expected ...any) types.GomegaMatcher {
+func (b *Biloba) HaveGapBetween(otherSelector any, expected ...any) *ValueMatcher {
 	matcher := matcherOrEqual(firstOrNil(expected))
 	data := map[string]any{"Other": fmt.Sprintf("%v", otherSelector), "Matcher": matcher}
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
 		pass := false
 		var matchErr error
 		ok, err := b.relativeBoxes(selector, otherSelector, func(a, o Box) {
@@ -521,7 +541,7 @@ func (b *Biloba) HaveGapBetween(otherSelector any, expected ...any) types.Gomega
 			return false, err
 		}
 		return pass, matchErr
-	}).WithTemplate("HaveGapBetween {{.Data.Other}} for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}).WithTemplate("HaveGapBetween {{.Data.Other}} for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
 }
 
 // viewportConfig is the resolved configuration behind BeInViewport.
@@ -856,9 +876,14 @@ HaveComputedStyleNumeric(property, expected) is the numeric counterpart of [Bilo
 
 A non-numeric computed value is a hard failure.  Because it returns a matcher you poll, configure the Eventually/Expect that wraps it.
 
+It returns a [ValueMatcher], so you can keep the number that satisfied the assertion:
+
+	var width float64
+	Eventually("#panel").Should(b.HaveComputedStyleNumeric("width", BeNumerically(">", 320)).Capture(&width))
+
 Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
 */
-func (b *Biloba) HaveComputedStyleNumeric(property string, expected any) types.GomegaMatcher {
+func (b *Biloba) HaveComputedStyleNumeric(property string, expected any) *ValueMatcher {
 	// numeric values compare with BeNumerically (not Equal) so a plain int expected matches the float64
 	// the getter produces (Equal(7) would reject float64(7)).
 	matcher, ok := expected.(types.GomegaMatcher)
@@ -866,7 +891,7 @@ func (b *Biloba) HaveComputedStyleNumeric(property string, expected any) types.G
 		matcher = gomega.BeNumerically("==", expected)
 	}
 	data := map[string]any{"Property": property, "Matcher": matcher}
-	return gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("getComputedStyleNumericP", selector, property)
 		if r.Error() != nil {
 			return false, r.Error()
@@ -878,5 +903,5 @@ func (b *Biloba) HaveComputedStyleNumeric(property string, expected any) types.G
 		data["Result"] = value
 		b.recordProbe(probeKey("HaveComputedStyleNumeric:"+property, selector), value)
 		return matcher.Match(value)
-	}).WithTemplate("HaveComputedStyleNumeric \"{{.Data.Property}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
+	}).WithTemplate("HaveComputedStyleNumeric \"{{.Data.Property}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
 }

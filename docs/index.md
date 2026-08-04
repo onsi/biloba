@@ -416,13 +416,13 @@ Here are some of the ways Biloba integrates with Ginkgo and Gomega so you can fo
 
 	This happens in `b.Prepare()`.
 	
-	Biloba registers a Ginkgo hook that runs after each spec.  If the spec has failed, a screenshot of every tab associated with that spec is captured.  Screenshots are emitted to the terminal as inline images (Kitty, iTerm2, or Sixel) **only when the terminal supports it** (see [Inline image gating](#inline-image-gating) below).  Biloba can also attach a text DOM outline of every tab on failure; this is off by default for an interactive human but on automatically under CI or an AI agent (see [Failure artifacts](#failure-artifacts)).
+	Biloba registers a Ginkgo hook that runs after each spec.  If the spec has failed, a screenshot of every tab associated with that spec is captured.  Screenshots are emitted to the terminal as inline images (Kitty, iTerm2, or Sixel) **only when the terminal supports it** (see [Inline image gating](#inline-image-gating) below).  Biloba can also attach a text DOM outline of every tab on failure; this is off by default for an interactive human but on automatically under CI or an AI agent (see [Failure artifacts](#failure-artifacts-humans-ci-and-agents)).
 
 	In addition, Biloba registers a Ginkgo ProgressReporter that will emit screenshots whenever a [progress report](https://onsi.github.io/ginkgo/#getting-visibility-into-long-running-specs) is requested.  This can happen when a spec times out, or when a spec decorated with `PollProgressAfter(X duration)` has taken longer than `X` to complete.  On MacOS you can get a progress report instantly by sending a `SIGINFO` signal with `^T`.  On Linux you can send a `SIGUSR2` signal.
 
 	Both of these mechanisms make it just a bit easier to debug a failing test by getting visual feedback.
 
-	(Note that the boolean `BilobaConfig` options take an optional bool — `BilobaConfigFailureScreenshots(false)` and `BilobaConfigProgressReportScreenshots(false)` turn those off, and `BilobaConfigFailureOutlines()` turns outlines on.  See [Failure artifacts](#failure-artifacts).)
+	(Note that the boolean `BilobaConfig` options take an optional bool — `BilobaConfigFailureScreenshots(false)` and `BilobaConfigProgressReportScreenshots(false)` turn those off, and `BilobaConfigFailureOutlines()` turns outlines on.  See [Failure artifacts](#failure-artifacts-humans-ci-and-agents).)
 
 3. All `console.log/info/warn/etc.` output gets immediately streamed to Ginkgo's GinkgoWriter.
 
@@ -575,6 +575,13 @@ this test will:
 ```go
 Eventually(b).Should(b.HaveURL("http://example.com/table-of-contents"))
 Eventually(b).Should(b.HaveURL(HaveSuffix("/table-of-contents")))
+```
+
+Both [capture](#capturing-values-from-matchers) - which matters more here than most places, since the url is exactly the sort of thing that can change again the moment after you assert on it.  Take it from the assertion rather than following up with `GetLocation`:
+
+```go
+var url string
+Eventually(b).Should(b.HaveURL(ContainSubstring("/docs/")).Capture(&url))
 ```
 
 #### Prefer a DOM anchor over polling the url
@@ -953,6 +960,91 @@ Not every Biloba method polls, so not every method accepts these knobs.  Biloba 
 
 The intuition: a method polls (and accepts every knob) when it is *waiting for the DOM to reach a state*.  A **waiting command** like `Navigate` does a single bounded wait for one event, so it keeps a purpose-built default deadline (~30s for navigation and for [awaiting a held response](#holding-a-response-hostage), ~5s for screenshots) that `WithTimeout` can override - but there's no repeated probe for `WithPolling` to tune.  A **snapshot** reads "what's true right now" and so never waits; when you want to wait for a snapshot to change, gate it on a polling matcher first (`Eventually(sel).Should(b.HaveCount(n))`, *then* read).  A **one-shot mutation** (and the raw-JS `Run`/`RunAsync`) just does its thing once.
 
+### Capturing Values from Matchers
+
+One shape shows up in nearly every browser suite: **wait until something is true, then use the value that made it true.**  You need the block id of the figure frame that finally rendered, the url you finally landed on, the count that finally settled.  The obvious way to write it is to assert, then read:
+
+```go
+/* === don't do this === */
+Eventually(".figure-frame").Should(b.HaveAttribute("data-block-id", Not(BeEmpty())))
+blockID := b.GetAttribute(".figure-frame", "data-block-id").(string)
+```
+
+That's **two reads of a page that is still moving** - the classic time-of-check/time-of-use shape.  Between the assertion and the getter the app can repaint, replace the node, or re-key it, and you walk away holding a value that nothing ever asserted on.  The failure doesn't land here, either: the read succeeds, `blockID` is just empty, and the spec blows up two assertions later pointing nowhere.  This is not hypothetical - it cost a real user the better part of a day.
+
+So every Biloba matcher that *reads a value off the page* also hands you that value, from the read that satisfied it.  Chain `.Capture(&target)`:
+
+```go
+var blockID string
+Eventually(".figure-frame").Should(b.HaveAttribute("data-block-id", Not(BeEmpty())).Capture(&blockID))
+```
+
+One read, one poll, and `blockID` holds exactly what the matcher saw when it passed.
+
+**Which matchers can capture.**  Any matcher that has a value to show you in its failure message has one to give you:
+
+| | |
+|---|---|
+| Contents & classes | `HaveInnerText`, `HaveTextContent`, `HaveText`, `HaveClass`, `HaveAttribute`, `HaveJSONAttribute`, `HaveComputedStyle` |
+| Counting | `HaveCount`, `HaveDistinctCount` |
+| Properties & values | `HaveProperty`, `HaveValue` |
+| Collections | `EachHaveInnerText`, `EachHaveTextContent`, `EachHaveProperty`, `EachHaveClass` - these capture the whole slice they asserted over |
+| [Geometry](#geometry) | `HaveBoundingBox`, `HaveScrollOffset`, `HaveOffsetTopWithin`, `HaveOffsetLeftWithin`, `HaveGapBetween`, `HaveComputedStyleNumeric` |
+| [JavaScript](#running-arbitrary-javascript) | `EvaluateTo` |
+| [Navigation](#navigation) | `HaveURL`, `HaveTitle` |
+| [Cookies & storage](#cookies-and-storage) | `HaveCookie`, `HaveNumCookies`, `HaveLocalStorageItem`, `HaveSessionStorageItem`, `HaveNumLocalStorageItems`, `HaveNumSessionStorageItems` |
+
+`HaveProperty`, `HaveAttribute`, and `EachHaveProperty` capture in **both** their forms - including the existence-only check, which hands you the value it found while it was checking:
+
+```go
+var poster string
+Eventually("div.comment").Should(b.HaveProperty("dataset.poster").Capture(&poster))
+
+var posters []string
+Eventually("div.comment").Should(b.EachHaveProperty("dataset.poster").Capture(&posters))
+```
+
+An "is it there?" matcher has to look at the value to answer, so it may as well give it to you - which is why the argument-less `EachHaveInnerText()`/`EachHaveTextContent()` (they route through `EachHaveProperty`'s existence-only form) capture the whole slice too.
+
+Matchers that read **no value** - `Exist`, `BeVisible`, `BeEnabled`, `BeClickable`, `BeChecked`, `BeFocused`, the relational [geometry](#geometry) matchers (`BeAbove`, `Encloses`, `BeInViewport`, …) - and the [actions-as-matchers](#interacting-with-elements) (`Click`, `SetValue`, `Type`, …) keep returning a plain Gomega matcher, so `.Capture` doesn't compile on them.  That's deliberate: there is no honest value for `Eventually(sel).Should(b.BeVisible().Capture(&x))` to give you, and a compile error is a better answer than a zero value.
+
+Two matchers *do* read something and still keep the plain interface.  [`b.MatchColor`](#geometry) runs JavaScript to normalize both colors, but it's a **sub-matcher** you hand to `HaveComputedStyle` - capture off `HaveComputedStyle` itself and you get the resolved style.  [`b.HaveMadeRequest`](#observing-requests) is a builder-style query rather than a value matcher (it chains `.WithMethod(...)`, like `HaveCookie` chains its refinements); it renders the requests it observed in its failure message, and when you want the request itself, `b.AllRequests().Find(b.RequestMatching(...))` is the same query used as a predicate.
+
+**The rules are small, and worth knowing exactly:**
+
+- **Capture writes only when the matcher matches.**  Under `ShouldNot`/`NotTo` the assertion passes precisely when the matcher *didn't* match, so nothing is captured and your variable keeps its zero value.  If you want the value, capture it with a separate `Should`.
+- **While polling, the target is overwritten on every successful attempt.**  When the assertion finally passes, it holds the value from the attempt that passed - which is the whole point.
+- **The decode is typed.**  Biloba decodes into your pointer the way `encoding/json` does, so a JavaScript number lands in an `*int` as `3` rather than `float64(3)`, and a JSON object lands in your struct.  No casts, no [`float64` gotcha](#running-arbitrary-javascript).
+- **A genuine type mismatch fails fast.**  Capturing a string into an `*int` can never come true, so Biloba stops the poll immediately (via Gomega's `StopTrying`) instead of burning the timeout to tell you about a bug in your spec.
+- **You can narrow a JavaScript object, but not one of Biloba's structs.**  Capturing a JSON object into a struct that picks out only the fields you care about is a normal, supported thing to do (that's the [`HaveJSONAttribute`](#properties) case).  Capturing a `Box`, `ScrollOffset`, `BoxDelta`, or `Cookie` into a *different* struct is rejected instead: those structs share field names and carry no json tags, so a `Box` would otherwise decode into a `ScrollOffset` in silence, filling `Top`/`Left` and zeroing the rest.  Capture into the matching type (or into an `any`) and read the fields you want off it.
+- **`.Capture(&x)` returns a *new* matcher and leaves the original alone.**  So a matcher stashed in a variable can be reused with different targets without the second capture stealing the first's - `Eventually("#a").Should(m.Capture(&idA))` followed by `Eventually("#b").Should(m.Capture(&idB))` does what it looks like.  `HaveCookie`'s `.Capture` behaves the same way, and composes with the `.WithX` refinements in either order.
+- `target` must be a non-nil pointer.
+
+**One asymmetry to keep in mind**, and it's a feature: [`b.EvaluateTo`](#running-arbitrary-javascript) hands its sub-matcher the **raw** JSON-decoded value - a `[]any` of `map[string]any` - while `Capture` gives you the typed thing.  So you match with `HaveKeyWithValue` and capture into your struct slice:
+
+```go
+type FoldEntry struct {
+	Fidelity string `json:"fidelity"`
+	Seq      int    `json:"seq"`
+}
+
+var log []FoldEntry
+Eventually(`window.__foldLog`).Should(b.EvaluateTo(ContainElement(HaveKeyWithValue("fidelity", "text"))).Capture(&log))
+Ω(log[0].Seq).Should(Equal(1))
+```
+
+Finally, the same decode rules power an **optional trailing pointer** on the value-getters - `GetProperty`, `GetAttribute`, `GetValue`, and their `Current*ForEach` snapshots - exactly like [`b.Run`](#running-arbitrary-javascript) and `b.GetJSValue` have always had:
+
+```go
+var width int
+b.GetProperty("#row", "offsetWidth", &width)   // width == 3, not float64(3)
+
+var names []string
+b.CurrentPropertyForEach(".notice", "dataset.name", &names)
+```
+
+The value is still returned as before, so this is purely additive - it just saves you the type assertion.
+
 ### Existence, Counting, Visibility, and Interactibility
 
 You can check if a tab has an element matching `selector` using  `b.Exist()` which returns a matcher:
@@ -988,6 +1080,19 @@ Eventually("img.thumbnail").Should(b.HaveCount(BeNumerically(">", 10)))
 ```
 
 if no elements match the `selector`, `Count/HaveCount` return `0`.  Obviously.
+
+That "obviously" has a sharp edge when you assert an **upper bound**: `Eventually(".row").Should(b.HaveCount(BeNumerically("<=", 3)))` is satisfied by *zero* rows, so it passes instantly on a page that never rendered the list at all - which is usually the failure you were guarding against.  There's no way around that (zero really is `<= 3`), so when you mean "some, but not too many", say both halves:
+
+```go
+Eventually(".row").Should(b.HaveCount(And(BeNumerically(">", 0), BeNumerically("<=", 3))))
+```
+
+`HaveCount` and `HaveDistinctCount` [capture](#capturing-values-from-matchers), so when you need the settled count afterwards take it from the assertion rather than re-reading with `b.Count`:
+
+```go
+var n int
+Eventually(".row").Should(b.HaveCount(BeNumerically(">", 0)).Capture(&n))
+```
 
 Sometimes the raw count over-counts: a DOM that transiently double-paints a node re-renders the same logical thing twice, and `HaveCount(3)` flakes against a stray fourth copy.  When the nodes carry a stable key (a `data-*` attribute), assert on the number of **distinct** keys instead with `b.HaveDistinctCount(attribute, expected)` - it counts the distinct values the attribute takes across all matches (`expected` is an integer or a Gomega matcher):
 
@@ -1130,7 +1235,23 @@ returns a slice of strings for all elements matching selector.  For example:
 list := b.CurrentInnerTextForEach("ol.movies li")
 ```
 
-will return the individual inner texts for each list element under all `<ol>`s with class `movies`.  If no elements are found `list` will be an empty slice.  The `Current*ForEach` getters are **snapshots** - they read the matches as they are *right now* and never poll.  When the elements appear asynchronously, gate on their count first with `Eventually("ol.movies li").Should(b.HaveCount(n))` and *then* read - but be careful to avoid flakes here as the DOM may have changed between the two atomic operations. 
+will return the individual inner texts for each list element under all `<ol>`s with class `movies`.  If no elements are found `list` will be an empty slice.  The `Current*ForEach` getters are **snapshots** - they read the matches as they are *right now* and never poll.  When the elements appear asynchronously, gate on their count first with `Eventually("ol.movies li").Should(b.HaveCount(n))` and *then* read - but be careful to avoid flakes here as the DOM may have changed between the two atomic operations.
+
+That "empty slice when nothing matches" is a timing hazard, and it is *also* an honesty hazard - because an empty slice **satisfies every negated collection matcher**:
+
+```go
+/* === passes when zero rows rendered === */
+Expect(b.CurrentInnerTextForEach(".row")).NotTo(ContainElement("Error"))
+```
+
+Nothing observed, assertion green.  A spec that meant "none of the rows says Error" quietly became "there were no rows," which is the white-screen failure it was written to catch.  The `HaveCount` gate fixes both problems at once - it is what makes the negation *about something*:
+
+```go
+Eventually(".row").Should(b.HaveCount(3))
+Expect(b.CurrentInnerTextForEach(".row")).NotTo(ContainElement("Error"))
+```
+
+(The positive direction is already safe: Gomega's `HaveEach` errors on an empty slice rather than passing, and Biloba's own `Each*` matchers fail on zero matches - see below.)
 
 You can assert on the set of inner texts with `b.EachHaveInnerText()` like so:
 
@@ -1139,18 +1260,26 @@ Expect(selector).To(b.EachHaveInnerText("A", "B", "C")) //uses Gomega's HaveExac
 Eventually(selector).Should(b.EachHaveInnerText(ContainElement("B"))) //passes the entire slice to the matcher
 ```
 
-use `b.EachHaveInnerText` with `Eventually` in lieu of `CurrentInnerTextForEach` if you want to poll and assert that the inner texts of these DOM elements eventually match your expectation - this approach gives you an atomic operation that is less susceptible to flakiness.
+use `b.EachHaveInnerText` with `Eventually` in lieu of `CurrentInnerTextForEach` if you want to poll and assert that the inner texts of these DOM elements eventually match your expectation - this approach gives you an atomic operation that is less susceptible to flakiness.  And if you need the texts themselves afterwards, [capture](#capturing-values-from-matchers) them off the assertion instead of following up with a snapshot read:
+
+```go
+var texts []string
+Eventually("ol.movies li").Should(b.EachHaveInnerText(ContainElement("Arrival")).Capture(&texts))
+```
 
 Like every `Each*` matcher, `EachHaveInnerText` requires **at least one** match: it fails (rather than passing vacuously) when nothing matches, which keeps it honest under `Eventually`/`Consistently`.  To assert that *nothing* matches a selector, use `Eventually(selector).Should(b.HaveCount(0))` (or `ShouldNot(b.Exist())`) instead.
 
 **Two text-assertion recipes worth knowing**:
 
 - *The ordered collection of an element group's text* - assert the visible text of every match, in document order - is exactly `EachHaveInnerText` with a slice (or `EachHaveTextContent` for the layout-independent variant): `Expect(".step").To(b.EachHaveInnerText("Pick", "Pay", "Done"))`.
-- *Negation - "no element (in this scope) says X"* - is cleanest as a [text locator](#selecting-by-locator) + `ShouldNot(b.Exist())`, rather than a JS scan.  Scope it with `.Within` when you only care about a region:
+- *Negation - "no element (in this scope) says X"* - is cleanest as a [text locator](#selecting-by-locator) + `ShouldNot(b.Exist())`, rather than a JS scan.  Scope it with `.Within` when you only care about a region - **and anchor the scope first**:
 
   ```go
+  Eventually("#published-list").Should(b.Exist())     // the anchor: prove the scope is really there
   Consistently(b.ByTextContains("Draft").Within("#published-list")).ShouldNot(b.Exist())
   ```
+
+  The anchor is not ceremony.  A locator whose `.Within`/`.Containing` scope doesn't resolve [matches nothing](#selecting-by-locator) - so if `#published-list` never renders, the unanchored `Consistently` passes instantly and keeps passing for its full duration, having observed nothing at all.  That is precisely the white-screen failure this guard exists to catch, and it is the one case where it goes green.  Every scoped negation wants an anchor; `Consistently` especially, because its passing feels like *more* evidence rather than less.
 
 ---
 
@@ -1198,6 +1327,20 @@ When you want an attribute value in a Go variable for *control-flow* (rather tha
 ```go
 href := b.GetAttribute("#link", "href") // "/about" - the raw attribute, not the resolved property
 theme := b.GetAttribute("html", "data-theme")
+```
+
+Pass an optional trailing pointer and Biloba decodes for you, so you don't have to type-assert (the value is still returned as well):
+
+```go
+var href string
+b.GetAttribute("#link", "href", &href)
+```
+
+And when you're waiting for the attribute *and* want its value, don't do both - `HaveAttribute` [captures](#capturing-values-from-matchers), in either form:
+
+```go
+var blockID string
+Eventually(".figure-frame").Should(b.HaveAttribute("data-block-id", Not(BeEmpty())).Capture(&blockID))
 ```
 
 Like the property getters, `GetAttribute` is a **two-axis** poller: it waits until an element matching `selector` is present **and** the named attribute is present, then returns it.  If you want an *absent* attribute to come back as `nil` rather than blocking the poll, wrap the name in [`b.AllowMissing`](#properties):
@@ -1299,6 +1442,7 @@ All of these methods follow the following rules:
 - The **single**-element getters and setters (`GetProperty`, `GetProperties`, `SetProperty`) [poll](#interacting-with-elements).  The getters poll until the element is present *and every named property is defined* (see [`AllowMissing`](#properties) below for the escape hatch); `SetProperty` polls until the element exists and the property is settable.  They fail the spec only if the deadline passes.
 - The plural `Current*ForEach` getters are **snapshots** - they read whatever matches *right now* and never poll.  They return an empty slice if no element matches; otherwise a slice matching the number of elements found, with `nil` standing in for any element that lacks the requested property.  Gate on a count first (`Eventually(sel).Should(b.HaveCount(n))`) when the elements appear asynchronously.
 - `SetPropertyForEachImmediately` acts on the current set immediately (no poll, no matcher form) - its `*Immediately` suffix is a deliberate "make sure you mean it" smell.
+- `GetProperty` and `CurrentPropertyForEach` accept an **optional trailing pointer** to decode into, so you don't have to type-assert or worry about `float64` (see [Capturing values from matchers](#capturing-values-from-matchers)).  The value is still returned as well.
 - All methods support `.` property delimiters.  For example you can access `data` attributes using `dataset.key`.  `Set*` methods will fail if the delimiter chain cannot be traversed (e.g. setting `foo.bar.baz` fails if either `foo` or `bar` are not defined on the element.  But `dataset.newKey` will succeed as `dataset` _is_ defined).  The snapshot `Current*ForEach` getters do not fail, but simply return `nil` if the delimiter chain cannot be traversed.
 - All properties are returned from JavaScript without type conversions: numbers will be `float64`, booleans will be `bool`, and strings will be `string`.  Arrays will be `[]any` and maps `[any]any`.  Anything `null`/`undefined` will be `nil`.  There are, however, two exceptions:
 	- JavaScript properties that are [iterable](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Iteration_protocols) will be turned into `[]any` when returned (this allows `GetProperty(selector, "classList")` to return a slice).  
@@ -1311,6 +1455,13 @@ property := b.GetProperty(selector, "href") //returns type any
 ```
 
 this returns the property value of the **first** element matching `selector`.  The value will have type `any` and the actual type will depend on what was stored in the property in JavaScript.  `GetProperty` polls: it waits until an element matching `selector` is present **and** the requested property is defined, then returns it (failing the spec only if the deadline passes).
+
+Pass a trailing pointer if you'd rather have it typed:
+
+```go
+var width int
+b.GetProperty("#row", "offsetWidth", &width) // 3, not float64(3) - no cast needed
+```
 
 That "and the property is defined" axis has a **sharp edge** worth knowing: a property that simply doesn't exist on the element *type* - asking for `disabled` on a `<div>`, say, where `"disabled" in div` is `false` - never becomes defined, so the poll will block until it times out.  When you genuinely expect a property may be absent, wrap its name in [`b.AllowMissing`](#properties) (below) to get the old return-`nil`-immediately behavior:
 
@@ -1479,6 +1630,21 @@ p.Filter("id", Not(ContainSubstring("new-user"))) //returns `SliceOfProperties` 
 
 `Find` returns the matching `Properties` object or `nil` if none is found; `Filter` returns `SliceOfProperties` with matching elements (possibly empty if none matched).  This lets you fetch all the properties you might need to assert on and then efficiently dig through the `SliceOfProperties` in your test to make assertions.
 
+> **Watch the composition of those two conveniences.**  `Find` returns `nil` when nothing matches, and the typed getters on `Properties` return the zero value for anything they don't have.  Each is reasonable alone; together they turn "no such element" into a perfectly plausible-looking reading:
+>
+> ```go
+> /* === passes when there is no element named Bob at all === */
+> Expect(p.Find("dataset.name", "Bob").GetBool("disabled")).To(BeFalse())
+> ```
+>
+> A missing element and a present-but-enabled element are indistinguishable at the assertion.  Split the two questions so the first one is actually asked:
+>
+> ```go
+> bob := p.Find("dataset.name", "Bob")
+> Expect(bob).NotTo(BeNil())
+> Expect(bob.GetBool("disabled")).To(BeFalse())
+> ```
+
 ### Geometry
 
 Some specs need to assert on **layout**: where an element ended up, how far it sits from the top of a scroll container, whether a panel scrolled to the bottom.  The temptation is to reach for `b.Run` and a hand-rolled `getBoundingClientRect()` blob — but that read happens *once*, and layout settles asynchronously, so it's the single most common residual flake source (see [`biloba:flaky-specs`](#claude-code-skills)).  Biloba's geometry getters fold readiness in and poll by default, exactly like [`GetProperty`](#properties): they wait until the element is present **and actually laid out** (a non-degenerate box, `width` and `height` > 0) before reading, so you never measure a zero box mid-layout.
@@ -1513,6 +1679,27 @@ Eventually(".hero .sec").Should(b.HaveOffsetTopWithin(".scroller", BeNumerically
 ```
 
 `HaveOffsetTopWithin`/`HaveOffsetLeftWithin` take the container plus an expected matcher (or a plain value, compared with `Equal`).  All of the getters honor `WithTimeout`/`WithPolling`/`WithContext` and `Immediate()`; the matcher forms are configured through the `Eventually`/`Expect` that polls them.
+
+**A geometry matcher is a claim about an element that is there.**  Every geometry probe distinguishes two things that look alike: an element that is *present but not laid out yet* (a zero-area box) is a silent "not ready" - so the positive direction keeps polling through late layout, exactly as you'd want - while an element that is **not there at all** is an **error**.  That second half is deliberate, and it is the one thing to know when upgrading: Gomega never counts an assertion satisfied while its matcher is erroring, in *either* direction, so a missing element can no longer satisfy `ShouldNot`.  That's the fix for `Ω("#toast").ShouldNot(b.BeInViewport())` passing forever against a page that never rendered `#toast` - but it also means the **wait-for-teardown** spec has to change its verb:
+
+```go
+/* === no longer works: it used to pass the moment the toast left the DOM; now it times out === */
+Eventually("#toast").ShouldNot(b.BeInViewport())
+
+/* === say it with the matchers that are about existence === */
+Eventually("#toast").ShouldNot(b.Exist())
+Eventually("#toast").Should(b.HaveCount(0))
+```
+
+The same applies to `HaveBoundingBox`, `HaveScrollOffset`, `HaveOffsetTopWithin`/`HaveOffsetLeftWithin`, `HaveGapBetween`, the pairwise matchers below, and to `Consistently(sel).ShouldNot(...)` where `sel` is conditionally rendered.  Reach for `Exist`/`HaveCount` when the question is *whether the element is there*, and for the geometry matchers when the question is *where it is*.  This is how [`BeVisible`/`BeEnabled`/`BeClickable`](#existence-counting-visibility-and-interactibility) have always behaved, so the convention is now uniform rather than split down the middle.  (When the pairwise or offset probes are the ones that can't find something, the failure names *which* selector went missing - subject, container, or other.)
+
+Layout is the place where a second read is *most* likely to disagree with the first, so when you need the measurement after asserting on it, [capture](#capturing-values-from-matchers) it off the matcher rather than following up with a getter:
+
+```go
+var box biloba.Box
+Eventually(".hero .sec").Should(b.HaveBoundingBox(HaveField("Width", BeNumerically(">", 100))).Capture(&box))
+Ω(box.CenterY).Should(BeNumerically("~", 440, 1))
+```
 
 #### Element-to-element geometry
 
@@ -1617,6 +1804,13 @@ Similarly, `GetValue` returns `any`.  That means you'll need to do a type-check 
 
 ```go
 val := b.GetValue("#my-text-input").(string)
+```
+
+...or you can hand `GetValue` (and `CurrentValueForEach`) an optional trailing pointer and let Biloba decode for you:
+
+```go
+var val string
+b.GetValue("#my-text-input", &val)
 ```
 
 but you probably won't need to as you can just use `b.HaveValue` and let Gomega manage the types for you:
@@ -2385,6 +2579,14 @@ cookie, ok := b.GetCookies().Find(b.CookieMatching("session").WithPath("/admin")
 admins := b.GetCookies().Filter(b.CookieMatching(ContainSubstring("session")))
 ```
 
+`HaveCookie` [captures](#capturing-values-from-matchers) too - chain `.Capture(&cookie)` (in any order relative to the refinements) to keep the cookie that satisfied *every* refinement, rather than polling for it and then hunting it down again with `GetCookies().Find`:
+
+```go
+var cookie biloba.Cookie
+Eventually(b).Should(b.HaveCookie("session").WithSecure().Capture(&cookie))
+Expect(cookie.Value).To(HavePrefix("v2."))
+```
+
 `b.HaveNumCookies(expected)` asserts on the number of cookies on the tab.  `expected` may be an int (exact match) or a Gomega matcher:
 
 ```go
@@ -2419,6 +2621,8 @@ b.LocalStorage().Get("user", &user)
 
 `Get` takes an optional pointer argument to decode into a specific type (just like [`b.Run`](#running-arbitrary-javascript)).  Without it, `Get` returns the decoded value as type `any` (so numbers come back as `float64`).  `Get` returns `nil` for a missing key.  Values written to storage by the page itself that aren't valid JSON (e.g. a plain `localStorage.setItem("k", "v")`) are returned as their raw string.
 
+> **A missing key leaves your variable at its zero value.**  `Get` is not an assertion - when the key isn't there it simply doesn't write, so `var count int; b.LocalStorage().Get("count", &count)` leaves `count` at `0` and `Expect(count).To(Equal(0))` passes for two very different reasons.  When the key's *presence* is part of what you're testing, assert it - `Expect(b).To(b.HaveLocalStorageItem("count"))` - or capture straight off the matcher (below) so the value you hold is one that was actually there.
+
 #### Asserting on Storage
 
 `b.HaveLocalStorageItem` and `b.HaveSessionStorageItem` are matchers you assert against the tab.  With a single argument they pass if the key exists; with a second argument they pass if the stored value matches (a string for an exact match, or a Gomega matcher):
@@ -2429,6 +2633,13 @@ Expect(b).To(b.HaveLocalStorageItem("user", "Joe"))     // exact value
 Eventually(b).Should(b.HaveLocalStorageItem("count", BeNumerically(">", 0)))
 
 Expect(b).To(b.HaveSessionStorageItem("token", ContainSubstring("ABCD")))
+```
+
+Both of these [capture](#capturing-values-from-matchers), so a "wait for it, then use it" step stays a single read - and, unlike `Get`, a captured value is one the assertion actually observed:
+
+```go
+var count int
+Eventually(b).Should(b.HaveLocalStorageItem("count", BeNumerically(">", 0)).Capture(&count))
 ```
 
 `b.HaveNumLocalStorageItems` and `b.HaveNumSessionStorageItems` assert on the number of items in the corresponding storage area.  `expected` may be an int (exact match) or a Gomega matcher:
@@ -2856,17 +3067,82 @@ b.GetJSValue("window.__storeLog", &log)   // blocks until the tab actually folds
 
 Now the barrier is a *renderer-side* fact: the value can't exist unless the browser ran the code that produced it.
 
-A few details that make this pleasant to use:
+#### The load-bearing detail in that example: the log is created *lazily*
+
+Look again at where `window.__storeLog` comes into existence.  It is created **by the subscriber**, on the first fold - so "the global is defined" and "at least one fold has happened" are the same event.  That coincidence is what makes the comment on that line true.
+
+**`GetJSValue` gates on definedness and nothing else.**  It does not know what the value means.  Point it at a log your app creates *eagerly* and the barrier evaporates:
+
+```go
+/* === looks identical.  gates nothing. === */
+b.Run(`window.__storeLog = []`)                  // created up front...
+b.Run(`app.store.on("fold", () => window.__storeLog.push(app.store.state))`)
+
+b.Click("#save")
+
+var log []string
+b.GetJSValue("window.__storeLog", &log)          // returns [] on the very first tick
+Ω(log).Should(HaveExactElements("saving", "saved"))   // ...and now this races
+```
+
+`window.__storeLog` is defined immediately, so `GetJSValue` returns on its first evaluation having waited for nothing at all.  What was supposed to be the one signal that cannot be faked is now a no-op, and the spec is green.  Worse: it is green *and it never flakes on a fast machine*, so nothing ever draws your attention to it.
+
+This isn't a contrived counter-example - **eager creation is the natural way to write a product-path log.**  A ring buffer that has to be live for a real session gets assigned at store construction, not on first use.  If the global you're gating on is a real diagnostic your app ships (rather than one your spec installed a moment ago), assume it's eager until you've read the code.
+
+The fix, when your readiness condition is a **predicate over the value** rather than its mere existence, is [`b.EvaluateTo`](#running-arbitrary-javascript) plus [`.Capture`](#capturing-values-from-matchers) - one read, one poll, typed result:
+
+```go
+var log []string
+Eventually(`window.__storeLog`).Should(b.EvaluateTo(HaveLen(2)).Capture(&log))
+Ω(log).Should(HaveExactElements("saving", "saved"))
+```
+
+The rule of thumb: reach for `GetJSValue` when *existence* is the fact you're waiting on, and for `EvaluateTo(...).Capture(...)` when the value has to reach some state.  If you can't say in one sentence why the global cannot exist before the thing you care about has happened, you want the second one.
+
+#### When absence is meaningful, `GetJSValue` is the wrong tool
+
+Because `GetJSValue` **waits** for existence, it cannot express a probe where the global being missing is itself a valid reading.  It has exactly one way to report "not there": burn the timeout and fail the spec.  So any of these want a plain [`b.Run`](#running-arbitrary-javascript) with a defensive coalesce instead:
+
+```go
+// a write ledger that legitimately doesn't exist on about:blank between navigations -
+// "missing" has to read as *quiet*, not as "wait for it"
+var writes []string
+b.Run(`window.__writeLedger || []`, &writes)
+Ω(writes).Should(BeEmpty())
+
+// a render-error channel that is missing on any page that never booted the app -
+// "missing" means *no errors*
+var errs []string
+b.Run(`window.__renderErrors || []`, &errs)
+Ω(errs).Should(BeEmpty())
+
+// a flag planted before a JS-only tab switch, where the assertion is that it SURVIVED -
+// waiting for it would invert the test
+var survived bool
+b.Run(`window.__sentinel === "planted"`, &survived)
+Ω(survived).Should(BeTrue())
+
+// a baseline taken before an action, which may legitimately be zero
+var before int
+b.Run(`(window.__foldLog || []).length`, &before)
+```
+
+In every one of these the coalesce isn't sloppiness to be tidied up into a "proper" barrier - it *is* the assertion.  `b.Run` is a one-shot read that reports what is there right now, including nothing, which is exactly what a probe over an optional global needs.  (For the third one especially: a `GetJSValue` would happily wait for a sentinel to *appear*, which is the opposite of proving it was never cleared.)
+
+A few more details that make `GetJSValue` pleasant to use:
 
 - **It retries through `undefined` *and* through a thrown error.**  `window.__storeLog` doesn't exist yet, so evaluating it may `ReferenceError` - that's a not-ready condition, not a bug, so `GetJSValue` keeps polling.  If it never resolves, the error surfaces in Gomega's `Timed out after…` message at the deadline.
 - **`null` is a legitimate value** and returns immediately.  Only `undefined` means "not yet."
 - **The optional pointer decodes into a concrete type**, exactly like `b.Run` - which is how you sidestep the JSON-`float64` gotcha (`var n int; b.GetJSValue("app.numRecords", &n)`).  Without a pointer you get `any`, and numbers arrive as `float64`.
 - **It's a [polling method](#interacting-with-elements)**, so it honors `WithTimeout`/`WithPolling`/`WithContext` and `Immediate()`.
 
-Finally, `GetJSValue` *fetches a value once it exists*.  When you'd rather poll until a **condition** holds, reach for its sibling matcher [`b.EvaluateTo`](#running-arbitrary-javascript):
+Finally - and this is the distinction the two traps above both turn on - `GetJSValue` *fetches a value once it exists*.  When you'd rather poll until a **condition** holds, reach for its sibling matcher [`b.EvaluateTo`](#running-arbitrary-javascript), and [`.Capture`](#capturing-values-from-matchers) the value that satisfied it so you don't re-read the page:
 
 ```go
 Eventually("window.__storeLog.length").Should(b.EvaluateTo(BeNumerically(">", 0)))
+
+var log []string
+Eventually("window.__storeLog").Should(b.EvaluateTo(HaveLen(2)).Capture(&log))
 ```
 
 ### Running asynchronous Javascript
@@ -3006,6 +3282,24 @@ Response interception is a heavier mode than the request-stage handlers: the tab
 > **First-match-wins has a sharp edge inside an `Ordered` container.**  Handlers are consulted in registration order and the first one whose URL matches claims the request - later handlers for that same URL are never consulted.  `Prepare()` is what clears them, and in an `Ordered` container with `BeforeEach(..., OncePerOrdered)` **`Prepare()` does not run between the `It`s**.  So handlers *accumulate*: a handler registered by the first `It` is still registered when the second `It` runs, and an identical handler registered there is silently dead code.  No error, no warning - it simply never runs, and you're left staring at a spec that behaves as though your stub isn't there.
 >
 > Two fixes.  The better one is usually to **drive both orderings from a single `It`** - if two specs need to install competing handlers for the same URL, that's often a sign they're really one scenario, and it reads better as one spec.  Failing that, give the second spec **its own `b.NewTab()`**: the handler list is per-tab, so a fresh tab starts empty.
+>
+> Biloba now names this for you: when a handler never fires *and* an earlier handler claimed its URL, the failure output reports both registration sites.  That catches the dead-handler case.
+
+> **Shadowing is silent in *both* directions, and the other direction reads as success.**  A shadowed handler that is *stateless* does nothing, so the spec that registered it usually fails somewhere obvious.  A shadowed handler that is **stateful** can be half-firing - still doing its job for the earlier spec's state while doing nothing for yours - and that looks exactly like everything working.
+>
+> The canonical shape is the hand-rolled first-only gate:
+>
+> ```go
+> var intercepted int32
+> b.ModifyResponse(ContainSubstring("/home")).Using(func(r biloba.InterceptedResponse) biloba.StubResponse {
+> 	if atomic.AddInt32(&intercepted, 1) == 1 { <-release }   // holds only the FIRST match
+> 	return biloba.StubResponse{Status: r.Status, Body: r.Body, Headers: r.Headers}
+> })
+> ```
+>
+> Its counter already reached `1` in the earlier `It`.  So in the later `It` the leftover handler still *claims* the response - and passes it straight through, unheld.  The page behaves completely normally.  Nothing hangs, nothing 500s, no request is missing; the only thing that stays at zero is the *later* spec's own counter.  "The hold worked" is precisely what a shadowed hold looks like from the app's side, which is why this one survives review.
+>
+> The dead-handler report above doesn't catch it (the handler *did* fire - for someone else).  What catches it is asserting that your gate actually engaged: `Eventually(hold.Count).Should(Equal(1))`.  Count the interceptions you expect, always - and prefer [`b.HoldResponse`](#holding-a-response-hostage) over hand-rolling the gate in the first place, since it carries that counter for you.
 
 ### Holding a response hostage
 
@@ -3022,14 +3316,48 @@ Eventually(".user").Should(b.HaveInnerText("Jane"))
 
 This is **the** tool for testing optimistic-UI reconciliation, which is the dominant flake class in any app with a server: a response arrives while the user has already moved on, and the app has to decide whether to fold it in or drop it on the floor.  Forcing the arrival order is the only honest way to test that decision.  At a 1% natural rate, "I ran it 30 times and it was green" proves essentially nothing - you need to *make* the race happen, every time.
 
-The API is four calls:
+**Say the default out loud, because it decides how the rest of the spec behaves: a hold freezes *every* matching response, not just the first.**  Register a hold on `/api/save` and the second save's response is frozen too, sitting behind the first.  A bare `Release()` then frees all of them at once and *stops holding* - it's terminal.  That default is the right one for the common case (one request, one response, one race), but it means the two most interesting orderings need a knob.
+
+The API:
 
 | | |
 |---|---|
 | `b.HoldResponse(url)` | register the hold; `url` is a string (exact match) or a Gomega matcher.  Returns a `*ResponseHold`. |
-| `hold.Await()` | block until a matching response is being held, and return it (an `InterceptedResponse` with `Status`, `Headers`, `Body`).  Returns immediately if one already arrived. |
-| `hold.Release()` | release everything currently held and stop holding future matches (they pass straight through).  Idempotent. |
-| `hold.Count()` | how many matching responses have been intercepted so far.  A snapshot, but safe to poll: `Eventually(hold.Count).Should(Equal(1))`. |
+| `.Limit(n)` | hold at most `n` matching responses **at a time**.  While `n` are held, further matches pass straight through untouched (they still count).  Releasing one re-opens capacity.  Set it when you build the hold: the limit is consulted as each response *arrives*, so lowering it later never releases responses already held, and raising it never retroactively holds one that already flew past. |
+| `hold.Await()` | block until a matching response is being **held**, and return it (an `InterceptedResponse` with `Status`, `Headers`, `Body`).  Returns immediately if one is already held; returns the *oldest* one still held. |
+| `hold.Release()` | terminal: release everything currently held **and** stop holding future matches.  Idempotent. |
+| `hold.Release(r)` | release just that response - the one `Await()` handed you - and stay **armed** for future matches. |
+| `hold.ReleaseNext()` | release the oldest response still held, and stay **armed**.  Fails the spec if nothing is currently held (`Await()` first). |
+| `hold.Count()` | how many matching responses have been intercepted so far - held *or* passed through under a `Limit`.  A snapshot, but safe to poll: `Eventually(hold.Count).Should(Equal(1))`. |
+
+**`Limit(1)` is how you say "hold #1 while #2 lands."**  Two rapid saves where the *first* response must resolve *last* is the ordering a default hold can never produce, because it freezes the second response as well:
+
+```go
+hold := b.HoldResponse(ContainSubstring("/api/save")).Limit(1)
+
+b.Click("#save")                              // the first save's response is held
+hold.Await()
+b.Click("#save")                              // the second save's response flies past and folds
+Eventually(hold.Count).Should(Equal(2))       // ...and the counter proves it really did
+
+hold.Release()                                // now the FIRST response lands - last
+Eventually("#status").Should(b.HaveInnerText("Saved"))
+```
+
+**`ReleaseNext()` is how you step responses through one at a time.**  Registering a *second* `HoldResponse` for the same URL to catch the next response does not work - handlers are [first-match-wins](#modifying-responses), so the second registration is dead code.  Re-arm the hold you already have instead:
+
+```go
+hold := b.HoldResponse(ContainSubstring("/home"))
+
+b.Click("#reload")
+hold.Await()          // the first GET /home is held
+hold.ReleaseNext()    // let it land - the hold stays armed
+
+b.Click("#reload")
+hold.Await()          // blocks until the SECOND GET /home is held
+```
+
+`hold.Release(r)` does the same thing when you're holding several and want to pick one out by value: pass back a response `Await()` returned and only that one goes.  (Responses are matched by value, oldest first - two byte-identical held responses are genuinely indistinguishable.)
 
 `Await` is a [waiting command](#interacting-with-elements): it keeps its own generous default deadline (~30s) and honors `WithTimeout`/`WithContext` - set them on the tab you build the hold from, `b.WithTimeout(5*time.Second).HoldResponse(url).Await()`.  `WithPolling` and `Immediate` are a hard error.  On timeout it fails the spec and tells you how many matching responses it *did* see.
 
@@ -3091,6 +3419,18 @@ Eventually(b).Should(b.BeNetworkIdle())
 
 In keeping with Biloba's pragmatism, "idle" means the in-flight count has reached zero - Biloba does not wait for a quiet period (à la `networkidle0`).  If you need to wait for one specific request to complete, assert on its effect directly instead.
 
+> **That example has a hole in it, and it's on the *leading* edge.**  `Eventually` evaluates its matcher immediately, at `t=0` - before Chrome's `requestWillBeSent` for the click's fetch has even reached Biloba.  The in-flight count is still zero, so `BeNetworkIdle` passes on its very first evaluation, having observed no network activity whatsoever.  On a fast machine it is green every single time, and it is waiting for nothing.
+>
+> The fix is to anchor on the request you're actually waiting for, *then* wait for quiet:
+>
+> ```go
+> b.Click("#refresh")
+> Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")))   // it started
+> Eventually(b).Should(b.BeNetworkIdle())                                   // ...and it finished
+> ```
+>
+> This is a different hazard from the no-quiet-period caveat above, which is about the *trailing* edge (a later request that hasn't started yet can still slip in after idle).  Both have the same shape - "idle" is only meaningful relative to activity you have independently pinned down - and both are why an effect-based assertion (`Eventually(".user").Should(b.HaveCount(2))`) beats a network-shaped one whenever you can write it.
+
 `BeNetworkIdle` tracks **HTTP** requests only - its in-flight count is keyed on the `Network.requestWillBeSent`/`Network.loadingFinished` request IDs Chrome reports.  A long-lived **WebSocket** does not register as an in-flight request, so it will not keep `BeNetworkIdle` perpetually busy (nor will `BeNetworkIdle` wait for a particular WS frame to arrive - wait on that frame's observable effect instead).
 
 ## Window Size, Screenshots, Configuration, and Debugging
@@ -3123,7 +3463,7 @@ One quick hack to speed up a test suite is to use the _smallest_ viable window s
 
 ### Capturing Screenshots
 
-As discussed above, Biloba automatically emits screenshots when a spec fails or a progress report is requested.  (It can also attach a text [DOM outline](#outline) on failure — off for an interactive human, on automatically under CI or an AI agent.  See [Failure artifacts](#failure-artifacts) for how the defaults are resolved.)
+As discussed above, Biloba automatically emits screenshots when a spec fails or a progress report is requested.  (It can also attach a text [DOM outline](#outline) on failure — off for an interactive human, on automatically under CI or an AI agent.  See [Failure artifacts](#failure-artifacts-humans-ci-and-agents) for how the defaults are resolved.)
 
 You can also manually capture a screenshot of a tab:
 
@@ -3253,7 +3593,7 @@ might produce something like:
 
 When you're debugging a failure whose interesting DOM lands past the cap, override it with the `BILOBA_OUTLINE_MAX` environment variable: set it to a byte count (e.g. `BILOBA_OUTLINE_MAX=131072`) to raise the cap, or to `0`/`off` to disable truncation entirely and emit the whole DOM.
 
-**Attachment on failure.** Biloba can attach a DOM Outline for every open tab when a spec fails.  This gives you a readable, text-based view of the page state, which is especially useful in environments that cannot render images.  It is **off for an interactive human** (the screenshot is the more useful artifact) but **on automatically under CI or an AI agent**; force it either way with `BilobaConfigFailureOutlines()` / `BilobaConfigFailureOutlines(false)` (see [Failure artifacts](#failure-artifacts)).  When enabled, the entry appears under "DOM Outline for: '<title>'" in the Ginkgo report.
+**Attachment on failure.** Biloba can attach a DOM Outline for every open tab when a spec fails.  This gives you a readable, text-based view of the page state, which is especially useful in environments that cannot render images.  It is **off for an interactive human** (the screenshot is the more useful artifact) but **on automatically under CI or an AI agent**; force it either way with `BilobaConfigFailureOutlines()` / `BilobaConfigFailureOutlines(false)` (see [Failure artifacts](#failure-artifacts-humans-ci-and-agents)).  When enabled, the entry appears under "DOM Outline for: '<title>'" in the Ginkgo report.
 
 **Console errors on failure.** Biloba streams the page's `console` output to the `GinkgoWriter` as it happens, but on a failure the originating `console.error` (say, the exception behind a React error boundary) is easily lost in the timeline.  So whenever a spec fails Biloba *also* replays every `console.error`/`console.assert` the page logged during the spec, gathered across all tabs, under **"Console errors logged before this failure"** at the **top** of the failure block - usually the fastest path to the root cause.  (This requires no configuration and rides along with the failure-artifact hook.)
 
@@ -3348,7 +3688,7 @@ Both `SpinUpChrome` and `ConnectToChrome` support a variety of configuration opt
 
 `SpinUpChrome(GinkgoT(), ...)` accepts a set of `SpinUpOption`s:
 
-- `biloba.HighFidelityHeadless()` runs the full ("new") headless Chrome instead of the default `chrome-headless-shell` (see [Headless Fidelity](#headless-fidelity)).
+- `biloba.HighFidelityHeadless()` runs the full ("new") headless Chrome instead of the default `chrome-headless-shell` (see [Headless Fidelity](#headless-fidelity-chrome-headless-shell-by-default)).
 - `biloba.AutoInstallHeadlessShell()` downloads `chrome-headless-shell` via Chrome for Testing if it can't be found locally, instead of failing with instructions.
 - `biloba.HeadlessShellPath(path)` points Biloba at a specific `chrome-headless-shell` binary (the `BILOBA_CHROME_HEADLESS_SHELL` environment variable does the same).
 - `biloba.StartingWindowSize(width, height)` sets the default window size for all tabs.
@@ -3369,7 +3709,7 @@ The boolean options take an optional bool — calling them with no argument mean
 - `BilobaConfigDebugLogging(...bool)` will send all Chrome DevTools protocol traffic to the `GinkgoWriter`.  This can be useful when debugging specs and/or implementing your own more advanced `chromedp` behavior.  Fair warning, though: these logs are verbose!
 - `BilobaConfigWithChromeConnection(cc ChromeConnection)` allows you to specify your own Chrome connection settings (typically a `WebSocketURL`)
 - `BilobaConfigFailureScreenshots(...bool)` controls Biloba's screenshots on failure (on by default)
-- `BilobaConfigFailureOutlines(...bool)` controls the DOM outline attached on failure (off for an interactive human, on under automation - see [Failure artifacts](#failure-artifacts))
+- `BilobaConfigFailureOutlines(...bool)` controls the DOM outline attached on failure (off for an interactive human, on under automation - see [Failure artifacts](#failure-artifacts-humans-ci-and-agents))
 - `BilobaConfigProgressReportScreenshots(...bool)` controls Biloba's screenshots when progress reports are requested (on by default)
 - `BilobaConfigInlineScreenshots(...bool)` controls the inline-image blob in failure and progress-report output (on for a supported interactive terminal, off under automation - see [Inline image gating](#inline-image-gating))
 - `BilobaConfigFailureScreenshotsSize(width, height)` specifies the window size to use when generating a screenshot on failure

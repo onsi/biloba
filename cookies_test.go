@@ -200,4 +200,64 @@ var _ = Describe("Cookies", func() {
 			Ω(b).ShouldNot(b.HaveNumCookies(5))
 		})
 	})
+
+	Describe("capturing values from the cookie matchers", func() {
+		It("captures the cookie that satisfied the assertion", func() {
+			b.SetCookie(biloba.Cookie{Name: "session", Value: "abc123", Path: "/"})
+			var cookie biloba.Cookie
+			Eventually(b).Should(b.HaveCookie("session").Capture(&cookie))
+			Ω(cookie.Name).Should(Equal("session"))
+			Ω(cookie.Value).Should(Equal("abc123"))
+			Ω(cookie.Path).Should(Equal("/"))
+		})
+
+		It("composes with the WithX refinements in either order, capturing the cookie that satisfied them all", func() {
+			b.SetCookie(
+				biloba.Cookie{Name: "session", Value: "abc123", Path: "/"},
+				biloba.Cookie{Name: "session", Value: "def456", Path: "/admin"},
+			)
+
+			//Capture before the refinement - withField must carry the capture target forward
+			var refinedFirst biloba.Cookie
+			Ω(b).Should(b.HaveCookie("session").Capture(&refinedFirst).WithPath("/admin"))
+			Ω(refinedFirst.Value).Should(Equal("def456"))
+
+			//...and after it
+			var refinedLast biloba.Cookie
+			Ω(b).Should(b.HaveCookie("session").WithPath("/").Capture(&refinedLast))
+			Ω(refinedLast.Value).Should(Equal("abc123"))
+		})
+
+		It("does not capture under ShouldNot", func() {
+			b.SetCookie(biloba.Cookie{Name: "session", Value: "abc123"})
+			var cookie biloba.Cookie
+			Ω(b).ShouldNot(b.HaveCookie("session").WithValue("nope").Capture(&cookie))
+			Ω(cookie).Should(Equal(biloba.Cookie{}))
+		})
+
+		It("captures the cookie count", func() {
+			b.SetCookie(
+				biloba.Cookie{Name: "a", Value: "1"},
+				biloba.Cookie{Name: "b", Value: "2"},
+			)
+			var n int
+			Eventually(b).Should(b.HaveNumCookies(BeNumerically(">", 0)).Capture(&n))
+			Ω(n).Should(Equal(2))
+		})
+
+		It("fails fast - it does not wait out the timeout - when the capture target cannot hold the cookie", func() {
+			b.SetCookie(biloba.Cookie{Name: "session", Value: "abc123"})
+			var wrongType string
+			failure := ""
+			g := NewGomega(func(message string, callerSkip ...int) { failure = message })
+
+			start := time.Now()
+			g.Eventually(b).WithTimeout(time.Second * 10).WithPolling(time.Millisecond * 10).Should(b.HaveCookie("session").Capture(&wrongType))
+			Ω(time.Since(start)).Should(BeNumerically("<", time.Second*2))
+
+			Ω(failure).Should(ContainSubstring("Told to stop trying"))
+			Ω(failure).Should(ContainSubstring("Capture cannot decode the observed value into *string"))
+			Ω(wrongType).Should(BeEmpty())
+		})
+	})
 })

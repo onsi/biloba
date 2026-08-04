@@ -155,4 +155,59 @@ var _ = Describe("Storage", func() {
 			Ω(b).ShouldNot(b.HaveNumSessionStorageItems(5))
 		})
 	})
+
+	Describe("capturing values from the storage matchers", func() {
+		It("captures the stored value, decoded into a typed target", func() {
+			b.LocalStorage().Set("count", 3)
+			var count int
+			Eventually(b).Should(b.HaveLocalStorageItem("count", BeNumerically(">", 0)).Capture(&count))
+			Ω(count).Should(Equal(3)) //int(3), not the float64(3) the JSON decode hands back
+		})
+
+		It("captures the stored value in the existence-only form too", func() {
+			b.LocalStorage().Set("user", "Joe")
+			var user string
+			Ω(b).Should(b.HaveLocalStorageItem("user").Capture(&user))
+			Ω(user).Should(Equal("Joe"))
+		})
+
+		It("captures a sessionStorage item into a struct", func() {
+			b.SessionStorage().Set("user", map[string]any{"name": "Joe", "age": 42})
+			var user struct {
+				Name string
+				Age  int
+			}
+			Eventually(b).Should(b.HaveSessionStorageItem("user", HaveKeyWithValue("name", "Joe")).Capture(&user))
+			Ω(user.Name).Should(Equal("Joe"))
+			Ω(user.Age).Should(Equal(42))
+		})
+
+		It("captures the item counts", func() {
+			b.LocalStorage().Set("a", 1)
+			b.LocalStorage().Set("b", 2)
+			var numLocal int
+			Eventually(b).Should(b.HaveNumLocalStorageItems(BeNumerically(">", 1)).Capture(&numLocal))
+			Ω(numLocal).Should(Equal(2))
+
+			b.SessionStorage().Set("only", "one")
+			var numSession int
+			Ω(b).Should(b.HaveNumSessionStorageItems(1).Capture(&numSession))
+			Ω(numSession).Should(Equal(1))
+		})
+
+		It("does not capture under ShouldNot", func() {
+			b.LocalStorage().Set("user", "Joe")
+			var user string
+			Ω(b).ShouldNot(b.HaveLocalStorageItem("user", "Jane").Capture(&user))
+			Ω(user).Should(BeEmpty())
+
+			var missing string
+			Ω(b).ShouldNot(b.HaveLocalStorageItem("nope").Capture(&missing))
+			Ω(missing).Should(BeEmpty())
+
+			var n int
+			Ω(b).ShouldNot(b.HaveNumLocalStorageItems(99).Capture(&n))
+			Ω(n).Should(BeZero())
+		})
+	})
 })
