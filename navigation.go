@@ -21,6 +21,14 @@ import (
 // (not a const) only so navigation_test.go can shrink it via SetNavigationTimeoutForTest.
 var navigationTimeout = 30 * time.Second
 
+// simulateTransientReadError, when non-nil, is consulted by location()/title() before they run the
+// real chromedp.Location/chromedp.Title action. It lets navigation_test.go simulate the transient CDP
+// error a live navigation can legitimately throw (e.g. "Inspected target navigated or closed (-32000)"
+// while the target is swapped mid-navigation) without needing to reproduce the underlying race. nil
+// (the default) means "no injected error, run the real action." Overridden from tests via
+// SetTransientReadErrorForTest.
+var simulateTransientReadError func() error
+
 /*
 Navigate() causes this tab to navigate to the provided URL.  The spec fails if the response does not have status code 200
 
@@ -107,67 +115,137 @@ func (b *Biloba) navigateWithStatus(url string, status int) *Biloba {
 }
 
 /*
-Location() returns the location (i.e. url) of the current tab.
+GetLocation() returns the location (i.e. url) of the current tab.
+
+GetLocation polls by default: it repeatedly asks Chrome for the tab's location, honoring
+WithTimeout/WithPolling/WithContext, or Immediate() to act once and fail fast.  A transient CDP error
+(e.g. "Inspected target navigated or closed" while a live navigation swaps the target out from under
+the read) is treated as a retryable miss, not a fatal - it keeps polling and only surfaces the
+underlying error if it never clears by the deadline.
+
+Read https://onsi.github.io/biloba/#navigation to learn more about navigation
 */
-func (b *Biloba) Location() string {
+func (b *Biloba) GetLocation() string {
 	b.gt.Helper()
-	b.guardConfig("Location")
+	var result string
+	matcher := gcustom.MakeMatcher(func(_ *Biloba) (bool, error) {
+		location, err := b.location()
+		if err != nil {
+			return false, err
+		}
+		result = location
+		return true, nil
+	}).WithMessage("fetch the tab's location")
+	b.pollOrImmediate(b, matcher)
+	return result
+}
+
+// location is the unguarded, single-shot substrate behind GetLocation. Internal callers (TabQuery
+// matching/rendering in tabs.go, SetCookie in cookies.go, GomegaString in biloba.go) call this
+// directly instead of GetLocation so a transient CDP error never polls or fails the spec from a
+// snapshot/rendering context - they take the zero value "" on error instead.
+func (b *Biloba) location() (string, error) {
+	if simulateTransientReadError != nil {
+		if err := simulateTransientReadError(); err != nil {
+			return "", err
+		}
+	}
 	var location string
 	err := chromedp.Run(b.Context, chromedp.Location(&location))
 	if err != nil {
-		b.gt.Fatalf("Failed to fetch location:\n%s", err.Error())
-		return ""
+		return "", err
 	}
-	return location
+	return location, nil
 }
 
 /*
-HaveURL(expected) is a Gomega matcher that matches against the current tab's [Biloba.Location].  Apply it to the tab itself so you can poll for navigation:
+HaveURL(expected) is a Gomega matcher that matches against the current tab's [Biloba.GetLocation].  Apply it to the tab itself so you can poll for navigation:
 
 	Eventually(b).Should(b.HaveURL("https://onsi.github.io/biloba/"))
 	Eventually(b).Should(b.HaveURL(HaveSuffix("biloba/")))
 
-expected can be a string (exact match) or a Gomega matcher.
+expected can be a string (exact match) or a Gomega matcher.  Like GetLocation, a transient CDP error while reading the location is a retryable miss under Eventually rather than an immediate failure.
+
+Read https://onsi.github.io/biloba/#navigation to learn more about navigation
 */
 func (b *Biloba) HaveURL(expected any) types.GomegaMatcher {
 	var data = map[string]any{}
 	var matcher = matcherOrEqual(expected)
 	data["Matcher"] = matcher
-	return gcustom.MakeMatcher(func(_ *Biloba) (bool, error) {
-		data["Result"] = b.Location()
+	return gcustom.MakeMatcher(func(tab *Biloba) (bool, error) {
+		location, err := tab.location()
+		if err != nil {
+			return false, err
+		}
+		data["Result"] = location
 		return matcher.Match(data["Result"])
 	}).WithTemplate("HaveURL:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
 }
 
 /*
-Title() returns the window title of the current tab.
+GetTitle() returns the window title of the current tab.
+
+GetTitle polls by default: it repeatedly asks Chrome for the tab's title, honoring
+WithTimeout/WithPolling/WithContext, or Immediate() to act once and fail fast.  A transient CDP error
+(e.g. "Inspected target navigated or closed" while a live navigation swaps the target out from under
+the read) is treated as a retryable miss, not a fatal - it keeps polling and only surfaces the
+underlying error if it never clears by the deadline.
+
+Read https://onsi.github.io/biloba/#navigation to learn more about navigation
 */
-func (b *Biloba) Title() string {
+func (b *Biloba) GetTitle() string {
 	b.gt.Helper()
-	b.guardConfig("Title")
+	var result string
+	matcher := gcustom.MakeMatcher(func(_ *Biloba) (bool, error) {
+		title, err := b.title()
+		if err != nil {
+			return false, err
+		}
+		result = title
+		return true, nil
+	}).WithMessage("fetch the tab's title")
+	b.pollOrImmediate(b, matcher)
+	return result
+}
+
+// title is the unguarded, single-shot substrate behind GetTitle. Internal callers (TabQuery
+// matching/rendering in tabs.go, GomegaString in biloba.go) call this directly instead of GetTitle so
+// a transient CDP error never polls or fails the spec from a snapshot/rendering context - they take
+// the zero value "" on error instead.
+func (b *Biloba) title() (string, error) {
+	if simulateTransientReadError != nil {
+		if err := simulateTransientReadError(); err != nil {
+			return "", err
+		}
+	}
 	var title string
 	err := chromedp.Run(b.Context, chromedp.Title(&title))
 	if err != nil {
-		b.gt.Fatalf("Failed to fetch title:\n%s", err.Error())
-		return ""
+		return "", err
 	}
-	return title
+	return title, nil
 }
 
 /*
-HaveTitle(expected) is a Gomega matcher that matches against the current tab's [Biloba.Title].  Apply it to the tab itself so you can poll for the title to change:
+HaveTitle(expected) is a Gomega matcher that matches against the current tab's [Biloba.GetTitle].  Apply it to the tab itself so you can poll for the title to change:
 
 	Eventually(b).Should(b.HaveTitle("Introduction"))
 	Eventually(b).Should(b.HaveTitle(HaveSuffix("Introduction")))
 
-expected can be a string (exact match) or a Gomega matcher.
+expected can be a string (exact match) or a Gomega matcher.  Like GetTitle, a transient CDP error while reading the title is a retryable miss under Eventually rather than an immediate failure.
+
+Read https://onsi.github.io/biloba/#navigation to learn more about navigation
 */
 func (b *Biloba) HaveTitle(expected any) types.GomegaMatcher {
 	var data = map[string]any{}
 	var matcher = matcherOrEqual(expected)
 	data["Matcher"] = matcher
-	return gcustom.MakeMatcher(func(_ *Biloba) (bool, error) {
-		data["Result"] = b.Title()
+	return gcustom.MakeMatcher(func(tab *Biloba) (bool, error) {
+		title, err := tab.title()
+		if err != nil {
+			return false, err
+		}
+		data["Result"] = title
 		return matcher.Match(data["Result"])
 	}).WithTemplate("HaveTitle:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)
 }

@@ -1,6 +1,9 @@
 package biloba_test
 
 import (
+	"context"
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -155,6 +158,66 @@ var _ = Describe("Javascript", func() {
 			match, err := matcher.Match(`1+`)
 			Ω(match).Should(BeFalse())
 			Ω(err).Should(MatchError("Failed to run script:\n1+\n\nexception \"Uncaught\" (0:2): SyntaxError: Unexpected end of input"))
+		})
+	})
+
+	Describe("GetJSValue", func() {
+		It("polls until the expression becomes defined", func() {
+			b.Run(`setTimeout(() => { window.__biloba_test_value = "hello" }, 50)`)
+			Ω(b.GetJSValue("window.__biloba_test_value")).Should(Equal("hello"))
+		})
+
+		It("retries through a thrown error (e.g. a ReferenceError) until the identifier is defined", func() {
+			// Before the global exists, evaluating a bare undeclared identifier throws a ReferenceError.
+			// Immediate() reads once, so it surfaces that error as a spec failure right away.
+			b.Immediate().GetJSValue("__biloba_late_var")
+			ExpectFailures(ContainSubstring("ReferenceError"))
+
+			// The default polling form treats that same error as "not ready yet" and retries through
+			// it until the identifier is declared, rather than failing on the first throw.
+			b.Run(`setTimeout(() => { window.__biloba_late_var = 99 }, 50)`)
+			Ω(b.GetJSValue("__biloba_late_var")).Should(Equal(99.0))
+		})
+
+		It("treats null as a legitimate value that returns immediately, without retrying", func() {
+			b.Run(`window.__biloba_null_val = null`)
+			start := time.Now()
+			result := b.WithTimeout(200 * time.Millisecond).GetJSValue("window.__biloba_null_val")
+			Ω(result).Should(BeNil())
+			Ω(time.Since(start)).Should(BeNumerically("<", 150*time.Millisecond))
+		})
+
+		It("decodes into a typed pointer, dodging the float64 default", func() {
+			b.Run(`window.__biloba_num = 3`)
+
+			var n int
+			b.GetJSValue("window.__biloba_num", &n)
+			Ω(n).Should(Equal(3))
+
+			Ω(b.GetJSValue("window.__biloba_num")).Should(BeNumerically("==", 3))
+			Ω(b.GetJSValue("window.__biloba_num")).ShouldNot(Equal(3)) // float64(3) != int(3)
+		})
+
+		It("fails fast under Immediate when the expression is not yet defined", func() {
+			result := b.Immediate().GetJSValue("window.__biloba_not_defined_yet")
+			Ω(result).Should(BeNil())
+			ExpectFailures(ContainSubstring(`evaluate "window.__biloba_not_defined_yet" to a defined value`))
+		})
+
+		It("names the expression in the timeout failure message", func() {
+			b.WithTimeout(60 * time.Millisecond).GetJSValue("window.__biloba_never_defined")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("Timed out after"),
+				ContainSubstring(`evaluate "window.__biloba_never_defined" to a defined value`),
+			))
+		})
+
+		It("accepts all four poll-config knobs, since it is a polling getter", func() {
+			b.Run(`window.__biloba_knob_test = "ok"`)
+			Ω(b.WithTimeout(time.Second).GetJSValue("window.__biloba_knob_test")).Should(Equal("ok"))
+			Ω(b.WithPolling(10 * time.Millisecond).GetJSValue("window.__biloba_knob_test")).Should(Equal("ok"))
+			Ω(b.WithContext(context.Background()).GetJSValue("window.__biloba_knob_test")).Should(Equal("ok"))
+			Ω(b.Immediate().GetJSValue("window.__biloba_knob_test")).Should(Equal("ok"))
 		})
 	})
 

@@ -13,11 +13,11 @@ var _ = Describe("Tabs", func() {
 		Context("explicitly", func() {
 			It("allows the user to create a new tab that is its own universe", func() {
 				b.Navigate(fixtureServer + "/nav-a.html")
-				Eventually(b.Title).Should(Equal("Nav-A Testpage"))
+				Eventually(b.GetTitle).Should(Equal("Nav-A Testpage"))
 
 				tab := b.NewTab().Navigate(fixtureServer + "/dom.html")
-				Eventually(tab.Title).Should(Equal("DOM Testpage"))
-				Ω(b.Title()).Should(Equal("Nav-A Testpage"))
+				Eventually(tab.GetTitle).Should(Equal("DOM Testpage"))
+				Ω(b.GetTitle()).Should(Equal("Nav-A Testpage"))
 
 				By("it correctly wires up logging and directs interactions to the correct tab")
 				Eventually("#increment").Should(tab.Click())
@@ -97,18 +97,18 @@ var _ = Describe("Tabs", func() {
 
 		It("can return all tabs", func() {
 			Ω(b.AllTabs()).Should(ConsistOf(
-				HaveField("Title()", "Nav-A Testpage"),
-				HaveField("Title()", "DOM Testpage"),
-				HaveField("Title()", "XPath Testpage"),
+				HaveField("GetTitle()", "Nav-A Testpage"),
+				HaveField("GetTitle()", "DOM Testpage"),
+				HaveField("GetTitle()", "XPath Testpage"),
 			))
 		})
 
 		It("any tab, in fact, can return all tabs", func() {
 			tab := b.AllTabs().Find(b.TabMatching().WithTitle("DOM Testpage"))
 			Ω(tab.AllTabs()).Should(ConsistOf(
-				HaveField("Title()", "Nav-A Testpage"),
-				HaveField("Title()", "DOM Testpage"),
-				HaveField("Title()", "XPath Testpage"),
+				HaveField("GetTitle()", "Nav-A Testpage"),
+				HaveField("GetTitle()", "DOM Testpage"),
+				HaveField("GetTitle()", "XPath Testpage"),
 			))
 		})
 
@@ -135,7 +135,7 @@ var _ = Describe("Tabs", func() {
 			Eventually(tab).Should(tab.HaveSpawnedTab().WithTitle("DOM Testpage"))
 			Ω(tab.AllSpawnedTabs()).Should(HaveLen(1))
 			spawnedTab := tab.AllSpawnedTabs().Find(tab.TabMatching().WithDOMElement("#hello"))
-			Ω(spawnedTab.Title()).Should(Equal("DOM Testpage"))
+			Ω(spawnedTab.GetTitle()).Should(Equal("DOM Testpage"))
 
 			By("this is currently a bit weird, but spawned tabs consider everything in the browser context to be their spawned tabs")
 			Ω(spawnedTab.AllSpawnedTabs()).Should(HaveLen(1))
@@ -172,10 +172,10 @@ var _ = Describe("Tabs", func() {
 
 		It("can find tabs by DOM element", func() {
 			tab := b.AllTabs().Find(b.TabMatching().WithDOMElement("#increment"))
-			Ω(tab.Title()).Should(Equal("DOM Testpage"))
+			Ω(tab.GetTitle()).Should(Equal("DOM Testpage"))
 
 			tab = b.AllTabs().Find(b.TabMatching().WithDOMElement(b.XPath().WithID("aquarium")))
-			Ω(tab.Title()).Should(Equal("XPath Testpage"))
+			Ω(tab.GetTitle()).Should(Equal("XPath Testpage"))
 		})
 
 		It("can match by title, URL, and DOM element", func() {
@@ -212,8 +212,8 @@ var _ = Describe("Tabs", func() {
 	Describe("a tab flow with stuff going on", Ordered, func() {
 		It("can spawn new tabs, etc.", func() {
 			b.Navigate(fixtureServer + "/nav-a.html")
-			Eventually(b.Title).Should(Equal("Nav-A Testpage"))
-			Ω(b.AllTabs()).Should(ConsistOf(HaveField("Title()", "Nav-A Testpage")))
+			Eventually(b.GetTitle).Should(Equal("Nav-A Testpage"))
+			Ω(b.AllTabs()).Should(ConsistOf(HaveField("GetTitle()", "Nav-A Testpage")))
 
 			b.Click("#to-b-new")
 			Eventually(b).Should(b.HaveSpawnedTab().WithTitle("Nav-B Testpage"))
@@ -222,20 +222,20 @@ var _ = Describe("Tabs", func() {
 			Ω(g2).Should(Equal(b.AllSpawnedTabs().Find(b.TabMatching().WithDOMElement("#to-a"))))
 
 			g3 := b.NewTab().Navigate(fixtureServer + "/dom.html")
-			Eventually(g3.Title).Should(Equal("DOM Testpage"))
+			Eventually(g3.GetTitle).Should(Equal("DOM Testpage"))
 
-			Ω(b.Title()).Should(Equal("Nav-A Testpage"))
-			Ω(g2.Title()).Should(Equal("Nav-B Testpage"))
-			Ω(g3.Title()).Should(Equal("DOM Testpage"))
+			Ω(b.GetTitle()).Should(Equal("Nav-A Testpage"))
+			Ω(g2.GetTitle()).Should(Equal("Nav-B Testpage"))
+			Ω(g3.GetTitle()).Should(Equal("DOM Testpage"))
 			Ω(b.AllTabs()).Should(ConsistOf(
-				HaveField("Title()", "Nav-A Testpage"),
-				HaveField("Title()", "DOM Testpage"),
-				HaveField("Title()", "Nav-B Testpage"),
+				HaveField("GetTitle()", "Nav-A Testpage"),
+				HaveField("GetTitle()", "DOM Testpage"),
+				HaveField("GetTitle()", "Nav-B Testpage"),
 			))
 
 			Ω(g2.Close()).Should(Succeed())
 			Ω(g3.Close()).Should(Succeed())
-			Eventually(b.AllTabs).Should(ConsistOf(HaveField("Title()", "Nav-A Testpage")))
+			Eventually(b.AllTabs).Should(ConsistOf(HaveField("GetTitle()", "Nav-A Testpage")))
 			Ω(b).ShouldNot(b.HaveTab().WithTitle("DOM Testpage"))
 			Ω(b).ShouldNot(b.HaveTab().WithTitle("Nav-B Testpage"))
 			Ω(b).Should(b.HaveTab().WithTitle("Nav-A Testpage"))

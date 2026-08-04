@@ -140,12 +140,14 @@ func (q *TabQuery) WithDOMElement(selector any) *TabQuery {
 // matches is the predicate role: does this single tab satisfy every constraint?
 func (q *TabQuery) matches(tab *Biloba) bool {
 	if q.titleMatcher != nil {
-		if match, _ := q.titleMatcher.Match(tab.Title()); !match {
+		title, _ := tab.title()
+		if match, _ := q.titleMatcher.Match(title); !match {
 			return false
 		}
 	}
 	if q.urlMatcher != nil {
-		if match, _ := q.urlMatcher.Match(tab.Location()); !match {
+		location, _ := tab.location()
+		if match, _ := q.urlMatcher.Match(location); !match {
 			return false
 		}
 	}
@@ -199,7 +201,9 @@ func (q *TabQuery) presentTabs() string {
 	out := &strings.Builder{}
 	out.WriteString("The tabs that were searched were:")
 	for _, tab := range q.observed {
-		fmt.Fprintf(out, "\n%s (%s)", tab.Title(), tab.Location())
+		title, _ := tab.title()
+		location, _ := tab.location()
+		fmt.Fprintf(out, "\n%s (%s)", title, location)
 	}
 	return out.String()
 }

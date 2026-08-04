@@ -184,6 +184,80 @@ func (b *Biloba) RunAsync(script string, args ...any) any {
 	return res
 }
 
+/*
+GetJSValue(expression, args...) polls expression - a JavaScript expression, typically a global path the
+app under test exposes (window.__storeLog, app.store.lastFold) - and returns its value once defined.
+
+GetJSValue is the blessed **app-state barrier**: a spec-visible proof that the *browser* actually
+processed something, as opposed to two traps that only look like proof. The DOM shows the *optimistic*
+value a click handler sets synchronously, before any round trip - asserting on it proves the handler
+ran, not that a response was folded in. A Go-side HTTP read bypasses the tab's event loop entirely - it
+proves the server persisted something, not that the tab ever processed it. Both can be true while the
+tab has done nothing with the result. Have the app log its own fold decisions to a window.__x path and
+poll that with GetJSValue - that's proof the renderer acted:
+
+	b.Run(`app.store.on("fold", () => { window.__storeLog = window.__storeLog || []; window.__storeLog.push(app.store.state) })`)
+	b.Click("#save")
+	var log []string
+	b.GetJSValue("window.__storeLog", &log) // blocks until the fold actually happens
+	Ω(log).Should(HaveExactElements("saving", "saved"))
+
+GetJSValue polls by default: it retries while expression evaluates to undefined (the barrier has not
+been reached yet) or throws (e.g. a ReferenceError because a global does not exist yet - not ready, not
+a bug). A null result is legitimate and returns immediately without retrying. Configure the wait with
+WithTimeout/WithPolling/WithContext, or opt into act-once/fail-fast with Immediate().
+
+As with [Biloba.Run] you may pass a single pointer to decode the result into a specific type:
+
+	var log []string
+	b.GetJSValue("window.__storeLog", &log)
+
+Without a decode target, JS numbers come back as float64 - prefer a numeric matcher like
+BeNumerically("==", 3) or decode into a typed pointer as above.
+
+To poll until a *condition* holds rather than fetch a value, reach for the sibling matcher form:
+Eventually("window.__storeLog.length").Should(b.EvaluateTo(BeNumerically(">", 0))).
+
+Read https://onsi.github.io/biloba/#running-arbitrary-javascript to learn more about running JavaScript in Biloba
+*/
+func (b *Biloba) GetJSValue(expression string, args ...any) any {
+	b.gt.Helper()
+	script := "(() => {\n  const __biloba_v = (" + expression + ");\n  return {defined: __biloba_v !== undefined, value: __biloba_v};\n})()"
+	var result any
+	matcher := gcustom.MakeMatcher(func(expr string) (bool, error) {
+		var envelope struct {
+			Defined bool            `json:"defined"`
+			Value   json.RawMessage `json:"value"`
+		}
+		if _, err := b.RunErr(script, &envelope); err != nil {
+			b.recordProbe(probeKey("GetJSValue", expr), fmt.Sprintf("error: %s", err))
+			return false, err
+		}
+		if !envelope.Defined {
+			b.recordProbe(probeKey("GetJSValue", expr), "<undefined>")
+			return false, nil
+		}
+		if len(args) > 0 && args[0] != nil {
+			if err := json.Unmarshal(envelope.Value, args[0]); err != nil {
+				return false, err
+			}
+			result = args[0]
+		} else {
+			var v any
+			if len(envelope.Value) > 0 {
+				if err := json.Unmarshal(envelope.Value, &v); err != nil {
+					return false, err
+				}
+			}
+			result = v
+		}
+		b.recordProbe(probeKey("GetJSValue", expr), result)
+		return true, nil
+	}).WithMessage(fmt.Sprintf("evaluate %q to a defined value", expression))
+	b.pollOrImmediate(expression, matcher)
+	return result
+}
+
 type JSFunc string
 
 /*

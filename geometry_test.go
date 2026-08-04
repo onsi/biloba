@@ -222,6 +222,29 @@ var _ = Describe("Geometry getters and matchers", func() {
 			Eventually("#o-first").Should(b.Exist())
 			Ω(b.BePrecededBy("#o-second").FailureMessage("#o-first")).Should(ContainSubstring("be preceded by"))
 		})
+
+		It("reports the order it actually observed, so a backwards assertion is self-correcting", func() {
+			b.Run("appendOrdered()")
+			Eventually("#o-second").Should(b.BePrecededBy("#o-first"))
+
+			// #o-first comes before #o-second, so this (backwards) expectation fails - and the message
+			// must say which way round they actually are, not merely restate the expectation.
+			matcher := b.BePrecededBy("#o-second")
+			match, err := matcher.Match("#o-first")
+			Ω(err).ShouldNot(HaveOccurred())
+			Ω(match).Should(BeFalse())
+			Ω(matcher.FailureMessage("#o-first")).Should(ContainSubstring("Actually: #o-first comes BEFORE #o-second"))
+		})
+
+		It("describes containment rather than claiming a plain before/after", func() {
+			b.Run("appendOrdered()")
+			Eventually("#o-first").Should(b.Exist())
+
+			matcher := b.BePrecededBy("#o-first")
+			_, err := matcher.Match("#order")
+			Ω(err).ShouldNot(HaveOccurred())
+			Ω(matcher.FailureMessage("#order")).Should(ContainSubstring("CONTAINS"))
+		})
 	})
 
 	Describe("GetComputedStyle", func() {

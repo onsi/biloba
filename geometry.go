@@ -619,27 +619,52 @@ func (b *Biloba) documentOrder(selector, other any, do func(mask int)) (ok bool,
 	return true, nil
 }
 
-// DOM Node.compareDocumentPosition bitmask constants (the only two we test).
+// DOM Node.compareDocumentPosition bitmask constants (the two we test, plus the two containment bits
+// we only use to describe what we actually observed).
 const (
-	documentPositionPreceding = 0x02
-	documentPositionFollowing = 0x04
+	documentPositionPreceding   = 0x02
+	documentPositionFollowing   = 0x04
+	documentPositionContains    = 0x08
+	documentPositionContainedBy = 0x10
 )
+
+// describeDocumentOrder renders the relationship we actually observed, in the same subject-first voice
+// the matchers are documented in.  A direction mix-up (BePrecededBy vs BeFollowedBy) is the single most
+// common misuse of these matchers - it reads backwards to most people - so when one fails we spell the
+// truth out rather than only restating the expectation, which is what makes a reversed assertion
+// self-correcting instead of merely confusing.
+func describeDocumentOrder(mask int, subject, other string) string {
+	switch {
+	case mask&documentPositionPreceding != 0 && mask&documentPositionContains != 0:
+		return fmt.Sprintf("%s is CONTAINED BY %s (and so comes after it)", subject, other)
+	case mask&documentPositionFollowing != 0 && mask&documentPositionContainedBy != 0:
+		return fmt.Sprintf("%s CONTAINS %s (and so comes before it)", subject, other)
+	case mask&documentPositionPreceding != 0:
+		return fmt.Sprintf("%s comes AFTER %s", subject, other)
+	case mask&documentPositionFollowing != 0:
+		return fmt.Sprintf("%s comes BEFORE %s", subject, other)
+	case mask == 0:
+		return fmt.Sprintf("%s and %s are the same element", subject, other)
+	}
+	return fmt.Sprintf("%s and %s are in disconnected trees", subject, other)
+}
 
 // documentOrderMatcher builds BePrecededBy/BeFollowedBy: it reads compareDocumentPosition once both
 // elements are present and passes when the named bit is set.
 func (b *Biloba) documentOrderMatcher(name, verb string, other any, bit int) types.GomegaMatcher {
-	data := map[string]any{"Other": fmt.Sprintf("%v", other)}
+	data := map[string]any{"Other": fmt.Sprintf("%v", other), "Observed": ""}
 	return gcustom.MakeMatcher(func(selector any) (bool, error) {
 		pass := false
 		ok, err := b.documentOrder(selector, other, func(mask int) {
 			b.recordProbe(probeKey(name, selector), mask)
 			pass = mask&bit != 0
+			data["Observed"] = describeDocumentOrder(mask, fmt.Sprintf("%v", selector), fmt.Sprintf("%v", other))
 		})
 		if !ok {
 			return false, err
 		}
 		return pass, nil
-	}).WithTemplate("Expected {{.Actual}} to {{if .Failure}}{{else}}NOT {{end}}"+verb+" {{.Data.Other}} in document order", data)
+	}).WithTemplate("Expected {{.Actual}} to {{if .Failure}}{{else}}NOT {{end}}"+verb+" {{.Data.Other}} in document order.{{if .Data.Observed}}\nActually: {{.Data.Observed}}.{{end}}", data)
 }
 
 /*
@@ -650,7 +675,24 @@ dynamically-inserted nodes:
 	Eventually(noteSel).Should(b.BePrecededBy(sectionSel))
 
 Read the subject first to keep the direction straight: Eventually(X).Should(b.BePrecededBy(Y)) means
-"X comes AFTER Y" (Y precedes X).  It is the exact inverse of [Biloba.BeFollowedBy].
+"X comes AFTER Y" (Y precedes X).  It is the exact inverse of [Biloba.BeFollowedBy]:
+
+	Eventually(X).Should(b.BePrecededBy(Y))   // X comes AFTER  Y
+	Eventually(X).Should(b.BeFollowedBy(Y))   // X comes BEFORE Y
+
+Getting the direction backwards is the common mistake here, and a backwards order assertion does not
+announce itself: on a fixture that happens to satisfy the inverted relation it passes, so the spec goes
+green without testing what you meant.  Guard against that by writing the assertion so it would fail on
+the wrong fixture - assert the inverse does NOT hold too:
+
+	Eventually(noteSel).Should(b.BePrecededBy(sectionSel))
+	Ω(noteSel).ShouldNot(b.BeFollowedBy(sectionSel))
+
+When one of these does fail, the failure message reports the order it actually observed ("Actually:
+#note comes BEFORE #section"), which is usually enough to spot an inverted assertion at a glance.
+
+Document order alone means "anywhere after", including *inside* - an element nested within Y is also
+preceded by Y.  Scope the subject with [Locator.NotWithin] when you mean "after Y but not contained by Y".
 
 Because it returns a matcher you poll, configure the Eventually/Expect that wraps it.
 
@@ -669,6 +711,9 @@ follows the subject in document order (compareDocumentPosition reports FOLLOWING
 Read the subject first to keep the direction straight: Eventually(X).Should(b.BeFollowedBy(Y)) means
 "X comes BEFORE Y" (X precedes Y).  So "the quiz renders after the note" is
 Eventually(noteSel).Should(b.BeFollowedBy(quizSel)) - the note is followed by the quiz.
+
+See [Biloba.BePrecededBy] for the direction table, the reason a backwards order assertion can pass
+silently, and how to write one that can't.
 
 Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
 */

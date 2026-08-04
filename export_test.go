@@ -90,10 +90,41 @@ func SetNavigationTimeoutForTest(d time.Duration) func() {
 	return func() { navigationTimeout = prev }
 }
 
+// SetTransientReadErrorForTest overrides the location()/title() read-error injection seam so
+// navigation_test.go can simulate the transient CDP error a live navigation can legitimately throw
+// (e.g. a target swapped mid-navigation) without reproducing the underlying race.  Returns a restore
+// func.
+func SetTransientReadErrorForTest(fn func() error) func() {
+	prev := simulateTransientReadError
+	simulateTransientReadError = fn
+	return func() { simulateTransientReadError = prev }
+}
+
 // SafeAllTabConsoleErrorsForTest exposes safeAllTabConsoleErrors for logging_test.go - the captured
 // console.error/console.assert messages Biloba replays at the top of the failure block.
 func (b *Biloba) SafeAllTabConsoleErrorsForTest() []string {
 	return b.safeAllTabConsoleErrors()
+}
+
+// DetachedNodeNoteForTest exposes the poll-trajectory recorder's detached-node annotation (the
+// "matched N× then stopped matching" signal) for dom_test.go.
+func (b *Biloba) DetachedNodeNoteForTest() string {
+	return b.probes.renderDetachedNode()
+}
+
+// OccludedClicksNoteForTest exposes this tab's recorded occluded-click notes for interactions_test.go.
+func (b *Biloba) OccludedClicksNoteForTest() string {
+	return b.occlusions.render()
+}
+
+// ResetPollDiagnosticsForTest exposes resetPollDiagnostics so a spec can start from a clean slate.
+func (b *Biloba) ResetPollDiagnosticsForTest() {
+	b.resetPollDiagnostics()
+}
+
+// ShadowedHandlersNoteForTest exposes this tab's shadowed-network-handler note for network_test.go.
+func (b *Biloba) ShadowedHandlersNoteForTest() string {
+	return b.renderShadowedHandlers()
 }
 
 // TabScreenshotForTest is a test-accessible view of tabScreenshot.

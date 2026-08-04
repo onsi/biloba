@@ -46,7 +46,7 @@ Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cook
 func (b *Biloba) SetCookie(cookies ...Cookie) {
 	b.gt.Helper()
 	b.guardConfig("SetCookie")
-	location := b.Location()
+	location, _ := b.location()
 	params := make([]*network.CookieParam, len(cookies))
 	for i, cookie := range cookies {
 		param := &network.CookieParam{

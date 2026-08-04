@@ -2002,3 +2002,98 @@ var _ = Describe("DOM manipulators and matchers", func() {
 		})
 	})
 })
+
+var _ = Describe("Failure diagnostics", func() {
+	BeforeEach(func() {
+		b.Navigate(fixtureServer + "/diagnostics.html")
+		Eventually("#hello").Should(b.Exist())
+		b.ResetPollDiagnosticsForTest()
+	})
+
+	Describe("the detached-node signal", func() {
+		It("reports a selector that matched during the poll and then stopped matching", func() {
+			b.Run("detachRowAfterLookups(2)")
+			b.WithTimeout(time.Millisecond*500).WithPolling(time.Millisecond*10).GetProperty("#row-4", "neverDefined")
+			ExpectFailures(ContainSubstring("Timed out after"))
+			Ω(b.DetachedNodeNoteForTest()).Should(SatisfyAll(
+				ContainSubstring(`⚠ Selector "#row-4" matched 2× during this poll`),
+				ContainSubstring("then stopped matching"),
+				ContainSubstring("the node was likely replaced, or its identifying attribute changed in place"),
+			))
+		})
+
+		It("reports a selector whose identifying attribute was swapped in place", func() {
+			b.Run("swapRowIdAfterLookups(2)")
+			b.WithTimeout(time.Millisecond*500).WithPolling(time.Millisecond*10).GetProperty("#row-swap", "neverDefined")
+			ExpectFailures(ContainSubstring("Timed out after"))
+			Ω(b.DetachedNodeNoteForTest()).Should(ContainSubstring(`⚠ Selector "#row-swap" matched`))
+			Ω("#row-swapped").Should(b.Exist()) // the node itself is still there - only the selector stopped resolving
+		})
+
+		It("stays quiet for a selector that never matched at all", func() {
+			b.WithTimeout(time.Millisecond*100).GetProperty("#never-existed", "id")
+			ExpectFailures(ContainSubstring("Timed out after"))
+			Ω(b.DetachedNodeNoteForTest()).Should(BeEmpty())
+		})
+
+		It("stays quiet when the selector is still matching at the deadline", func() {
+			b.WithTimeout(time.Millisecond*100).GetProperty("#widget", "neverDefined")
+			ExpectFailures(ContainSubstring("Timed out after"))
+			Ω(b.DetachedNodeNoteForTest()).Should(BeEmpty())
+		})
+	})
+
+	Describe("the AllowMissing sharp edge", func() {
+		It("explains that the element was present and it was the property that never appeared", func() {
+			b.WithTimeout(time.Millisecond*80).GetProperty("#widget", "disabled")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring(`have property "disabled"`),
+				ContainSubstring("The element <div#widget.panel> was present the whole time - it was the property that never appeared."),
+				ContainSubstring(`"disabled" is not defined on it, so the poll had nothing to wait for.`),
+				ContainSubstring(`wrap the name - b.AllowMissing("disabled") - to get nil back instead of waiting for it.`),
+			))
+		})
+
+		It("names only the properties that are actually undefined when several were requested", func() {
+			b.WithTimeout(time.Millisecond*80).GetProperties("#widget", "tagName", "disabled")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("have properties tagName, disabled"),
+				ContainSubstring("<div#widget.panel> was present the whole time"),
+				ContainSubstring(`"disabled" is not defined on it`),
+				ContainSubstring(`b.AllowMissing("disabled")`),
+			))
+		})
+
+		It("does the same for an attribute that never appears", func() {
+			b.WithTimeout(time.Millisecond*80).GetAttribute("#widget", "data-role")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring(`have attribute "data-role"`),
+				ContainSubstring("The element <div#widget.panel> was present the whole time - it was the attribute that never appeared."),
+				ContainSubstring(`b.AllowMissing("data-role")`),
+			))
+		})
+
+		It("pluralizes when several names are undefined", func() {
+			b.WithTimeout(time.Millisecond*80).GetAttributes("#widget", "data-role", "data-size")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring("have attributes data-role, data-size"),
+				ContainSubstring(`"data-role", "data-size" are not defined on it`),
+				ContainSubstring(`b.AllowMissing("data-role"), b.AllowMissing("data-size")`),
+			))
+		})
+
+		It("keeps the plain message when it was the ELEMENT that never appeared", func() {
+			b.WithTimeout(time.Millisecond*80).GetProperty("#never-existed", "disabled")
+			ExpectFailures(SatisfyAll(
+				ContainSubstring(`have property "disabled"`),
+				Not(ContainSubstring("was present the whole time")),
+				Not(ContainSubstring("AllowMissing's sharp edge")),
+			))
+		})
+
+		It("does not enrich anything when the name is wrapped in AllowMissing", func() {
+			Ω(b.GetProperty("#widget", b.AllowMissing("disabled"))).Should(BeNil())
+			Ω(b.GetAttribute("#widget", b.AllowMissing("data-role"))).Should(BeNil())
+		})
+	})
+})

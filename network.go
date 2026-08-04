@@ -7,10 +7,13 @@ import (
 	"maps"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
+	ginkgotypes "github.com/onsi/ginkgo/v2/types"
 	"github.com/onsi/gomega/format"
 	"github.com/onsi/gomega/gcustom"
 	"github.com/onsi/gomega/types"
@@ -254,6 +257,49 @@ type requestHandler struct {
 	stub    *StubResponse
 	abort   bool
 	modify  *RequestModification
+
+	prov handlerProvenance
+}
+
+// handlerProvenance is the registration-site bookkeeping every network handler carries.  It exists
+// solely for the on-failure shadowed-handler diagnostic: a handler that never won a single dispatch
+// AND lost at least one to an earlier handler is silently dead code, which is precisely the
+// "fails downstream, points nowhere useful" shape the poll-trajectory and occluded-click notes exist
+// to kill.  api/stage/location are immutable after registration; fired/shadowed/shadower are mutated
+// by the dispatch lookups and are therefore guarded by b.lock.
+type handlerProvenance struct {
+	api      string                   // the API that registered this handler (StubRequest, ModifyResponse, ...)
+	stage    string                   // "request" or "response" - the noun the note uses
+	location ginkgotypes.CodeLocation // the user's registration site
+
+	fired    int                // dispatches this handler actually claimed
+	shadowed int                // dispatches it matched but an earlier handler claimed first
+	shadower *handlerProvenance // the earlier handler that claimed the first of them
+}
+
+// newHandlerProvenance captures the user's registration site.  skip is relative to the exported
+// registration method, which is always the direct caller (b.StubRequest(...) et al are called from
+// the spec), so every call site passes 2: one frame for newHandlerProvenance, one for the method.
+func newHandlerProvenance(api, stage string) handlerProvenance {
+	return handlerProvenance{api: api, stage: stage, location: ginkgotypes.NewCodeLocation(2)}
+}
+
+// indefiniteArticle keeps the note grammatical across the five registration APIs ("An AbortRequest
+// handler", "A ModifyResponse handler").
+func indefiniteArticle(word string) string {
+	if word != "" && strings.ContainsRune("AEIOU", rune(word[0])) {
+		return "An"
+	}
+	return "A"
+}
+
+// recordShadowed notes that this handler matched a dispatch that an earlier handler claimed first.
+// Called under b.lock from the dispatch lookups.
+func (p *handlerProvenance) recordShadowed(winner *handlerProvenance) {
+	p.shadowed++
+	if p.shadower == nil {
+		p.shadower = winner
+	}
 }
 
 /*
@@ -276,7 +322,7 @@ func (b *Biloba) StubRequest(url any, response StubResponse) {
 	}
 	b.lock.Lock()
 	resp := response
-	b.requestHandlers = append(b.requestHandlers, &requestHandler{matcher: matcherOrEqual(url), stub: &resp})
+	b.requestHandlers = append(b.requestHandlers, &requestHandler{matcher: matcherOrEqual(url), stub: &resp, prov: newHandlerProvenance("StubRequest", "request")})
 	b.lock.Unlock()
 	b.ensureFetchEnabled()
 }
@@ -298,7 +344,7 @@ func (b *Biloba) AbortRequest(url any) {
 	b.gt.Helper()
 	b.guardConfig("AbortRequest")
 	b.lock.Lock()
-	b.requestHandlers = append(b.requestHandlers, &requestHandler{matcher: matcherOrEqual(url), abort: true})
+	b.requestHandlers = append(b.requestHandlers, &requestHandler{matcher: matcherOrEqual(url), abort: true, prov: newHandlerProvenance("AbortRequest", "request")})
 	b.lock.Unlock()
 	b.ensureFetchEnabled()
 }
@@ -337,7 +383,7 @@ func (b *Biloba) ModifyRequest(url any) *RequestModification {
 	b.guardConfig("ModifyRequest")
 	mod := &RequestModification{}
 	b.lock.Lock()
-	b.requestHandlers = append(b.requestHandlers, &requestHandler{matcher: matcherOrEqual(url), modify: mod})
+	b.requestHandlers = append(b.requestHandlers, &requestHandler{matcher: matcherOrEqual(url), modify: mod, prov: newHandlerProvenance("ModifyRequest", "request")})
 	b.lock.Unlock()
 	b.ensureFetchEnabled()
 	return mod
@@ -410,6 +456,9 @@ type ResponseModification struct {
 	body    *string
 	headers map[string]string
 	using   func(InterceptedResponse) StubResponse
+	hold    *ResponseHold // set when this handler was registered by HoldResponse
+
+	prov handlerProvenance
 }
 
 /*
@@ -428,14 +477,17 @@ Or supply a transform that reads the real response and returns a replacement:
 
 ModifyResponse enables response-stage interception for the tab (a heavier mode than request stubbing,
 since the tab pauses at both the request and response stages).  It is scoped to the tab and cleared by
-Prepare().  Handlers are first-match-wins in registration order.
+Prepare().  Handlers are first-match-wins in registration order: once a handler matches a URL, later
+handlers for that same URL are never consulted.  Watch for this inside an Ordered container, where
+Prepare() runs only once (OncePerOrdered) - a handler registered by an earlier It is still registered
+and will silently shadow an identical handler registered by a later It.
 
 Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
 */
 func (b *Biloba) ModifyResponse(url any) *ResponseModification {
 	b.gt.Helper()
 	b.guardConfig("ModifyResponse")
-	mod := &ResponseModification{matcher: matcherOrEqual(url)}
+	mod := &ResponseModification{matcher: matcherOrEqual(url), prov: newHandlerProvenance("ModifyResponse", "response")}
 	b.lock.Lock()
 	b.responseHandlers = append(b.responseHandlers, mod)
 	b.lock.Unlock()
@@ -492,12 +544,227 @@ func (m *ResponseModification) resolve(original InterceptedResponse) StubRespons
 	return out
 }
 
+// holdResponseTimeout is the default deadline for ResponseHold.Await().  Awaiting an intercepted
+// response is a Cat 5a waiting command: it keeps this generous purpose-built deadline rather than
+// inheriting Gomega's 1s default, and honors WithTimeout/WithContext.
+var holdResponseTimeout = 30 * time.Second
+
+/*
+ResponseHold is the handle returned by [Biloba.HoldResponse].  It lets a spec block a matching
+response in flight, wait for it to arrive, count how many have matched, and then let them through.
+
+Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
+*/
+type ResponseHold struct {
+	b       *Biloba
+	matcher types.GomegaMatcher
+
+	lock     sync.Mutex
+	count    int                   // every matching response intercepted so far
+	held     []InterceptedResponse // the responses this hold has intercepted, oldest first
+	blocked  int                   // how many goroutines are currently parked inside the hold
+	released bool
+	release  chan struct{} // closed by Release: parked responses proceed, future ones pass straight through
+	notify   chan struct{} // closed-and-replaced on every arrival so Await can wake without polling
+}
+
+/*
+HoldResponse intercepts the real response to requests whose URL matches url and holds it hostage -
+the response is paused in flight until you Release it, at which point it is passed through to the
+page unchanged.  url may be a string (exact match) or a Gomega matcher.  This is the tool for
+forcing an arrival order when testing optimistic-UI reconciliation:
+
+	hold := b.HoldResponse(ContainSubstring("/api/users"))
+	b.Click("#refresh")
+	hold.Await()                            // block until the response is actually being held
+	b.Click("#rename")                      // drive the app into the racy window
+	hold.Release()                          // now let the stale response land
+	Expect(hold.Count()).To(Equal(1))
+
+HoldResponse builds on [Biloba.ModifyResponse], so the same rules apply: it is scoped to the tab,
+cleared by Prepare(), and participates in the same first-match-wins handler list.  Matching is
+tab-wide and URL-based, so a hold can catch a response belonging to an *earlier* page load - a URL
+substring does not identify a page generation.  Scope it (drive the flow in a dedicated b.NewTab())
+or assert Count() when that matters.
+
+A held response is a real Chrome pause, so Biloba force-releases every hold at the end of the spec
+(and again in Prepare()) - a failing spec can never wedge the tab for the specs that follow.
+
+Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
+*/
+func (b *Biloba) HoldResponse(url any) *ResponseHold {
+	b.gt.Helper()
+	// the two knobs HoldResponse accepts are the two Await honors - it stashes them for the wait.
+	b.guardConfig("HoldResponse", knobTimeout, knobContext)
+	h := &ResponseHold{
+		b:       b,
+		matcher: matcherOrEqual(url),
+		release: make(chan struct{}),
+		notify:  make(chan struct{}),
+	}
+	mod := &ResponseModification{matcher: h.matcher, hold: h, using: h.intercept, prov: newHandlerProvenance("HoldResponse", "response")}
+	b.lock.Lock()
+	b.responseHandlers = append(b.responseHandlers, mod)
+	b.lock.Unlock()
+	b.ensureFetchEnabled()
+	b.gt.DeferCleanup(h.forceRelease)
+	return h
+}
+
+// intercept is the ResponseModification transform HoldResponse registers.  It runs on the goroutine
+// handleResponseStagePause spun up for this paused response (never on the CDP event loop, and never
+// while holding b.lock) so parking here blocks nothing but this one response.
+func (h *ResponseHold) intercept(r InterceptedResponse) StubResponse {
+	passthrough := StubResponse{Status: r.Status, Body: r.Body, Headers: r.Headers}
+
+	h.lock.Lock()
+	h.count++
+	h.held = append(h.held, r)
+	close(h.notify)
+	h.notify = make(chan struct{})
+	if h.released {
+		h.lock.Unlock()
+		return passthrough
+	}
+	h.blocked++
+	release := h.release
+	h.lock.Unlock()
+
+	defer func() {
+		h.lock.Lock()
+		h.blocked--
+		h.lock.Unlock()
+	}()
+
+	select {
+	case <-release:
+	case <-h.b.Context.Done(): // the tab is going away - never hang the suite waiting on a dead tab
+	}
+	return passthrough
+}
+
+/*
+Await blocks until this hold has intercepted a matching response, then returns it so the spec can
+assert on it.  It returns immediately if one has already arrived.
+
+Await is a waiting command: it keeps its own generous default deadline and honors WithTimeout and
+WithContext (set them on the tab you build the hold from - b.WithTimeout(d).HoldResponse(url)).
+WithPolling and Immediate are a hard error.  On timeout Await fails the spec.
+
+Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
+*/
+func (h *ResponseHold) Await() InterceptedResponse {
+	h.b.gt.Helper()
+	h.b.guardConfig("Await", knobTimeout, knobContext)
+	timeout := holdResponseTimeout
+	if h.b.timeout != nil {
+		timeout = *h.b.timeout
+	}
+	ctx, cancel := h.b.waitingContext(timeout)
+	defer cancel()
+
+	for {
+		h.lock.Lock()
+		if len(h.held) > 0 {
+			response := h.held[0]
+			h.lock.Unlock()
+			return response
+		}
+		notify, count := h.notify, h.count
+		h.lock.Unlock()
+
+		select {
+		case <-notify:
+		case <-ctx.Done():
+			h.b.gt.Fatalf("Timed out after %s waiting for HoldResponse to intercept a response with URL matching %s\n%d matching response(s) have been intercepted so far.", timeout, h.description(), count)
+			return InterceptedResponse{}
+		}
+	}
+}
+
+/*
+Release lets every response this hold is currently holding through to the page, unchanged, and stops
+holding future matches (they pass straight through).  It is idempotent and safe to call when nothing
+is held.
+
+Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
+*/
+func (h *ResponseHold) Release() {
+	h.b.gt.Helper()
+	// WithTimeout/WithContext are legal on the tab a hold is built from (they configure Await) so
+	// they can't be rejected here; WithPolling/Immediate were already rejected by HoldResponse.
+	h.b.guardConfig("Release", knobTimeout, knobContext)
+	h.release_()
+}
+
+func (h *ResponseHold) release_() {
+	h.lock.Lock()
+	if h.released {
+		h.lock.Unlock()
+		return
+	}
+	h.released = true
+	close(h.release)
+	h.lock.Unlock()
+}
+
+/*
+Count returns how many matching responses this hold has intercepted so far.  It is a snapshot - it
+takes no poll-config knobs - but it is safe to poll:
+
+	Eventually(hold.Count).Should(Equal(1))
+
+Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
+*/
+func (h *ResponseHold) Count() int {
+	h.lock.Lock()
+	defer h.lock.Unlock()
+	return h.count
+}
+
+func (h *ResponseHold) description() string {
+	return normalizeWhitespace(h.matcher.FailureMessage(""))
+}
+
+// forceRelease is the deadlock backstop: it releases everything and then waits (briefly) for the
+// parked goroutines to actually hand their responses back to Chrome.  It runs as a DeferCleanup
+// registered by HoldResponse and again from Prepare(), so neither a failing spec nor a panic can
+// leave a Fetch pause outstanding and wedge the tab for every spec that follows.
+func (h *ResponseHold) forceRelease() {
+	h.release_()
+	for range 200 {
+		h.lock.Lock()
+		blocked := h.blocked
+		h.lock.Unlock()
+		if blocked == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// releaseHeldResponses force-releases every hold among the passed-in response handlers.  Prepare()
+// calls it with the handlers it is about to discard, before it disables the Fetch domain.
+func releaseHeldResponses(handlers []*ResponseModification) {
+	for _, handler := range handlers {
+		if handler.hold != nil {
+			handler.hold.forceRelease()
+		}
+	}
+}
+
 // ensureFetchEnabled turns on the Fetch domain once, with a single request-stage "*" pattern that
 // pauses every request the tab makes.  Response interception is driven per-request, not by a global
 // response-stage pattern: when a request's URL has a matching ModifyResponse handler, the
 // request-stage continue sets interceptResponse=true so that one request pauses again at the response
 // stage (see handleRequestStagePause).  This keeps request- and response-stage handling from
 // double-pausing unrelated requests.
+//
+// It also disables the HTTP cache for as long as interception is on.  A response served out of
+// Chrome's cache never traverses the network stack, so it raises no Fetch event at all - the request
+// would still show up in Network.requestWillBeSent (and therefore in HaveMadeRequest) while silently
+// skipping every stub/abort/modify handler.  Interception has to mean interception, so we trade the
+// cache away while it is enabled and restore it in Prepare() when we turn Fetch back off.
 func (b *Biloba) ensureFetchEnabled() {
 	b.gt.Helper()
 	b.lock.Lock()
@@ -509,31 +776,122 @@ func (b *Biloba) ensureFetchEnabled() {
 		return
 	}
 
-	if err := chromedp.Run(b.Context, fetch.Enable().WithPatterns([]*fetch.RequestPattern{{URLPattern: "*"}})); err != nil {
+	// cache first, then Fetch: that way there is no window in which requests are being intercepted
+	// but could still be answered from cache.
+	if err := chromedp.Run(b.Context,
+		network.SetCacheDisabled(true),
+		fetch.Enable().WithPatterns([]*fetch.RequestPattern{{URLPattern: "*"}}),
+	); err != nil {
 		b.gt.Fatalf("Failed to enable network interception:\n%s", err.Error())
 	}
 }
 
+// requestHandlerFor resolves the request-stage handler for url.  Dispatch stays first-match-wins;
+// the loop no longer short-circuits only so it can note which later handlers ALSO matched and were
+// therefore shadowed (see handlerProvenance).  That costs a handful of matcher calls per request on
+// a tab that has request handlers at all - we bail before evaluating anything when it has none.
 func (b *Biloba) requestHandlerFor(url string) *requestHandler {
 	b.lock.Lock()
 	defer b.lock.Unlock()
+	if len(b.requestHandlers) == 0 {
+		return nil
+	}
+	var winner *requestHandler
 	for _, h := range b.requestHandlers {
 		if match, _ := h.matcher.Match(url); match {
-			return h
+			if winner == nil {
+				winner = h
+			} else {
+				h.prov.recordShadowed(&winner.prov)
+			}
 		}
 	}
-	return nil
+	if winner != nil {
+		winner.prov.fired++
+	}
+	return winner
 }
 
+// responseHandlerFor resolves the response-stage handler for url and records the dispatch (see
+// requestHandlerFor).  Call it only when actually dispatching - the request-stage probe that decides
+// whether to opt into response interception uses hasResponseHandlerFor so it doesn't double-count.
 func (b *Biloba) responseHandlerFor(url string) *ResponseModification {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	if len(b.responseHandlers) == 0 {
+		return nil
+	}
+	var winner *ResponseModification
+	for _, h := range b.responseHandlers {
+		if match, _ := h.matcher.Match(url); match {
+			if winner == nil {
+				winner = h
+			} else {
+				h.prov.recordShadowed(&winner.prov)
+			}
+		}
+	}
+	if winner != nil {
+		winner.prov.fired++
+	}
+	return winner
+}
+
+// hasResponseHandlerFor is the non-recording probe: does any response handler claim this URL?  It
+// short-circuits on the first match and leaves the provenance bookkeeping to the response-stage
+// dispatch, which is the pause that actually resolves a handler.
+func (b *Biloba) hasResponseHandlerFor(url string) bool {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	for _, h := range b.responseHandlers {
 		if match, _ := h.matcher.Match(url); match {
-			return h
+			return true
 		}
 	}
-	return nil
+	return false
+}
+
+// renderShadowedHandlers returns the on-failure note for this tab's silently-dead network handlers:
+// handlers that never claimed a single dispatch and lost at least one to an earlier handler.  Both
+// conditions matter - a handler whose URL simply was never requested is not evidence of anything and
+// must stay silent, or the diagnostic cries wolf.
+func (b *Biloba) renderShadowedHandlers() string {
+	// Snapshot everything the note needs under the lock (dispatch goroutines are still free to run),
+	// then format outside it.
+	type note struct {
+		api, location, stage string
+		shadowed             int
+		byAPI, byLocation    string
+	}
+	notes := []note{}
+	b.lock.Lock()
+	collect := func(p *handlerProvenance) {
+		if p.fired > 0 || p.shadowed == 0 || p.shadower == nil {
+			return
+		}
+		notes = append(notes, note{
+			api: p.api, location: p.location.String(), stage: p.stage, shadowed: p.shadowed,
+			byAPI: p.shadower.api, byLocation: p.shadower.location.String(),
+		})
+	}
+	for _, h := range b.requestHandlers {
+		collect(&h.prov)
+	}
+	for _, h := range b.responseHandlers {
+		collect(&h.prov)
+	}
+	b.lock.Unlock()
+
+	out := &strings.Builder{}
+	for _, n := range notes {
+		fmt.Fprintf(out, "⚠ %s %s handler registered at %s never ran — an earlier %s handler\n  (registered at %s) claimed %d matching %s(s) first.\n",
+			indefiniteArticle(n.api), n.api, n.location, n.byAPI, n.byLocation, n.shadowed, n.stage)
+	}
+	if out.Len() == 0 {
+		return ""
+	}
+	out.WriteString("  Network handlers are first-match-wins in registration order, so a later handler for a URL an\n  earlier one already claims is dead code.  Prepare() is what clears them: inside an Ordered\n  container (where BeforeEach(..., OncePerOrdered) skips Prepare) they accumulate across specs, so a\n  handler registered by an earlier It permanently claims that URL.\n")
+	return out.String()
 }
 
 // handleEventRequestPaused responds to a paused request.  With response-stage interception enabled a
@@ -559,7 +917,7 @@ func (b *Biloba) handleRequestStagePause(ev *fetch.EventRequestPaused) {
 		// "*" pattern matches first and would otherwise consume the request before the response-stage
 		// pattern could fire.)  A stub/abort short-circuits the real network, so it never reaches the
 		// response stage and doesn't need this.
-		interceptResponse := b.responseHandlerFor(ev.Request.URL) != nil
+		interceptResponse := b.hasResponseHandlerFor(ev.Request.URL)
 		var action chromedp.Action
 		switch {
 		case handler == nil:

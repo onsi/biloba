@@ -778,6 +778,11 @@ type Biloba struct {
 	// attaching the most-recent series on failure (see BilobaConfigPollTrajectory).  Off by default.
 	pollTrajectory bool
 	probes         *probeRecorder // the most-recent-polled-entity trajectory recorder for this tab
+
+	// occlusions holds the most recent clicks this tab dispatched onto a covered element.  Always
+	// recorded (one synchronous elementFromPoint inside the click's own snippet), rendered only when a
+	// spec fails - plain Click stays occlusion-blind by design, this just leaves a trail.
+	occlusions *occlusionRecorder
 }
 
 // inlineScreenshotsEnabled returns true when inline-image output should be
@@ -796,7 +801,8 @@ func (b *Biloba) GomegaString() string {
 	if b.isRootTab() {
 		s.WriteString("Root ")
 	}
-	fmt.Fprintf(s, "Biloba Tab %p: %s (TargetID=%s, BrowserContextID=%s)", b, b.Title(), b.targetID, b.browserContextID)
+	title, _ := b.title()
+	fmt.Fprintf(s, "Biloba Tab %p: %s (TargetID=%s, BrowserContextID=%s)", b, title, b.targetID, b.browserContextID)
 	return s.String()
 }
 
@@ -814,6 +820,7 @@ func newBiloba(ginkgoT GinkgoTInterface) *Biloba {
 		inlineScreenshots:         true,
 		pollTrajectory:            true,
 		probes:                    &probeRecorder{},
+		occlusions:                &occlusionRecorder{},
 	}
 	return b
 }
@@ -869,16 +876,29 @@ func (b *Biloba) Prepare() {
 	b.requests = nil
 	b.inflightRequests = map[network.RequestID]bool{}
 	b.requestHandlers = nil
+	discardedResponseHandlers := b.responseHandlers
 	b.responseHandlers = nil
 	wasFetchEnabled := b.fetchEnabled
 	b.fetchEnabled = false
 	b.lock.Unlock()
 
+	// belt and braces with the DeferCleanup HoldResponse registers: a response held hostage by a
+	// previous spec is a real Chrome Fetch pause, and disabling Fetch underneath one would wedge
+	// the tab.  Force-release before we tear interception down.
+	releaseHeldResponses(discardedResponseHandlers)
+
 	// disable request interception if a previous spec stubbed requests, so the catch-all
-	// pause doesn't carry into specs that don't stub
+	// pause doesn't carry into specs that don't stub - and restore the HTTP cache that
+	// ensureFetchEnabled turned off (a cached response raises no Fetch event, so interception
+	// would silently miss it)
 	if wasFetchEnabled {
-		chromedp.Run(b.Context, fetch.Disable())
+		chromedp.Run(b.Context, fetch.Disable(), network.SetCacheDisabled(false))
 	}
+
+	// attachFailureArtifactsIfFailed clears the per-spec poll diagnostics on its way out, but it is
+	// only registered when failure artifacts are on - so clear them here too.  A detached-node signal
+	// or an occluded click carried over from the previous spec would diagnose the wrong spec.
+	b.resetPollDiagnostics()
 
 	if b.failureScreenshots || b.failureOutlines {
 		b.gt.DeferCleanup(b.attachFailureArtifactsIfFailed)
@@ -1082,6 +1102,9 @@ func (b *Biloba) safeAllTabConsoleErrors() []string {
 }
 
 func (b *Biloba) attachFailureArtifactsIfFailed() {
+	// The poll-time diagnostics are scoped to a spec - a match trail or an occluded click that outlived
+	// its spec would point at the wrong failure - so they are cleared on the way out, pass or fail.
+	defer b.resetPollDiagnostics()
 	if b.gt.Failed() {
 		if consoleErrors := b.safeAllTabConsoleErrors(); len(consoleErrors) > 0 {
 			b.gt.AddReportEntryVisibilityFailureOrVerbose("Console errors logged before this failure", strings.Join(consoleErrors, "\n"))
@@ -1095,15 +1118,28 @@ func (b *Biloba) attachFailureArtifactsIfFailed() {
 				}
 			}
 		}
-		if b.pollTrajectory {
-			for _, tab := range b.AllTabs() {
-				if trajectory := tab.probes.render(); trajectory != "" {
-					title := "Poll trajectory"
-					if !tab.isRootTab() {
-						title = fmt.Sprintf("Poll trajectory for tab: %s", tab.targetID)
-					}
-					b.gt.AddReportEntryVisibilityFailureOrVerbose(title, trajectory)
+		for _, tab := range b.AllTabs() {
+			suffix := ""
+			if !tab.isRootTab() {
+				suffix = fmt.Sprintf(" for tab: %s", tab.targetID)
+			}
+			if b.pollTrajectory {
+				// the detached-node diagnosis leads: it explains a failure that otherwise reads
+				// identically to "that selector was never there"
+				if detached := tab.probes.renderDetachedNode(); detached != "" {
+					b.gt.AddReportEntryVisibilityFailureOrVerbose("Selector matched, then stopped matching"+suffix, detached)
 				}
+				if trajectory := tab.probes.render(); trajectory != "" {
+					b.gt.AddReportEntryVisibilityFailureOrVerbose("Poll trajectory"+suffix, trajectory)
+				}
+			}
+			if occluded := tab.occlusions.render(); occluded != "" {
+				b.gt.AddReportEntryVisibilityFailureOrVerbose("Click dispatched onto a covered element"+suffix, occluded)
+			}
+			// a network handler that never ran is silently dead code - the spec fails downstream, at
+			// whatever was waiting on it, and points nowhere near the registration that lost
+			if shadowed := tab.renderShadowedHandlers(); shadowed != "" {
+				b.gt.AddReportEntryVisibilityFailureOrVerbose("Network handler never ran (shadowed by an earlier handler)"+suffix, shadowed)
 			}
 		}
 		if !b.failureScreenshots {

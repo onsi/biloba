@@ -104,6 +104,17 @@ if (!window["_biloba"]) {
         if (title != null && normText(title)) return normText(title)
         return ""
     }
+    // describeEl renders an element the way a person would point at it in a failure message:
+    // <div#overlay.modal-scrim>.  Classes are capped so a utility-class soup stays one glance wide.
+    let describeEl = (el) => {
+        if (!el) return ""
+        let out = el.tagName.toLowerCase()
+        if (el.id) out += "#" + el.id
+        let classes = [...el.classList]
+        out += classes.slice(0, 3).map(c => "." + c).join("")
+        if (classes.length > 3) out += "…"
+        return "<" + out + ">"
+    }
     let matchText = (actual, target, mode) => mode === "contains" ? actual.includes(target) : actual === target
     let attrText = (el, attr) => { let v = el.getAttribute(attr); return v == null ? null : normText(v) }
     let headingLevel = (el) => {
@@ -220,17 +231,22 @@ if (!window["_biloba"]) {
         }
         return s
     }
+    // found rides along on every one()/poll() response: it reports whether the selector resolved on
+    // THIS attempt, independent of whether the operation then succeeded.  The Go side folds it into the
+    // poll-trajectory recorder so a failure can distinguish "never matched" from "matched, then stopped
+    // matching" (the detached-node signature).  Purely diagnostic - nothing branches on it.
+    let withFound = (result, found) => { result.found = found; return result }
     let one = (...chain) => (s, ...args) => {
         let n = sel(s)
         let errAnnotation = (typeof s == "string" ? ": " + s.slice(1) : "")
-        if (!n) return rErr("could not find DOM element matching selector" + errAnnotation)
+        if (!n) return withFound(rErr("could not find DOM element matching selector" + errAnnotation), false)
         for (let i = 0; i < chain.length - 1; i++) {
             let r = chain[i](n, ...args)
-            if (!r.success) return !!r.error ? r : rErr(r.guard + errAnnotation)
+            if (!r.success) return withFound(!!r.error ? r : rErr(r.guard + errAnnotation), true)
         }
         let result = chain[chain.length - 1](n, ...args)
         if (!!result.error) result.error = result.error + errAnnotation
-        return result
+        return withFound(result, true)
     }
     let each = (cb) => (s, ...args) => {
         let ns = selEach(s)
@@ -247,15 +263,15 @@ if (!window["_biloba"]) {
     // (no error) to keep the poll waiting - e.g. a required-but-not-yet-defined property.
     let poll = (...chain) => (s, ...args) => {
         let n = sel(s)
-        if (!n) return { success: false } // not found -> retry, NOT an error
+        if (!n) return { success: false, found: false } // not found -> retry, NOT an error
         let errAnnotation = (typeof s == "string" ? ": " + s.slice(1) : "")
         for (let i = 0; i < chain.length - 1; i++) {
             let r = chain[i](n, ...args)
-            if (!r.success) return !!r.error ? r : rErr(r.guard + errAnnotation)
+            if (!r.success) return withFound(!!r.error ? r : rErr(r.guard + errAnnotation), true)
         }
         let result = chain[chain.length - 1](n, ...args)
         if (!!result.error) result.error = result.error + errAnnotation
-        return result
+        return withFound(result, true)
     }
     // parseNameSpec unwraps a property/attribute name argument: a plain string is REQUIRED (it gates the
     // poll until defined) while {__biloba_allow_missing: "x"} (produced by Go's AllowMissing) is optional
@@ -296,11 +312,26 @@ if (!window["_biloba"]) {
     // can take the maximally-faithful native element.click() path instead of dispatching synthetics.
     let plainPointer = (o) => !o.hasOffset && !o.shift && !o.control && !o.alt && !o.meta
     let dispatchMouse = (n, types, opts) => types.forEach(t => n.dispatchEvent(new MouseEvent(t, opts)))
+    // occludedBy runs isClickable's hit-test (shared hitTest/composedContains) WITHOUT gating on it:
+    // it returns a description of whatever is topmost at n's center when that thing is neither n nor
+    // inside n, and "" otherwise.  A button whose center is covered by its own <span> label is NOT
+    // occluded (composedContains sees it).  This is the diagnostic half of the occlusion tradeoff -
+    // plain click stays occlusion-blind by design, but a swallowed click now leaves a trail.  One
+    // synchronous elementFromPoint inside the click's own atomic snippet; no extra round-trip.
+    let occludedBy = (n) => {
+        let rect = n.getBoundingClientRect()
+        let cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2
+        if (cx < 0 || cy < 0 || cx > window.innerWidth || cy > window.innerHeight) return ""
+        let top = hitTest(n.ownerDocument, cx, cy)
+        if (!top || composedContains(n, top)) return ""
+        return describeEl(top)
+    }
     b.click = one(b.isVisible, b.isEnabled, (n, o) => {
         o = o || {}
-        if (plainPointer(o)) { n.click(); return r() }
-        dispatchMouse(n, ['mousedown', 'mouseup', 'click'], { ...pointerOpts(n, o), button: 0, buttons: 1 })
-        return r()
+        let occluder = occludedBy(n) // measured BEFORE dispatch - the click itself may rewrite the DOM
+        if (plainPointer(o)) n.click()
+        else dispatchMouse(n, ['mousedown', 'mouseup', 'click'], { ...pointerOpts(n, o), button: 0, buttons: 1 })
+        return occluder ? rRes(occluder) : r()
     })
     b.dblClick = one(b.isVisible, b.isEnabled, (n, o) => {
         o = o || {}
@@ -714,15 +745,18 @@ if (!window["_biloba"]) {
     }, {}))))
     // getAttributesP backs GetAttribute/GetAttributes: poll until the element is present AND every
     // REQUIRED named attribute is present (getAttribute !== null); AllowMissing names never block.
+    // When it is NOT ready the response carries a diagnostic ({element, undefined}) instead of a value,
+    // so a timeout can say "the element was there the whole time; the ATTRIBUTE never appeared" and
+    // name AllowMissing.  {success:false} still means "retry" - nothing branches on the diagnostic.
     b.getAttributesP = poll((n, specs) => {
-        let result = {}, ready = true
+        let result = {}, ready = true, undef = []
         for (const spec of specs) {
             let { name, required } = parseNameSpec(spec)
             let v = n.getAttribute(name)
-            if (required && v === null) ready = false
+            if (required && v === null) { ready = false; undef.push(name) }
             result[name] = v
         }
-        return ready ? rRes(result) : { success: false }
+        return ready ? rRes(result) : { success: false, result: { element: describeEl(n), undefined: undef } }
     })
     b.hasAttribute = one((n, a) => r(n.hasAttribute(a)))
     b.isFocused = one(n => r(n === document.activeElement, "DOM element is not focused"))
@@ -799,15 +833,18 @@ if (!window["_biloba"]) {
     // getPropertiesP backs GetProperty/GetProperties: poll until the element is present AND every
     // REQUIRED named property is defined (the path resolves); AllowMissing names return null and never
     // block.  The result map is keyed by the plain property name (matching Go's nameOf).
+    // When it is NOT ready the response carries a diagnostic ({element, undefined}) instead of a value,
+    // so a timeout can say "the element was there the whole time; the PROPERTY never appeared" and
+    // name AllowMissing.  {success:false} still means "retry" - nothing branches on the diagnostic.
     b.getPropertiesP = poll((n, specs) => {
-        let result = {}, ready = true
+        let result = {}, ready = true, undef = []
         for (const spec of specs) {
             let { name, required } = parseNameSpec(spec)
             let resolved = resolveProperty(n, name)
-            if (required && !resolved.found) ready = false
+            if (required && !resolved.found) { ready = false; undef.push(name) }
             result[name] = resolved.found ? resolved.value : null
         }
-        return ready ? rRes(result) : { success: false }
+        return ready ? rRes(result) : { success: false, result: { element: describeEl(n), undefined: undef } }
     })
     b.setProperty = one((n, p, v) => {
         p = p.split(".")

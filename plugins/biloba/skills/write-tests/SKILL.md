@@ -1,6 +1,6 @@
 ---
 name: write-tests
-description: Author good Biloba specs in your own Ginkgo/Gomega suite — the dual immediate/matcher API (act now vs. return a matcher you poll with Eventually), first-vs-all naming, the navigate-then-readiness-anchor shape, selecting elements (CSS targeting stable hooks as the default, semantic role/text/label locators, the >>> piercing combinator, XPath), the interaction vocabulary (click variants, drag, scroll, tap), realistic mode for occlusion/hover smoke tests, hermetic tests via request stubbing/aborting/modifying, multi-tab flows, and seeding state. Use when writing or reviewing Biloba browser tests.
+description: Author good Biloba specs in your own Ginkgo/Gomega suite — the dual immediate/matcher API (act now vs. return a matcher you poll with Eventually), first-vs-all naming, the navigate-then-readiness-anchor shape (gate on the DOM, then read GetLocation), selecting elements (CSS targeting stable hooks as the default, semantic role/text/label locators, the >>> piercing combinator, XPath), the interaction vocabulary (click variants, drag, scroll, tap), realistic mode for occlusion/hover smoke tests, hermetic tests via request stubbing/aborting/modifying, multi-tab flows, and seeding state. Use when writing or reviewing Biloba browser tests.
 ---
 
 # Writing Biloba specs
@@ -60,6 +60,16 @@ var _ = Describe("the search page", func() {
 - Pick a **stable, meaningful** anchor (a heading, a key container) — `b.Exist()` or `b.BeVisible()`.
 - **Assert on observable outcomes**, not implementation: visible text (`HaveInnerText`/`HaveText`), counts (`HaveCount`), URL/title (`HaveURL`/`HaveTitle`), or network effects (`HaveMadeRequest`).
 
+**For an in-app navigation, gate on a DOM readiness anchor and *then* read the location — don't poll the URL.** The URL flips the instant the router pushes it, so it is the *weakest* proof that the destination actually rendered; the DOM anchor is the strong one, and once it's up the URL read is a formality:
+
+```go
+b.Click("#submit")
+Eventually("#dashboard-root").Should(b.Exist())     // the DOM proves the navigation landed…
+Ω(b.GetLocation()).Should(HaveSuffix("/dashboard")) // …so this read is a formality
+```
+
+`b.GetLocation()`/`b.GetTitle()` (a **breaking rename** — the old bare `Location`/`Title` names are gone) are **polling getters** — they honor `WithTimeout`/`WithPolling`/`WithContext`/`Immediate`, and a transient CDP error mid-navigation (`Inspected target navigated or closed`) counts as a retryable miss rather than blowing up the poll. So `Eventually(b.GetLocation).Should(...)` is safe when you truly have nothing else to gate on — it's just rarely the best available signal.
+
 **Pocket matcher cheat-sheet** — reach here before `b.Run`:
 
 | Want to assert… | Matcher |
@@ -69,11 +79,12 @@ var _ = Describe("the search page", func() {
 | visible text | `b.HaveInnerText("…")` / `b.HaveText(…)` (textContent) |
 | a DOM/JS property | `b.HaveProperty("href", …)` / `b.HaveClass("active")` (JSON-valued attr: `b.HaveJSONAttribute("data-state", HaveKeyWithValue(…))` / getter `b.GetJSONAttribute(sel, attr, &out)`) |
 | it's actually clickable (visible+enabled+topmost) | `b.BeClickable()` |
-| form value | `b.HaveValue(…)` (also `b.HaveSpawnedTab`, `b.HaveURL`, `b.HaveTitle`) |
+| form value | `b.HaveValue(…)` (also `b.HaveSpawnedTab`, `b.HaveURL`, `b.HaveTitle`; getters `b.GetLocation()`/`b.GetTitle()` — both poll) |
+| the app actually folded a server response | `b.GetJSValue("window.__storeLog", &log)` — the app-state barrier (see below); *not* the DOM, *not* a Go-side HTTP read |
 | a network request was made | `Eventually(b).Should(b.HaveMadeRequest(…))` |
 | layout / box / scroll position | `b.HaveBoundingBox(HaveField("Top", …))` / `b.HaveOffsetTopWithin(container, …)` / `b.HaveScrollOffset(…)` (getters: `b.GetBoundingBox`/`b.GetScrollOffset`/`b.GetOffsetTopWithin`). `Box.Width`/`Height` = border-box; `Box.ClientWidth`/`ClientHeight` = scrollbar-excluded content box |
 | element A positioned relative to B | `b.BeAbove(other)` / `BeBelow` / `BeLeftOf` / `BeRightOf` / `b.Encloses(other)` / `b.Overlaps(other)` (numeric: `b.GetGapBetween(a, b)` → `BoxDelta`) |
-| on screen after a scroll / document order | `b.BeInViewport()` (partial; `b.BeInViewport(b.Fully())` = whole box on screen) / `b.BePrecededBy(other)` / `b.BeFollowedBy(other)` — read subject first: `Eventually(X).Should(b.BeFollowedBy(Y))` ⇔ X precedes Y |
+| on screen after a scroll / document order | `b.BeInViewport()` (partial; `b.BeInViewport(b.Fully())` = whole box on screen) / `b.BePrecededBy(other)` / `b.BeFollowedBy(other)` — read subject first: `Eventually(X).Should(b.BeFollowedBy(Y))` ⇔ X comes BEFORE Y (a backwards one can pass silently — also assert the inverse doesn't hold) |
 | resolved computed style value | `b.GetComputedStyle(selector, prop)` (getter; resolves custom properties) / `b.HaveComputedStyle(prop, …)` (matcher); numeric: `b.GetComputedStyleNumeric` / `b.HaveComputedStyleNumeric`; color across syntaxes: `b.HaveComputedStyle(prop, b.MatchColor("var(--tok)"))` / `b.NormalizeColor(x)` |
 | scroll a target into view (instant) | `b.ScrollIntoView(sel)` — options `b.WithinScroller(container)`, `b.AtTopOffset(px)` |
 | an arbitrary JS expression | `Eventually(expr).Should(b.EvaluateTo(matcher))` |
@@ -199,7 +210,20 @@ b.Navigate("/app")
 Eventually(".user").Should(b.HaveCount(2))
 ```
 
-Stubs are per-tab and reset by `Prepare()`. Beyond `StubRequest` you can `b.AbortRequest(url)` (fail it), `b.ModifyRequest(url).WithURL/.WithMethod/.WithHeader/.WithBody(...)` (continue with overrides), and `b.ModifyResponse(url).WithStatus/.WithHeader/.WithBody/.Using(func(biloba.InterceptedResponse) biloba.StubResponse)` (rewrite a real response) — all share one first-match-wins handler list with `StubRequest`. Observe requests with `Eventually(b).Should(b.HaveMadeRequest(...))` and wait for quiet with `Eventually(b).Should(b.BeNetworkIdle())`.
+Stubs are per-tab and reset by `Prepare()`. Beyond `StubRequest` you can `b.AbortRequest(url)` (fail it), `b.ModifyRequest(url).WithURL/.WithMethod/.WithHeader/.WithBody(...)` (continue with overrides), and `b.ModifyResponse(url).WithStatus/.WithHeader/.WithBody/.Using(func(biloba.InterceptedResponse) biloba.StubResponse)` (rewrite a real response) — all share one first-match-wins handler list with `StubRequest`. Observe requests with `Eventually(b).Should(b.HaveMadeRequest(...))` and wait for quiet with `Eventually(b).Should(b.BeNetworkIdle())`. While interception is on Biloba disables the HTTP cache (a cached response raises no interception event at all), restoring it in `Prepare()`. **In an `Ordered` container handlers accumulate** (`Prepare()` is `OncePerOrdered`), so an earlier `It`'s handler silently shadows a later identical one → `biloba:flaky-specs`.
+
+**`b.HoldResponse(url)` holds a real response hostage** so you can force an arrival order — the honest way to test optimistic-UI reconciliation, where the bug only shows when the stale response lands *after* the next action:
+
+```go
+hold := b.HoldResponse(ContainSubstring("/api/settings"))
+b.Click("#refresh")            // fires the request…
+hold.Await()                   // …and blocks until its response is actually being held
+b.Click("#rename")             // drive the app into the racy window
+hold.Release()                 // now let the stale response land
+Ω(hold.Count()).Should(Equal(1))
+```
+
+`Await` has its own 30s deadline (tune with `b.WithTimeout(d).HoldResponse(url)`); holds are force-released at spec end and by `Prepare()`, so a failing spec can't wedge the tab. Matching is **tab-wide and URL-based** — it can catch a response from an earlier page load, so scope the flow to a `b.NewTab()` (or assert `Count()`) when that matters.
 
 ## Seed state to skip slow flows
 
@@ -229,6 +253,18 @@ Eventually(b.Run).WithArguments(`document.title`).Should(Equal("Done"))         
 ```
 
 For an interpolated/multi-line expr, pre-build the string (`expr := fmt.Sprintf(...)`; `Eventually(b.Run).WithArguments(expr)…`) or poll a closure that returns the decoded value. See `biloba:flaky-specs` for why single-shot reads flake.
+
+**`b.GetJSValue(expr[, &ptr])` is the app-state barrier — the way to prove the *browser* processed something.** It polls `expr` until it is *defined* and returns it, retrying through both `undefined` and a thrown error (a `ReferenceError` for a global the app hasn't created yet is a not-ready condition, not a bug); `null` is a legitimate value and returns immediately. Point it at a path the app writes so a spec can wait on the app's own decision rather than on a proxy for it:
+
+```go
+b.Run(`app.store.on("fold", () => { window.__storeLog ??= []; window.__storeLog.push(app.store.state) })`)
+b.Click("#save")
+var log []string
+b.GetJSValue("window.__storeLog", &log)   // blocks until the fold actually happens
+Ω(log).Should(HaveExactElements("saving", "saved"))
+```
+
+The pointer decodes into a concrete type (dodging the JSON-`float64` gotcha). This matters most for optimistic UI: the DOM shows the optimistic value and a Go-side HTTP read bypasses the tab entirely — neither proves the browser folded anything. See `biloba:flaky-specs` Smell 3.
 
 **Don't hand-roll `getBoundingClientRect`/`scrollTop` through `b.Run` — Biloba has pollable geometry getters** (`b.GetBoundingBox`/`b.GetScrollOffset`/`b.GetOffsetTopWithin` + their `Have*` matchers) that wait for the element to be laid out (non-degenerate box) before reading. Relational layout ("A above/encloses/overlaps B") has the pairwise matchers `b.BeAbove`/`BeBelow`/`BeLeftOf`/`BeRightOf`/`Encloses`/`Overlaps` and the `b.GetGapBetween` delta getter (both boxes read in one atomic frame); on-screen-ness has `b.BeInViewport()`, document order has `b.BePrecededBy`/`b.BeFollowedBy`, and resolved computed style has `b.GetComputedStyle`. They're the idiomatic fix for the most race-prone class of `b.Run` reads → `biloba:api`.
 

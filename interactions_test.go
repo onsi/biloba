@@ -2,6 +2,7 @@ package biloba_test
 
 import (
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -120,7 +121,7 @@ var _ = Describe("First-class interactions", func() {
 		})
 
 		It("times out (poll-by-default) if the element never exists", func() {
-			b.WithTimeout(time.Millisecond * 60).SetUpload("#non-existing", "/tmp/whatever.txt")
+			b.WithTimeout(time.Millisecond*60).SetUpload("#non-existing", "/tmp/whatever.txt")
 			ExpectFailures(SatisfyAll(
 				ContainSubstring("Timed out after"),
 				ContainSubstring("be uploadable to"),
@@ -154,5 +155,53 @@ var _ = Describe("First-class interactions", func() {
 			Eventually("#multi-filenames").Should(b.HaveInnerText(ContainSubstring("upload-sample.txt")))
 			Expect("#multi-filenames").To(b.HaveInnerText(ContainSubstring("upload-other.txt")))
 		})
+	})
+})
+
+var _ = Describe("Occluded-click diagnosis", func() {
+	BeforeEach(func() {
+		b.Navigate(fixtureServer + "/diagnostics.html")
+		Eventually("#submit").Should(b.Exist())
+		b.ResetPollDiagnosticsForTest()
+	})
+
+	It("still clicks through an overlay - Click is occlusion-blind by design", func() {
+		Expect("#submit").NotTo(b.BeClickable())
+		b.Click("#submit")
+		Eventually("#submit-result").Should(b.HaveInnerText("clicked"))
+	})
+
+	It("records the occluder so the failure artifacts can name it", func() {
+		b.Click("#submit")
+		Expect(b.OccludedClicksNoteForTest()).To(SatisfyAll(
+			ContainSubstring(`⚠ Click on "#submit" was dispatched while <div#overlay.modal-scrim> was the topmost`),
+			ContainSubstring("element at its centre — the click may have been swallowed."),
+			ContainSubstring(`Consider Eventually("#submit").Should(b.BeClickable()) or b.Realistic().Click("#submit").`),
+		))
+	})
+
+	It("keeps only the most recent handful of occluded clicks", func() {
+		for range 8 {
+			b.Click("#submit")
+		}
+		Expect(strings.Count(b.OccludedClicksNoteForTest(), "⚠ Click on")).To(Equal(5))
+	})
+
+	It("does not cry wolf when the element's own child is the hit-test target", func() {
+		b.Click("#labeled-btn")
+		Eventually("#labeled-result").Should(b.HaveInnerText("clicked"))
+		Expect(b.OccludedClicksNoteForTest()).To(BeEmpty())
+	})
+
+	It("says nothing about an ordinary, uncovered click", func() {
+		b.Click("#label-span")
+		Eventually("#labeled-result").Should(b.HaveInnerText("clicked"))
+		Expect(b.OccludedClicksNoteForTest()).To(BeEmpty())
+	})
+
+	It("does not record anything for a click that never happened", func() {
+		b.WithTimeout(time.Millisecond * 60).Click("#non-existing")
+		ExpectFailures(ContainSubstring("Timed out after"))
+		Expect(b.OccludedClicksNoteForTest()).To(BeEmpty())
 	})
 })

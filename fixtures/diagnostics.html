@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Failure Diagnostics Fixture</title>
+  <style>
+    #shell { position: relative; display: inline-block; }
+    #overlay { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.2); }
+  </style>
+</head>
+<body>
+  <h1 id="hello">Diagnostics</h1>
+
+  <!-- D2: a button permanently covered by an overlay in its own stacking context.  A plain Click()
+       still lands on #submit (occlusion-blind by design) - the diagnostic just records the cover. -->
+  <div id="shell">
+    <button id="submit">Submit</button>
+    <div id="overlay" class="modal-scrim"></div>
+  </div>
+  <span id="submit-result">no</span>
+
+  <!-- D2 (the cry-wolf case): a button whose centre is covered by its OWN child span.  el.contains
+       the hit-test target, so this must NOT be reported as occluded. -->
+  <button id="labeled-btn"><span id="label-span">Save the document now</span></button>
+  <span id="labeled-result">no</span>
+
+  <!-- D1: rows that go away partway through a poll -->
+  <div id="rows">
+    <div id="row-4" class="row">Row 4</div>
+    <div id="row-swap" class="row">Row swap</div>
+  </div>
+
+  <!-- D3: a plain div, which can never have a "disabled" property defined -->
+  <div id="widget" class="panel">Widget</div>
+
+  <script>
+    const set = (id, v) => (document.getElementById(id).textContent = v);
+    document.getElementById('submit').addEventListener('click', () => set('submit-result', 'clicked'));
+    document.getElementById('labeled-btn').addEventListener('click', () => set('labeled-result', 'clicked'));
+
+    // Rewrite the node behind `selector` right after its Nth SUCCESSFUL lookup.  Counting lookups
+    // rather than milliseconds makes "the selector resolved N times, then stopped" deterministic no
+    // matter how fast the lane polls - a wall-clock timer races the poll interval.
+    window.mutateAfterLookups = (selector, n, mutate) => {
+      const orig = document.querySelector.bind(document);
+      let hits = 0;
+      document.querySelector = (s) => {
+        const el = orig(s);
+        if (s === selector && el) { hits++; if (hits >= n) mutate(el); }
+        return el;
+      };
+    };
+    // detach #row-4 entirely (the node is replaced out from under the selector)
+    window.detachRowAfterLookups = (n) => mutateAfterLookups('#row-4', n, (el) => el.remove());
+    // swap #row-swap's identifying attribute in place (the node survives; the selector does not)
+    window.swapRowIdAfterLookups = (n) => mutateAfterLookups('#row-swap', n, (el) => (el.id = 'row-swapped'));
+  </script>
+</body>
+</html>

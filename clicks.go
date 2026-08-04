@@ -1,6 +1,10 @@
 package biloba
 
 import (
+	"fmt"
+	"strings"
+	"sync"
+
 	"github.com/onsi/gomega/gcustom"
 	"github.com/onsi/gomega/types"
 )
@@ -188,6 +192,73 @@ func (b *Biloba) pointerInteraction(verb, matcherMessage string, args []any, act
 	return matcher
 }
 
+// maxOccludedClicks bounds the occluded-click ring.  These are only useful near the failure, so the
+// most recent handful is all we keep - an unbounded log of every covered click in a long spec would
+// bury the one that mattered.
+const maxOccludedClicks = 5
+
+// occludedClick is one click that WAS dispatched (plain Click is occlusion-blind by design - see the
+// stability-via-pragmatism principle) while something else was the topmost element at the target's
+// center.  Recorded on every click, surfaced only when a spec fails: zero noise, full signal.
+type occludedClick struct {
+	selector string
+	occluder string
+}
+
+// occlusionRecorder holds a tab's most recent occluded clicks.  Like probeRecorder it is shared
+// across a tab's clone-with-a-flag views (b.WithTimeout(...).Click(...) acts on a shallow copy) via a
+// pointer, so the recording survives back to the tab the failure artifacts read.
+type occlusionRecorder struct {
+	mu     sync.Mutex
+	clicks []occludedClick
+}
+
+func (o *occlusionRecorder) record(click occludedClick) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.clicks = append(o.clicks, click)
+	if len(o.clicks) > maxOccludedClicks {
+		o.clicks = o.clicks[len(o.clicks)-maxOccludedClicks:]
+	}
+}
+
+func (o *occlusionRecorder) reset() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.clicks = nil
+}
+
+// render returns the on-failure note for this tab's occluded clicks, or "" when there were none.  It
+// names the selector, the occluder, and the two remedies - the diagnostic exists precisely because a
+// swallowed click fails DOWNSTREAM, pointing nowhere useful.
+func (o *occlusionRecorder) render() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if len(o.clicks) == 0 {
+		return ""
+	}
+	out := &strings.Builder{}
+	for _, click := range o.clicks {
+		fmt.Fprintf(out, "⚠ Click on %q was dispatched while %s was the topmost\n  element at its centre — the click may have been swallowed.\n  Consider Eventually(%q).Should(b.BeClickable()) or b.Realistic().Click(%q).\n",
+			click.selector, click.occluder, click.selector, click.selector)
+	}
+	return out.String()
+}
+
+// recordOccludedClick files the occluder biloba.js reported alongside a successful click.  The JS
+// handler returns the description only when the resolved node was NOT the hit-test target at its own
+// center, so an empty/absent result is the (overwhelmingly common) non-occluded case.
+func (b *Biloba) recordOccludedClick(selector any, r *bilobaJSResponse) {
+	if !r.Success || b.occlusions == nil {
+		return
+	}
+	occluder, ok := r.Result.(string)
+	if !ok || occluder == "" {
+		return
+	}
+	b.occlusions.record(occludedClick{selector: fmt.Sprintf("%v", selector), occluder: occluder})
+}
+
 // performClick / performDblClick / performRightClick / performMiddleClick / performTap are the
 // fork points handed to pointerInteraction: each routes to the realistic CDP path when the tab is
 // realistic, and otherwise to the fast JS handler, passing the encoded option object along.
@@ -195,7 +266,9 @@ func (b *Biloba) performClick(selector any, cfg pointerConfig) (bool, error) {
 	if b.realistic {
 		return b.realisticClick(selector, cfg)
 	}
-	return b.runBilobaHandler("click", selector, cfg.encode()).MatcherResult()
+	r := b.runBilobaHandler("click", selector, cfg.encode())
+	b.recordOccludedClick(selector, r)
+	return r.MatcherResult()
 }
 
 func (b *Biloba) performDblClick(selector any, cfg pointerConfig) (bool, error) {

@@ -84,8 +84,8 @@ var _ = Describe("The Ginkgo GitHub page", func() {
 
 	It("should have a link to the docs", func() {
 		b.Click(b.XPath("a").WithText("Ginkgo Docs"))
-		Eventually(b.Location).Should(Equal("https://onsi.github.io/ginkgo/"))
 		Eventually(b.XPath("h2").WithTextContains("Getting Started")).Should(b.BeVisible())
+		Ω(b.GetLocation()).Should(Equal("https://onsi.github.io/ginkgo/"))
 	})
 })
 ```
@@ -152,11 +152,11 @@ Eventually("#readme").Should(b.Exist())
 ```go
 It("should have a link to the docs", func() {
     b.Click(b.XPath("a").WithText("Ginkgo Docs"))
-    Eventually(b.Location).Should(Equal("https://onsi.github.io/ginkgo/"))
     Eventually(b.XPath("h2").WithTextContains("Getting Started")).Should(b.BeVisible())
+    Ω(b.GetLocation()).Should(Equal("https://onsi.github.io/ginkgo/"))
 })
 ```
-here we find and click on the anchor tag containing the text `Ginkgo Docs`.  This will eventually take us to `https://onsi.github.io/ginkgo/` where we should eventually see an `h2` tag with text containing `Getting Started`.
+here we find and click on the anchor tag containing the text `Ginkgo Docs`.  This will eventually take us to `https://onsi.github.io/ginkgo/` where we should eventually see an `h2` tag with text containing `Getting Started`.  Notice the order: we wait on the **DOM** to prove the navigation landed, and only then read the tab's url with `b.GetLocation()`.  That's the sturdier habit - more on it in [Navigation](#navigation).
 
 > "`b.XPath(...)`?"
 
@@ -546,12 +546,23 @@ Eventually("#content").Should(b.Exist())
 
 This will, typically, indicate that the page has loaded and is ready for testing.
 
-Related to navigation, Biloba also lets you query the current URL for the tab (via `url := b.Location()`) and the title (via `title = b.Title()`).  You can use both of these with `Eventually`.  For example:
+Related to navigation, Biloba also lets you query the current URL for the tab (via `url := b.GetLocation()`) and the title (via `title := b.GetTitle()`).  Both are **polling getters** - which is what the `Get` prefix means throughout Biloba: they keep asking Chrome until they get an answer, and they honor the full set of knobs (`WithTimeout`/`WithPolling`/`WithContext`, and `Immediate()` to read exactly once).  So you call them and use the value; you don't wrap them in an `Eventually` yourself:
+
+```go
+url := b.GetLocation()
+Ω(url).Should(HaveSuffix("/table-of-contents"))
+```
+
+> `Eventually(b.GetLocation)` still works - each iteration's inner read succeeds immediately, so the outer `Eventually` does the waiting you asked for - but it's a poll *inside* a poll: redundant, and when it does fail you get the inner read's timeout rather than your own assertion's.  When you want to wait for the url or title to *become* something, use the matchers below instead.
+
+The reason these poll is subtler than "the page might be slow."  A live full-page navigation legitimately makes Chrome throw at the reader mid-flight - `Inspected target navigated or closed (-32000)` - while the target is being swapped out from under you.  It's rare (on the order of 0.03% of reads under concurrent load) which is exactly what makes it maddening: your suite is green for weeks and then one spec goes red on CI.  `GetLocation`/`GetTitle` treat a transient CDP error as a **retryable miss** rather than a failure, so it only ever surfaces if it hasn't cleared by the deadline.  `HaveURL`/`HaveTitle` do the same.
+
+You can apply the `HaveURL()` and `HaveTitle()` matchers to the tab itself.  This reads more naturally and parallels the [tab matchers](#finding-and-managing-spawned-tabs):
 
 ```go
 b.Navigate("http://example.com/table-of-contents")
-Eventually(b.XPath().WithTextStartsWith("Introduction").Should(b.Click()))
-Eventually(b.Title).Should(HaveSuffix("Introduction"))
+Eventually(b.XPath().WithTextStartsWith("Introduction")).Should(b.Click())
+Eventually(b).Should(b.HaveTitle(HaveSuffix("Introduction")))
 ```
 
 this test will:
@@ -559,14 +570,24 @@ this test will:
 - keep trying until it successfully clicks on an element that has text that begins with "Introduction"
 - assert that the tab eventually ends up on a page whose title ends with "Introduction"
 
-In addition to polling the `b.Location`/`b.Title` functions directly, you can apply the `HaveURL()` and `HaveTitle()` matchers to the tab itself.  This reads more naturally and parallels the [tab matchers](#finding-and-managing-spawned-tabs):
+`HaveURL` is the location counterpart, and both accept either a string (for an exact match) or a Gomega matcher:
 
 ```go
 Eventually(b).Should(b.HaveURL("http://example.com/table-of-contents"))
-Eventually(b).Should(b.HaveTitle(HaveSuffix("Introduction")))
+Eventually(b).Should(b.HaveURL(HaveSuffix("/table-of-contents")))
 ```
 
-Both accept either a string (for an exact match) or a Gomega matcher.
+#### Prefer a DOM anchor over polling the url
+
+Everything above works.  But when you're waiting for a *navigation* to land, there's a shape that is meaningfully more robust than polling the url: **gate on a DOM readiness anchor first, then read the location.**
+
+```go
+b.Click("#submit")
+Eventually("#dashboard-root").Should(b.Exist())    // the DOM proves the navigation landed…
+Ω(b.GetLocation()).Should(HaveSuffix("/dashboard")) // …so this read is a formality
+```
+
+The url changes the instant Chrome commits the new document - before the app has rendered anything you can act on.  So a spec that polls the url is waiting on a signal that arrives *early*, and then races the render it actually cares about.  Waiting on the DOM waits on the thing you actually care about, and turns the location read into a cheap confirmation that can't race anything.  It's a small discipline that removes a whole category of intermittent failure.
 
 ## Managing Tabs
 
@@ -925,12 +946,12 @@ Not every Biloba method polls, so not every method accepts these knobs.  Biloba 
 
 | Bucket | Examples | `WithTimeout` / `WithContext` | `WithPolling` | `Immediate` |
 |---|---|---|---|---|
-| **Polling** - actions & value-getters | `Click`, `SetValue`, `Type`, `GetProperty`, `GetValue`, `GetInnerText`, `InvokeOn` | honored | honored | honored |
-| **Waiting commands** - one bounded wait | `Navigate`, the `CaptureScreenshot*` family | honored (overrides the built-in deadline) | error | error |
-| **Snapshot / state queries** | `HasElement`, `Count`, `Title`, every `Current*ForEach`, `GetCookies` | error | error | error |
+| **Polling** - actions & value-getters | `Click`, `SetValue`, `Type`, `GetProperty`, `GetValue`, `GetInnerText`, `InvokeOn`, `GetLocation`, `GetTitle`, `GetJSValue` | honored | honored | honored |
+| **Waiting commands** - one bounded wait | `Navigate`, the `CaptureScreenshot*` family, `HoldResponse(...).Await()` | honored (overrides the built-in deadline) | error | error |
+| **Snapshot / state queries** | `HasElement`, `Count`, every `Current*ForEach`, `GetCookies`, `AllRequests` | error | error | error |
 | **One-shot mutations & raw JS** | `SetWindowSize`, the `*Immediately` family, `Run`, `RunAsync` | error | error | error |
 
-The intuition: a method polls (and accepts every knob) when it is *waiting for the DOM to reach a state*.  A **waiting command** like `Navigate` does a single bounded wait for one event, so it keeps a purpose-built default deadline (~30s for navigation, ~5s for screenshots) that `WithTimeout` can override - but there's no repeated probe for `WithPolling` to tune.  A **snapshot** reads "what's true right now" and so never waits; when you want to wait for a snapshot to change, gate it on a polling matcher first (`Eventually(sel).Should(b.HaveCount(n))`, *then* read).  A **one-shot mutation** (and the raw-JS `Run`/`RunAsync`) just does its thing once.
+The intuition: a method polls (and accepts every knob) when it is *waiting for the DOM to reach a state*.  A **waiting command** like `Navigate` does a single bounded wait for one event, so it keeps a purpose-built default deadline (~30s for navigation and for [awaiting a held response](#holding-a-response-hostage), ~5s for screenshots) that `WithTimeout` can override - but there's no repeated probe for `WithPolling` to tune.  A **snapshot** reads "what's true right now" and so never waits; when you want to wait for a snapshot to change, gate it on a polling matcher first (`Eventually(sel).Should(b.HaveCount(n))`, *then* read).  A **one-shot mutation** (and the raw-JS `Run`/`RunAsync`) just does its thing once.
 
 ### Existence, Counting, Visibility, and Interactibility
 
@@ -1526,16 +1547,35 @@ Eventually(noteSel).Should(b.BeInViewport(b.Fully()))     // require the whole b
 
 By default *any* overlap with the viewport passes (the element is partly on screen).  Pass `b.Fully()` to require the element be **entirely** within the viewport — all four edges on screen.
 
-`b.BePrecededBy(otherSelector)` / `b.BeFollowedBy(otherSelector)` assert structural ordering via `compareDocumentPosition` — useful for "the note renders between section 1 and section 2," "the quiz box renders after the note," and other ordering checks on dynamically-inserted nodes.  **Read the subject first to keep the direction straight:**
+`b.BePrecededBy(otherSelector)` / `b.BeFollowedBy(otherSelector)` assert structural ordering via `compareDocumentPosition` — useful for "the note renders between section 1 and section 2," "the quiz box renders after the note," and other ordering checks on dynamically-inserted nodes.
 
-> `Eventually(X).Should(b.BeFollowedBy(Y))` ⇔ **X precedes Y** in document order (X is followed by Y).
-> `Eventually(X).Should(b.BePrecededBy(Y))` ⇔ **X comes after Y** (X is preceded by Y).
+These read backwards to most people, so **read the subject first** and keep this table handy:
+
+```go
+Eventually(X).Should(b.BePrecededBy(Y))   // X comes AFTER  Y
+Eventually(X).Should(b.BeFollowedBy(Y))   // X comes BEFORE Y
+```
 
 So "the quiz renders after the note" is `Eventually(noteSel).Should(b.BeFollowedBy(quizSel))` — the note is followed by the quiz:
 
 ```go
 Eventually(noteSel).Should(b.BePrecededBy(section1Sel))   // the note comes after section 1
 Eventually(noteSel).Should(b.BeFollowedBy(quizSel))       // the quiz comes after the note
+```
+
+**The hazard: a backwards order assertion does not announce itself.**  Get the direction wrong on a fixture that happens to satisfy the *inverted* relation and the matcher simply passes — the spec goes green without ever testing what you meant.  There is no error to notice.  The guard is to write the assertion so it would fail on the wrong fixture: assert the inverse does **not** hold, too.
+
+```go
+Eventually(noteSel).Should(b.BePrecededBy(sectionSel))
+Ω(noteSel).ShouldNot(b.BeFollowedBy(sectionSel))
+```
+
+When one of these *does* fail, the failure message reports the order it actually observed — `Actually: #note comes BEFORE #section.` (and it spells out containment too: `#note is CONTAINED BY #section (and so comes after it)`) — which is usually enough to spot an inverted assertion at a glance.
+
+One more subtlety: document order alone means "anywhere after, **including inside**."  An element nested within `Y` is also preceded by `Y`.  When you mean "after `Y` but not contained by `Y`," scope the subject with [`NotWithin`](#selecting-by-locator):
+
+```go
+Eventually(b.ByRole("listitem").NotWithin(sectionSel)).Should(b.BePrecededBy(sectionSel))
 ```
 
 > A geometry poll that times out *consistently* under load — not intermittently — usually means the **product** computed a position once and never reconciled, not a test that needs a wider timeout.  The DOM you're polling is real, but if the page never re-runs the computation `Eventually` can't save you: the value is stably wrong.  The [poll trajectory](#outline) attached on failure is the tell — a flat line is a product bug, a monotone approach is latency, a dip-then-rebound is a late reflow.
@@ -2779,6 +2819,56 @@ var _ = Describe("rendering documents", func() {
 
 You said it, not me.
 
+### The app-state barrier: `b.GetJSValue`
+
+`b.Run` is a one-shot read - it evaluates once and hands you whatever was there.  `b.GetJSValue(expression)` is its **polling** sibling: it evaluates a JavaScript expression - typically a global path your app exposes - and keeps retrying until that expression is *defined*, then returns the value.
+
+```go
+var log []string
+b.GetJSValue("window.__storeLog", &log)
+Ω(log).Should(HaveExactElements("saving", "saved"))
+```
+
+That's a small API.  The reason it exists is not small, and it's worth slowing down for, because it names a trap that eats entire afternoons.
+
+**When you assert that "the app handled the server's response," there are two obvious signals that both look like proof - and neither one is.**
+
+- **The DOM.** In any app with optimistic UI, the click handler writes the new value *synchronously*, before a single byte goes over the wire.  So `Eventually("#name").Should(b.HaveInnerText("Jane"))` passes the instant the click handler runs.  It proves your click handler ran.  It says nothing about whether a response ever came back, let alone whether the app folded it in.
+- **A Go-side HTTP read.**  Reaching out from your spec to `GET /api/users` and checking the payload bypasses the browser's event loop *entirely*.  It proves the **server** persisted something.  It does not prove the **tab** ever processed the response.
+
+Both of these can be green while the tab has done nothing at all with the result.  That's the flake: the spec's next step assumes reconciliation has happened, and most of the time it has.
+
+The fix is to make the app say so itself.  Have it log its own decisions to a `window.__x` path, and poll *that* - which is a one-liner:
+
+```go
+// have the app record each fold as it happens
+b.Run(`app.store.on("fold", () => {
+	window.__storeLog = window.__storeLog || []
+	window.__storeLog.push(app.store.state)
+})`)
+
+b.Click("#save")
+
+var log []string
+b.GetJSValue("window.__storeLog", &log)   // blocks until the tab actually folds the response
+Ω(log).Should(HaveExactElements("saving", "saved"))
+```
+
+Now the barrier is a *renderer-side* fact: the value can't exist unless the browser ran the code that produced it.
+
+A few details that make this pleasant to use:
+
+- **It retries through `undefined` *and* through a thrown error.**  `window.__storeLog` doesn't exist yet, so evaluating it may `ReferenceError` - that's a not-ready condition, not a bug, so `GetJSValue` keeps polling.  If it never resolves, the error surfaces in Gomega's `Timed out after…` message at the deadline.
+- **`null` is a legitimate value** and returns immediately.  Only `undefined` means "not yet."
+- **The optional pointer decodes into a concrete type**, exactly like `b.Run` - which is how you sidestep the JSON-`float64` gotcha (`var n int; b.GetJSValue("app.numRecords", &n)`).  Without a pointer you get `any`, and numbers arrive as `float64`.
+- **It's a [polling method](#interacting-with-elements)**, so it honors `WithTimeout`/`WithPolling`/`WithContext` and `Immediate()`.
+
+Finally, `GetJSValue` *fetches a value once it exists*.  When you'd rather poll until a **condition** holds, reach for its sibling matcher [`b.EvaluateTo`](#running-arbitrary-javascript):
+
+```go
+Eventually("window.__storeLog.length").Should(b.EvaluateTo(BeNumerically(">", 0)))
+```
+
 ### Running asynchronous Javascript
 
 `b.Run` evaluates a _synchronous_ expression.  Modern web applications, however, often expose `async` APIs (`fetch`, dynamic `import`, `await app.load()`).  To work with these use `b.RunAsync` (and its error-returning sibling `b.RunErrAsync`).
@@ -2860,6 +2950,7 @@ A few things to keep in mind:
 
 - **Stubs are per-tab and reset by `Prepare()`.**  Each spec starts with no stubs.
 - **Registering the first stub turns on request interception for that tab.**  Under the hood Biloba pauses and resumes *every* request the tab makes so it can decide whether to fulfill or pass each one through.  That has a small per-request cost, so interception is only enabled once you register a stub (and is torn down at the next `Prepare()`).
+- **Turning interception on also disables the browser cache** (and `Prepare()` turns it back on).  This is not an optimization knob - it's a correctness requirement.  A response served out of Chrome's cache never traverses the network stack, so it raises no interception event at all: the request would still show up in `HaveMadeRequest` while silently skipping every stub/abort/modify handler.  Concretely, a second fetch of a `Cache-Control: max-age=3600` resource would hand your `ModifyResponse` transform a **stale cached body** while the origin server was never contacted.  Interception has to mean interception, so Biloba trades the cache away for as long as it's on (and it disables the cache *before* enabling interception, so there's no window where the two disagree).
 - **Stubbed requests are still observed.**  `HaveMadeRequest` and `AllRequests` (below) see stubbed requests just like real ones.
 
 `StubRequest` is one of a family of network handlers.  All of them are registered the same way - on a tab, scoped to it, cleared by `Prepare()` - and consulted in **registration order, first-match-wins**.  A request that matches no handler passes through to the real network.  The rest of the family is below.
@@ -2911,6 +3002,56 @@ b.ModifyResponse(ContainSubstring("/api/users")).Using(func(r biloba.Intercepted
 ```
 
 Response interception is a heavier mode than the request-stage handlers: the tab pauses each matching request twice (once on the way out, once when the response arrives) so Biloba can read the real body.  As with the others, it's per-tab, reset by `Prepare()`, and first-match-wins.
+
+> **First-match-wins has a sharp edge inside an `Ordered` container.**  Handlers are consulted in registration order and the first one whose URL matches claims the request - later handlers for that same URL are never consulted.  `Prepare()` is what clears them, and in an `Ordered` container with `BeforeEach(..., OncePerOrdered)` **`Prepare()` does not run between the `It`s**.  So handlers *accumulate*: a handler registered by the first `It` is still registered when the second `It` runs, and an identical handler registered there is silently dead code.  No error, no warning - it simply never runs, and you're left staring at a spec that behaves as though your stub isn't there.
+>
+> Two fixes.  The better one is usually to **drive both orderings from a single `It`** - if two specs need to install competing handlers for the same URL, that's often a sign they're really one scenario, and it reads better as one spec.  Failing that, give the second spec **its own `b.NewTab()`**: the handler list is per-tab, so a fresh tab starts empty.
+
+### Holding a response hostage
+
+`b.HoldResponse(url)` intercepts the real response to a matching request and **holds it in flight** until you let it go.  While it's held the browser has genuinely not received the response - so you can drive the app into the racy window in between, deterministically.
+
+```go
+hold := b.HoldResponse(ContainSubstring("/api/users"))
+b.Click("#refresh")     // kicks off the fetch
+hold.Await()            // block until the response is actually being held
+b.Click("#rename")      // drive the app into the racy window
+hold.Release()          // now let the stale response land
+Eventually(".user").Should(b.HaveInnerText("Jane"))
+```
+
+This is **the** tool for testing optimistic-UI reconciliation, which is the dominant flake class in any app with a server: a response arrives while the user has already moved on, and the app has to decide whether to fold it in or drop it on the floor.  Forcing the arrival order is the only honest way to test that decision.  At a 1% natural rate, "I ran it 30 times and it was green" proves essentially nothing - you need to *make* the race happen, every time.
+
+The API is four calls:
+
+| | |
+|---|---|
+| `b.HoldResponse(url)` | register the hold; `url` is a string (exact match) or a Gomega matcher.  Returns a `*ResponseHold`. |
+| `hold.Await()` | block until a matching response is being held, and return it (an `InterceptedResponse` with `Status`, `Headers`, `Body`).  Returns immediately if one already arrived. |
+| `hold.Release()` | release everything currently held and stop holding future matches (they pass straight through).  Idempotent. |
+| `hold.Count()` | how many matching responses have been intercepted so far.  A snapshot, but safe to poll: `Eventually(hold.Count).Should(Equal(1))`. |
+
+`Await` is a [waiting command](#interacting-with-elements): it keeps its own generous default deadline (~30s) and honors `WithTimeout`/`WithContext` - set them on the tab you build the hold from, `b.WithTimeout(5*time.Second).HoldResponse(url).Await()`.  `WithPolling` and `Immediate` are a hard error.  On timeout it fails the spec and tells you how many matching responses it *did* see.
+
+A held response is a real Chrome pause, so Biloba **force-releases every hold at the end of the spec** (and again in `Prepare()`).  A failing spec - or a panicking one - can never wedge the tab for the specs that follow.
+
+Before this existed, this shape had to be hand-rolled, roughly like so:
+
+```go
+/* === the old way - you don't need this anymore === */
+release := make(chan struct{})
+var intercepted int32
+b.ModifyResponse(ContainSubstring("/home")).Using(func(r biloba.InterceptedResponse) biloba.StubResponse {
+	if atomic.AddInt32(&intercepted, 1) == 1 { <-release }
+	return biloba.StubResponse{Status: r.Status, Body: r.Body, Headers: r.Headers}
+})
+```
+
+...plus a separate gate to prove the request was actually intercepted before you proceeded.  A channel, an atomic first-only counter, a pass-through echo, and a gate - four moving parts, each easy to get subtly wrong.  `HoldResponse` is that, correct, in one line.
+
+**One sharp edge worth knowing.**  Matching is **tab-wide and URL-based**, and a URL substring does not identify a page *generation*.  If the tab loaded `/home` earlier in the spec, a hold registered on `ContainSubstring("/home")` can catch a response belonging to that earlier load rather than the one you're driving.  Two ways to keep it honest: assert `hold.Count()` so a surprise extra match can't hide, or drive the flow in a dedicated `b.NewTab()` whose network history is its own.
+
+`HoldResponse` builds on `ModifyResponse`, so all the same rules apply: it's per-tab, cleared by `Prepare()`, it enables response-stage interception, and it participates in the same first-match-wins handler list (including the `Ordered`-container trap above).
 
 ### Observing requests
 
@@ -3074,6 +3215,8 @@ When a spec fails, the *kind* of artifact that's useful depends on who's looking
 
 So a typical agent or CI run needs **zero configuration** — just run the suite, and failures come back as a DOM outline plus screenshot files on disk.
 
+Riding along with these, and needing no configuration at all, is a set of **diagnostic annotations** Biloba emits only when a spec fails: replayed console errors, the [poll trajectory](#outline), the [detached-node signal](#outline), the [occluded-click diagnosis](#outline), the [shadowed-network-handler note](#outline), and the [`AllowMissing` enrichment](#outline).  They're covered in [Outline](#outline) below.
+
 **Explicit configuration always wins, per knob.**  Anything you set in the suite overrides just that piece of the environment-derived default; everything you leave alone still follows it.  Each toggle takes an optional bool (no argument means `true`):
 
 - `BilobaConfigFailureOutlines()` / `BilobaConfigFailureOutlines(false)` — force outlines on (e.g. for an interactive debugging run) or off (e.g. suppress them under CI).
@@ -3132,6 +3275,47 @@ Probe: Run document.querySelector("#card").getBoundingClientRect().top
 ```
 
 A flat line points straight at "compute-once product bug, no source-reading required"; a monotone staircase reads as latency; a dip-then-climb reveals the late reflow.  This is **on by default** and rides the same failure-artifact hook as the outline and screenshot (so a passing spec pays only a few nanoseconds per poll to record, and emits nothing).  Turn it off with `BilobaConfigPollTrajectory(false)`.
+
+**Detached-node signal.**  "The selector never matched" and "the selector matched, and then the node was yanked out from under it" produce the *same* timeout - and they have completely different fixes.  So when a poll's selector matched at least once and then stopped, Biloba says so:
+
+```
+⚠ Selector "#row-4" matched 6× during this poll (+0.00s to +0.41s) then stopped matching
+  — the node was likely replaced, or its identifying attribute changed in place.
+```
+
+That's the signature of a re-render that swapped the node (or swapped the attribute you're selecting on) rather than mutating it - the thing you were holding onto stopped being the thing on the page.  A selector that *never* matched gets no annotation: the ordinary "could not find DOM element" message already says exactly that, and an extra note would only add noise.
+
+**Occluded-click diagnosis.**  Biloba's plain `b.Click` is [occlusion-blind by design](#pragmatism-how-biloba-interacts-with-the-dom) - it clicks the element even when something covers it, and this has not changed.  The click still succeeds.  But a click that the *browser* swallowed fails **downstream**, several assertions later, pointing nowhere useful.  So the click now records a hit-test as it dispatches, and reports it only if the spec goes on to fail:
+
+```
+⚠ Click on "#submit" was dispatched while <div#overlay.modal-scrim> was the topmost
+  element at its centre — the click may have been swallowed.
+  Consider Eventually("#submit").Should(b.BeClickable()) or b.Realistic().Click("#submit").
+```
+
+The check is genuinely about *occlusion*, not merely "something else is on top": a button whose centre is covered by its own `<span>` label is correctly not flagged.  Nothing is emitted when the spec passes.
+
+**`AllowMissing` timeout enrichment.**  When [`GetProperty`/`GetProperties`/`GetAttribute`/`GetAttributes`](#properties) time out there are two very different causes - the *element* never appeared, or the element was there the whole time and the *property* never became defined.  Once the poll has actually seen the element, the timeout stops being ambiguous and the message says which one it was, quoting the name so the fix pastes straight into your spec:
+
+```
+The element <div#card> was present the whole time - it was the property that never appeared.
+"disabled" is not defined on it, so the poll had nothing to wait for.  This is AllowMissing's
+sharp edge: if this property can never be defined on this element, wrap the name -
+b.AllowMissing("disabled") - to get nil back instead of waiting for it.
+```
+
+**Document-order matchers report what they saw.**  `BePrecededBy`/`BeFollowedBy` append the relationship they actually observed to their failure message (`Actually: #o-first comes BEFORE #o-second.`, including the containment cases) - see [Geometry](#geometry) for why that matters.
+
+**Network handler never ran.**  Network handlers are [first-match-wins](#modifying-responses), so a handler registered for a URL an earlier handler already claims is dead code - it never runs, and it never says so.  That's mostly invisible inside a single spec, and *very* confusing across an `Ordered` container, where `Prepare()` doesn't run between the `It`s and handlers accumulate.  Biloba now names both call sites:
+
+```
+⚠ A ModifyResponse handler registered at network_test.go:231 never ran — an earlier ModifyResponse
+  handler (registered at network_test.go:223) claimed 1 matching response(s) first.
+```
+
+A handler is only reported when it **never fired** *and* was shadowed at least once - so a catch-all that loses one URL to a specific stub while happily claiming others stays silent.
+
+All five of these are **diagnostic only**: none of them changes whether a spec passes, and none appears unless it fails.
 
 You can also call `b.Outline()` directly in a spec to capture a snapshot at any point:
 

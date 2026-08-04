@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Network Cache Testpage</title>
+</head>
+<body>
+    <h1 id="hello">Network Cache Testpage</h1>
+    <button id="fetch-cacheable" onclick="doFetch('/cacheable.json')">Fetch Cacheable</button>
+    <pre id="body"></pre>
+
+    <script>
+        async function doFetch(url) {
+            document.getElementById("body").innerText = ""
+            const response = await fetch(url)
+            document.getElementById("body").innerText = await response.text()
+        }
+    </script>
+</body>
+</html>

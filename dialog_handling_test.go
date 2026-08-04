@@ -29,7 +29,7 @@ var _ = Describe("DialogHandling", func() {
 		It("authoandles beforeunload with 'true'", func() {
 			b.Click(b.XPath("a").WithText("Evacuate"))
 			Eventually(gt.buffer).Should(gbytes.Say("Biloba automatically handled an {{red}}unhandled dialog{{/}} - you should add an explicit dialog handler: beforeunload"))
-			Eventually(b.Location).Should(HaveSuffix("/dom.html"))
+			Eventually(b.GetLocation).Should(HaveSuffix("/dom.html"))
 		})
 	})
 
@@ -153,7 +153,7 @@ var _ = Describe("DialogHandling", func() {
 			It("can be configured to handle false", func() {
 				handler := b.HandleBeforeunloadDialogs().WithResponse(false)
 				b.Click(b.XPath("a").WithText("Evacuate"))
-				Consistently(b.Location).Should(HaveSuffix("/dialogs.html"))
+				Consistently(b.GetLocation).Should(HaveSuffix("/dialogs.html"))
 
 				//so we can run navigate away after this test ends!
 				b.RemoveDialogHandler(handler)

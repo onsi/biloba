@@ -35,6 +35,23 @@ type probeRecorder struct {
 	start    time.Time
 	segments []probeSegment
 	dropped  int
+	match    matchTrail
+}
+
+// matchTrail is the presence axis of the current series - probeShape reads a numeric trajectory for
+// direction; this reads the same trajectory for whether the selector RESOLVED.  It answers the one
+// question a plain "never matched" failure cannot: did this selector match earlier in the poll and
+// then stop?  Matched-then-stopped is the detached-node signature (the node was replaced, or its
+// identifying attribute was swapped in place) and reads identically to "never matched" otherwise.
+// Like the value series it is a SINGLE series: a new selector supersedes the prior (resolved) one.
+type matchTrail struct {
+	key       string        // the encoded selector this trail follows
+	display   string        // the selector as the user wrote it (for the message)
+	start     time.Time     // when this trail began
+	firstAt   time.Duration // elapsed at the first match
+	lastAt    time.Duration // elapsed at the most recent match
+	matched   int           // how many samples resolved the selector
+	unmatched bool          // the most recent sample did NOT resolve it
 }
 
 // recordProbe appends value to this tab's trajectory under key, when the suite has opted into
@@ -69,6 +86,55 @@ func (p *probeRecorder) record(key string, value any, now time.Time) {
 		p.segments = p.segments[1:]
 		p.dropped++
 	}
+}
+
+// recordMatch folds one poll sample's presence verdict into this tab's match trail, when the suite has
+// opted into trajectory recording (BilobaConfigPollTrajectory).  Cheap no-op otherwise; it rides
+// runBilobaHandler, which already knows whether the selector resolved (biloba.js's `found`).
+func (b *Biloba) recordMatch(key, display string, found bool) {
+	if !b.pollTrajectory || b.probes == nil {
+		return
+	}
+	b.probes.recordMatch(key, display, found, time.Now())
+}
+
+func (p *probeRecorder) recordMatch(key, display string, found bool, now time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if key != p.match.key {
+		// a new selector supersedes the prior (resolved) trail
+		p.match = matchTrail{key: key, display: display, start: now}
+	}
+	elapsed := now.Sub(p.match.start)
+	if found {
+		if p.match.matched == 0 {
+			p.match.firstAt = elapsed
+		}
+		p.match.matched++
+		p.match.lastAt = elapsed
+	}
+	p.match.unmatched = !found
+}
+
+// renderDetachedNode returns the detached-node annotation when the current trail matched at least once
+// and then stopped matching, and "" otherwise.  A selector that NEVER matched gets nothing - the
+// ordinary "could not find DOM element matching selector" failure already says that, and a diagnostic
+// that fires on the ordinary case is noise.
+func (p *probeRecorder) renderDetachedNode() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.match.matched == 0 || !p.match.unmatched {
+		return ""
+	}
+	return fmt.Sprintf("⚠ Selector %q matched %d× during this poll (+%ss to +%ss) then stopped matching\n  — the node was likely replaced, or its identifying attribute changed in place.\n",
+		p.match.display, p.match.matched, roundDuration(p.match.firstAt), roundDuration(p.match.lastAt))
+}
+
+// resetMatch drops the match trail so a diagnosis can't leak from one spec into the next.
+func (p *probeRecorder) resetMatch() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.match = matchTrail{}
 }
 
 // render returns the human-readable trajectory for the current series, or "" when nothing was recorded.
@@ -156,6 +222,33 @@ func renderProbeValue(value any) string {
 
 func roundDuration(d time.Duration) string {
 	return strconv.FormatFloat(d.Seconds(), 'f', 2, 64)
+}
+
+// resetPollDiagnostics clears the per-spec poll diagnostics - the match trail behind the
+// detached-node signal, and the occluded-click ring - across the root tab and every registered tab.
+// attachFailureArtifactsIfFailed calls it on the way out of every spec (pass or fail).  It walks the
+// registered-tab map rather than AllTabs() deliberately: AllTabs costs a CDP round-trip, and this
+// runs on the happy path too.
+func (b *Biloba) resetPollDiagnostics() {
+	root := b.root
+	if root == nil {
+		root = b
+	}
+	root.lock.Lock()
+	tabs := make([]*Biloba, 0, len(root.tabs)+1)
+	tabs = append(tabs, root)
+	for _, tab := range root.tabs {
+		tabs = append(tabs, tab)
+	}
+	root.lock.Unlock()
+	for _, tab := range tabs {
+		if tab.probes != nil {
+			tab.probes.resetMatch()
+		}
+		if tab.occlusions != nil {
+			tab.occlusions.reset()
+		}
+	}
 }
 
 // probeKey builds the recorder key for a getter/matcher: method name + the (already s/x-encoded)

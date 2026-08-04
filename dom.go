@@ -15,6 +15,11 @@ type bilobaJSResponse struct {
 	Success bool   `json:"success"`
 	Err     string `json:"error"`
 	Result  any    `json:"result"`
+	// Found is the presence axis biloba.js's one()/poll() combinators report: did the selector resolve
+	// on this attempt, regardless of whether the operation then succeeded?  nil means the handler
+	// doesn't report it (the each()/snapshot family).  Purely diagnostic - it feeds the poll-trajectory
+	// recorder's detached-node signal; nothing branches on it.
+	Found *bool `json:"found"`
 }
 
 func (r *bilobaJSResponse) Error() error {
@@ -61,6 +66,10 @@ func (b *Biloba) runBilobaHandler(name string, selector any, args ...any) *bilob
 	_, err = b.RunErr(b.JSFunc("_biloba."+name).Invoke(parameters...), result)
 	if err != nil {
 		result.Err = err.Error()
+	}
+	if result.Found != nil {
+		// one lock + a few comparisons per DOM op, and only when trajectory recording is on
+		b.recordMatch(encoded, fmt.Sprintf("%v", selector), *result.Found)
 	}
 	return result
 }
@@ -414,17 +423,19 @@ func (b *Biloba) GetProperty(selector any, property any) any {
 	b.gt.Helper()
 	name := nameOf(property)
 	var result any
+	data := map[string]any{}
 	matcher := gcustom.MakeMatcher(func(sel any) (bool, error) {
 		r := b.runBilobaHandler("getPropertiesP", sel, []any{property})
 		if r.Error() != nil {
 			return false, r.Error()
 		}
 		if !r.Success {
+			noteUndefinedAxis(data, r.Result)
 			return false, nil
 		}
 		result = newProperties(r.Result).Get(name)
 		return true, nil
-	}).WithMessage(fmt.Sprintf("have property %q", name))
+	}).WithTemplate(undefinedAxisTemplate("property", fmt.Sprintf("have property %q", name)), data)
 	b.pollOrImmediate(selector, matcher)
 	return result
 }
@@ -466,17 +477,19 @@ func (b *Biloba) GetAttribute(selector any, name any) any {
 	b.gt.Helper()
 	attr := nameOf(name)
 	var result any
+	data := map[string]any{}
 	matcher := gcustom.MakeMatcher(func(sel any) (bool, error) {
 		r := b.runBilobaHandler("getAttributesP", sel, []any{name})
 		if r.Error() != nil {
 			return false, r.Error()
 		}
 		if !r.Success {
+			noteUndefinedAxis(data, r.Result)
 			return false, nil
 		}
 		result = newProperties(r.Result).Get(attr)
 		return true, nil
-	}).WithMessage(fmt.Sprintf("have attribute %q", attr))
+	}).WithTemplate(undefinedAxisTemplate("attribute", fmt.Sprintf("have attribute %q", attr)), data)
 	b.pollOrImmediate(selector, matcher)
 	return result
 }
@@ -734,17 +747,19 @@ func (b *Biloba) GetProperties(selector any, properties ...any) Properties {
 		return nil
 	}
 	var result Properties
+	data := map[string]any{}
 	matcher := gcustom.MakeMatcher(func(sel any) (bool, error) {
 		r := b.runBilobaHandler("getPropertiesP", sel, properties)
 		if r.Error() != nil {
 			return false, r.Error()
 		}
 		if !r.Success {
+			noteUndefinedAxis(data, r.Result)
 			return false, nil
 		}
 		result = newProperties(r.Result)
 		return true, nil
-	}).WithMessage(fmt.Sprintf("have properties %s", strings.Join(namesOf(properties), ", ")))
+	}).WithTemplate(undefinedAxisTemplate("property", fmt.Sprintf("have properties %s", strings.Join(namesOf(properties), ", "))), data)
 	b.pollOrImmediate(selector, matcher)
 	return result
 }
@@ -772,17 +787,19 @@ func (b *Biloba) GetAttributes(selector any, names ...any) Properties {
 		return nil
 	}
 	var result Properties
+	data := map[string]any{}
 	matcher := gcustom.MakeMatcher(func(sel any) (bool, error) {
 		r := b.runBilobaHandler("getAttributesP", sel, names)
 		if r.Error() != nil {
 			return false, r.Error()
 		}
 		if !r.Success {
+			noteUndefinedAxis(data, r.Result)
 			return false, nil
 		}
 		result = newProperties(r.Result)
 		return true, nil
-	}).WithMessage(fmt.Sprintf("have attributes %s", strings.Join(namesOf(names), ", ")))
+	}).WithTemplate(undefinedAxisTemplate("attribute", fmt.Sprintf("have attributes %s", strings.Join(namesOf(names), ", "))), data)
 	b.pollOrImmediate(selector, matcher)
 	return result
 }
@@ -996,7 +1013,7 @@ By default those getters poll until the element is present AND every named prope
 	tab.GetProperty("#user", tab.AllowMissing("dataset.middleName"))             // nil if not set
 	tab.GetProperties("#user", "dataset.firstName", tab.AllowMissing("dataset.middleName"))
 
-Sharp edge: a property that simply does not exist on the element type (e.g. "disabled" on a <div>, where "disabled" in div is false) would otherwise block the poll until it times out.  Wrap such names in AllowMissing to get the old nil/zero-value back.
+Sharp edge: a property that simply does not exist on the element type (e.g. "disabled" on a <div>, where "disabled" in div is false) would otherwise block the poll until it times out.  Wrap such names in AllowMissing to get the old nil/zero-value back.  The getters do not fail fast on this (an app may legitimately define a property later), but when such a poll DOES time out the failure names the element, says the element was present the whole time and it was the property/attribute that never appeared, and quotes the AllowMissing call to paste in.
 
 AllowMissing is only meaningful for the property/attribute getters; it has no effect elsewhere.
 
@@ -1010,6 +1027,53 @@ type AllowMissing string
 
 func (a AllowMissing) MarshalJSON() ([]byte, error) {
 	return json.Marshal(map[string]string{"__biloba_allow_missing": string(a)})
+}
+
+// undefinedAxisTemplate builds the failure template shared by the two-axis getters (GetProperty,
+// GetProperties, GetAttribute, GetAttributes).  It renders the ordinary message until the poll has
+// actually SEEN the element - at which point the timeout stops being ambiguous and can say the thing
+// that matters: the element was present the whole time; it was the property/attribute that never
+// appeared.  That is [Biloba.AllowMissing]'s "sharp edge", and the message names the fix by quoting
+// the actual name so it can be pasted straight into the spec.  kind is "property" or "attribute";
+// message is the method's own "have property \"x\"" fragment, kept verbatim.
+func undefinedAxisTemplate(kind, message string) string {
+	return "Expected:\n{{.FormattedActual}}\n{{.To}} " + message +
+		"{{if .Data.Element}}\n\nThe element {{.Data.Element}} was present {{if .Data.EverAbsent}}for part of this poll{{else}}the whole time{{end}} - it was the " + kind +
+		" that never appeared.\n{{.Data.Undefined}} not defined on it, so the poll had nothing to wait for.  " +
+		"This is AllowMissing's sharp edge: if this " + kind + " can never be defined on this element, wrap the " +
+		"name - {{.Data.Suggestion}} - to get nil back instead of waiting for it.{{end}}"
+}
+
+// noteUndefinedAxis folds the diagnostic biloba.js attaches to a not-yet-ready two-axis read (the
+// element's description plus the names that are still undefined) into the matcher's template data.  It
+// always reflects the MOST RECENT attempt: a response with no diagnostic means the element itself
+// wasn't found on that attempt, so the enrichment is dropped and the message stays the plain one (the
+// detached-node signal is what covers a node that went away).  EverAbsent remembers that the element
+// was missing at some point, so a late-arriving element isn't described as "present the whole time".
+func noteUndefinedAxis(data map[string]any, result any) {
+	element, names := "", []string{}
+	if m, ok := result.(map[string]any); ok {
+		element, _ = m["element"].(string)
+		if raw, ok := m["undefined"].([]any); ok {
+			names = toStringSlice(raw)
+		}
+	}
+	if element == "" || len(names) == 0 {
+		delete(data, "Element")
+		data["EverAbsent"] = true
+		return
+	}
+	quoted, suggestions := make([]string, len(names)), make([]string, len(names))
+	for i, name := range names {
+		quoted[i], suggestions[i] = fmt.Sprintf("%q", name), fmt.Sprintf("b.AllowMissing(%q)", name)
+	}
+	verb := " is"
+	if len(names) > 1 {
+		verb = " are"
+	}
+	data["Element"] = element
+	data["Undefined"] = strings.Join(quoted, ", ") + verb
+	data["Suggestion"] = strings.Join(suggestions, ", ")
 }
 
 // nameOf returns the plain property/attribute name carried by a getter name argument - either an
@@ -1221,6 +1285,8 @@ Both forms accept [PointerOption]s after the selector (or in place of it, for th
 	Eventually("#canvas").Should(tab.Click(b.At(30, 40), b.Shift()))
 
 A plain tab.Click(selector) dispatches the maximally-faithful native element.click().  Passing any option instead dispatches synthetic mousedown/mouseup/click MouseEvents carrying the coordinates and modifier flags (realistic mode always uses real CDP input) - a deliberate fidelity-for-control tradeoff.
+
+Click is occlusion-blind by design: it clicks the element even when something covers it.  It does, however, record a hit-test as it dispatches, and if the spec later fails Biloba names the covering element in the failure artifacts along with the two remedies ([Biloba.BeClickable] and [Biloba.Realistic]).  Nothing is reported when the spec passes.
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */

@@ -1,6 +1,6 @@
 ---
 name: api
-description: One-line reference for every Biloba method and matcher, grouped by area — selectors/locators, lifecycle, poll-config (WithTimeout/WithPolling/WithContext/Immediate), navigation, cookies/storage, tabs, DOM existence/visibility/contents/properties/forms, clicking and interactions (incl. drag/scroll/tap/modifiers/text-selection), realistic mode, keyboard, uploads, element JS, dialogs, downloads, arbitrary JS, network stubbing/aborting/modifying/observing, and screenshots/outline/window. Use to look up the exact method or matcher name and shape. Methods marked (dual) poll until they succeed when fully applied and return a pollable matcher when under-applied.
+description: One-line reference for every Biloba method and matcher, grouped by area — selectors/locators, lifecycle, poll-config (WithTimeout/WithPolling/WithContext/Immediate), navigation (GetLocation/GetTitle), cookies/storage, tabs, DOM existence/visibility/contents/properties/forms, clicking and interactions (incl. drag/scroll/tap/modifiers/text-selection), realistic mode, keyboard, uploads, element JS, dialogs, downloads, arbitrary JS (incl. the GetJSValue app-state barrier), network stubbing/aborting/modifying/observing/holding (HoldResponse), and screenshots/outline/window. Use to look up the exact method or matcher name and shape. Methods marked (dual) poll until they succeed when fully applied and return a pollable matcher when under-applied.
 ---
 
 # Biloba API reference
@@ -33,9 +33,9 @@ Tune or opt out of poll-by-default. Each returns a lightweight view of the same 
 
   | Bucket | Methods | `WithTimeout`/`WithContext` | `WithPolling` | `Immediate` |
   |---|---|---|---|---|
-  | **Polling** | dual actions, value-getters | ✓ | ✓ | ✓ |
-  | **Waiting command** | `Navigate`, `Capture*Screenshot*` (own ~30s/~5s defaults) | ✓ (overrides own default) | error | error |
-  | **Snapshot** | `HasElement`/`Count`/`Current*ForEach`/`Title`/… | error | error | error |
+  | **Polling** | dual actions, value-getters (incl. `GetLocation`/`GetTitle`/`GetJSValue`) | ✓ | ✓ | ✓ |
+  | **Waiting command** | `Navigate`, `Capture*Screenshot*` (own ~30s/~5s defaults), `HoldResponse`+`ResponseHold.Await` (own 30s default) | ✓ (overrides own default) | error | error |
+  | **Snapshot** | `HasElement`/`Count`/`Current*ForEach`/`ResponseHold.Count`/… | error | error | error |
   | **One-shot mutation** | `SetCookie`/`StubRequest`/`*Immediately`/`Run`/`RunAsync`/… | error | error | error |
 
   Configuring a call that resolves to a **bare matcher** (a `(matcher)` method, or the under-applied form of a dual method like `b.WithTimeout(d).Click()`) is also a hard error — configure the `Eventually`, not the matcher.
@@ -43,9 +43,10 @@ Tune or opt out of poll-by-default. Each returns a lightweight view of the same 
 ## Navigation
 - `b.Navigate(url)` — navigate, assert `200`.
 - `b.NavigateWithStatus(url, code)` — navigate, assert a specific status.
-- `b.Location()` / `b.Title()` — current URL / title (**immediate snapshot** — no poll, rejects every config knob; drive your own poll via `Eventually(b.Title)` or the `HaveURL`/`HaveTitle` matchers below).
-- `b.HaveURL(string|matcher)` (matcher) — assert tab URL.
+- `b.GetLocation()` / `b.GetTitle()` → string — current URL / title. **Polling getters** (the `Get` prefix means "polls and returns a value"): they honor all four knobs, and a **transient CDP error is a retryable miss** — a live navigation legitimately throws `Inspected target navigated or closed (-32000)` while Chrome swaps the target, which used to abort the poll. (**Breaking rename** — the old bare `Location`/`Title` names are gone.)
+- `b.HaveURL(string|matcher)` (matcher) — assert tab URL; same transient-error-is-a-miss behavior under `Eventually`.
 - `b.HaveTitle(string|matcher)` (matcher) — assert tab title.
+- **Prefer a DOM readiness anchor over polling the URL**: `Eventually("#dashboard-root").Should(b.Exist())` proves the navigation *landed*, then `Ω(b.GetLocation()).Should(HaveSuffix("/dashboard"))` is a formality (see `biloba:write-tests`).
 
 ## Cookies & storage  (navigate to a real origin first)
 - `b.SetCookie(...Cookie)` — set one or more cookies (default domain = current URL).
@@ -109,7 +110,7 @@ Tune or opt out of poll-by-default. Each returns a lightweight view of the same 
 - **Pairwise (element-to-element; both boxes read in one atomic frame — don't split into two `GetBoundingBox`es, that loses the single-frame poll):** `b.BeAbove(other)` (`subject.Bottom<=other.Top`), `b.BeBelow(other)`, `b.BeLeftOf(other)` (`subject.Right<=other.Left`), `b.BeRightOf(other)`, `b.Encloses(other)` (contains on all 4 edges), `b.Overlaps(other)` (boxes intersect) — all matchers: `Eventually(subjectSel).Should(b.BeAbove(otherSel))`.
 - `b.GetGapBetween(selector, other)` → `BoxDelta{Top,Left,Bottom,Right,Width,Height,CenterX,CenterY}` (subject minus other; first; polls — `CenterX~0` ⇒ shared center line, `Width~0` ⇒ same size). / `b.HaveGapBetween(other, value|matcher)` — matcher receives the `BoxDelta`.
 - `b.BeInViewport(options...)` (matcher) — element is laid out **and** its box intersects the visible layout viewport (actually on screen; ≠ `BeVisible`, which is only "rendered"). Partial overlap counts by default; pass `b.Fully()` to require the whole box on screen (all 4 edges within the viewport).
-- `b.BePrecededBy(other)` / `b.BeFollowedBy(other)` (matchers) — document order via `compareDocumentPosition`. **Read the subject first:** `Eventually(X).Should(b.BeFollowedBy(Y))` ⇔ **X precedes Y**; `Eventually(X).Should(b.BePrecededBy(Y))` ⇔ **X comes after Y**. ("Quiz renders after the note" = `Eventually(noteSel).Should(b.BeFollowedBy(quizSel))`.)
+- `b.BePrecededBy(other)` / `b.BeFollowedBy(other)` (matchers) — document order via `compareDocumentPosition`. **Read the subject first:** `Eventually(X).Should(b.BeFollowedBy(Y))` ⇔ **X comes BEFORE Y**; `Eventually(X).Should(b.BePrecededBy(Y))` ⇔ **X comes AFTER Y**. ("Quiz renders after the note" = `Eventually(noteSel).Should(b.BeFollowedBy(quizSel))`.) These read backwards to most people and **a backwards assertion does not announce itself** — on a fixture that happens to satisfy the inverted relation it just passes. Guard it by asserting the inverse does *not* hold too (`Ω(noteSel).ShouldNot(b.BeFollowedBy(sectionSel))`). On failure the message reports the order actually observed (`Actually: #note comes BEFORE #section.`). "Anywhere after" includes *inside* — scope with `Locator.NotWithin` for "after Y but not nested in Y".
 - `b.GetComputedStyle(selector, property)` → string (first; polls; resolved value via `getPropertyValue`, so kebab-case names and CSS custom properties like `--stage` resolve — the getter counterpart of `HaveComputedStyle`, for Go-side math on the value).
 - `b.GetComputedStyleNumeric(selector, property)` → float64 (first; polls; leading number of the computed value via `parseFloat`, so `"16px"`→`16`; non-numeric value fails). / `b.HaveComputedStyleNumeric(property, number|matcher)` (matcher; a plain number compares with `BeNumerically`).
 - `b.NormalizeColor(color)` → string (**one-shot snapshot / pure transform**, no selector, no poll) — normalizes any CSS `<color>` incl. a `var(--token)` chain (resolved against `:root`-scoped custom properties) to canonical `rgb()`/`rgba()`. / `b.MatchColor(color)` (matcher) — normalizes **both** sides to `rgb()` before comparing; pass as the expected to `HaveComputedStyle`: `b.HaveComputedStyle("stroke", b.MatchColor("var(--tok-teal)"))`.
@@ -166,15 +167,24 @@ Tune or opt out of poll-by-default. Each returns a lightweight view of the same 
 ## Arbitrary JS  (runs on the global `window`; wrap object literals in parens)
 - `b.Run(script[, &ptr])` → any — synchronous **expression**; returns the decoded value (no `return` allowed at top level — it errors with a hint pointing to `RunAsync`/IIFE). Pollable: `Eventually(b.Run).WithArguments(expr).Should(matcher)` (it's a `func(string,...any) any`) — the fix for a single-shot read that races an async settle (`biloba:flaky-specs`).
 - `b.RunAsync(script[, &ptr])` / `b.RunErrAsync(...)` — body of an async fn; you `return` the awaited value (use this for `await`/`fetch`).
+- `b.GetJSValue(expression[, &ptr])` → any — **polls** `expression` until it is *defined*, then returns it. The **app-state barrier**: point it at a global the app writes (`window.__storeLog`) to prove the *browser* processed something. Retries through `undefined` **and** through a thrown error (a `ReferenceError` for a not-yet-created global is "not ready", not a bug); `null` is a legitimate value and returns immediately. Pass a pointer to decode into a concrete type (the way around the JSON-`float64` gotcha). For a *condition* rather than a value use `Eventually(expr).Should(b.EvaluateTo(matcher))`.
 - `b.EvaluateTo(value|matcher)` (matcher) — assert a JS expression's result. Numbers decode to `float64` — use `BeNumerically`, not `Equal(intLiteral)`.
 - `b.JSFunc(script)` → `.Invoke(...args)` string — JSON-encodes args into an invocable snippet.
 - `b.JSVar(nameOrExpr)` — reference a JS variable/expression as a `JSFunc` argument (don't quote it).
 
 ## Network  (per-tab; reset by Prepare)
 - `b.StubRequest(url string|matcher, biloba.StubResponse{Status,Body,Headers})` — first handler enables interception; unmatched requests pass through. Handlers below share one ordered, first-match-wins list.
+- **First-match-wins bites in an `Ordered` container**: `Prepare()` is `OncePerOrdered`, so handlers **accumulate** across the `It`s — a handler registered by an earlier spec permanently claims that URL and an identical one in a later spec is silent dead code. Symptom + fixes in `biloba:flaky-specs`.
+- While interception is on, Biloba **disables the HTTP cache** (`Network.setCacheDisabled(true)`, restored by `Prepare()`) — a cached response never traverses the network stack, so it would raise no Fetch event and silently skip every stub/abort/modify handler (it also means `ModifyResponse.Using` can no longer be handed a stale cached body).
 - `b.AbortRequest(url string|matcher)` — fail matching requests (page's fetch rejects).
 - `b.ModifyRequest(url string|matcher)` → builder `.WithURL(u).WithMethod(m).WithHeader(n,v).WithBody(b)` — continue to the real network with overrides (only what you set).
 - `b.ModifyResponse(url string|matcher)` → builder `.WithStatus(s).WithHeader(n,v).WithBody(b)` or `.Using(func(biloba.InterceptedResponse) biloba.StubResponse)` — rewrite the real response (reads real status/headers/body; heavier: pauses twice).
+- `b.HoldResponse(url string|matcher)` → `*ResponseHold` — intercept the **real** response and **hold it hostage** in flight until you release it (then it passes through unchanged). Builds on `ModifyResponse` (same tab scoping, same first-match-wins list). **The** tool for forcing an arrival order when testing optimistic-UI reconciliation → `biloba:flaky-specs`.
+  - `hold.Await()` → `InterceptedResponse` — blocks until a match is actually held (returns immediately if one already arrived). Waiting command: own 30s default, honors `WithTimeout`/`WithContext` **set on the tab you build the hold from** (`b.WithTimeout(d).HoldResponse(u)`); `WithPolling`/`Immediate` are a hard error.
+  - `hold.Release()` — let everything held through and stop holding future matches; idempotent.
+  - `hold.Count()` → int — matches intercepted so far; a snapshot (no knobs) but safe to poll: `Eventually(hold.Count).Should(Equal(1))`.
+  - Held responses are **force-released at spec end and by `Prepare()`** — a failing spec can't wedge the tab.
+  - **Sharp edge:** matching is **tab-wide and URL-based**, so a hold can catch a response from an *earlier* page load — a URL substring does not identify a page generation. Scope it to a dedicated `b.NewTab()`, or assert `Count()`, when that matters.
 - `b.HaveMadeRequest(url string|matcher)` (matcher) — chain `.WithMethod(m)`.
 - `b.AllRequests()` → `Requests` (each `*Request` has `.URL/.Method/.Headers/.ResourceType`); `b.RequestMatching(...)` predicate for `.Find/.Filter`.
 - `b.BeNetworkIdle()` (matcher) — zero in-flight requests. Tracks **HTTP** requests only (keyed on `Network.requestWillBeSent`/`loadingFinished` request IDs); a long-lived **WebSocket** does not keep it busy, so it won't wait for WS frames.
