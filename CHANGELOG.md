@@ -1,3 +1,16 @@
+## 0.14.1
+
+## Features
+
+- Every network handler now hands back a handle with a `Count()`, so a spec can assert its handler actually fired instead of trusting that it did: `b.StubRequest` returns a `*RequestStub`, `b.AbortRequest` a `*RequestAbort`, and `Count()` joins the `*RequestModification`/`*ResponseModification` builders.  A typo'd URL that passes silently to the real network is now one `Eventually(stub.Count).Should(Equal(1))` away from being caught.
+- `HoldResponse` splits its counter: `hold.Held()` and `hold.PassedThrough()` sit alongside the total `Count()` (and always sum to it).  `PassedThrough()` is how a spec states "this response was *not* frozen" directly, instead of inferring it from the total plus the `Limit`.
+- `AllowMissing` (and `Capture`) can now keep "absent" and "present but empty" apart: decode into a pointer to a pointer (`var key *string; b.GetAttribute(sel, b.AllowMissing("data-key"), &key)`) and absent leaves it nil while present allocates.  This always worked; it is now guaranteed and documented.
+
+## Fixes
+
+- `EachHaveInnerText`/`EachHaveTextContent` now hand their sub-matcher the `[]string` their godoc promised (and that `CurrentInnerTextForEach`/`CurrentTextContentForEach` already return), instead of the raw `[]any`.  `Equal([]string{"a", "b"})` against them used to be impossible to satisfy while looking exactly right.  The generic `EachHaveProperty` still passes the raw `[]any` - properties are heterogeneous - and now says so, and names `HaveExactElements` as the ordered-exact form.
+- `EachHaveInnerText`/`EachHaveTextContent` failures now name themselves rather than reporting as `EachHaveProperty "innerText"`.
+
 ## 0.14.0
 
 ## Breaking Changes
