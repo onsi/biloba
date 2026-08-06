@@ -253,6 +253,30 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω("#list li").Should(b.EachHaveInnerText(ContainElement("Second Things")))
 		})
 
+		It("hands the sub-matcher a []string, so Equal([]string{...}) and HaveExactElements pin order and length the way they look like they do", func() {
+			// this used to be impossible: the sub-matcher saw the raw []any Chrome returns, so
+			// Equal([]string{...}) could never match despite looking exactly right
+			Ω("#list li").Should(b.EachHaveInnerText(Equal([]string{"First Things", "Second Things", "Third Things"})))
+			Ω("#list li").Should(b.EachHaveInnerText(HaveExactElements("First Things", "Second Things", "Third Things")))
+		})
+
+		It("captures into a []string target, and into a *[]any target via the JSON decode path", func() {
+			var texts []string
+			Ω("#list li").Should(b.EachHaveInnerText(Equal([]string{"First Things", "Second Things", "Third Things"})).Capture(&texts))
+			Ω(texts).Should(Equal([]string{"First Things", "Second Things", "Third Things"}))
+
+			var anyTexts []any
+			Ω("#list li").Should(b.EachHaveInnerText(HaveLen(3)).Capture(&anyTexts))
+			Ω(anyTexts).Should(HaveExactElements("First Things", "Second Things", "Third Things"))
+		})
+
+		It("names itself in failure output, not the generic EachHaveProperty", func() {
+			m := b.EachHaveInnerText(Equal([]string{"nope"}))
+			Ω("#list li").ShouldNot(m)
+			Ω(m.FailureMessage("#list li")).Should(ContainSubstring("EachHaveInnerText for #list li:"))
+			Ω(m.FailureMessage("#list li")).ShouldNot(ContainSubstring("EachHaveProperty"))
+		})
+
 		It("fails (does not pass vacuously) when no elements match the selector", func() {
 			m := b.EachHaveInnerText("anything")
 			Ω("#non-existing").ShouldNot(m)
@@ -321,6 +345,30 @@ var _ = Describe("DOM manipulators and matchers", func() {
 
 			Ω("#list li").Should(b.EachHaveTextContent(ConsistOf("Second Things", "First Things", "Third Things")))
 			Ω("#list li").Should(b.EachHaveTextContent(ContainElement("Second Things")))
+		})
+
+		It("hands the sub-matcher a []string, so Equal([]string{...}) and HaveExactElements pin order and length the way they look like they do", func() {
+			// this used to be impossible: the sub-matcher saw the raw []any Chrome returns, so
+			// Equal([]string{...}) could never match despite looking exactly right
+			Ω("#list li").Should(b.EachHaveTextContent(Equal([]string{"First Things", "Second Things", "Third Things"})))
+			Ω("#list li").Should(b.EachHaveTextContent(HaveExactElements("First Things", "Second Things", "Third Things")))
+		})
+
+		It("captures into a []string target, and into a *[]any target via the JSON decode path", func() {
+			var texts []string
+			Ω("#list li").Should(b.EachHaveTextContent(Equal([]string{"First Things", "Second Things", "Third Things"})).Capture(&texts))
+			Ω(texts).Should(Equal([]string{"First Things", "Second Things", "Third Things"}))
+
+			var anyTexts []any
+			Ω("#list li").Should(b.EachHaveTextContent(HaveLen(3)).Capture(&anyTexts))
+			Ω(anyTexts).Should(HaveExactElements("First Things", "Second Things", "Third Things"))
+		})
+
+		It("names itself in failure output, not the generic EachHaveProperty", func() {
+			m := b.EachHaveTextContent(Equal([]string{"nope"}))
+			Ω("#list li").ShouldNot(m)
+			Ω(m.FailureMessage("#list li")).Should(ContainSubstring("EachHaveTextContent for #list li:"))
+			Ω(m.FailureMessage("#list li")).ShouldNot(ContainSubstring("EachHaveProperty"))
 		})
 
 		It("fails (does not pass vacuously) when no elements match the selector", func() {
@@ -1412,6 +1460,15 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Expect(".non-existing").NotTo(mValue)
 			Expect(mValue.FailureMessage(".non-existing")).To(ContainSubstring("Expected at least one element to match .non-existing, but none did"))
 		})
+
+		It("does NOT convert to []string the way EachHaveInnerText/EachHaveTextContent do - this is deliberate, not a bug to fix", func() {
+			// the generic form hands the sub-matcher the raw []any Chrome returns, so Equal([]string{...})
+			// always fails here even though the values render identically...
+			Expect("#list li").NotTo(b.EachHaveProperty("innerText", Equal([]string{"First Things", "Second Things", "Third Things"})))
+			// ...while the element-wise HaveExactElements still passes, because it does not care about the
+			// slice's dynamic type
+			Expect("#list li").To(b.EachHaveProperty("innerText", HaveExactElements("First Things", "Second Things", "Third Things")))
+		})
 	})
 
 	Describe("GetProperties", func() {
@@ -2178,6 +2235,15 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			Ω(err).Should(MatchError("could not find DOM element matching selector: #non-existing"))
 		})
 
+		It("captures a matcher's legitimate nil observation into a pointer-to-pointer target", func() {
+			// onclick is defined on every element and is null until a handler is assigned - a real nil
+			// observation, not an absent one. A **string target stays nil rather than crashing or
+			// silently allocating a pointer to "".
+			var onclick *string
+			Ω("#list li").Should(b.HaveProperty("onclick", BeNil()).Capture(&onclick))
+			Ω(onclick).Should(BeNil())
+		})
+
 		It("captures the slice over all matches from the Each* matchers", func() {
 			var texts []string
 			Ω("#list li").Should(b.EachHaveInnerText(ContainElement("First Things")).Capture(&texts))
@@ -2349,6 +2415,55 @@ var _ = Describe("DOM manipulators and matchers", func() {
 
 			Ω(b.CurrentValueForEach("#text-input", &a, &c)).Should(BeNil())
 			ExpectFailures("CurrentValueForEach accepts at most one trailing pointer to decode into, but got 2 extra arguments")
+		})
+	})
+
+	Describe("decoding an AllowMissing result into a pointer-to-pointer, to keep absent apart from zero", func() {
+		It("leaves a **string target nil for an absent attribute, and non-nil pointing at \"\" for one that is present but empty", func() {
+			// #yellow's `disabled` attribute is present with an empty value (a boolean HTML attribute) -
+			// a plain *string target would flatten this and "absent" into the same "" observation
+			var key *string
+			b.GetAttribute("#link", b.AllowMissing("data-missing"), &key)
+			Ω(key).Should(BeNil())
+
+			b.GetAttribute("#yellow", b.AllowMissing("disabled"), &key)
+			Ω(key).ShouldNot(BeNil())
+			Ω(*key).Should(Equal(""))
+		})
+
+		It("does the same for a property via GetProperty", func() {
+			b.Run(`document.querySelector(".notice").emptyProp = ""`)
+
+			var value *string
+			b.GetProperty(".notice", b.AllowMissing("neverSetProp"), &value)
+			Ω(value).Should(BeNil())
+
+			b.GetProperty(".notice", b.AllowMissing("emptyProp"), &value)
+			Ω(value).ShouldNot(BeNil())
+			Ω(*value).Should(Equal(""))
+		})
+
+		It("keeps absent apart from present-and-zero for a numeric pointer-to-pointer target - the NaN-sentinel case a *float64 target would have hidden", func() {
+			b.Run(`document.querySelector(".notice").zeroCount = 0`)
+
+			var count *float64
+			b.GetProperty(".notice", b.AllowMissing("neverSetCount"), &count)
+			Ω(count).Should(BeNil())
+
+			b.GetProperty(".notice", b.AllowMissing("zeroCount"), &count)
+			Ω(count).ShouldNot(BeNil())
+			Ω(*count).Should(Equal(0.0))
+		})
+
+		It("re-decodes honestly across repeated observations - a later absent observation clears a previously-set pointer rather than leaving it stale", func() {
+			var key *string
+			b.GetAttribute("#yellow", b.AllowMissing("disabled"), &key)
+			Ω(key).ShouldNot(BeNil())
+			Ω(*key).Should(Equal(""))
+
+			b.Run(`document.getElementById("yellow").removeAttribute("disabled")`)
+			b.GetAttribute("#yellow", b.AllowMissing("disabled"), &key)
+			Ω(key).Should(BeNil())
 		})
 	})
 })

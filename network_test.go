@@ -100,6 +100,20 @@ var _ = Describe("Observing the network", func() {
 			b.Click("#fetch-users")
 			Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")))
 		})
+
+		It("counts how many requests it has fulfilled, and stays at 0 when its URL never matches", func() {
+			stub := b.StubRequest(ContainSubstring("/api/users"), biloba.StubResponse{Body: `{}`})
+			miss := b.StubRequest(ContainSubstring("/api/widgets"), biloba.StubResponse{Body: `{}`})
+			Expect(stub.Count()).To(Equal(0))
+
+			b.Click("#fetch-users")
+			Eventually(stub.Count).Should(Equal(1))
+
+			b.Click("#fetch-users")
+			Eventually(stub.Count).Should(Equal(2))
+
+			Expect(miss.Count()).To(Equal(0))
+		})
 	})
 
 	Describe("AbortRequest", func() {
@@ -121,6 +135,21 @@ var _ = Describe("Observing the network", func() {
 			// /api/echo matches no abort, so it reaches the real echoing backend
 			Eventually("#status").Should(b.HaveInnerText("200"))
 			Expect("#error").To(b.HaveInnerText(""))
+		})
+
+		It("counts how many requests it has aborted, and stays at 0 when its URL never matches", func() {
+			abort := b.AbortRequest(ContainSubstring("/api/echo"))
+			miss := b.AbortRequest(ContainSubstring("/api/widgets"))
+			Expect(abort.Count()).To(Equal(0))
+
+			b.Click("#fetch")
+			Eventually("#error").Should(b.HaveInnerText(ContainSubstring("fetch failed")))
+			Eventually(abort.Count).Should(Equal(1))
+
+			b.Click("#fetch")
+			Eventually(abort.Count).Should(Equal(2))
+
+			Expect(miss.Count()).To(Equal(0))
 		})
 	})
 
@@ -148,6 +177,18 @@ var _ = Describe("Observing the network", func() {
 			// #body is written after an awaited response.text(), so it is the one to gate on
 			Eventually("#body").Should(b.HaveInnerText(ContainSubstring(`"path":"/api/echo"`)))
 			Expect("#status").To(b.HaveInnerText("200"))
+		})
+
+		It("counts how many requests it has modified, and stays at 0 when its URL never matches", func() {
+			mod := b.ModifyRequest(ContainSubstring("/api/echo")).WithHeader("X-Test", "true")
+			miss := b.ModifyRequest(ContainSubstring("/api/widgets")).WithHeader("X-Test", "true")
+			Expect(mod.Count()).To(Equal(0))
+
+			b.Click("#fetch")
+			Eventually("#body").Should(b.HaveInnerText(ContainSubstring(`"path":"/api/echo"`)))
+			Eventually(mod.Count).Should(Equal(1))
+
+			Expect(miss.Count()).To(Equal(0))
 		})
 	})
 
@@ -185,6 +226,18 @@ var _ = Describe("Observing the network", func() {
 			b.Click("#fetch")
 			Eventually("#body").Should(b.HaveInnerText(ContainSubstring("/api/echo")))
 			Expect("#status").To(b.HaveInnerText("200"))
+		})
+
+		It("counts how many responses it has modified, and stays at 0 when its URL never matches", func() {
+			mod := b.ModifyResponse(ContainSubstring("/api/echo")).WithStatus(503)
+			miss := b.ModifyResponse(ContainSubstring("/api/widgets")).WithStatus(503)
+			Expect(mod.Count()).To(Equal(0))
+
+			b.Click("#fetch")
+			Eventually("#status").Should(b.HaveInnerText("503"))
+			Eventually(mod.Count).Should(Equal(1))
+
+			Expect(miss.Count()).To(Equal(0))
 		})
 
 		// Handlers are first-match-wins, and Prepare() is OncePerOrdered - so inside an Ordered
@@ -284,6 +337,20 @@ var _ = Describe("Observing the network", func() {
 				ContainSubstring("⚠ A StubRequest handler registered at "+specificLoc+" never ran"),
 				ContainSubstring("(registered at "+catchAllLoc+")"),
 			))
+		})
+
+		// Count is a fact about the handler that actually claimed the dispatch, not about the URL: a
+		// handler that only ever loses to an earlier one never fires, no matter how many matching
+		// requests go by.
+		It("keeps a shadowed handler's Count at 0 while the handler that claims the dispatch climbs", func() {
+			catchAll := b.StubRequest(ContainSubstring("/api/"), biloba.StubResponse{Body: `{"who":"catch-all"}`})
+			specific := b.StubRequest(ContainSubstring("/api/users"), biloba.StubResponse{Body: `{"who":"specific"}`})
+
+			b.Click("#fetch-users")
+			Eventually("#result").Should(b.HaveInnerText(ContainSubstring("catch-all")))
+
+			Eventually(catchAll.Count).Should(Equal(1))
+			Expect(specific.Count()).To(Equal(0))
 		})
 
 		It("names the API each handler was registered with", func() {
@@ -396,11 +463,19 @@ var _ = Describe("Observing the network", func() {
 			hold.Release() // idempotent
 			Eventually("#status").Should(b.HaveInnerText("200"))
 
+			// the one response this hold ever saw was frozen, so it counts against Held, not PassedThrough
+			Expect(hold.Held()).To(Equal(1))
+			Expect(hold.PassedThrough()).To(Equal(0))
+
 			// subsequent matches pass straight through - no hold, no await
 			b.Click("#fetch")
 			Eventually(hold.Count).Should(Equal(2))
 			Eventually("#body").Should(b.HaveInnerText(ContainSubstring("/api/echo")))
 			Expect("#status").To(b.HaveInnerText("200"))
+
+			// ...and that one is recorded on the passed-through side, not held again
+			Expect(hold.Held()).To(Equal(1))
+			Eventually(hold.PassedThrough).Should(Equal(1))
 		})
 
 		It("is safe to release when nothing is being held", func() {
@@ -438,6 +513,29 @@ var _ = Describe("Observing the network", func() {
 				Consistently("#status", 100*time.Millisecond).Should(b.HaveInnerText(""))
 				Expect(`window.__landed.join(",")`).To(b.EvaluateTo(""))
 
+				// a default (unlimited) hold freezes everything it intercepts: Held equals Count, and
+				// nothing has ever passed straight through
+				Expect(hold.Held()).To(Equal(hold.Count()))
+				Expect(hold.PassedThrough()).To(Equal(0))
+
+				hold.Release()
+				Eventually(`window.__landed.slice().sort().join(",")`).Should(b.EvaluateTo("/api/echo/one,/api/echo/two"))
+			})
+
+			// This is the headline behavior Limit exists for: PassedThrough lets a spec state "#2 was
+			// NOT frozen" directly, instead of inferring it from Count plus the limit.
+			It("splits Count into Held and PassedThrough under Limit(1)", func() {
+				hold := b.HoldResponse(ContainSubstring("/api/echo")).Limit(1)
+
+				fetchPath("/api/echo/one")
+				hold.Await() // #1 is frozen
+				fetchPath("/api/echo/two")
+				Eventually(hold.PassedThrough).Should(Equal(1)) // #2 flew past
+
+				Expect(hold.Held()).To(Equal(1))
+				Expect(hold.Count()).To(Equal(2))
+				Expect(hold.Held() + hold.PassedThrough()).To(Equal(hold.Count()))
+
 				hold.Release()
 				Eventually(`window.__landed.slice().sort().join(",")`).Should(b.EvaluateTo("/api/echo/one,/api/echo/two"))
 			})
@@ -470,6 +568,7 @@ var _ = Describe("Observing the network", func() {
 
 				fetchPath("/api/echo/one")
 				hold.Await()
+				Expect(hold.Held()).To(Equal(1))
 				hold.ReleaseNext()
 				Eventually("#body").Should(b.HaveInnerText(ContainSubstring("/api/echo/one")))
 
@@ -477,6 +576,11 @@ var _ = Describe("Observing the network", func() {
 				fetchPath("/api/echo/two")
 				Expect(hold.Await().Body).To(ContainSubstring("/api/echo/two"))
 				Consistently("#body", 100*time.Millisecond).Should(b.HaveInnerText(""))
+
+				// released capacity means the second match was held too - it increments Held, not
+				// PassedThrough, even though the first one already came and went
+				Expect(hold.Held()).To(Equal(2))
+				Expect(hold.PassedThrough()).To(Equal(0))
 
 				hold.ReleaseNext()
 				Eventually("#body").Should(b.HaveInnerText(ContainSubstring("/api/echo/two")))
@@ -571,6 +675,42 @@ var _ = Describe("Observing the network", func() {
 				ExpectFailures(SatisfyAll(
 					ContainSubstring("ReleaseNext() was called but this hold is not holding any responses with URL matching"),
 					ContainSubstring("0 matching response(s) have been intercepted so far."),
+					ContainSubstring("Await() until a response is actually being held"),
+				))
+			})
+
+			It("renders the plain tally with no parenthetical when nothing has passed through", func() {
+				hold := b.HoldResponse(ContainSubstring("/api/echo"))
+
+				fetchPath("/api/echo/one")
+				first := hold.Await()
+				hold.Release(first) // targeted release, not terminal - still 0 passed through
+
+				hold.ReleaseNext()
+				ExpectFailures(SatisfyAll(
+					ContainSubstring("ReleaseNext() was called but this hold is not holding any responses with URL matching"),
+					ContainSubstring("1 matching response(s) have been intercepted so far."),
+					ContainSubstring("Await() until a response is actually being held"),
+				))
+
+				Expect(hold.Held()).To(Equal(1))
+				Expect(hold.PassedThrough()).To(Equal(0))
+			})
+
+			It("appends the held/passed-through breakdown to the tally once something has passed through", func() {
+				hold := b.HoldResponse(ContainSubstring("/api/echo"))
+
+				fetchPath("/api/echo/one")
+				hold.Await()
+				hold.Release() // terminal: releases the one held response and stops holding future matches
+
+				fetchPath("/api/echo/two")
+				Eventually(hold.PassedThrough).Should(Equal(1))
+
+				hold.ReleaseNext()
+				ExpectFailures(SatisfyAll(
+					ContainSubstring("ReleaseNext() was called but this hold is not holding any responses with URL matching"),
+					ContainSubstring("2 matching response(s) have been intercepted so far (1 held, 1 passed straight through)."),
 					ContainSubstring("Await() until a response is actually being held"),
 				))
 			})

@@ -79,6 +79,21 @@ HaveJSONAttribute captures are usually written.  A genuine type mismatch - a str
 into an *int - fails the assertion immediately (it will never come true, so Capture does not wait out
 the timeout).
 
+A JavaScript null/undefined decodes as the Go zero value, which makes "absent" and "present but empty"
+the same observation.  When that distinction is the point - it usually is under [Biloba.AllowMissing] -
+decode into a pointer to a pointer: absent sets it to nil, present allocates, so an empty string or a
+0 stays distinguishable from nothing at all:
+
+	var key *string
+	b.GetAttribute(".mark", b.AllowMissing("data-key"), &key)
+	// key == nil               -> the attribute is absent
+	// key != nil && *key == "" -> the attribute is present and empty
+
+This is guaranteed, not incidental, and it holds for every decode target - **float64, **bool,
+**MyStruct - across both Capture and the getters' trailing decode pointer, which share this code.  It
+is also re-evaluated on every observation, so a poll that watches an absent -> present transition sets
+the pointer non-nil on the attempt that sees the value.
+
 The one thing Capture will not do is bridge a Biloba struct into a different Go struct: a [Box]
 captured into a *ScrollOffset (or into a hand-rolled struct naming a few of Box's fields) is an
 immediate, explanatory failure rather than a silent half-fill.  Capture the type the matcher observes -
@@ -128,6 +143,11 @@ func decodeCapture(observed any, target any) error {
 		return fmt.Errorf("Capture requires a settable pointer to decode into, got %T", target)
 	}
 
+	// null/undefined zeroes the target.  For a **T target that zero is a nil pointer while a present
+	// value allocates one (json.Unmarshal below does the allocating), which is the documented way to
+	// keep "absent" and "present but empty" apart - see Capture's godoc.  Zeroing rather than leaving
+	// the target alone is what makes that stable across a poll: an observation that goes back to absent
+	// must not leave the previous attempt's value sitting there.
 	if observed == nil {
 		elem.Set(reflect.Zero(elem.Type()))
 		return nil

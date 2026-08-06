@@ -53,6 +53,8 @@ A fully-applied action dispatches **once** on the first success and stops — sa
 | `GetProperty` | `CurrentPropertyForEach` | `EachHaveProperty` |
 | `Click` | `ClickEachImmediately` | — |
 
+`EachHaveInnerText`/`EachHaveTextContent`'s sub-matcher and `.Capture` see a typed `[]string` (same slice their `Current*ForEach` getter returns) — `Equal([]string{...})` works. The generic `EachHaveProperty` hands over the raw JSON-decoded `[]any` (properties are heterogeneous) — `Equal([]string{...})` always fails there; reach for `HaveExactElements(...)`. Same shape as `EvaluateTo`'s raw-vs-typed asymmetry, below.
+
 ## The spec shape
 
 ```go
@@ -120,6 +122,7 @@ Asserting and *then* calling the getter is two reads of a page that may have cha
 - Writes **only on a match** — `ShouldNot` captures nothing; use a `Should` when you need the value.
 - Returns a **new** matcher and leaves the receiver alone, so a matcher in a variable is reusable with different targets (`m.Capture(&idA)`, then `m.Capture(&idB)`).
 - Narrowing a JS object into a struct with a subset of its fields is fine; capture Biloba's own structs (`Box`, `ScrollOffset`, `BoxDelta`, `Cookie`) into the matching type or an `any` — a different struct is rejected, not half-filled.
+- A JS `null`/`undefined` decodes to the Go zero value, so a plain `*string` target can't tell "absent" from "present but empty." Decode into a `**T` instead — absent leaves it `nil`, present allocates. Same rule for the getters' trailing decode pointer. Matters most under `AllowMissing` (`biloba:api`), whose whole point is making absence a value rather than a timeout.
 - Value-less matchers (`Exist`, `BeVisible`, `BeInViewport`, the relational ones) and actions-as-matchers deliberately don't compile with it. Full capturable list → `biloba:api`.
 
 ## Selecting elements — the vocabulary
@@ -249,6 +252,8 @@ Eventually(".user").Should(b.HaveCount(2))
 
 Stubs are per-tab and reset by `Prepare()`. Also `b.AbortRequest(url)`, `b.ModifyRequest(url).WithURL/.WithMethod/.WithHeader/.WithBody(...)`, and `b.ModifyResponse(url).WithStatus/.WithHeader/.WithBody/.Using(func(biloba.InterceptedResponse) biloba.StubResponse)`. All share one **first-match-wins** handler list. While interception is on Biloba disables the HTTP cache (a cached response raises no interception event), restoring it in `Prepare()`.
 
+Every registration returns a handle — `stub.Count()`/`abort.Count()`/`mod.Count()` — reporting how many dispatches *that handler* claimed. **Assert it fired:** `Eventually(stub.Count).Should(Equal(1))`. A typo'd URL otherwise matches nothing, passes through to the real network, and the spec passes for the wrong reason.
+
 Three traps, detailed in `biloba:flaky-specs`:
 
 - **Observe in order:** `Eventually(b).Should(b.HaveMadeRequest(...))` **first**, *then* `Eventually(b).Should(b.BeNetworkIdle())`. Idle means "nothing in flight right now", so alone it passes at t=0.
@@ -267,6 +272,8 @@ hold.Release()                 // now let the stale response land
 ```
 
 **By default a hold freezes *every* matching response**, and a bare `Release()` frees them all and disarms the hold. `.Limit(n)` caps how many are held at once — overflow matches fly straight past, which is how you express "hold save #1 while save #2 lands". `Await()` returns the **oldest response still held**; `hold.Release(r)` releases just that one and `hold.ReleaseNext()` releases the oldest, both keeping the hold **armed** (`ReleaseNext` fails loudly if nothing is held). `Await` has its own 30s deadline (`b.WithTimeout(d).HoldResponse(url)`); holds are force-released at spec end and by `Prepare()`. Matching is **tab-wide and URL-based**, so a hold can catch a response from an earlier page load — scope the flow to a `b.NewTab()` when that matters. Full semantics → `biloba:api`; worked orderings → `biloba:flaky-specs`.
+
+`hold.Held()`/`hold.PassedThrough()` split `Count()` into what the hold actually froze vs. what arrived and flew past (at `Limit`, or after a bare `Release()`) — with `.Limit(1)`, assert `Eventually(hold.PassedThrough).Should(Equal(1))` directly rather than inferring "not held" from `Count()` and the limit. And `Count`/`Release` are facts about the network, not the page — pair them with an app-state barrier (`b.GetJSValue`, or the DOM the response produces) when the assertion is about what the app *did* with the response.
 
 ## Seed state to skip slow flows
 

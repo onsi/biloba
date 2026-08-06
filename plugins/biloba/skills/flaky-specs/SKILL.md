@@ -161,15 +161,18 @@ b.GetJSValue("window.__storeLog", &log)
 Ω(log).Should(HaveExactElements("renamed"))   // the stale response must not have clobbered it
 ```
 
+**`Count`/`Release` are facts about the network, not the page.** `Count` says the response reached the tab's interceptor; `Release` returns when the release is signalled. Neither says the renderer has done anything with it — the barrier that actually proves that is the `GetJSValue` read above, not the `Release()` call. When the assertion is about what the app did with a response, pair the network fact with an app-state barrier (or the DOM the response produces) — never a sleep.
+
 - **A hold freezes EVERY matching response by default**, and a bare `Release()` frees them all *and* disarms the hold. So "response #1 is still in flight while #2 lands" is not expressible with the default — cap it:
   ```go
   hold := b.HoldResponse(ContainSubstring("/api/save")).Limit(1)
-  b.Click("#save"); hold.Await()                             // #1 held…
-  b.Click("#save"); Eventually(hold.Count).Should(Equal(2))  // …#2 passes straight through
-  hold.Release()                                             // now #1 lands, last
+  b.Click("#save"); hold.Await()                                    // #1 held…
+  b.Click("#save"); Eventually(hold.PassedThrough).Should(Equal(1)) // …#2 passes straight through
+  hold.Release()                                                    // now #1 lands, last
   ```
+  Assert `PassedThrough`, not `Count` — the fixture under test is "#2 was NOT held," and `Count()==2` only says that by inference from the limit. A regression that raises the limit to 2 keeps `Count()==2` green while quietly destroying the ordering you pinned. `hold.Held()` is the other half — `Held()+PassedThrough()==Count()` always, and both are snapshots safe to poll.
 - `hold.ReleaseNext()` releases the oldest still held and **stays armed** (fails loudly with nothing held — that means your sequencing is off). `Await()` always returns the oldest still held, so `Await`/`ReleaseNext`/`Await` walks arrival order.
-- `Await` honors `WithTimeout`/`WithContext` set on the tab you built the hold from (`b.WithTimeout(d).HoldResponse(url)`); otherwise 30s. `Count()` is a snapshot but safe to poll. Holds are force-released at spec end and by `Prepare()`.
+- `Await` honors `WithTimeout`/`WithContext` set on the tab you built the hold from (`b.WithTimeout(d).HoldResponse(url)`); otherwise 30s. `Count()`/`Held()`/`PassedThrough()` are snapshots but safe to poll. Holds are force-released at spec end and by `Prepare()`.
 - **Sharp edge: matching is tab-wide and URL-based**, so a hold can catch a response from an *earlier page load*. If the flow navigates, scope it to a `b.NewTab()` or assert `Count()`. And handlers are first-match-wins, so a **second `HoldResponse` for a URL an earlier one already claims is dead code** — re-arm the one you have with `ReleaseNext` (§6).
 
 ## 4. Layout, geometry, and document order
@@ -188,7 +191,7 @@ hex := b.GetComputedStyle(".rail", "--stage")          // resolves custom proper
 box := b.GetBoundingBox("#card")                       // Box{Top,Left,Width,Height,…,ClientWidth,ClientHeight}
 ```
 
-`Box.Width`/`Height` are border-box; `ClientWidth`/`ClientHeight` are the scrollbar-excluded content box. Also: `b.GetScrollOffset`, `b.GetOffsetTopWithin`/`GetOffsetLeftWithin`, `b.BeBelow`/`BeLeftOf`/`BeRightOf`/`Encloses`/`Overlaps`, `b.GetGapBetween`/`HaveGapBetween`. Drop to `Eventually(b.Run)` only for what these don't cover (per-line `getClientRects` wrap detection, SVG path points, atomic act-then-measure).
+`Box.Width`/`Height` are border-box; `ClientWidth`/`ClientHeight` are the scrollbar-excluded content box. Also: `b.GetScrollOffset`, `b.GetOffsetTopWithin`/`GetOffsetLeftWithin`, `b.BeBelow`/`BeLeftOf`/`BeRightOf`/`Encloses`/`Overlaps`, `b.GetGapBetween`/`HaveGapBetween`. Drop to `Eventually(b.Run)` only for what these don't cover (per-line `getClientRects` wrap detection, SVG path points, atomic act-then-measure, WebGL `gl.readPixels`, `elementFromPoint` hit-testing).
 
 **A backwards document-order assertion goes green, it doesn't flake.** `Eventually(X).Should(b.BePrecededBy(Y))` ⇔ X comes **AFTER** Y; `b.BeFollowedBy(Y)` ⇔ X comes **BEFORE** Y. These read backwards to most people, and on a fixture that happens to satisfy the inversion the spec silently tests the opposite of what you meant. Pin the direction from both sides:
 
@@ -212,6 +215,15 @@ b.GetProperties("#user", "dataset.firstName", b.AllowMissing("dataset.middleName
 
 The timeout message self-explains: it says the element was present, names the undefined property, and prints the exact `b.AllowMissing(...)` to paste. Read it before investigating.
 
+**`AllowMissing` only pays off if the decode target can hold "absent."** A JS `null`/`undefined` decodes to the Go zero value, so a plain `*string` flattens "absent" and "present but empty" into the same `""`. Decode into a `**T` instead — absent leaves it `nil`, present allocates:
+
+```go
+var key *string
+b.GetAttribute(".mark", b.AllowMissing("data-key"), &key)   // key == nil while the attribute is absent
+```
+
+Works for every decode target (`.Capture` and the getters' trailing pointer), and is re-evaluated on every observation, so a poll watching an absent → present transition stays honest.
+
 `GetValue`/`GetInnerText`/`GetTextContent` have no "defined" axis (empty string is a valid value) — they poll on presence only and never need `AllowMissing`.
 
 **The `Each*` matchers fail on zero matches** (`EachBeVisible`/`EachBeEnabled`/`EachHaveClass`/`EachHaveInnerText`/`EachHaveProperty`/…): "≥1 match AND all satisfy", so they wait for elements to appear instead of passing vacuously. To assert nothing matches, use `Eventually(sel).Should(b.HaveCount(0))` or `ShouldNot(b.Exist())` — **not** the no-arg `EachHaveInnerText()`/`EachHaveTextContent()`, which now assert the property is *defined* on every match (and capture the slice).
@@ -231,7 +243,7 @@ b.ModifyResponse(url).Using(func(r biloba.InterceptedResponse) biloba.StubRespon
 })
 ```
 
-**Assert on your own interception state in every spec that installs a handler it depends on** — the app's behavior can't tell you:
+**Assert on your own interception state in every spec that installs a handler it depends on** — the app's behavior can't tell you. Every registration returns a handle with its own `Count()` (`stub.Count()`/`abort.Count()`/`mod.Count()`/`hold.Count()`) — reach for that before hand-rolling a counter; only a `Using()` callback needing logic beyond counting still needs one:
 
 ```go
 Eventually(hold.Count).Should(Equal(1))

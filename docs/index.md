@@ -1020,6 +1020,17 @@ Two matchers *do* read something and still keep the plain interface.  [`b.MatchC
 - **`.Capture(&x)` returns a *new* matcher and leaves the original alone.**  So a matcher stashed in a variable can be reused with different targets without the second capture stealing the first's - `Eventually("#a").Should(m.Capture(&idA))` followed by `Eventually("#b").Should(m.Capture(&idB))` does what it looks like.  `HaveCookie`'s `.Capture` behaves the same way, and composes with the `.WithX` refinements in either order.
 - `target` must be a non-nil pointer.
 
+**Telling "absent" apart from "zero".**  Because the decode follows `encoding/json`, a JavaScript `null`/`undefined` lands in your target as the Go zero value - so a plain `*string` collapses "the attribute isn't there" and "the attribute is there and empty" into the same `""`.  When that distinction is the point - it usually is under [`b.AllowMissing`](#properties) - decode into a *pointer to a pointer*: absent leaves it `nil`, present allocates.
+
+```go
+var key *string
+b.GetAttribute(".mark", b.AllowMissing("data-key"), &key)
+// key == nil               -> the attribute is absent
+// key != nil && *key == "" -> the attribute is present and empty
+```
+
+This is guaranteed, not incidental.  It works for every type (`**float64`, `**bool`, `**MyStruct`) and for both `.Capture` and the getters' trailing pointer - they share the same decode.  And it's re-evaluated on every observation, so a poll watching an absent → present transition sets the pointer non-nil on the attempt that actually sees the value, and an observation that goes back to absent sets it back to `nil`.
+
 **One asymmetry to keep in mind:** [`b.EvaluateTo`](#running-arbitrary-javascript) hands its sub-matcher the **raw** JSON-decoded value - a `[]any` of `map[string]any` - while `Capture` gives you the typed value.  So you match with `HaveKeyWithValue` and capture into your struct slice:
 
 ```go
@@ -1260,6 +1271,15 @@ Expect(selector).To(b.EachHaveInnerText("A", "B", "C")) //uses Gomega's HaveExac
 Eventually(selector).Should(b.EachHaveInnerText(ContainElement("B"))) //passes the entire slice to the matcher
 ```
 
+The slice your matcher receives is a `[]string` - the same slice `CurrentInnerTextForEach` returns (and `EachHaveTextContent` does the same with `CurrentTextContentForEach`).  So `Equal([]string{...})` and `HaveExactElements(...)` both mean what they look like they mean:
+
+```go
+Eventually(selector).Should(b.EachHaveInnerText(Equal([]string{"A", "B", "C"})))
+Eventually(selector).Should(b.EachHaveInnerText(HaveExactElements("A", "B", "C")))
+```
+
+(The generic [`EachHaveProperty`](#properties) hands your matcher the raw `[]any` instead.)
+
 use `b.EachHaveInnerText` with `Eventually` in lieu of `CurrentInnerTextForEach` if you want to poll and assert that the inner texts of these DOM elements eventually match your expectation - this approach gives you an atomic operation that is less susceptible to flakiness.  And if you need the texts themselves afterwards, [capture](#capturing-values-from-matchers) them off the assertion instead of following up with a snapshot read:
 
 ```go
@@ -1347,6 +1367,13 @@ Like the property getters, `GetAttribute` is a **two-axis** poller: it waits unt
 
 ```go
 b.GetAttribute("#link", b.AllowMissing("data-role")) // nil if data-role isn't set, no waiting
+```
+
+`AllowMissing`'s whole point is to make absence a *value* rather than a timeout, so don't throw that value away on the decode: a plain `*string` target turns an absent attribute into `""`, which is also what a present-but-empty attribute gives you.  Decode into a [pointer to a pointer](#capturing-values-from-matchers) to keep the two apart:
+
+```go
+var role *string
+b.GetAttribute("#link", b.AllowMissing("data-role"), &role) // role == nil when the attribute is absent
 ```
 
 To fetch several attributes from one element at once use `b.GetAttributes(selector, names...)`, which returns a [`Properties`](#properties) map (and polls the same way, with `AllowMissing` available per name):
@@ -1469,6 +1496,13 @@ That "and the property is defined" axis has a **sharp edge** worth knowing: a pr
 b.GetProperty("div.comment", b.AllowMissing("dataset.poster")) // nil if it's absent, no waiting
 ```
 
+As with attributes, decode an `AllowMissing` property into a [pointer to a pointer](#capturing-values-from-matchers) when you need to tell "absent" apart from the zero value:
+
+```go
+var poster *string
+b.GetProperty("div.comment", b.AllowMissing("dataset.poster"), &poster) // poster == nil when it's absent
+```
+
 You can fetch subproperties using `.` notation:
 
 ```go
@@ -1543,6 +1577,16 @@ Eventually(".notice").Should(b.EachHaveProperty("dataset.name", ConsistOf(BeNil(
 // if you want all attribute values to be the same, use Gomega's `HaveEach`:
 Eventually(".notice").Should(b.EachHaveProperty("disabled", HaveEach(BeFalse())))
 ```
+
+The slice your matcher receives is the **raw** JSON-decoded `[]any` Chrome handed back, not a typed slice - properties are heterogeneous, so there's nothing honest to convert them to.  That means `Equal([]string{...})` will always fail here, even against a slice whose contents render identically: Gomega's `Equal` compares dynamic types, and `[]any` is not `[]string`.  When you want to pin order and length, reach for the element-wise `HaveExactElements` instead (`ContainElement`/`ConsistOf`/`HaveEach` are all fine as well - they compare element by element).  [Capturing](#capturing-values-from-matchers) is unaffected: it goes through the JSON decode, so a `*[]string` target works even though the matcher saw `[]any`:
+
+```go
+var names []string
+Eventually(".notice").Should(b.EachHaveProperty("dataset.name", HaveExactElements("Bob", "George", BeNil(), "John")).Capture(&names))
+//names is []string{"Bob", "George", "", "John"} - the JSON decode turns the absent property into the zero value
+```
+
+That's the same shape as [`b.EvaluateTo`](#running-arbitrary-javascript) - the sub-matcher sees the raw JSON-decoded value while `Capture` types it for you.  The text specializations [`EachHaveInnerText`/`EachHaveTextContent`](#contents-and-classes) *do* convert, and hand your matcher a `[]string`.
 
 You can use `SetPropertyForEachImmediately` to set the specified property to the specified value for **all** matched elements.  Since we're pointing at the set of _all_ elements matched by a selector it acts immediately on the current set rather than polling (hence the `*Immediately` suffix), and so has no matcher variant.  You can use it like this:
 
@@ -2181,7 +2225,7 @@ In realistic mode:
 - **`SetValue`** drives form controls with real input: a text input is focused with a real click, cleared, and typed with real key events (then blurred to fire `change`); a checkbox is toggled with a real click (and left alone if it's already in the desired state).  Native pickers - radio groups, `<select>`, and multi-selects - fall back to the fast JS path, because they can't be driven by a real pointer (Playwright's `selectOption` sets them programmatically too).
 - **`Type`** / **`SendKeysToWindowImmediately`** already use real CDP key events; in realistic mode they additionally scroll the element into view before typing.
 
-All keep Biloba's dual immediate/matcher API (`rb.Click("#go")` vs `Eventually("#go").Should(rb.Click())`).  For anything else you can still [drop down to chromedp](#chromedp-breaking-the-fourth-wall) via `b.Context`.
+All keep Biloba's dual immediate/matcher API (`rb.Click("#go")` vs `Eventually("#go").Should(rb.Click())`).  For anything else you can still [drop down to chromedp](#codechromedpcode-breaking-the-fourth-wall) via `b.Context`.
 
 #### Using realistic mode across a spec or a suite
 
@@ -2227,7 +2271,7 @@ Biloba's interactions run on two tracks: the fast default (`b`) is an atomic Jav
 | `ScrollIntoView` | real `scrollIntoView()` (both tracks) | real `scrollIntoView()` |
 | `SetUpload` | CDP `DOM.setFileInputFiles` (both tracks - cannot be simulated in JS) | same |
 
-A couple of deliberate gaps are worth calling out, both reachable via [chromedp](#chromedp-breaking-the-fourth-wall) on `b.Context`:
+A couple of deliberate gaps are worth calling out, both reachable via [chromedp](#codechromedpcode-breaking-the-fourth-wall) on `b.Context`:
 
 - **Occlusion on the fast track.** Plain `Click` intentionally clicks through overlays (the atomic, no-scroll default).  When you want to *assert* an element is genuinely clickable without paying for full realistic mode, use the deterministic [`b.BeClickable()`](#existence-counting-visibility-and-interactibility) matcher (visible + enabled + topmost-at-its-center); it stays opt-in rather than changing `Click`'s default, so existing click-through behavior is never silently broken.
 - **Native HTML5 drag-and-drop, native `<select>` realism, cross-origin iframes, and device/mobile emulation** are not driven by either track by design - drop to chromedp for those (see the [emulation recipes](#emulation-and-device-conveniences-drop-to-chromedp)).
@@ -3229,7 +3273,17 @@ A few things to keep in mind:
 - **Turning interception on also disables the browser cache** (and `Prepare()` turns it back on).  This is not an optimization knob - it's a correctness requirement.  A response served out of Chrome's cache never traverses the network stack, so it raises no interception event at all: the request would still show up in `HaveMadeRequest` while silently skipping every stub/abort/modify handler.  Concretely, a second fetch of a `Cache-Control: max-age=3600` resource would hand your `ModifyResponse` transform a **stale cached body** while the origin server was never contacted.  Interception has to mean interception, so Biloba trades the cache away for as long as it's on (and it disables the cache *before* enabling interception, so there's no window where the two disagree).
 - **Stubbed requests are still observed.**  `HaveMadeRequest` and `AllRequests` (below) see stubbed requests just like real ones.
 
-`StubRequest` is one of a family of network handlers.  All of them are registered the same way - on a tab, scoped to it, cleared by `Prepare()` - and consulted in **registration order, first-match-wins**.  A request that matches no handler passes through to the real network.  The rest of the family is below.
+`StubRequest` returns a `*biloba.RequestStub`.  You can ignore it - every example in these docs does - or keep it and assert that the stub actually fired:
+
+```go
+stub := b.StubRequest(ContainSubstring("/api/users"), biloba.StubResponse{Body: `[]`})
+b.Click("#refresh")
+Eventually(stub.Count).Should(Equal(1))
+```
+
+That line earns its keep because the alternative failure is silent: a typo'd URL matches nothing, the request sails through to the real network, and the spec passes for the wrong reason.  `Count` is a snapshot (it takes no poll knobs) but it's safe to poll.  It's also a fact about *that handler*, not about the URL - handlers are first-match-wins, so a stub shadowed by an earlier registration stays at `0`.
+
+`StubRequest` is one of a family of network handlers.  All of them are registered the same way - on a tab, scoped to it, cleared by `Prepare()` - and consulted in **registration order, first-match-wins**.  A request that matches no handler passes through to the real network.  Each of them hands back a handle with a `Count()` of its own, and it means the same thing everywhere: how many dispatches *that* handler claimed.  The rest of the family is below.
 
 ### Aborting requests
 
@@ -3241,7 +3295,7 @@ b.Click("#load-users")
 Eventually("#error").Should(b.HaveText("Couldn't reach the server"))
 ```
 
-The `url` argument is a string (exact match) or any Gomega matcher.  Like all the network handlers, aborts are per-tab and reset by `Prepare()`.
+The `url` argument is a string (exact match) or any Gomega matcher.  Like all the network handlers, aborts are per-tab and reset by `Prepare()`.  `AbortRequest` returns a `*biloba.RequestAbort` whose `Count()` reports how many requests it aborted - `Eventually(abort.Count).Should(Equal(1))`, for [the same reason](#stubbing-requests) it's worth asserting on a stub's.
 
 ### Modifying requests (continue with overrides)
 
@@ -3255,7 +3309,7 @@ b.ModifyRequest(ContainSubstring("/api/users")).
 	WithBody(`{"name":"Jane"}`)        // override the request body
 ```
 
-Each `WithHeader` accumulates, so you can build up several headers.  Anything you don't set passes through unchanged.
+Each `WithHeader` accumulates, so you can build up several headers.  Anything you don't set passes through unchanged.  The builder also carries a `Count()` - hold on to it and `Eventually(mod.Count).Should(Equal(1))` proves the modification actually ran, [as with a stub](#stubbing-requests).
 
 ### Modifying responses
 
@@ -3277,7 +3331,7 @@ b.ModifyResponse(ContainSubstring("/api/users")).Using(func(r biloba.Intercepted
 })
 ```
 
-Response interception is a heavier mode than the request-stage handlers: the tab pauses each matching request twice (once on the way out, once when the response arrives) so Biloba can read the real body.  As with the others, it's per-tab, reset by `Prepare()`, and first-match-wins.
+Response interception is a heavier mode than the request-stage handlers: the tab pauses each matching request twice (once on the way out, once when the response arrives) so Biloba can read the real body.  As with the others, it's per-tab, reset by `Prepare()`, and first-match-wins - and its builder carries the same `Count()`, which is the cheapest way to prove your transform ran at all ([as with a stub](#stubbing-requests)).
 
 > **First-match-wins has a sharp edge inside an `Ordered` container.**  Handlers are consulted in registration order and the first one whose URL matches claims the request - later handlers for that same URL are never consulted.  `Prepare()` is what clears them, and in an `Ordered` container with `BeforeEach(..., OncePerOrdered)` **`Prepare()` does not run between the `It`s**.  So handlers *accumulate*: a handler registered by the first `It` is still registered when the second `It` runs, and an identical handler registered there is silently dead code.  No error, no warning - it simply never runs, and you're left staring at a spec that behaves as though your stub isn't there.
 >
@@ -3329,20 +3383,26 @@ The API:
 | `hold.Release(r)` | release just that response - the one `Await()` handed you - and stay **armed** for future matches. |
 | `hold.ReleaseNext()` | release the oldest response still held, and stay **armed**.  Fails the spec if nothing is currently held (`Await()` first). |
 | `hold.Count()` | how many matching responses have been intercepted so far - held *or* passed through under a `Limit`.  A snapshot, but safe to poll: `Eventually(hold.Count).Should(Equal(1))`. |
+| `hold.Held()` | how many of those the hold actually froze - cumulative, including ones it has since released. |
+| `hold.PassedThrough()` | how many reached the hold and were never frozen: they arrived while it was at its `Limit`, or after a bare terminal `Release()`. |
+
+`Held() + PassedThrough() == Count()`, always.  All three are snapshots and all three are safe to poll.
 
 **`Limit(1)` is how you say "hold #1 while #2 lands."**  Two rapid saves where the *first* response must resolve *last* is an ordering a default hold can never produce, since it freezes the second response as well:
 
 ```go
 hold := b.HoldResponse(ContainSubstring("/api/save")).Limit(1)
 
-b.Click("#save")                              // the first save's response is held
+b.Click("#save")                                   // the first save's response is held
 hold.Await()
-b.Click("#save")                              // the second save's response goes straight through
-Eventually(hold.Count).Should(Equal(2))       // ...and the counter proves it did
+b.Click("#save")                                   // the second save's response goes straight through
+Eventually(hold.PassedThrough).Should(Equal(1))    // ...and the counter proves it did
 
-hold.Release()                                // now the FIRST response lands - last
+hold.Release()                                     // now the FIRST response lands - last
 Eventually("#status").Should(b.HaveInnerText("Saved"))
 ```
+
+Assert on `PassedThrough` rather than `Count` here.  The fixture this spec is built on is that response #2 was *not* frozen, and `Count() == 2` can only say that by inference from the limit - so a regression that raises the limit to 2 leaves the spec green while destroying the ordering it was written to pin.  `PassedThrough` says it directly, and fails when the limit moves.
 
 **`ReleaseNext()` is how you step responses through one at a time.**  Registering a *second* `HoldResponse` for the same URL to catch the next response does not work - handlers are [first-match-wins](#modifying-responses), so the second registration is dead code.  Re-arm the hold you already have instead:
 
@@ -3358,6 +3418,8 @@ hold.Await()          // blocks until the SECOND GET /home is held
 ```
 
 `hold.Release(r)` does the same thing when you're holding several and want to pick one out by value: pass back a response `Await()` returned and only that one goes.  (Responses are matched by value, oldest first - two byte-identical held responses are genuinely indistinguishable.)
+
+**`Release` and `Count` are facts about the *network*, not about the page.**  `Count` says the response reached this tab's interceptor; `Release` returns once the release has been signalled.  Neither says the renderer has done anything with it yet.  So when the assertion is really about what the app *did* with the response, pair them with an [app-state barrier](#the-app-state-barrier-codebgetjsvaluecode) - the DOM the response produces, or state the app exposes on `window` for you to poll with `b.GetJSValue` - rather than a sleep.
 
 `Await` is a [waiting command](#interacting-with-elements): it keeps its own generous default deadline (~30s) and honors `WithTimeout`/`WithContext` - set them on the tab you build the hold from, `b.WithTimeout(5*time.Second).HoldResponse(url).Await()`.  `WithPolling` and `Immediate` are a hard error.  On timeout it fails the spec and tells you how many matching responses it *did* see.
 
@@ -3688,7 +3750,7 @@ Both `SpinUpChrome` and `ConnectToChrome` support a variety of configuration opt
 
 `SpinUpChrome(GinkgoT(), ...)` accepts a set of `SpinUpOption`s:
 
-- `biloba.HighFidelityHeadless()` runs the full ("new") headless Chrome instead of the default `chrome-headless-shell` (see [Headless Fidelity](#headless-fidelity-chrome-headless-shell-by-default)).
+- `biloba.HighFidelityHeadless()` runs the full ("new") headless Chrome instead of the default `chrome-headless-shell` (see [Headless Fidelity](#headless-fidelity-codechrome-headless-shellcode-by-default)).
 - `biloba.AutoInstallHeadlessShell()` downloads `chrome-headless-shell` via Chrome for Testing if it can't be found locally, instead of failing with instructions.
 - `biloba.HeadlessShellPath(path)` points Biloba at a specific `chrome-headless-shell` binary (the `BILOBA_CHROME_HEADLESS_SHELL` environment variable does the same).
 - `biloba.StartingWindowSize(width, height)` sets the default window size for all tabs.

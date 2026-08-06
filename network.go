@@ -303,6 +303,69 @@ func (p *handlerProvenance) recordShadowed(winner *handlerProvenance) {
 	}
 }
 
+// firedCount is the read side of the same counter the shadowed-handler diagnostic keeps: how many
+// dispatches this handler actually claimed.  Every network-handler handle exposes it as Count() so a
+// spec can assert its handler fired rather than trusting that it did - a typo'd URL otherwise passes
+// silently to the real network.  fired is guarded by b.lock, and the dispatch goroutines write it, so
+// take the lock to read it.
+func firedCount(b *Biloba, prov *handlerProvenance) int {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	return prov.fired
+}
+
+/*
+RequestStub is the handle [Biloba.StubRequest] returns.  Its one job is [RequestStub.Count]: proof that
+the stub you registered actually answered a request.
+
+Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
+*/
+type RequestStub struct {
+	b    *Biloba
+	prov *handlerProvenance
+}
+
+/*
+Count returns how many requests this stub has fulfilled.  It is a snapshot - it takes no poll-config
+knobs - but it is safe to poll, which is how a spec asserts its stub actually fired:
+
+	stub := b.StubRequest(ContainSubstring("/api/users"), biloba.StubResponse{Body: `[]`})
+	b.Click("#refresh")
+	Eventually(stub.Count).Should(Equal(1))
+
+Without this the usual failure mode is silent: a URL that matches nothing goes straight to the real
+network and the spec passes for the wrong reason.  Note that Count is a fact about *this* handler, not
+about the URL: handlers are first-match-wins, so a stub shadowed by an earlier one stays at 0.
+
+Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
+*/
+func (s *RequestStub) Count() int { return firedCount(s.b, s.prov) }
+
+/*
+RequestAbort is the handle [Biloba.AbortRequest] returns.  Its one job is [RequestAbort.Count]: proof
+that the abort you registered actually failed a request.
+
+Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
+*/
+type RequestAbort struct {
+	b    *Biloba
+	prov *handlerProvenance
+}
+
+/*
+Count returns how many requests this handler has aborted.  It is a snapshot - it takes no poll-config
+knobs - but it is safe to poll:
+
+	abort := b.AbortRequest(ContainSubstring("/api/users"))
+	b.Click("#refresh")
+	Eventually(abort.Count).Should(Equal(1))
+
+See [RequestStub.Count] for why asserting on it is worth the line.
+
+Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
+*/
+func (a *RequestAbort) Count() int { return firedCount(a.b, a.prov) }
+
 /*
 StubRequest intercepts requests whose URL matches url and fulfills them with the provided StubResponse instead of hitting the network.  url may be a string (exact match) or a Gomega matcher (e.g. ContainSubstring("/api/users")):
 
@@ -313,9 +376,15 @@ StubRequest intercepts requests whose URL matches url and fulfills them with the
 
 Stubs are scoped to the tab they are registered on and are cleared by Prepare().  Requests that match no stub are passed through to the real network.  Registering the first stub on a tab enables request interception for that tab, which pauses and resumes every request the tab makes - so only stub when you need to.
 
+It returns a [RequestStub] handle you can ignore, or keep to assert the stub actually fired:
+
+	stub := b.StubRequest(ContainSubstring("/api/users"), biloba.StubResponse{Body: `[]`})
+	b.Click("#refresh")
+	Eventually(stub.Count).Should(Equal(1))
+
 Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
 */
-func (b *Biloba) StubRequest(url any, response StubResponse) {
+func (b *Biloba) StubRequest(url any, response StubResponse) *RequestStub {
 	b.gt.Helper()
 	b.guardConfig("StubRequest")
 	if response.Status == 0 {
@@ -323,9 +392,11 @@ func (b *Biloba) StubRequest(url any, response StubResponse) {
 	}
 	b.lock.Lock()
 	resp := response
-	b.requestHandlers = append(b.requestHandlers, &requestHandler{matcher: matcherOrEqual(url), stub: &resp, prov: newHandlerProvenance("StubRequest", "request")})
+	handler := &requestHandler{matcher: matcherOrEqual(url), stub: &resp, prov: newHandlerProvenance("StubRequest", "request")}
+	b.requestHandlers = append(b.requestHandlers, handler)
 	b.lock.Unlock()
 	b.ensureFetchEnabled()
+	return &RequestStub{b: b, prov: &handler.prov}
 }
 
 /*
@@ -339,15 +410,20 @@ Like StubRequest, AbortRequest is scoped to the tab, cleared by Prepare(), and e
 interception.  Handlers are first-match-wins in registration order, so register your aborts and
 stubs in the order you want them consulted.
 
+It returns a [RequestAbort] handle you can ignore, or keep to assert the abort actually fired with
+Eventually(abort.Count).Should(Equal(1)).
+
 Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
 */
-func (b *Biloba) AbortRequest(url any) {
+func (b *Biloba) AbortRequest(url any) *RequestAbort {
 	b.gt.Helper()
 	b.guardConfig("AbortRequest")
 	b.lock.Lock()
-	b.requestHandlers = append(b.requestHandlers, &requestHandler{matcher: matcherOrEqual(url), abort: true, prov: newHandlerProvenance("AbortRequest", "request")})
+	handler := &requestHandler{matcher: matcherOrEqual(url), abort: true, prov: newHandlerProvenance("AbortRequest", "request")}
+	b.requestHandlers = append(b.requestHandlers, handler)
 	b.lock.Unlock()
 	b.ensureFetchEnabled()
+	return &RequestAbort{b: b, prov: &handler.prov}
 }
 
 /*
@@ -362,6 +438,9 @@ type RequestModification struct {
 	method  *string
 	body    *string
 	headers []*fetch.HeaderEntry
+
+	b    *Biloba
+	prov *handlerProvenance
 }
 
 /*
@@ -382,13 +461,29 @@ Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn 
 func (b *Biloba) ModifyRequest(url any) *RequestModification {
 	b.gt.Helper()
 	b.guardConfig("ModifyRequest")
-	mod := &RequestModification{}
+	mod := &RequestModification{b: b}
 	b.lock.Lock()
-	b.requestHandlers = append(b.requestHandlers, &requestHandler{matcher: matcherOrEqual(url), modify: mod, prov: newHandlerProvenance("ModifyRequest", "request")})
+	handler := &requestHandler{matcher: matcherOrEqual(url), modify: mod, prov: newHandlerProvenance("ModifyRequest", "request")}
+	mod.prov = &handler.prov
+	b.requestHandlers = append(b.requestHandlers, handler)
 	b.lock.Unlock()
 	b.ensureFetchEnabled()
 	return mod
 }
+
+/*
+Count returns how many requests this handler has modified.  It is a snapshot - it takes no poll-config
+knobs - but it is safe to poll:
+
+	mod := b.ModifyRequest(ContainSubstring("/api/users")).WithMethod("POST")
+	b.Click("#refresh")
+	Eventually(mod.Count).Should(Equal(1))
+
+See [RequestStub.Count] for why asserting on it is worth the line.
+
+Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
+*/
+func (m *RequestModification) Count() int { return firedCount(m.b, m.prov) }
 
 // WithURL overrides the request URL (the change is not observable by the page).
 func (m *RequestModification) WithURL(url string) *RequestModification {
@@ -459,8 +554,23 @@ type ResponseModification struct {
 	using   func(InterceptedResponse) StubResponse
 	hold    *ResponseHold // set when this handler was registered by HoldResponse
 
+	b    *Biloba
 	prov handlerProvenance
 }
+
+/*
+Count returns how many responses this handler has modified.  It is a snapshot - it takes no
+poll-config knobs - but it is safe to poll:
+
+	mod := b.ModifyResponse(ContainSubstring("/api/users")).WithStatus(503)
+	b.Click("#refresh")
+	Eventually(mod.Count).Should(Equal(1))
+
+See [RequestStub.Count] for why asserting on it is worth the line.
+
+Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
+*/
+func (m *ResponseModification) Count() int { return firedCount(m.b, &m.prov) }
 
 /*
 ModifyResponse intercepts the real response to requests whose URL matches url and fulfills the page
@@ -488,7 +598,7 @@ Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn 
 func (b *Biloba) ModifyResponse(url any) *ResponseModification {
 	b.gt.Helper()
 	b.guardConfig("ModifyResponse")
-	mod := &ResponseModification{matcher: matcherOrEqual(url), prov: newHandlerProvenance("ModifyResponse", "response")}
+	mod := &ResponseModification{b: b, matcher: matcherOrEqual(url), prov: newHandlerProvenance("ModifyResponse", "response")}
 	b.lock.Lock()
 	b.responseHandlers = append(b.responseHandlers, mod)
 	b.lock.Unlock()
@@ -575,6 +685,7 @@ type ResponseHold struct {
 
 	lock     sync.Mutex
 	count    int           // every matching response intercepted so far, held or not
+	passed   int           // of those, the ones that were never frozen (at the Limit, or after a terminal Release)
 	limit    int           // at most this many responses may be held concurrently (0 = unlimited)
 	held     []*heldEntry  // every response this hold has taken ownership of, oldest first (released ones included)
 	blocked  int           // how many goroutines are currently parked inside the hold
@@ -622,7 +733,7 @@ func (b *Biloba) HoldResponse(url any) *ResponseHold {
 		matcher: matcherOrEqual(url),
 		notify:  make(chan struct{}),
 	}
-	mod := &ResponseModification{matcher: h.matcher, hold: h, using: h.intercept, prov: newHandlerProvenance("HoldResponse", "response")}
+	mod := &ResponseModification{b: b, matcher: h.matcher, hold: h, using: h.intercept, prov: newHandlerProvenance("HoldResponse", "response")}
 	b.lock.Lock()
 	b.responseHandlers = append(b.responseHandlers, mod)
 	b.lock.Unlock()
@@ -641,11 +752,13 @@ never produce, since it freezes #2 as well:
 	b.Click("#save")                                 // the first save's response is held
 	hold.Await()
 	b.Click("#save")                                 // the second save's response flies past and lands
-	Eventually(hold.Count).Should(Equal(2))
+	Eventually(hold.PassedThrough).Should(Equal(1))  // ...and this is how you say so
 	hold.Release()                                   // now the FIRST response lands, last
 
 Releasing a held response frees up capacity, so the next match is held again.  n must be at least 1;
-by default a hold is unlimited.
+by default a hold is unlimited.  A response that flew past under the cap is counted by
+[ResponseHold.PassedThrough] - assert on that rather than on the total, so raising the limit breaks the
+spec instead of silently changing what it tests.
 
 Two edges worth knowing: the hold starts intercepting the moment [Biloba.HoldResponse] returns, so a
 response already in flight when the chained .Limit(n) runs can be held before the cap is set (only
@@ -679,6 +792,7 @@ func (h *ResponseHold) intercept(r InterceptedResponse) StubResponse {
 	if h.limit > 0 && h.holdingCount() >= h.limit {
 		// at capacity: this match was never this hold's business.  It passes straight through and is
 		// not recorded as an entry - Await must not hand back a response the hold never held.
+		h.passed++
 		h.lock.Unlock()
 		return passthrough
 	}
@@ -687,7 +801,9 @@ func (h *ResponseHold) intercept(r InterceptedResponse) StubResponse {
 	h.signal()
 	if h.released {
 		// terminal: the hold is done holding, but the entry is still recorded so a post-Release Await
-		// keeps returning the first intercepted response rather than blocking forever.
+		// keeps returning the first intercepted response rather than blocking forever.  It was never
+		// actually frozen, though, so it counts as passed through.
+		h.passed++
 		h.releaseEntry(entry)
 		h.lock.Unlock()
 		return passthrough
@@ -780,13 +896,13 @@ func (h *ResponseHold) Await() InterceptedResponse {
 			h.lock.Unlock()
 			return response
 		}
-		notify, count := h.notify, h.count
+		notify, tally := h.notify, h.tally()
 		h.lock.Unlock()
 
 		select {
 		case <-notify:
 		case <-ctx.Done():
-			h.b.gt.Fatalf("Timed out after %s waiting for HoldResponse to intercept a response with URL matching %s\n%d matching response(s) have been intercepted so far.", timeout, h.description(), count)
+			h.b.gt.Fatalf("Timed out after %s waiting for HoldResponse to intercept a response with URL matching %s\n%s", timeout, h.description(), tally)
 			return InterceptedResponse{}
 		}
 	}
@@ -818,6 +934,11 @@ stays armed - the next matching response is held just like the first:
 
 Releasing a response this hold is not currently holding fails the spec.  Responses are matched by
 value, oldest first, since two byte-identical held responses are genuinely indistinguishable.
+
+Release is a fact about the *network*: it returns once the release is signalled, which is not the same
+thing as the page having received the response, let alone having rendered it.  When the next assertion
+is about what the renderer did, follow Release with an app-state barrier - Eventually on the DOM the
+response produces, or on state the app exposes on window - rather than a sleep.
 
 Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
 */
@@ -857,10 +978,10 @@ func (h *ResponseHold) ReleaseNext() {
 		h.lock.Unlock()
 		return
 	}
-	count := h.count
+	tally := h.tally()
 	h.lock.Unlock()
 	// never fail while holding h.lock - gt.Fatalf does not return in a real spec.
-	h.b.gt.Fatalf("ReleaseNext() was called but this hold is not holding any responses with URL matching %s\n%d matching response(s) have been intercepted so far.\nAwait() until a response is actually being held before you release it.", h.description(), count)
+	h.b.gt.Fatalf("ReleaseNext() was called but this hold is not holding any responses with URL matching %s\n%s\nAwait() until a response is actually being held before you release it.", h.description(), tally)
 }
 
 // releaseResponse frees the oldest still-held entry equal to response.  InterceptedResponse is a
@@ -914,12 +1035,71 @@ spec waits for a passed-through response to have reached the interceptor:
 
 	Eventually(hold.Count).Should(Equal(1))
 
+Count is the total; [ResponseHold.Held] and [ResponseHold.PassedThrough] split it, and are what you
+want when the fact under test is which side a particular response landed on.
+
+Count is a fact about the *network*, not about the page: it says the response reached this tab's
+interceptor, not that the renderer has done anything with it.  When your assertion is about what the
+app did with the response, pair it with an app-state barrier (a DOM change, a store the app exposes on
+window) - the same lesson as [ResponseHold.Release].
+
 Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
 */
 func (h *ResponseHold) Count() int {
 	h.lock.Lock()
 	defer h.lock.Unlock()
 	return h.count
+}
+
+/*
+Held returns how many matching responses this hold has actually frozen - cumulative, including ones it
+has since released.  It is a snapshot but safe to poll, exactly like [ResponseHold.Count].
+
+Held plus [ResponseHold.PassedThrough] always equals Count.
+
+Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
+*/
+func (h *ResponseHold) Held() int {
+	h.lock.Lock()
+	defer h.lock.Unlock()
+	return h.count - h.passed
+}
+
+/*
+PassedThrough returns how many matching responses reached this hold and were never frozen: they
+arrived while the hold was at its [ResponseHold.Limit], or after a bare Release() ended it.
+
+This is how a spec states the fixture "response #2 was NOT held" directly, instead of inferring it from
+the total plus the limit:
+
+	hold := b.HoldResponse(ContainSubstring("/api/save")).Limit(1)
+	b.Click("#save")
+	held := hold.Await()                                 // #1 is frozen
+	b.Click("#save")
+	Eventually(hold.PassedThrough).Should(Equal(1))      // #2 flew past - and a raised Limit would fail here
+	hold.Release(held)
+
+Asserting on Count() alone cannot say that: a regression that raises the limit to 2 keeps Count() == 2
+green while quietly destroying the ordering under test.
+
+It is a snapshot but safe to poll, exactly like [ResponseHold.Count].
+
+Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
+*/
+func (h *ResponseHold) PassedThrough() int {
+	h.lock.Lock()
+	defer h.lock.Unlock()
+	return h.passed
+}
+
+// tally renders the intercepted/held/passed-through breakdown the Await and ReleaseNext failures
+// carry.  Must be called with h.lock held.
+func (h *ResponseHold) tally() string {
+	out := fmt.Sprintf("%d matching response(s) have been intercepted so far", h.count)
+	if h.passed > 0 {
+		out += fmt.Sprintf(" (%d held, %d passed straight through)", h.count-h.passed, h.passed)
+	}
+	return out + "."
 }
 
 func (h *ResponseHold) description() string {

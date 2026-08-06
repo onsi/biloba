@@ -343,7 +343,7 @@ func (b *Biloba) CurrentInnerTextForEach(selector any) []string {
 }
 
 /*
-EachHaveInnerText(expected) is a Gomega matcher that passes if there is at least one element matching selector and the []string slice of innerTexts for all matching elements satisfies expected.  expected can be a []string, but you'll probably want to use a Gomega matcher.  It fails when no elements match - to assert that nothing matches use Eventually(selector).Should(b.HaveCount(0)) or ShouldNot(b.Exist()).
+EachHaveInnerText(expected) is a Gomega matcher that passes if there is at least one element matching selector and the []string slice of innerTexts for all matching elements satisfies expected.  It fails when no elements match - to assert that nothing matches use Eventually(selector).Should(b.HaveCount(0)) or ShouldNot(b.Exist()).
 
 Use it like this:
 
@@ -351,13 +351,17 @@ Use it like this:
 	//equivalent to, but tidier than
 	Eventually(tab.CurrentInnerTextForEach).WithArgument("div.comment").Should(ContainElement("new comment"))
 
+The value handed to your matcher is a []string - the same slice [Biloba.CurrentInnerTextForEach] returns - so Equal([]string{...}) and HaveExactElements("a", "b", "c") both mean what they look like they mean.  (Unlike the generic [Biloba.EachHaveProperty], which hands over the raw JSON-decoded []any.)  You can also pass the expected texts directly:
+
+	Eventually("div.comment").Should(tab.EachHaveInnerText("first", "second"))
+
 It returns a [ValueMatcher], so you can keep the slice of innerTexts that satisfied the assertion with .Capture(&texts).
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DO
 M
 */
 func (b *Biloba) EachHaveInnerText(args ...any) *ValueMatcher {
-	return b.EachHaveProperty("innerText", args...)
+	return b.eachHaveProperty("EachHaveInnerText", "innerText", anyStringSlice, args...)
 }
 
 /*
@@ -404,7 +408,7 @@ func (b *Biloba) CurrentTextContentForEach(selector any) []string {
 }
 
 /*
-EachHaveTextContent(expected) is a Gomega matcher that passes if there is at least one element matching selector and the []string slice of textContents for all matching elements satisfies expected.  expected can be a []string, but you'll probably want to use a Gomega matcher.  It fails when no elements match - to assert that nothing matches use Eventually(selector).Should(b.HaveCount(0)) or ShouldNot(b.Exist()).
+EachHaveTextContent(expected) is a Gomega matcher that passes if there is at least one element matching selector and the []string slice of textContents for all matching elements satisfies expected.  It fails when no elements match - to assert that nothing matches use Eventually(selector).Should(b.HaveCount(0)) or ShouldNot(b.Exist()).
 
 Use it like this:
 
@@ -412,12 +416,16 @@ Use it like this:
 	//equivalent to, but tidier than
 	Eventually(tab.CurrentTextContentForEach).WithArgument("div.comment").Should(ContainElement("new comment"))
 
+The value handed to your matcher is a []string - the same slice [Biloba.CurrentTextContentForEach] returns - so Equal([]string{...}) and HaveExactElements("a", "b", "c") both mean what they look like they mean.  (Unlike the generic [Biloba.EachHaveProperty], which hands over the raw JSON-decoded []any.)  You can also pass the expected texts directly:
+
+	Eventually("div.comment").Should(tab.EachHaveTextContent("first", "second"))
+
 It returns a [ValueMatcher], so you can keep the slice of textContents that satisfied the assertion with .Capture(&texts).
 
 Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about selectors and handling the DOM
 */
 func (b *Biloba) EachHaveTextContent(args ...any) *ValueMatcher {
-	return b.EachHaveProperty("textContent", args...)
+	return b.eachHaveProperty("EachHaveTextContent", "textContent", anyStringSlice, args...)
 }
 
 /*
@@ -715,7 +723,9 @@ Alternatively, you can pass a Gomega matcher as a single expected argument after
 
 	Eventually("div.comment").Should(tabEach.HaveProperty("dataset.poster", ContainElement("George")))
 
-Both forms return a [ValueMatcher], so you can keep the slice of property values that satisfied the assertion - the existence-only form hands back the same []any the value-matching form does:
+The slice your matcher sees is the raw JSON-decoded []any Chrome handed back, not a typed slice - properties are heterogeneous, so there is nothing honest to convert them to.  That makes Equal([]string{"Jane", "George"}) always fail (Equal compares dynamic types, and []any is not []string, even when the contents render identically).  Reach for the element-wise HaveExactElements("Jane", "George") when you want to pin order and length, or ContainElement/HaveEach/ConsistOf otherwise.  The text specializations [Biloba.EachHaveInnerText] and [Biloba.EachHaveTextContent] do convert, and hand your matcher a []string.
+
+Both forms return a [ValueMatcher], so you can keep the slice of property values that satisfied the assertion - the existence-only form hands back the same []any the value-matching form does, and Capture decodes it the way encoding/json would, so a *[]string target works even though the matcher saw []any:
 
 	var posters []string
 	Eventually("div.comment").Should(tab.EachHaveProperty("dataset.poster", ContainElement("George")).Capture(&posters))
@@ -725,8 +735,27 @@ Read https://onsi.github.io/biloba/#working-with-the-dom to learn more about sel
 Read https://onsi.github.io/biloba/#properties to learn more about working with properties
 */
 func (b *Biloba) EachHaveProperty(property string, expected ...any) *ValueMatcher {
+	return b.eachHaveProperty(fmt.Sprintf("EachHaveProperty %q", property), property, nil, expected...)
+}
+
+// eachHaveProperty is the shared implementation behind EachHaveProperty and the innerText/textContent
+// specializations.  convert, when set, is applied to the slice the browser returns BEFORE it reaches
+// the sub-matcher and before Capture sees it: that is how EachHaveInnerText/EachHaveTextContent
+// present the []string their getter twins (CurrentInnerTextForEach/CurrentTextContentForEach) return
+// rather than the raw []any Chrome hands back - so Equal([]string{...}) means what it looks like it
+// means.  It is nil for the generic property form, where the values are heterogeneous JSON and there
+// is nothing honest to convert them to.  label names the matcher the user actually called, so an
+// EachHaveInnerText failure does not report itself as EachHaveProperty.
+func (b *Biloba) eachHaveProperty(label string, property string, convert func(any) any, expected ...any) *ValueMatcher {
 	var data = map[string]any{}
 	data["Property"] = property
+	data["Label"] = label
+	decode := func(values any) any {
+		if convert == nil {
+			return values
+		}
+		return convert(values)
+	}
 	if len(expected) == 0 {
 		return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
 			// the handler returns {count, values}: count drives the fail-on-empty message, values is the
@@ -739,7 +768,7 @@ func (b *Biloba) EachHaveProperty(property string, expected ...any) *ValueMatche
 			}
 			m, _ := r.Result.(map[string]any)
 			data["Empty"] = toInt(m["count"]) == 0
-			data["Result"] = m["values"]
+			data["Result"] = decode(m["values"])
 			return r.Success, nil
 		}).WithTemplate("{{if .Data.Empty}}"+eachEmptyTemplate+"{{else}}Expected each {{.Actual}} {{.To}} each have property \"{{.Data.Property}}\"{{end}}", data), data)
 	} else {
@@ -756,7 +785,7 @@ func (b *Biloba) EachHaveProperty(property string, expected ...any) *ValueMatche
 			if r.Error() != nil {
 				return false, r.Error()
 			}
-			data["Result"] = r.Result
+			data["Result"] = decode(r.Result)
 			// Fail (with a clear message) on zero matches before handing the empty slice to the
 			// value matcher - otherwise a matcher like BeEmpty() would vacuously pass, and the rest
 			// would report a confusing slice-length mismatch instead of "no elements matched".
@@ -766,9 +795,12 @@ func (b *Biloba) EachHaveProperty(property string, expected ...any) *ValueMatche
 			}
 			data["Empty"] = false
 			return matcher.Match(data["Result"])
-		}).WithTemplate("{{if .Data.Empty}}"+eachEmptyTemplate+"{{else}}EachHaveProperty \"{{.Data.Property}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}{{end}}", data), data)
+		}).WithTemplate("{{if .Data.Empty}}"+eachEmptyTemplate+"{{else}}{{.Data.Label}} for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}{{end}}", data), data)
 	}
 }
+
+// anyStringSlice adapts toStringSlice to the eachHaveProperty convert signature.
+func anyStringSlice(values any) any { return toStringSlice(values) }
 
 /*
 SetProperty() has two modes of operation:
@@ -1136,6 +1168,13 @@ By default those getters poll until the element is present AND every named prope
 	tab.GetProperties("#user", "dataset.firstName", tab.AllowMissing("dataset.middleName"))
 
 Sharp edge: a property that simply does not exist on the element type (e.g. "disabled" on a <div>, where "disabled" in div is false) would otherwise block the poll until it times out.  Wrap such names in AllowMissing to get the old nil/zero-value back.  The getters do not fail fast on this (an app may legitimately define a property later), but when such a poll DOES time out the failure names the element, says the element was present the whole time and it was the property/attribute that never appeared, and quotes the AllowMissing call to paste in.
+
+AllowMissing exists to make absence a *value* rather than a timeout, so keep it a value when you decode: a plain *string target flattens "absent" and "present but empty" into "".  Decode into a pointer to a pointer to keep them apart - absent leaves it nil, present allocates:
+
+	var key *string
+	tab.GetAttribute(".mark", tab.AllowMissing("data-key"), &key)   // key == nil while the attribute is absent
+
+That works for every type (**float64, **bool, ...) and for [ValueMatcher.Capture] too - it is the same decode.  It also makes polling for the absent -> present transition honest, since the pointer only goes non-nil on the attempt that actually saw the value.
 
 AllowMissing is only meaningful for the property/attribute getters; it has no effect elsewhere.
 
