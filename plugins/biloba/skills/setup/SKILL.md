@@ -5,7 +5,7 @@ description: Wire Biloba into your project's Ginkgo suite — go get, the bootst
 
 # Setting up Biloba in your suite
 
-This is the one-time wiring. For the authoring model see `biloba:write-tests`; for the mental model see `biloba:overview`. Docs: <https://onsi.github.io/biloba/#getting-started>.
+One-time wiring. Authoring model → `biloba:write-tests`. Mental model → `biloba:overview`. Docs: <https://onsi.github.io/biloba/#getting-started>.
 
 ## 1. Add Biloba and bootstrap a suite
 
@@ -15,7 +15,7 @@ mkdir browser && cd browser
 ginkgo bootstrap
 ```
 
-Then edit the generated `*_suite_test.go` to wire in Biloba:
+Edit the generated `*_suite_test.go`:
 
 ```go
 package browser_test
@@ -48,40 +48,34 @@ var _ = BeforeEach(func() {
 
 - `GinkgoT()` is the seam: Chrome errors become suite failures.
 - `SpinUpChrome` runs **once** (process 1) and writes connection info to disk; `ConnectToChrome` runs on **every** parallel process and opens that process's reusable root tab `b`.
-- `b.Prepare()` resets `b` between specs (closes other tabs, clears state, navigates to `about:blank`). `OncePerOrdered` keeps it from resetting between `It`s inside an `Ordered` container.
+- `b.Prepare()` resets `b` between specs (closes other tabs, clears state, navigates to `about:blank`). `OncePerOrdered` keeps it from resetting between `It`s inside an `Ordered` container — which is also why network/dialog handlers **accumulate** inside an `Ordered` block (see `biloba:flaky-specs`).
 
 ## 2. Get `chrome-headless-shell`
 
-By default `SpinUpChrome` drives **`chrome-headless-shell`** — the lightweight headless build that is ~an order of magnitude faster and lets one Chrome process drive many isolated contexts in parallel (see `#headless-fidelity`). It's a standalone binary, separate from your Chrome install. Biloba looks for it in this order:
+`SpinUpChrome` drives **`chrome-headless-shell`** by default — the lightweight headless build that is ~an order of magnitude faster and lets one Chrome process drive many isolated contexts in parallel. It's a standalone binary, separate from your Chrome install. Lookup order:
 
 1. `biloba.HeadlessShellPath("/path/to/chrome-headless-shell")`
 2. `BILOBA_CHROME_HEADLESS_SHELL` env var
 3. your `PATH`
 4. the `@puppeteer/browsers` and Biloba download caches
 
-If none turn it up, Biloba **fails fast with instructions** (it will not silently download). Install it once:
+If none turn it up Biloba **fails fast with instructions** — it never silently downloads. Install it once:
 
 ```bash
 npx @puppeteer/browsers install chrome-headless-shell@stable
 ```
 
-Or have Biloba download+cache it the first time (opt-in, since it reaches the network):
+Or let Biloba download+cache it on first use (opt-in, since it reaches the network):
 
 ```go
 biloba.SpinUpChrome(GinkgoT(), biloba.AutoInstallHeadlessShell())
 ```
 
-### When you need full-browser realism
-
-```go
-biloba.SpinUpChrome(GinkgoT(), biloba.HighFidelityHeadless())
-```
-
-This runs the full ("new") headless Chrome — pixel-accurate, extensions, etc. — but markedly slower and it serializes parallel work. Keep the bulk of the suite on the shell and run a focused high-fidelity lane where it earns its keep.
+**Full-browser realism:** `biloba.SpinUpChrome(GinkgoT(), biloba.HighFidelityHeadless())` runs the full ("new") headless Chrome — pixel-accurate, extensions — but markedly slower, and it serializes parallel work. Keep the bulk of the suite on the shell and run a focused high-fidelity lane where it earns its keep.
 
 ## 3. Choose a bootstrap variation
 
-Trade isolation against performance by editing the bootstrap. All three are simple code changes — try them on your suite.
+Trade isolation against performance. All three are small edits — try them on your suite.
 
 **Default — shared browser, reused root tab** (most performant, good-enough isolation): the snippet in step 1.
 
@@ -112,26 +106,27 @@ var _ = BeforeEach(func() {
 }, OncePerOrdered)
 ```
 
-You can mix per-process browsers with fresh-tab-per-spec.
+Per-process browsers and fresh-tab-per-spec can be combined.
 
 ## 4. Suite-level config
 
-`SpinUpChrome(GinkgoT(), ...)` options:
+`SpinUpChrome(GinkgoT(), ...)`:
+
 - `biloba.HighFidelityHeadless()` — full headless Chrome.
 - `biloba.AutoInstallHeadlessShell()` — download the shell if missing.
 - `biloba.HeadlessShellPath(path)` — point at a specific shell binary.
-- `biloba.StartingWindowSize(w, h)` — default tab size (default `1024x768`); a process-wide setting.
+- `biloba.StartingWindowSize(w, h)` — default tab size (default `1024x768`); process-wide. Per-spec override: `b.SetWindowSize(w, h)` (self-restoring).
 - `biloba.ChromeFlags(...)` — raw `chromedp.ExecAllocatorOption`s (e.g. `chromedp.Flag("headless", false)` to watch).
 
-`ConnectToChrome(GinkgoT(), ...)` carries Biloba-specific config — most of it about failure artifacts (outlines, screenshots, inline images), which is covered in `biloba:debug-failures`. Under CI or an AI agent, **failure artifacts need zero config** — Biloba auto-detects and emits a DOM outline plus screenshot files on disk.
+`ConnectToChrome(GinkgoT(), ...)` carries Biloba-specific config — mostly failure artifacts (outlines, screenshots, inline images) → `biloba:debug-failures`. Under CI or an AI agent, **failure artifacts need zero config**: Biloba auto-detects and emits a DOM outline plus screenshot files on disk.
 
 ## 5. Run it
 
 ```bash
-ginkgo -r -p              # parallel — Biloba is built for this
-ginkgo -r -p -randomize-all
+ginkgo -r -p                 # parallel — Biloba is built for this
+ginkgo -r -p -randomize-all  # also enforces spec independence
 ```
 
-## Next: read `biloba:write-tests` before authoring a spec
+## Next
 
-This skill only wired Chrome in. **Before you write a single spec, load `biloba:write-tests`** — the most consequential authoring decision (selecting elements: CSS hook vs. locator vs. XPath) lives there, and generic-automation muscle memory gets it wrong. Reach for `biloba:api` for exact method/matcher names.
+**Before you write a single spec, load `biloba:write-tests`** — the most consequential authoring decision (CSS hook vs. locator vs. XPath) lives there, and generic-automation muscle memory gets it wrong. Reach for `biloba:api` for exact method/matcher names.

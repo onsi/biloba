@@ -1,97 +1,113 @@
 ---
 name: write-tests
-description: Author good Biloba specs in your own Ginkgo/Gomega suite — the dual immediate/matcher API (act now vs. return a matcher you poll with Eventually), capturing a matcher's observed value with .Capture instead of asserting-then-re-reading, first-vs-all naming, the navigate-then-readiness-anchor shape (gate on the DOM, then read GetLocation), selecting elements (CSS targeting stable hooks as the default, semantic role/text/label locators, anchoring a locator scope so a negative assertion isn't vacuous, the >>> piercing combinator, XPath), the interaction vocabulary (click variants, drag, scroll, tap), realistic mode for occlusion/hover smoke tests, hermetic tests via request stubbing/aborting/modifying/holding, the GetJSValue app-state barrier (and when it gates nothing), multi-tab flows, and seeding state. Use when writing or reviewing Biloba browser tests.
+description: Author good Biloba specs in your own Ginkgo/Gomega suite — the dual immediate/matcher API (act now vs. return a matcher you poll with Eventually), capturing a matcher's observed value with .Capture instead of asserting-then-re-reading, first-vs-all naming, the navigate-then-readiness-anchor shape (gate on the DOM, then read GetLocation), selecting elements (CSS targeting stable hooks as the default, semantic role/text/label locators, anchoring a locator scope so a negative assertion isn't vacuous, the >>> piercing combinator, XPath), the interaction vocabulary (click variants, drag, scroll, tap, text selection), realistic mode for occlusion/hover smoke tests, hermetic tests via request stubbing/aborting/modifying/holding, the GetJSValue app-state barrier (and when it gates nothing), multi-tab flows, and seeding state. Use when writing or reviewing Biloba browser tests.
 ---
 
 # Writing Biloba specs
 
-Assumes Biloba is already wired into the suite (`biloba:setup`) and you know the principles (`biloba:overview`). For the full method list see `biloba:api`; for XPath see `biloba:xpath`. Docs: <https://onsi.github.io/biloba/#working-with-the-dom>.
+Assumes the suite is wired (`biloba:setup`) and you know the principles (`biloba:overview`). Method list → `biloba:api`. XPath → `biloba:xpath`. Flakes → `biloba:flaky-specs`. Docs: <https://onsi.github.io/biloba/#working-with-the-dom>.
 
-## RULE — two decisions to get right on the first draft
+## RULE — get these two right in the first draft
 
-1. **Selecting elements.** Interactions and user-facing things → a **Locator** by role/name/text (`b.ByRole("button").WithName("Save")`, `b.ByText("Sign in")`), which doubles as an a11y guard. Structural/state hooks you own → **CSS on a stable `#id`/`[data-testid]`**, never a styling class.
+1. **Selecting elements.** User-facing things → a **Locator** by role/name/text (`b.ByRole("button").WithName("Save")`, `b.ByText("Sign in")`), which doubles as an a11y guard. Structural/state hooks you own → **CSS on a stable `#id`/`[data-testid]`**, never a styling class.
 2. **Assert observable outcomes** — visible text, counts, URL/title, network effects — not internal class/structure.
 
-**Smells** to catch in your own draft (the wrong-from-generic-automation-muscle-memory moves): positional/styling-class CSS (`:nth-of-type`, `.btn-primary` — to address "the Nth element matching a CSS selector," start from `b.ByCSS(sel).Nth(i)` instead); text-matching XPath where `b.ByText`/`b.ByRole().WithName` fits; reinventing a matcher with `b.Run` (`querySelectorAll(...).length` instead of `b.HaveCount`); IIFE-wrapping a script for `return` (use `b.RunAsync`); `SetValue` when you meant keystrokes (use `b.Type`); a **single-shot read** — `b.Run(expr, &x)` immediately followed by `Expect(x)` — which races any async settle (poll it: `Eventually(b.Run).WithArguments(expr)`; see flaky-specs below); a **gate-then-re-read** — a matcher assertion followed by a getter for the same value, which is two reads of a page that may have changed in between (`.Capture(&x)` it instead).
+**Smells to catch in your own draft** (generic-automation muscle memory gets these wrong):
 
-## The one pattern to internalize: dual, and poll-by-default
+| Smell | Instead |
+|---|---|
+| `:nth-of-type`, `.btn-primary` | `b.ByCSS(sel).Nth(i)`, or a stable `#id`/`[data-testid]` |
+| text-matching XPath | `b.ByText(...)` / `b.ByRole(...).WithName(...)` |
+| `b.Run("...querySelectorAll(s).length")` | `b.HaveCount(...)` — reinventing a matcher |
+| IIFE-wrapping a script to get `return` | `b.RunAsync` |
+| `SetValue` when you meant keystrokes | `b.Type` |
+| `b.Run(expr, &x)` then `Expect(x)` — single-shot read | `Eventually(b.Run).WithArguments(expr)` |
+| matcher assertion, then a getter for the same value | `.Capture(&x)` on the matcher — one read |
+| a guarded/conditional interaction ("click X only if…") | fix the spec's state determinism upstream → `biloba:flaky-specs` |
 
-Most DOM methods have **two forms keyed on argument count** — and the key thing to internalize is that **the fully-applied form polls until it succeeds**:
+## The one pattern: dual, and poll-by-default
 
-- **Fully-applied → polls until it succeeds, then acts/reads once.** This is the everyday form. It waits for the element to be ready, does the thing exactly once, then stops — no flake-prone single-shot race.
-  ```go
-  b.Click("#go")                  // polls until clickable, clicks once, stops
-  b.SetValue("#name", "Jane")     // polls until settable, sets once
-  text := b.GetInnerText("#title")// polls until present, reads once
-  ```
-- **Under-applied → returns a Gomega matcher that *you* poll.** Reach for this when you want to drive the `Eventually`/`Consistently` yourself (a custom timeout, a `Consistently`, composing with `.And()`).
-  ```go
-  Eventually("#go").Should(b.Click())            // you own the poll
-  Eventually("#name").Should(b.SetValue("Jane"))
-  Eventually("#title").Should(b.HaveInnerText("Welcome"))
-  ```
+Most DOM methods have **two forms keyed on argument count**.
 
-**Poll-by-default is the whole point.** A fully-applied `b.Click(sel)` **polls until the element exists and is clickable (visible + enabled), dispatches exactly one atomic click on the first success, then succeeds and stops.** It does *not* re-act on later polls, so it is **safe even on a toggle** — there is no oscillation, because the successful action ends the poll. This is what makes Biloba flake-resistant: there is no "fired a frame too early" race to design around. Write `b.Click("#go")` and move on. (What is *not* safe is a **conditional** interaction — "click X only if it's in state S." Reaching for a guard/branch means the spec doesn't know its own state; fix that determinism upstream rather than branching — see flaky-specs.)
+```go
+// Fully applied → POLLS until ready, acts/reads exactly once, stops. The everyday form.
+b.Click("#go")                     // polls until clickable, clicks once
+b.SetValue("#name", "Jane")        // polls until settable, sets once
+text := b.GetInnerText("#title")   // polls until present, reads once
 
-**Tune the poll, or opt out, with `*Biloba` clones** (shallow, à la `Realistic()`): `b.WithTimeout(5*time.Second).Click("#go")`, `b.WithPolling(d)`, `b.WithContext(ctx)`. `b.Immediate().Click("#go")` opts into the old act-once/fail-fast behavior — **you almost never want it**; it reintroduces the classic race. Misapplying config (e.g. `WithPolling` on a snapshot, or any config on the bare matcher form) is a hard error — see `biloba:api` for the four-bucket rule.
+// Under-applied → returns a matcher YOU poll. For a custom timeout, a Consistently, or .And().
+Eventually("#go").Should(b.Click())
+Eventually("#name").Should(b.SetValue("Jane"))
+Eventually("#title").Should(b.HaveInnerText("Welcome"))
+```
 
-**First-vs-all naming.** A bare method acts on/polls for the **first** match; the plural sibling works on **all** current matches. The plural getters are **snapshots** (`Current*ForEach` — no poll, gate presence first) and the plural actions carry an **`Immediately` suffix** (`ClickEachImmediately`, `SetPropertyForEachImmediately` — act now, no poll): `GetInnerText` vs `CurrentInnerTextForEach`/`EachHaveInnerText`; `GetProperty` vs `CurrentPropertyForEach`/`EachHaveProperty`; `Click` vs `ClickEachImmediately`. The name tells you which — and the long `Immediately` suffix is an intentional "know what you're doing" smell.
+A fully-applied action dispatches **once** on the first success and stops — safe even on a **toggle**, no oscillation, no "fired a frame too early" race.
+
+**Tune or opt out** with shallow `*Biloba` clones: `b.WithTimeout(5*time.Second).Click("#go")`, `b.WithPolling(d)`, `b.WithContext(ctx)`. `b.Immediate()` reverts to act-once/fail-fast — **you almost never want it**. Misapplying a knob (e.g. `WithPolling` on a snapshot, or any knob on the bare matcher form) is a hard error → four-bucket table in `biloba:api`.
+
+**First-vs-all naming.** A bare method acts on the **first** match. Plural getters are **snapshots** (no poll — gate presence first); plural actions carry an **`Immediately` suffix** (act now, no poll; the long suffix is a deliberate "know what you're doing" smell). Matchers over all matches are `Each*` and **fail on zero matches**.
+
+| first (polls) | all (snapshot / immediate) | matcher over all |
+|---|---|---|
+| `GetInnerText` | `CurrentInnerTextForEach` | `EachHaveInnerText` |
+| `GetProperty` | `CurrentPropertyForEach` | `EachHaveProperty` |
+| `Click` | `ClickEachImmediately` | — |
 
 ## The spec shape
-
-Navigate, gate on a **readiness anchor**, then exercise behavior:
 
 ```go
 var _ = Describe("the search page", func() {
 	BeforeEach(func() {
 		b.Navigate("http://localhost:8080/search")
-		Eventually("#results").Should(b.Exist()) // page is ready once this appears
+		Eventually("#results").Should(b.Exist()) // readiness anchor
 	})
 
 	It("finds matches", func() {
-		b.SetValue("#q", "biloba")                              // polls until settable, sets once
-		b.Click(b.ByRole("button").WithName("Search"))          // polls until clickable, clicks once
-		Eventually(".result").Should(b.HaveCount(BeNumerically(">", 0))) // assert the outcome
+		b.SetValue("#q", "biloba")
+		b.Click(b.ByRole("button").WithName("Search"))
+		Eventually(".result").Should(b.HaveCount(BeNumerically(">", 0)))
 	})
 })
 ```
 
-- `b.Navigate(url)` also asserts the response was `200` (use `NavigateWithStatus` for other codes).
-- Pick a **stable, meaningful** anchor (a heading, a key container) — `b.Exist()` or `b.BeVisible()`.
-- **Assert on observable outcomes**, not implementation: visible text (`HaveInnerText`/`HaveText`), counts (`HaveCount`), URL/title (`HaveURL`/`HaveTitle`), or network effects (`HaveMadeRequest`).
+- `b.Navigate(url)` asserts the response was `200` (`NavigateWithStatus` for other codes).
+- Pick a **stable, meaningful** anchor (a heading, a key container) with `b.Exist()`/`b.BeVisible()`.
 
-**For an in-app navigation, gate on a DOM readiness anchor and *then* read the location — don't poll the URL.** The URL flips the instant the router pushes it, so it is the *weakest* proof that the destination actually rendered; the DOM anchor is the strong one, and once it's up the URL read is a formality:
+**For an in-app navigation, gate on a DOM anchor and *then* read the location — don't poll the URL.** The URL flips the instant the router pushes it, so it's the weakest proof the destination rendered.
 
 ```go
 b.Click("#submit")
-Eventually("#dashboard-root").Should(b.Exist())     // the DOM proves the navigation landed…
-Ω(b.GetLocation()).Should(HaveSuffix("/dashboard")) // …so this read is a formality
+Eventually("#dashboard-root").Should(b.Exist())     // proves the navigation landed…
+Ω(b.GetLocation()).Should(HaveSuffix("/dashboard")) // …so this is a formality
 ```
 
-`b.GetLocation()`/`b.GetTitle()` (a **breaking rename** — the old bare `Location`/`Title` names are gone) are **polling getters** — they honor `WithTimeout`/`WithPolling`/`WithContext`/`Immediate`, and a transient CDP error mid-navigation (`Inspected target navigated or closed`) counts as a retryable miss rather than blowing up the poll. So `Eventually(b.GetLocation).Should(...)` is safe when you truly have nothing else to gate on — it's just rarely the best available signal.
+`b.GetLocation()`/`b.GetTitle()` (**breaking rename** — bare `Location`/`Title` are gone) are polling getters honoring all four knobs, and a transient CDP error mid-navigation (`Inspected target navigated or closed`) is a retryable miss — so `Eventually(b.GetLocation)` is safe, just weaker.
 
-**Pocket matcher cheat-sheet** — reach here before `b.Run`:
+## Pocket matcher cheat-sheet — reach here before `b.Run`
 
 | Want to assert… | Matcher |
 |---|---|
-| element is present / visible | `b.Exist()` / `b.BeVisible()` |
-| how many match | `b.HaveCount(BeNumerically(">", 0))` (distinct by a key: `b.HaveDistinctCount("data-key", 3)`) |
-| visible text | `b.HaveInnerText("…")` / `b.HaveText(…)` (textContent) |
-| a DOM/JS property | `b.HaveProperty("href", …)` / `b.HaveClass("active")` (JSON-valued attr: `b.HaveJSONAttribute("data-state", HaveKeyWithValue(…))` / getter `b.GetJSONAttribute(sel, attr, &out)`) |
-| it's actually clickable (visible+enabled+topmost) | `b.BeClickable()` |
-| form value | `b.HaveValue(…)` (also `b.HaveSpawnedTab`, `b.HaveURL`, `b.HaveTitle`; getters `b.GetLocation()`/`b.GetTitle()` — both poll) |
-| the app actually folded a server response | `b.GetJSValue("window.__storeLog", &log)` — the app-state barrier (see below; it gates on *definedness*, so only against a **lazily**-created path); *not* the DOM, *not* a Go-side HTTP read |
+| present / visible | `b.Exist()` / `b.BeVisible()` |
+| how many match | `b.HaveCount(BeNumerically(">", 0))`; distinct by key: `b.HaveDistinctCount("data-key", 3)` |
+| visible text | `b.HaveInnerText("…")` / `b.HaveTextContent(…)` / `b.HaveText(…)` (whitespace-collapsed) |
+| a DOM/JS property | `b.HaveProperty("href", …)` / `b.HaveClass("active")`; JSON attr `b.HaveJSONAttribute("data-state", HaveKeyWithValue(…))` (getter `b.GetJSONAttribute(sel, attr, &out)`) |
+| actually clickable (visible+enabled+topmost) | `b.BeClickable()` |
+| form value | `b.HaveValue(…)` |
+| tab URL / title / spawned tab | `b.HaveURL(…)` / `b.HaveTitle(…)` / `b.HaveSpawnedTab(…)`; getters `b.GetLocation()`/`b.GetTitle()` |
+| the app applied a server response | `b.GetJSValue("window.__storeLog", &log)` — app-state barrier (below); *not* the DOM, *not* a Go-side HTTP read |
 | a network request was made | `Eventually(b).Should(b.HaveMadeRequest(…))` |
-| layout / box / scroll position | `b.HaveBoundingBox(HaveField("Top", …))` / `b.HaveOffsetTopWithin(container, …)` / `b.HaveScrollOffset(…)` (getters: `b.GetBoundingBox`/`b.GetScrollOffset`/`b.GetOffsetTopWithin`). `Box.Width`/`Height` = border-box; `Box.ClientWidth`/`ClientHeight` = scrollbar-excluded content box |
-| element A positioned relative to B | `b.BeAbove(other)` / `BeBelow` / `BeLeftOf` / `BeRightOf` / `b.Encloses(other)` / `b.Overlaps(other)` (numeric: `b.GetGapBetween(a, b)` → `BoxDelta`) |
-| on screen after a scroll / document order | `b.BeInViewport()` (partial; `b.BeInViewport(b.Fully())` = whole box on screen) / `b.BePrecededBy(other)` / `b.BeFollowedBy(other)` — read subject first: `Eventually(X).Should(b.BeFollowedBy(Y))` ⇔ X comes BEFORE Y (a backwards one can pass silently — also assert the inverse doesn't hold) |
-| resolved computed style value | `b.GetComputedStyle(selector, prop)` (getter; resolves custom properties) / `b.HaveComputedStyle(prop, …)` (matcher); numeric: `b.GetComputedStyleNumeric` / `b.HaveComputedStyleNumeric`; color across syntaxes: `b.HaveComputedStyle(prop, b.MatchColor("var(--tok)"))` / `b.NormalizeColor(x)` |
+| layout / box / scroll | `b.HaveBoundingBox(HaveField("Top", …))` / `b.HaveOffsetTopWithin(container, …)` / `b.HaveScrollOffset(…)`. `Box.Width`/`Height` = border-box; `ClientWidth`/`ClientHeight` = scrollbar-excluded content box |
+| A relative to B | `b.BeAbove` / `BeBelow` / `BeLeftOf` / `BeRightOf` / `b.Encloses` / `b.Overlaps`; numeric `b.GetGapBetween(a,b)` → `BoxDelta` |
+| on screen / document order | `b.BeInViewport()` (partial; `b.BeInViewport(b.Fully())` = whole box) / `b.BePrecededBy` / `b.BeFollowedBy` |
+| computed style | `b.HaveComputedStyle(prop, …)` / `b.HaveComputedStyleNumeric(prop, …)`; color across syntaxes `b.HaveComputedStyle(prop, b.MatchColor("var(--tok)"))`; getters `b.GetComputedStyle`/`GetComputedStyleNumeric`/`NormalizeColor` |
 | scroll a target into view (instant) | `b.ScrollIntoView(sel)` — options `b.WithinScroller(container)`, `b.AtTopOffset(px)` |
 | an arbitrary JS expression | `Eventually(expr).Should(b.EvaluateTo(matcher))` |
 
-`EvaluateTo`/`Run` JSON-decode numbers to **float64** — assert with `BeNumerically("==", n)`, not `Equal(intLiteral)`.
+- `EvaluateTo`/`Run` decode JS numbers to **float64** — `BeNumerically("==", n)`, not `Equal(intLiteral)`.
+- **`BePrecededBy`/`BeFollowedBy` read subject-first**: `Eventually(X).Should(b.BeFollowedBy(Y))` ⇔ X comes **BEFORE** Y. A backwards one passes silently — also assert the inverse doesn't hold.
+- **Geometry matchers error on a missing element**, so `Eventually(sel).ShouldNot(b.BeInViewport())` times out. Assert disappearance with `ShouldNot(b.Exist())` / `Should(b.HaveCount(0))`.
 
-**Need the value you just asserted on? `.Capture(&x)` it — don't re-read it.** Every matcher that reads a value off the page takes `.Capture(&target)` and writes what it observed on a successful match:
+## `.Capture(&x)` — don't re-read what you just asserted on
 
 ```go
 var blockID string
@@ -99,124 +115,128 @@ Eventually(".figure-frame").Should(b.HaveAttribute("data-block-id", Not(BeEmpty(
 b.Click("#block-" + blockID)
 ```
 
-Asserting and *then* calling the getter is **two reads of a page that may have changed in between** — the gate proves one state, the getter hands you another. `Capture` gives you the value from the winning read itself, decoded into your Go type (a JS number lands in an `*int` as `3`, not `float64(3)`; a JS object lands in your struct). It writes only on a match, so `ShouldNot` captures nothing — use a `Should` when you need the value. The target lives **on the matcher**, so write the matcher inline (a matcher stored in a variable and reused keeps writing into the first target). You can narrow a JS object into a struct that reads a subset of its fields, but capture one of Biloba's own structs (`Box`, `ScrollOffset`, `BoxDelta`, `Cookie`) into the matching type or an `any` — a different struct is rejected, not half-filled. `HaveCookie` has its own `.Capture(&cookie)`; the value-less matchers (`Exist`, `BeVisible`, `BeInViewport`, the relational ones) and the actions-as-matchers deliberately don't compile with it. Full list: `biloba:api`; docs: <https://onsi.github.io/biloba/#capturing-values-from-matchers>.
+Asserting and *then* calling the getter is two reads of a page that may have changed in between. `Capture` hands you the value from the winning read, decoded into your Go type (a JS number lands in an `*int` as `3`, not `float64(3)`).
+
+- Writes **only on a match** — `ShouldNot` captures nothing; use a `Should` when you need the value.
+- Returns a **new** matcher and leaves the receiver alone, so a matcher in a variable is reusable with different targets (`m.Capture(&idA)`, then `m.Capture(&idB)`).
+- Narrowing a JS object into a struct with a subset of its fields is fine; capture Biloba's own structs (`Box`, `ScrollOffset`, `BoxDelta`, `Cookie`) into the matching type or an `any` — a different struct is rejected, not half-filled.
+- Value-less matchers (`Exist`, `BeVisible`, `BeInViewport`, the relational ones) and actions-as-matchers deliberately don't compile with it. Full capturable list → `biloba:api`.
 
 ## Selecting elements — the vocabulary
 
-The *decision* is the RULE above; here are the mechanics. A `selector` is a **CSS string** (fastest; `:has()`; pierces shadow/iframe via `>>>`), a **semantic `Locator`** (`b.By*`; most resilient, slowest — full-document ARIA scan), or an **`XPath`** value (`biloba:xpath`; axis/ordinal/`text()` queries; pierces neither boundary).
+A `selector` is a **CSS string** (fastest; `:has()`; `>>>` pierces shadow/iframe), a **`Locator`** (`b.By*`; most resilient, slowest — full-document ARIA scan), or an **`XPath`** (`biloba:xpath`; axis/ordinal; pierces neither).
 
 ```go
-b.Click("#go")                                    // CSS by id — stable hook (preferred default)
-b.Click("[data-testid=save]")                     // CSS by intentional test-id
-Eventually("tr:has(td.overdue)").Should(b.Exist())// CSS :has() — "the row that contains X"
-b.Click(b.ByRole("button").WithName("Save"))      // Locator — role + accessible name (a11y guard)
-b.Click(b.ByText("Submit"))                       // Locator — visible text (b.ByTextContains for substring)
-b.SetValue(b.ByLabel("Email"), "jane@acme.com")   // Locator — a form control by its label
-b.Click(b.XPath("li").WithText("OK").Ancestor("ul"))// XPath — axis query no CSS/locator expresses
+b.Click("#go")                                     // CSS by id — the preferred default
+b.Click("[data-testid=save]")                      // CSS by intentional test-id
+Eventually("tr:has(td.overdue)").Should(b.Exist()) // CSS :has() — "the row that contains X"
+b.Click(b.ByRole("button").WithName("Save"))       // Locator — role + accessible name (a11y guard)
+b.Click(b.ByText("Submit"))                        // Locator — visible text (ByTextContains for substring)
+b.SetValue(b.ByLabel("Email"), "jane@acme.com")    // Locator — a control by its label
+b.Click(b.XPath("li").WithText("OK").Ancestor("ul"))// XPath — an axis query nothing else expresses
 ```
 
-**Locator constructors** (each text-valued one has a `*Contains` variant): `b.ByRole`, `b.ByText`, `b.ByLabel`, `b.ByPlaceholder`, `b.ByAltText`, `b.ByTitle`, `b.ByTestID` (attr = `biloba.TestIDAttribute`, default `data-testid`), and `b.ByCSS(sel)` — raw CSS into the algebra (the structural escape hatch: ordinally/filter-address a CSS selector, e.g. `b.ByCSS(".story").Nth(1)`). Refine a role with `.WithName(n)`, `.Level(n)` (heading), or ARIA states `.Checked()`/`.Disabled()`/`.Expanded()`/`.Pressed()`/`.Selected()`.
+Constructors (each text-valued one has a `*Contains` variant): `b.ByRole`, `b.ByText`, `b.ByLabel`, `b.ByPlaceholder`, `b.ByAltText`, `b.ByTitle`, `b.ByTestID` (attr = `biloba.TestIDAttribute`, default `data-testid`), `b.ByCSS(sel)` (raw CSS into the algebra — the structural escape hatch). Refine a role with `.WithName(n)`, `.Level(n)`, or ARIA states `.Checked()`/`.Disabled()`/`.Expanded()`/`.Pressed()`/`.Selected()`.
 
-Locators **compose** — and the filters/combinators accept **any** selector (CSS/XPath/Locator), so pathways mix:
+Locators **compose**, and every filter accepts **any** selector (CSS/XPath/Locator):
 
 ```go
-b.ByRole("listitem").ContainingText("Product 2")             // .ContainingText / .NotContainingText
-b.ByRole("listitem").Containing(b.ByText("Delete"))          // .Containing / .NotContaining (a descendant)
-b.ByRole("button").And(".primary")                           // .And / .Or — set intersection / union
-b.ByRole("button").WithName("Delete").Within("#dialog")      // .Within(scope)
-b.ByText("Item").Nth(2)                                      // .Nth(i)/.First()/.Last() — ordinal
-b.ByCSS(".story").Nth(1)                                     // raw CSS into the algebra (the 2nd .story)
+b.ByRole("listitem").ContainingText("Product 2")        // .ContainingText / .NotContainingText
+b.ByRole("listitem").Containing(b.ByText("Delete"))     // .Containing / .NotContaining (a descendant)
+b.ByRole("button").And(".primary")                      // .And / .Or — intersection / union
+b.ByRole("button").WithName("Delete").Within("#dialog") // .Within / .NotWithin
+b.ByText("Item").Nth(2)                                 // .Nth(i) / .First() / .Last()
+b.ByCSS(".story").Nth(1)                                // the 2nd .story
 ```
 
-**A `.Within`/`.Containing` scope that doesn't resolve matches nothing — which makes a negative assertion vacuous.** `Consistently(b.ByTextContains("Draft").Within("#published-list")).ShouldNot(b.Exist())` passes instantly and permanently when `#published-list` never renders — precisely the white-screen failure the guard exists to catch. Anchor the scope, then assert the absence:
+**Trap — an unresolved `.Within`/`.Containing` scope matches nothing, so a negative assertion is vacuous** — it passes instantly and forever if the scope never renders. Anchor the scope first:
 
 ```go
-Eventually("#published-list").Should(b.Exist())                                      // the scope is real…
-Consistently(b.ByTextContains("Draft").Within("#published-list")).ShouldNot(b.Exist()) // …so this means something
+Eventually("#published-list").Should(b.Exist())                                       // the scope is real…
+Consistently(b.ByTextContains("Draft").Within("#published-list")).ShouldNot(b.Exist()) // …so this bites
 ```
 
-Locators **pierce open shadow roots automatically** (no `>>>`); CSS needs the `>>>` combinator (one boundary each, open shadow / same-origin iframe only); XPath crosses neither.
+Locators **pierce open shadow roots automatically**; CSS needs `>>>` (one boundary each, open shadow / same-origin iframe only); XPath crosses neither.
 
 ```go
 b.Click("my-widget >>> button.submit")
 Eventually("#editor-frame >>> .toolbar .save").Should(b.Click())
 ```
 
-Never fetch-then-act — always pass the selector *into* the action so find-and-act is one atomic JS snippet.
+Never fetch-then-act — pass the selector *into* the action so find-and-act is one atomic JS snippet.
 
 ## The interaction vocabulary
 
-`b.Click` is the everyday verb (dual: `b.Click(sel)` polls-then-acts; `Eventually(sel).Should(b.Click())` hands you the poll). The fuller set — all dual unless noted, all working on both the fast and realistic tracks:
+All dual unless noted; all work on both the fast and realistic tracks.
 
 ```go
-b.DblClick(sel); b.RightClick(sel); b.MiddleClick(sel)       // dual
-b.Click(sel, b.At(x, y))                                     // click at top-left-origin offset; canvas/map/slider
-b.Click(sel, b.Shift(), b.Meta())                            // modifiers held; composes with b.At(...)
-b.DragTo(source, target)                                     // pointer-based drag; dual — Eventually(src).Should(b.DragTo(tgt))
-b.ScrollWheel(sel, deltaX, deltaY)                           // wheel/scroll, +Y down +X right; dual — Eventually(sel).Should(b.ScrollWheel(dx, dy))
-b.Tap(sel)                                                   // touch tap (dual); takes b.At(...), ignores modifiers
-b.Type(sel, "abc"); b.Type(sel, biloba.Keys.Enter)          // real keystrokes — text and named Keys (SetValue does NOT type)
-b.Type("textarea", biloba.Keys.Enter, b.Shift())            // Shift-Enter — modifiers work on the keyboard too
+b.DblClick(sel); b.RightClick(sel); b.MiddleClick(sel)
+b.Click(sel, b.At(x, y))                          // click at a top-left-origin offset; canvas/map/slider
+b.Click(sel, b.Shift(), b.Meta())                 // modifiers held; composes with b.At(...)
+b.DragTo(source, target)                          // pointer-based drag — Eventually(src).Should(b.DragTo(tgt))
+b.ScrollWheel(sel, deltaX, deltaY)                // +Y down, +X right
+b.Tap(sel)                                        // touch tap; takes b.At(...), ignores modifiers
+b.Focus(sel); b.Blur(sel); b.Hover(sel)           // Hover fires pointer events, NOT CSS :hover
+b.ScrollIntoView(sel, b.AtTopOffset(96))          // also b.WithinScroller(container)
+b.Type(sel, "abc"); b.Type(sel, biloba.Keys.Enter)// real keystrokes — SetValue does NOT type
+b.Type("textarea", biloba.Keys.Enter, b.Shift())  // Shift-Enter — modifiers work on the keyboard too
 ```
 
-**`b.Type` is THE element-targeted keyboard method** — text, named `biloba.Keys.*`, and held modifiers, all in one. It's dual and **polls** like every other action: `b.Type(sel, payload...)` is immediate (selector + ≥1 payload arg), `b.Type(payload)` returns a matcher (a lone string, or one-or-more `Keys.*`). See `biloba:api` for the exact arg disambiguation.
+**`b.Type` is THE element-targeted keyboard method** — text, named `biloba.Keys.*`, and held modifiers. `b.Type(sel, payload...)` polls; `b.Type(payload)` returns a matcher (a lone string, or one-or-more `Keys.*`). Exact disambiguation → `biloba:api`.
 
-**Two interactions don't poll — gate them by hand.** `b.SendKeysToWindowImmediately(...)` (focus-free global keystrokes — routes to the focused element, else `document`/window; no selector) and the `*Immediately` plural verbs (`ClickEachImmediately`, `SetPropertyForEachImmediately`) act now with nothing to fold readiness into. Put an explicit gate on the line above — for `SendKeysToWindowImmediately` that means proving focus:
+`b.At(x,y)`/`b.Shift()`/`b.Ctrl()`/`b.Alt()`/`b.Meta()` (⌘/Win) are **pointer options** on `Click`/`DblClick`/`RightClick`/`MiddleClick`/`Tap` — after the selector, or in place of it in the matcher form (`Eventually(sel).Should(b.Click(b.At(x,y), b.Shift()))`). The modifiers double as keyboard modifiers on `b.Type`/`b.SendKeysToWindowImmediately`.
+
+**Two interactions don't poll — gate them by hand:** `b.SendKeysToWindowImmediately(...)` (focus-free global keystrokes — routes to the focused element, else `document`/window) and the `*Immediately` plural verbs.
 
 ```go
-Eventually("input.search").Should(b.BeFocused());  b.SendKeysToWindowImmediately(biloba.Keys.Enter)
+Eventually("input.search").Should(b.BeFocused()); b.SendKeysToWindowImmediately(biloba.Keys.Enter)
 ```
 
-(To send keys *into* a specific element, prefer `b.Type(sel, ...)` — it focuses first and polls. Reserve `SendKeysToWindowImmediately` for genuine global hotkeys / already-focused targets.)
+To send keys *into* an element use `b.Type(sel, ...)` — it focuses and polls. Reserve `SendKeysToWindowImmediately` for genuine global hotkeys.
 
-`b.At(x,y)` / `b.Shift()` / `b.Ctrl()` / `b.Alt()` / `b.Meta()` (⌘/Win) are **pointer options** accepted by `Click`/`DblClick`/`RightClick`/`MiddleClick`/`Tap` — after the selector (immediate) or in place of it (matcher: `Eventually(sel).Should(b.Click(b.At(x,y), b.Shift()))`). In fast mode any option switches a click off native `el.click()` to a synthetic event carrying the coords/flags. The **modifiers double as keyboard modifiers**: pass `b.Shift()`/`b.Ctrl()`/`b.Alt()`/`b.Meta()` to `b.Type`/`b.SendKeysToWindowImmediately` (in any position) for Shift-Enter, ⌘-A, etc.
+**Fast interactions act in place** — `element.click()` after a visibility check, no `scrollIntoView`, no focus move — so a fast click never shifts the page out from under a scroll/layout assertion. Scroll-into-view comes only from `b.Realistic()` and from focus-bearing ops (`b.Focus`/`b.SetValue`/`b.Type`, because `.focus()` scrolls). If a scroll position moves around a fast click, the cause is app-side.
 
-**Fast interactions act in place — no scroll, no focus move.** A fast `b.Click`/`b.Tap` is `element.click()` after a visibility check; it does **not** `scrollIntoView` and does **not** move focus, so it never shifts the page out from under a scroll/layout assertion. Scroll-into-view comes only from `b.Realistic()` (deliberately) and from **focus-bearing ops** — `b.Focus`/`b.SetValue`/`b.Type` — because the browser's `.focus()` scrolls its target into view. If a scroll position moves around a fast click, the cause is app-side, not Biloba.
+**`b.SetValue` and frameworks.** It writes through the input's native value setter, so it drives **controlled** React/Vue/Solid inputs (`onChange` fires, state updates) — no need to make an input uncontrolled. It does **not** blur, so an `onBlur` commit / inline-edit-unmount handler won't fire; pair with `b.Blur(sel)`.
 
-**`b.SetValue` and frameworks.** `SetValue` writes through the input's native value setter, so it drives **controlled** React/Vue/Solid inputs (whose `value` is bound to state) — `onChange` fires and state updates; no need to make an input uncontrolled for Biloba's sake. For text inputs it focuses + dispatches `input`/`change` but does **not** blur — an `onBlur` commit/inline-edit-unmount handler won't fire from `SetValue`; pair with `b.Blur(sel)` when you want it (`b.SetValue("#name","New"); b.Blur("#name")`).
-
-**`<select>` form values.** `b.SetValue(sel, v)` matches `v` against the option's underlying **`value`**, not its visible label: `b.SetValue("#model", "claude-sonnet-4-6")` (and `b.SetValue` on a native `<select>` already fires `input`+`change` with `bubbles:true`, so React `onChange` runs — no realistic mode needed). To pick by the label the user sees, wrap it: `b.SetValue("#model", b.ValueLabel("Sonnet"))`. Assert labels via `option.textContent` and the selection via the `<select>`'s `value` (`b.HaveProperty("value", id)`).
+**`<select>`.** `b.SetValue(sel, v)` matches the option's underlying **`value`**, not its visible label (`input`+`change` fire with `bubbles:true`, so React `onChange` runs — no realistic mode needed). Pick by label with `b.SetValue("#model", b.ValueLabel("Sonnet"))`. Assert labels via `option.textContent`, the selection via `b.HaveProperty("value", id)`.
 
 ### Selecting text (highlight / annotation / editor UIs)
 
-For "highlight text → floating menu → Define"-style interactions, use the first-class selection primitives — no `Range`/`getSelection` archaeology needed. Each produces a genuine `window.getSelection()` range and dispatches a `mouseup` so selection-driven toolbars fire:
+Each produces a genuine `window.getSelection()` range and dispatches `mouseup`, so selection-driven toolbars fire.
 
 ```go
-b.SelectText("#passage")                          // select all of the element's text (dual)
-Eventually("#passage").Should(b.SelectText())     // matcher form
-b.SelectRange("#passage", 4, 9)                   // select chars 4..8 across text nodes (dual)
+b.SelectText("#passage")                          // all of the element's text (dual, polls)
+b.SelectText("#passage", "fox")                   // the first "fox"
+b.SelectText("#passage", "fox", b.Occurrence(2))  // the 2nd "fox" (1-based)
+b.SelectRange("#passage", 4, 9)                   // chars [4,9) across text nodes; fails if out of bounds
+b.ClearSelection()
+
+Eventually("#passage").Should(b.SelectText())                       // matcher forms
+Eventually("#passage").Should(b.SelectText("fox", b.Occurrence(2))) // REQUIRES an explicit Occurrence
 Eventually("#passage").Should(b.SelectRange(4, 9))
-b.ClearSelection()                                // drop the selection
 ```
 
-Assert on what's selected by reading it back: `Eventually("window.getSelection().toString()").Should(b.EvaluateTo("quick"))`.
+Read back what's selected: `Eventually("window.getSelection().toString()").Should(b.EvaluateTo("quick"))`.
 
-**`b.SelectText` polls** like every dual action — `b.SelectText(".blocks p")` waits until a matching element exists before selecting, so it's safe against content that appears asynchronously or nondeterministically (e.g. streamed/agent output). Use `b.WithTimeout(d)` if the default wait is too short, or the matcher form inside `Eventually` when you want to drive the poll yourself.
+## Realistic mode — a handful of smoke tests → `biloba:realistic-mode`
 
-## Realistic mode — for a handful of smoke tests
-
-By default every interaction is a fast, atomic **simulation** (`element.click()` after synchronous visibility/enabled checks — no scroll, no occlusion test, no real `:hover`; see `biloba:overview` principle 2). That's what you want for the overwhelming bulk of specs.
-
-`b.Realistic()` returns a `*Biloba` view of the **same tab** whose interactions run through **real Chrome DevTools Protocol input** instead. A realistic click scrolls the element into view, waits for it to stop moving, **refuses to click through an occluding overlay**, moves the **real pointer** (so hover-gated clicks fire and CSS `:hover` activates), and dispatches a genuine mouse/touch/key event. The whole interaction vocabulary above works on both tracks.
-
-It's **opt-in** because it costs real round-trips and can reintroduce timing flake — quarantine it to a handful of smoke tests that guard the realism the fast path trades away (a drag, an overlay, a `:hover` menu). There is deliberately **no per-call decorator**; the handle is the one seam. It composes at three scopes:
+`b.Realistic()` returns a `*Biloba` view of the **same tab** routed through real Chrome DevTools Protocol input: it scrolls into view, waits for stability, **refuses to click through an occluding overlay**, moves the **real pointer** (CSS `:hover` activates). Opt-in — it costs round-trips and can reintroduce timing flake, so quarantine it to smoke tests guarding a drag, an overlay, a `:hover` menu. No per-call decorator.
 
 ```go
-b.Realistic().Click("#submit")                    // inline — the handle is cheap to make
+b.Realistic().Click("#submit")                                   // inline
 rb := b.Realistic(); rb.Hover(".menu"); rb.Click(".menu .item")  // per-spec
 
-var _ = Describe("checkout (realistic)", Label("realistic"), func() {  // per-suite
+var _ = Describe("checkout (realistic)", Label("realistic"), func() {   // per-suite
     var rb *biloba.Biloba
     BeforeEach(func() { rb = b.Realistic() })
-    // ...use rb throughout...
 })
 ```
 
-With a `Label("realistic")`, `ginkgo --label-filter='realistic'` runs only the realistic lane and `--label-filter='!realistic'` keeps it out of the fast inner loop. For the full fast-vs-realistic **capability matrix** (what each track actually does, per interaction) and the deep dive, see `biloba:realistic-mode` and <https://onsi.github.io/biloba/#realistic-interactions>. To merely *assert* an element isn't occluded without paying for realistic mode, use the deterministic `b.BeClickable()` matcher (visible + enabled + topmost-at-its-center).
+With the label, `ginkgo --label-filter='realistic'` runs only that lane; `'!realistic'` keeps it out of the fast inner loop. To merely *assert* an element isn't occluded, use `b.BeClickable()` — deterministic, no realistic round-trips.
 
-## Run with real backends.  But stub the network if all else fails.
+## Prefer real backends; stub the network when you must
 
-Favor testing against real backends whenever possible and focus on fixing flakes and performance there.  But, if you must stub, stub the endpoints you don't want to depend on; everything unmatched passes through to the real network (`#stubbing-and-observing-the-network`):
+Favor real backends and fix flakes/perf there. When you must stub, stub only the endpoints you don't want to depend on — everything unmatched passes through.
 
 ```go
 b.StubRequest(ContainSubstring("/api/users"), biloba.StubResponse{
@@ -227,37 +247,30 @@ b.Navigate("/app")
 Eventually(".user").Should(b.HaveCount(2))
 ```
 
-Stubs are per-tab and reset by `Prepare()`. Beyond `StubRequest` you can `b.AbortRequest(url)` (fail it), `b.ModifyRequest(url).WithURL/.WithMethod/.WithHeader/.WithBody(...)` (continue with overrides), and `b.ModifyResponse(url).WithStatus/.WithHeader/.WithBody/.Using(func(biloba.InterceptedResponse) biloba.StubResponse)` (rewrite a real response) — all share one first-match-wins handler list with `StubRequest`. Observe requests with `Eventually(b).Should(b.HaveMadeRequest(...))` and wait for quiet with `Eventually(b).Should(b.BeNetworkIdle())` — **in that order**: idle means "nothing in flight *right now*", so on its own it passes at t=0, before the request you're waiting for has even started. Anchor on `HaveMadeRequest` first, then wait for idle. While interception is on Biloba disables the HTTP cache (a cached response raises no interception event at all), restoring it in `Prepare()`. **In an `Ordered` container handlers accumulate** (`Prepare()` is `OncePerOrdered`), so an earlier `It`'s handler silently shadows a later identical one — sometimes as a timeout, sometimes as a spec that just *passes* because the leftover handler quietly let the response through. Assert on your own interception state (`Eventually(hold.Count).Should(Equal(1))`) so you'd notice → `biloba:flaky-specs`.
+Stubs are per-tab and reset by `Prepare()`. Also `b.AbortRequest(url)`, `b.ModifyRequest(url).WithURL/.WithMethod/.WithHeader/.WithBody(...)`, and `b.ModifyResponse(url).WithStatus/.WithHeader/.WithBody/.Using(func(biloba.InterceptedResponse) biloba.StubResponse)`. All share one **first-match-wins** handler list. While interception is on Biloba disables the HTTP cache (a cached response raises no interception event), restoring it in `Prepare()`.
 
-**`b.HoldResponse(url)` holds a real response hostage** so you can force an arrival order — the honest way to test optimistic-UI reconciliation, where the bug only shows when the stale response lands *after* the next action:
+Three traps, detailed in `biloba:flaky-specs`:
+
+- **Observe in order:** `Eventually(b).Should(b.HaveMadeRequest(...))` **first**, *then* `Eventually(b).Should(b.BeNetworkIdle())`. Idle means "nothing in flight right now", so alone it passes at t=0.
+- **Handlers accumulate in an `Ordered` container** (`Prepare()` is `OncePerOrdered`), so an earlier `It`'s handler silently shadows a later identical one — sometimes a timeout, sometimes a spec that just passes.
+- **Assert your own interception state** (`Eventually(hold.Count).Should(Equal(1))`) so you'd notice either.
+
+**`b.HoldResponse(url)` holds a real response hostage** so you can force an arrival order — the honest way to test optimistic-UI reconciliation, where the bug only shows when a stale response lands *after* the next action.
 
 ```go
 hold := b.HoldResponse(ContainSubstring("/api/settings"))
 b.Click("#refresh")            // fires the request…
-hold.Await()                   // …and blocks until its response is actually being held
+hold.Await()                   // …blocks until its response is actually being held
 b.Click("#rename")             // drive the app into the racy window
 hold.Release()                 // now let the stale response land
 Ω(hold.Count()).Should(Equal(1))
 ```
 
-**By default a hold freezes *every* matching response, not just the first** — a second request to the same URL is frozen too, and a bare `Release()` frees them all and disarms the hold. Three refinements cover the orderings that default can't produce:
-
-```go
-hold := b.HoldResponse(ContainSubstring("/api/save")).Limit(1) // hold at most 1; further matches fly past
-b.Click("#save"); hold.Await()                                 // save #1 is held…
-b.Click("#save"); Eventually(hold.Count).Should(Equal(2))      // …save #2 lands first
-hold.Release()                                                 // now #1 lands, last
-
-first := hold.Await()
-hold.Release(first)   // release just this one — the hold STAYS armed for the next match
-hold.ReleaseNext()    // or: release the oldest still held, stay armed (fails loudly if nothing is held)
-```
-
-`Await()` returns the **oldest response still held** (so `Await`/`ReleaseNext`/`Await` steps through them in order). `Await` has its own 30s deadline (tune with `b.WithTimeout(d).HoldResponse(url)`); holds are force-released at spec end and by `Prepare()`, so a failing spec can't wedge the tab. Matching is **tab-wide and URL-based** — it can catch a response from an earlier page load, so scope the flow to a `b.NewTab()` (or assert `Count()`) when that matters. `Count()` counts every match, held or passed through; assert it — it's the only thing that proves the interception you think happened actually did.
+**By default a hold freezes *every* matching response**, and a bare `Release()` frees them all and disarms the hold. `.Limit(n)` caps how many are held at once — overflow matches fly straight past, which is how you express "hold save #1 while save #2 lands". `Await()` returns the **oldest response still held**; `hold.Release(r)` releases just that one and `hold.ReleaseNext()` releases the oldest, both keeping the hold **armed** (`ReleaseNext` fails loudly if nothing is held). `Await` has its own 30s deadline (`b.WithTimeout(d).HoldResponse(url)`); holds are force-released at spec end and by `Prepare()`. Matching is **tab-wide and URL-based**, so a hold can catch a response from an earlier page load — scope the flow to a `b.NewTab()` when that matters. Full semantics → `biloba:api`; worked orderings → `biloba:flaky-specs`.
 
 ## Seed state to skip slow flows
 
-Set an auth cookie or `localStorage` to jump past login (navigate to a real origin first — `about:blank` can't hold cookies/storage):
+Navigate to a real origin first — `about:blank` can't hold cookies/storage.
 
 ```go
 b.Navigate("/home")
@@ -265,51 +278,50 @@ b.SetCookie(biloba.Cookie{Name: "user", Value: "Joe"})
 DeferCleanup(b.ClearCookies)
 ```
 
-Or shortcut straight through your app's JS API (`#running-arbitrary-javascript`):
+Or shortcut through your app's JS API:
 
 ```go
 b.Run(`app.load(` + jsonFixture + `); app.redraw()`)
 Eventually("#doc-name").Should(b.HaveInnerText("My Fixture Data"))
 ```
 
-**`b.Run` returns the decoded value directly** — `n := b.Run("app.users.length")` feeds Gomega without a wrapper, and `b.Run("expr", &typed)` decodes into a pointer. Don't write `runInt`/`runStr` helpers. `b.Run` is a synchronous *expression*, so a top-level `return` is illegal — use `b.RunAsync` (which wraps a function body, so `return`/`await` work) for `fetch`/`await`. `b.EvaluateTo` asserts on a JS expression directly. Remember numbers decode to `float64` (use `BeNumerically`).
+**`b.Run` returns the decoded value directly** — `n := b.Run("app.users.length")` feeds Gomega with no wrapper, `b.Run("expr", &typed)` decodes into a pointer, and there is no need for `runInt`/`runStr` helpers. It's a synchronous *expression*, so a top-level `return` is illegal — use `b.RunAsync` for `fetch`/`await`. Numbers decode to `float64`.
 
-**Poll a `b.Run` read instead of snapshotting it.** `b.Run` is a plain `func(string, ...any) any`, so it drops straight into `Eventually` — this is the antidote to the single most common flake (a one-shot read that races an async settle), and it needs no wrapper closure for a scalar expr:
+**Poll a `b.Run` read instead of snapshotting it.** It's a plain `func(string, ...any) any`, so it drops straight into `Eventually` — the antidote to the most common flake:
 
 ```go
-Eventually(b.Run).WithArguments(`isReady()`).Should(BeTrue())                         // bool
-Eventually(b.Run).WithArguments(`document.querySelectorAll(".card").length`).Should(BeNumerically("==", 3)) // float64!
-Eventually(b.Run).WithArguments(`document.title`).Should(Equal("Done"))               // string
+Eventually(b.Run).WithArguments(`isReady()`).Should(BeTrue())
+Eventually(b.Run).WithArguments(`document.querySelectorAll(".card").length`).Should(BeNumerically("==", 3))
 ```
 
-For an interpolated/multi-line expr, pre-build the string (`expr := fmt.Sprintf(...)`; `Eventually(b.Run).WithArguments(expr)…`) or poll a closure that returns the decoded value. See `biloba:flaky-specs` for why single-shot reads flake.
+For an interpolated/multi-line expr, pre-build the string (`expr := fmt.Sprintf(...)`) or poll a closure returning the decoded value.
 
-**`b.GetJSValue(expr[, &ptr])` is the app-state barrier — the way to prove the *browser* processed something.** It polls `expr` until it is *defined* and returns it, retrying through both `undefined` and a thrown error (a `ReferenceError` for a global the app hasn't created yet is a not-ready condition, not a bug); `null` is a legitimate value and returns immediately. Point it at a path the app writes so a spec can wait on the app's own decision rather than on a proxy for it:
+**Don't hand-roll `getBoundingClientRect`/`scrollTop` through `b.Run`** — the geometry getters (`b.GetBoundingBox`/`GetScrollOffset`/`GetOffsetTopWithin` + `Have*` matchers) wait for layout before reading; relational layout has the pairwise matchers and `b.GetGapBetween`; on-screen-ness `b.BeInViewport()`; document order `b.BePrecededBy`/`BeFollowedBy`; computed style `b.GetComputedStyle`. → `biloba:api`
+
+## The app-state barrier: `b.GetJSValue`
+
+`b.GetJSValue(expr[, &ptr])` polls `expr` until it is *defined* and returns it, retrying through both `undefined` and a thrown error (a `ReferenceError` for a not-yet-created global is a not-ready condition); `null` is a legitimate value and returns immediately. Point it at a path the app writes — the only signal that proves the **browser** processed a response (the DOM may be the optimistic copy; a Go-side HTTP read bypasses the tab entirely).
 
 ```go
-b.Run(`app.store.on("fold", () => { window.__storeLog ??= []; window.__storeLog.push(app.store.state) })`)
+b.Run(`app.store.on("update", () => { window.__storeLog ??= []; window.__storeLog.push(app.store.state) })`)
 b.Click("#save")
 var log []string
-b.GetJSValue("window.__storeLog", &log)   // blocks until the fold actually happens
+b.GetJSValue("window.__storeLog", &log)   // blocks until the update actually lands
 Ω(log).Should(HaveExactElements("saving", "saved"))
 ```
 
-**The `??=` is load-bearing.** `GetJSValue` gates on *definedness* and nothing else. This barrier works because the subscriber creates the log **lazily**, so "defined" and "at least one fold happened" are the same event. Point it at a log the app creates **eagerly** — `this.__log = []` at store construction, the natural implementation for anything that's part of the product rather than a test fixture — and it is defined from page load: `GetJSValue` returns `[]` on the first tick, gates nothing, and the spec goes green in a barrier whose entire purpose was to be the signal that can't be faked. It never flakes, so nothing draws attention to it.
+**The `??=` is what makes this a barrier.** `GetJSValue` gates on *definedness* and nothing else, so this works only because the subscriber creates the log **lazily** — "defined" and "an update landed" are the same event. Against a log the app creates **eagerly** (`this.__log = []` at construction) it is defined from page load, returns `[]` on the first tick, gates nothing, and never flakes: permanently vacuous.
 
-**For an eagerly-created path, poll the *predicate*, not the existence** — one read, one poll, typed result:
+**For an eagerly-created path, poll the *predicate*** — one read, one poll, typed result:
 
 ```go
 var log []FoldEntry
 Eventually(`window.__storeLog`).Should(b.EvaluateTo(ContainElement(HaveKeyWithValue("state", "saved"))).Capture(&log))
 ```
 
-Note the asymmetry: `EvaluateTo` hands its sub-matcher the **raw JSON-decoded** value (an `[]any` of `map[string]any` — so `HaveKeyWithValue`, not `HaveField`), while `Capture` decodes into your typed `[]FoldEntry`.
+Asymmetry: `EvaluateTo` hands its sub-matcher the **raw JSON-decoded** value (`[]any` of `map[string]any` — `HaveKeyWithValue`, not `HaveField`); `Capture` gives you the typed `[]FoldEntry`.
 
-**And `GetJSValue` is the wrong tool wherever *absence is meaningful*.** Because it waits for existence, it can't express a probe where the global being missing is a valid reading: a write ledger absent on `about:blank` between navigations (missing means *quiet*, not "wait"), `window.__renderErrors` absent on a page that never booted the app (missing means *no errors*), a flag planted before a JS-only tab switch where the assertion is that it **survived** (waiting for it inverts the test), a baseline count taken before the action. Those stay `b.Run` with a defensive coalesce — `b.Run("window.__ledger ?? null")` — and that is correct, not a smell.
-
-The pointer decodes into a concrete type (dodging the JSON-`float64` gotcha). This matters most for optimistic UI: the DOM shows the optimistic value and a Go-side HTTP read bypasses the tab entirely — neither proves the browser folded anything. See `biloba:flaky-specs` Smell 3.
-
-**Don't hand-roll `getBoundingClientRect`/`scrollTop` through `b.Run` — Biloba has pollable geometry getters** (`b.GetBoundingBox`/`b.GetScrollOffset`/`b.GetOffsetTopWithin` + their `Have*` matchers) that wait for the element to be laid out (non-degenerate box) before reading. Relational layout ("A above/encloses/overlaps B") has the pairwise matchers `b.BeAbove`/`BeBelow`/`BeLeftOf`/`BeRightOf`/`Encloses`/`Overlaps` and the `b.GetGapBetween` delta getter (both boxes read in one atomic frame); on-screen-ness has `b.BeInViewport()`, document order has `b.BePrecededBy`/`b.BeFollowedBy`, and resolved computed style has `b.GetComputedStyle`. They're the idiomatic fix for the most race-prone class of `b.Run` reads → `biloba:api`.
+**`GetJSValue` is wrong wherever *absence* is meaningful** — a ledger absent on `about:blank` means *quiet*; `window.__renderErrors` absent means *no errors*; a flag planted before a JS-only tab switch must have *survived* (waiting inverts the test); a pre-action baseline count. Those stay `b.Run` with a coalesce (`b.Run("window.__ledger ?? null")`) — correct, not a smell. → `biloba:flaky-specs` §3
 
 ## Multi-tab flows
 
@@ -319,7 +331,7 @@ login(b, "sally"); login(tab, "jane")
 Eventually(userXPath.WithText("Jane")).Should(b.HaveClass("online"))
 ```
 
-Tabs opened *by the page* (e.g. `target="_blank"`) are **spawned tabs** — find them with the `HaveSpawnedTab`/`AllSpawnedTabs` (or `HaveTab`/`AllTabs`) queries:
+Tabs opened *by the page* (`target="_blank"`) are **spawned tabs**:
 
 ```go
 tab.Click(linkXPath)
@@ -331,6 +343,4 @@ A DOM method always operates on the tab it's invoked on (`tab.Click`, not `b.Cli
 
 ## When Biloba can't express it
 
-For realism (occlusion, scroll-into-view, real CSS `:hover`) reach for `b.Realistic()` (above) before chromedp. For everything else — cross-origin frames, geolocation, any CDP feature without a wrapper — drop to chromedp via `b.Context` (the escape hatch in `biloba:overview`). For real keystrokes use `b.Type` rather than `SetValue`.
-
-Propose opening an issue if a common pattern is missing.
+Realism (occlusion, scroll-into-view, real CSS `:hover`) → `b.Realistic()`. Real keystrokes → `b.Type`, not `SetValue`. Everything else — cross-origin frames, geolocation, any CDP feature without a wrapper — drop to chromedp via `b.Context` (`biloba:overview`). Propose an issue if a common pattern is missing.

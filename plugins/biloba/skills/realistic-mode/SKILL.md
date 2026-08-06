@@ -5,67 +5,69 @@ description: Use Biloba's realistic interaction track (b.Realistic()) when a spe
 
 # Realistic interactions
 
-Biloba has **two interaction tracks** on the same tab:
+Two interaction tracks on the **same tab**:
 
-- **Fast track (default `b`)** — atomic JavaScript *simulations*: a click is `element.click()` after synchronous visibility/enabled checks. No scroll, no occlusion test, no real `:hover`. Fast and stable — what you want for the overwhelming bulk of specs (see `biloba:overview` principle 2).
-- **Realistic track (`b.Realistic()`)** — a `*Biloba` view of the **same tab** whose interactions run through **real Chrome DevTools Protocol input**.
+- **Fast track (default `b`)** — atomic JS simulations: a click is `element.click()` after synchronous visibility/enabled checks. No scroll, no occlusion test, no real `:hover`. What you want for the bulk of specs.
+- **Realistic track (`b.Realistic()`)** — a `*Biloba` view of the same tab whose interactions run through real Chrome DevTools Protocol input. The default `b` is untouched.
 
 ```go
 rb := b.Realistic()
-rb.Click("#submit")              // scrolls into view, waits for stability, refuses to click through an overlay, real mouse click
+rb.Click("#submit")                     // scrolls into view, waits for stability, refuses to click through an overlay, real mouse click
 Eventually(".menu").Should(rb.Hover())  // moves the real pointer → CSS :hover activates
 ```
 
-`b.Realistic()` shares the tab's connection and state — it's the *same tab*, just routed through CDP. The default `b` is untouched. Full story: <https://onsi.github.io/biloba/#realistic-interactions>.
+Docs: <https://onsi.github.io/biloba/#realistic-interactions>.
 
 ## When to reach for it
 
-Quarantine it to a **handful of smoke tests** that guard realism the fast track can't see. It costs real round-trips and can reintroduce the timing flake the atomic model avoids — that's the deliberate, opt-in cost.
+Quarantine it to a handful of smoke tests. It costs real round-trips and can reintroduce the timing flake the atomic model avoids — that's the deliberate, opt-in cost.
 
-| Symptom you want to test | Why the fast track misses it |
+| You need to test | Why the fast track misses it |
 |---|---|
-| A click must route **around an occluding overlay** | Fast `Click` calls `el.click()` and clicks straight through overlays |
-| A menu/tooltip opens on **CSS `:hover`** | Fast `Hover` fires JS pointer events but does not activate CSS `:hover` |
-| Element is **off-screen / below the fold** and must scroll into view | Fast track never scrolls |
+| A click must route **around an occluding overlay** | fast `Click` is `el.click()` — it clicks straight through |
+| A menu/tooltip opens on **CSS `:hover`** | fast `Hover` fires JS pointer events; CSS `:hover` never activates |
+| Element is **off-screen / below the fold** and must scroll in | the fast track never scrolls |
 | A **pointer drag** (@dnd-kit, Sortable, custom DnD) | needs real `pointerdown`/`move`/`up` |
 | Real **wheel scrolling** of the page, or **touch** | needs trusted CDP input |
 
-If you only need to *assert* an element isn't occluded (not drive a realistic interaction), prefer the cheaper deterministic matcher `Eventually(sel).Should(b.BeClickable())` (visible + enabled + topmost-at-its-center) — no realistic round-trips.
+To merely *assert* an element isn't occluded, use the cheaper deterministic matcher `Eventually(sel).Should(b.BeClickable())` (visible + enabled + topmost-at-its-center) — no realistic round-trips.
 
-Realistic mode does **not** help with cross-origin frames or geolocation — drop to chromedp via `b.Context` for those (`biloba:overview`).
+Realistic mode does **not** help with cross-origin frames or geolocation — drop to chromedp via `b.Context` (`biloba:overview`).
 
-## What each track does (capability matrix)
+## Capability matrix
 
-Selection is track-agnostic (`b.ByRole`/`ByText`/`ByLabel`, CSS, `>>>`, XPath work identically through either handle). The interactions differ:
+Selection is track-agnostic (CSS, `>>>`, locators, XPath all work through either handle). The interactions differ:
 
-| Interaction | Fast track (`b`) | Realistic track (`b.Realistic()`) |
+| Interaction | Fast (`b`) | Realistic (`b.Realistic()`) |
 |---|---|---|
-| `Click` | `el.click()`, no scroll/occlusion test | scroll to center, wait for stability, verify enabled + **topmost** (no click-through), real mouse press/release |
-| `DblClick`/`RightClick`/`MiddleClick` | synthetic events (`dblclick`/`contextmenu`/`auxclick`) | scroll + stability + occlusion + real button input (native context menu fires) |
-| `Hover` | JS pointer/mouse events; **no** CSS `:hover` | moves the **real pointer** → CSS `:hover` activates |
+| `Click` | `el.click()`, no scroll/occlusion test | scroll to center, wait for stability, verify enabled + **topmost** (no click-through), real mouse press/release. Coords inside same-origin `>>>` iframes are translated |
+| `DblClick`/`RightClick`/`MiddleClick` | synthetic `dblclick`/`contextmenu`/`auxclick` | scroll + stability + occlusion + real button input (native context menu fires) |
+| `ClickEachImmediately` | clicks all visible+enabled matches | real input, scrolling and re-measuring each in turn; skips hidden/disabled/off-screen/obscured |
+| `Hover` | JS pointer/mouse events; **no** CSS `:hover` | real pointer → CSS `:hover` activates |
 | `SetValue` | sets value, fires `input`/`change` (no typing) | text inputs: real click → clear → real keystrokes → blur; checkboxes: real click. Native pickers (radio/`<select>`/multi) fall back to fast JS |
 | `Type` | real CDP key events already | additionally scrolls the element into view first |
-| `SendKeysToWindowImmediately` | real CDP key events already | no target element — sends to current focus, nothing to scroll |
-| pointer options `b.At(x,y)`/`b.Shift()`… | any option switches a click off native `el.click()` to a synthetic event carrying coords+modifier flags | real CDP input honoring the offset (translated, bounds-checked) + modifier bitmask |
+| `SendKeysToWindowImmediately` | real CDP key events already | no target element — nothing to scroll |
+| pointer options `b.At(x,y)`/`b.Shift()`… | any option switches a click off native `el.click()` to a synthetic event carrying coords + modifier flags | real CDP input honoring the offset (translated, bounds-checked) + modifier bitmask |
 | `DragTo` | `pointerdown`/`move`/`up` events | real CDP mouse drag (scrolls + checks both ends) |
-| `ScrollWheel` | synthetic `wheel` + manual ancestor scroll | real CDP wheel — genuine trusted input, scrolls the page |
+| `ScrollWheel` | synthetic `wheel` + manual ancestor scroll | real CDP wheel — trusted input, scrolls the page |
 | `Tap` | synthetic touch/pointer + `click` | real CDP `touchStart`/`touchEnd` |
+| `Focus` | plain JS `.focus()` | **same** — real engines focus without a side-effecting click |
 
-The whole vocabulary (`DblClick`, `RightClick`, `MiddleClick`, pointer options `b.At`/`b.Shift`/`b.Ctrl`/`b.Alt`/`b.Meta`, `DragTo`, `ScrollWheel`, `Tap`, `Type`) is in `biloba:write-tests` and `biloba:api`.
+Full vocabulary (`DblClick`, `RightClick`, `MiddleClick`, `b.At`/`b.Shift`/`b.Ctrl`/`b.Alt`/`b.Meta`, `DragTo`, `ScrollWheel`, `Tap`, `Type`) → `biloba:write-tests`, `biloba:api`.
 
-**Realistic interactions poll by default too.** `b.Realistic()` is the same shallow `*Biloba`-clone pattern as the poll-config handles, so it **composes** with them: `b.Realistic().WithTimeout(5*time.Second).Click("#submit")`, `b.Realistic().Immediate().Click(...)`. A fully-applied `rb.Click(sel)` polls (scroll + stability + occlusion + click) until it succeeds, exactly like the fast track — you don't have to wrap realistic interactions in `Eventually` to get readiness-waiting (though the matcher form is still there when you want to own the poll).
+**Realistic interactions poll by default too.** `b.Realistic()` is the same shallow `*Biloba`-clone as the poll-config handles, so it composes with them: `b.Realistic().WithTimeout(5*time.Second).Click("#submit")`. A fully-applied `rb.Click(sel)` polls (scroll + stability + occlusion + click) until it succeeds — no `Eventually` wrapper needed. The matcher form is still there when you want to own the poll.
 
-**Scroll-into-view lives only on this track** (plus the focus-bearing `SetValue`/`Type`, whose `.focus()` scrolls). A *fast* `Click`/`Tap` never moves the page — so if a scroll/layout spec needs the viewport held still, stay on the fast track; and if a scroll position shifts around a fast click, the cause is app-side, not Biloba (a real diagnosis trap — see `biloba:flaky-specs`).
+**Scroll-into-view lives only on this track** (plus the focus-bearing `SetValue`/`Type`, whose `.focus()` scrolls). A fast `Click`/`Tap` never moves the page — so if a scroll/layout spec needs the viewport held still, stay fast; and if scroll position shifts around a fast click, the cause is app-side (`biloba:flaky-specs` §8).
 
 ## The three composition patterns
 
-There is deliberately **no per-call decorator** (Biloba's dual API keys on argument count; a realism flag would muddy that). The `b.Realistic()` handle is the one seam, and because it's just a `*Biloba` view it flows through helpers and `Eventually` exactly like `b`:
+There is deliberately **no per-call decorator** — the handle is the one seam, and it flows through helpers and `Eventually` exactly like `b`.
 
 ```go
 // 1. Inline — the handle is cheap to make
 b.Realistic().DragTo("#card", "#done-column")
 
-// 2. Per-spec — grab one handle, use it throughout
+// 2. Per-spec
 It("opens the hover menu", func() {
     rb := b.Realistic()
     Eventually(".nav-item").Should(rb.Hover())
@@ -73,23 +75,18 @@ It("opens the hover menu", func() {
     Eventually(b.ByRole("menuitem").WithName("Settings")).Should(rb.Click())
 })
 
-// 3. Per-suite — swap the tab in a BeforeEach, gated on a Ginkgo Label
+// 3. Per-suite, gated on a Ginkgo Label
 var _ = Describe("checkout (realistic smoke)", Label("realistic"), func() {
     var rb *biloba.Biloba
     BeforeEach(func() { rb = b.Realistic() })
-
-    It("won't submit through the consent overlay", func() {
-        Consistently(".overlay").Should(b.BeVisible())
-        // rb.Click fails (occluded) until the overlay is dismissed — exactly what we want to guard
-    })
+    // ...use rb throughout; rb.Click fails while an overlay covers the target — the guard we want
 })
 ```
 
-With the label, `ginkgo --label-filter='realistic'` runs only the realistic lane and `--label-filter='!realistic'` keeps the slow/flake-prone realism checks out of the fast inner loop.
+`ginkgo --label-filter='realistic'` runs only that lane; `--label-filter='!realistic'` keeps it out of the fast inner loop.
 
 ## Pitfalls
 
-- **Don't realistic-mode the whole suite.** It defeats Biloba's performance and stability story; reserve it for smoke tests.
-- A realistic interaction on an occluded/off-screen element **polls and fails** like a real interaction — that's the feature, but it means realistic specs are more timing-sensitive. The fully-applied `rb.Click(sel)` already polls (readiness-waiting is built in); bump `rb.WithTimeout(d)` for a genuinely slow scroll/settle rather than dropping to `Immediate()`.
-- `DragTo` drives **pointer-based** DnD libraries (@dnd-kit, Sortable), **not** native HTML5 `draggable` (which uses a separate drag-event model).
-- `Focus` stays a plain JS focus even on the realistic track (matching how real engines focus without a side-effecting click).
+- **Don't realistic-mode the whole suite.** It defeats the performance and stability story.
+- A realistic interaction on an occluded/off-screen element **polls and fails** like a real one — the feature, but it makes these specs timing-sensitive. Bump `rb.WithTimeout(d)` for a slow scroll/settle; don't drop to `Immediate()`.
+- `DragTo` drives **pointer-based** DnD (@dnd-kit, Sortable), **not** native HTML5 `draggable` (a separate drag-event model).

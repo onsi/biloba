@@ -48,12 +48,12 @@ match, so you can poll for a condition and keep the value that satisfied it - in
 	var blockID string
 	Eventually(".figure-frame").Should(b.HaveAttribute("data-block-id", Not(BeEmpty())).Capture(&blockID))
 
-	var log []FoldEntry
-	Eventually(`window.__foldLog`).Should(b.EvaluateTo(ContainElement(HaveKeyWithValue("fidelity", "text"))).Capture(&log))
+	var log []SaveEntry
+	Eventually(`window.__saveLog`).Should(b.EvaluateTo(ContainElement(HaveKeyWithValue("status", "saved"))).Capture(&log))
 
 Note the asymmetry in that second example: the matcher sees the raw JSON-decoded value (a []any of
 map[string]any, so match on it with HaveKeyWithValue rather than HaveField) while Capture is what
-hands you the typed []FoldEntry.
+hands you the typed []SaveEntry.
 
 This is the fix for gate-then-re-read: asserting with a matcher and *then* calling a getter for the
 value is two reads of a page that may have changed in between (the classic TOCTOU shape - a repaint

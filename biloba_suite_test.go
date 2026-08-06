@@ -64,6 +64,19 @@ var _ = SynchronizedBeforeSuite(func() {
 	Ω(gt.failures).Should(BeEmpty(), "ConnectToChrome failed during suite setup")
 	Ω(b).ShouldNot(BeNil())
 	ServeFixtures()
+
+	// Gomega's 1s default is too tight for this suite. Every bare Eventually here is guarding a
+	// browser round-trip, and the heaviest of them - a response-stage interception - pauses the
+	// request twice (request stage, a CDP ContinueRequest(WithInterceptResponse), the real fetch,
+	// then the response stage). hold.Await() always budgeted 30s for that chain, but every other
+	// wait on it silently inherited 1s, so the first held response got 30s and the second got 1s for
+	// identical work. Under the full-headless lane at -p that chain can exceed 1s, which flaked the
+	// network, download, and interception-cache specs - always with "Timed out after 1.00s".
+	//
+	// This costs nothing: the ~180 specs that assert a Biloba call *fails* fail fast on their own
+	// (an explicit b.WithTimeout, a config guard, or Gomega's StopTrying), so they never burn the
+	// default. Measured suite runtime is unchanged at 1s vs 5s vs 10s.
+	SetDefaultEventuallyTimeout(10 * time.Second)
 })
 
 var _ = BeforeEach(func() {

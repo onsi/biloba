@@ -5,64 +5,83 @@ description: See why a Biloba spec failed or flaked — the on-failure artifacts
 
 # Debugging Biloba failures
 
-Biloba adapts failure output to *who's looking* and lets you override any piece. Docs: <https://onsi.github.io/biloba/#failure-artifacts>. This skill is about *seeing why a spec failed*; if a spec is **flaky** (passes locally, fails under `-p`/CI, fails intermittently) the cause is usually a single-shot `b.Run` read or a reach for `b.Immediate()` (Biloba's actions poll by default) — fix those with `biloba:flaky-specs`, then come back here to read the artifacts.
+Reading artifacts after a spec failed. To *prevent* flakes → `biloba:flaky-specs`. Docs: <https://onsi.github.io/biloba/#failure-artifacts>.
 
-## What you get on failure, by environment
+## Zero config: what you already get
 
-Biloba detects the environment automatically (in `ConnectToChrome`). With **zero config**:
+Biloba detects the environment in `ConnectToChrome`. "Automation" = `CI` is set **or** an AI coding agent is detected (`CLAUDECODE`/`AI_AGENT`/Cursor/Gemini CLI/Codex/…).
 
 | | Interactive human | CI **or** AI agent |
 |---|---|---|
-| Screenshot on failure | yes, inline | yes, written to a directory |
+| Failure screenshot | inline in the terminal | written to `./biloba-screenshots` |
 | DOM outline on failure | no | yes |
-| Inline image blob | yes (if terminal supports) | no |
+| Inline image blob | yes (if the terminal supports it) | no |
 
-"Automation" = `CI` is set **or** an AI coding agent is detected (Claude Code, Cursor, Gemini CLI, Codex, … via signals like `CLAUDECODE`/`AI_AGENT`). Under automation, screenshots go to **`./biloba-screenshots`** by default — so a typical agent or CI run needs nothing: just run the suite and read the outline + screenshot files.
+So an agent or CI run needs nothing: `ginkgo -r -p`, then read the outline and the screenshot files. `BILOBA_SCREENSHOTS_DIR=./artifacts` points the directory elsewhere.
 
-```bash
-ginkgo -r -p   # under CI/agent: DOM outlines + screenshot files on disk, automatically
+## Read the artifacts in this order
+
+1. **Console errors** — any `console.error`/`console.assert` before the failure, replayed under "Console errors logged before this failure" at the **top** of the failure block. On a JS crash (a React error boundary) this is the root cause.
+2. **`⚠` diagnostic notes** — they name the cause outright.
+3. **Poll trajectory** — what the timed-out read did over the whole deadline.
+4. **Screenshot** — `Read` the printed PNG path.
+5. **DOM outline** — "DOM Outline for: '<title>'": indented DOM, `<script>/<style>/<svg>` bodies pruned, whitespace collapsed, capped at 32 KB. Past `... [truncated]`? Raise the cap with **`BILOBA_OUTLINE_MAX`** — a byte count (`=131072`), or `0`/`off` for the whole DOM.
+
+### Poll trajectory
+
+When an `Eventually` over a polled read (`b.Run`/`b.RunAsync`, a value getter, a geometry getter) times out, Biloba attaches the `(elapsed, value)` series. Gomega's `Timed out … Expected <120>` shows only the final value; the shape is the diagnosis:
+
+| Shape | Means | Do |
+|---|---|---|
+| **flat** (one row, `held ×N`) | the product computed the value once and never reconciled | fix the product (`biloba:flaky-specs` §4) — a wider timeout won't help |
+| **monotone staircase** | latency; it nearly made it | widen the timeout |
+| **dip-then-rebound** | a late reflow shoved it back | settle layout before asserting |
+
+On by default; `BilobaConfigPollTrajectory(false)` disables it (and the detached-node signal).
+
+### The `⚠` diagnostic notes
+
+**"Selector matched, then stopped matching"** — the detached node. The selector resolved, then its node was replaced (list re-key, portal migration) or its identifying attribute swapped in place. Silent when the selector genuinely never matched.
+
+```
+⚠ Selector "#row-4" matched 6× during this poll (+0.00s to +0.41s) then stopped matching
+  — the node was likely replaced, or its identifying attribute changed in place.
 ```
 
-Point the directory elsewhere (e.g. a CI artifact path) with `BILOBA_SCREENSHOTS_DIR=./artifacts`.
+**"Click dispatched onto a covered element"** — fast `Click` stays occlusion-blind by design and still succeeds through an overlay, but records a hit-test so the downstream failure points somewhere. Diagnostic only; never changes whether a spec passes.
 
-## Reading the artifacts as an agent
+```
+⚠ Click on "#submit" was dispatched while <div#overlay.modal-scrim> was the topmost
+  element at its centre — the click may have been swallowed.
+  Consider Eventually("#submit").Should(b.BeClickable()) or b.Realistic().Click("#submit").
+```
 
-- **Console errors** — if the page logged any `console.error`/`console.assert` before the failure, Biloba replays them under "Console errors logged before this failure" at the **top** of the failure block. On a JS crash (e.g. a React error boundary) this is usually the root cause — read it first, before the outline.
-- **Screenshot files** — `Read` the printed PNG path to see the rendered page at failure.
-- **DOM outline** — attached under "DOM Outline for: '<title>'" in the Ginkgo report. This is the primary tool for *why a selector didn't match*: it's the indented DOM (`<script>/<style>/<svg>` bodies pruned, whitespace collapsed, capped ~32 KB). If the region you need is past the cap (`... [truncated]`), raise or remove it with **`BILOBA_OUTLINE_MAX`**: a byte count (e.g. `BILOBA_OUTLINE_MAX=131072`) raises the cap; `0`/`off` disables truncation and dumps the whole DOM.
-- **"Selector matched, then stopped matching"** — the detached-node signal. A selector that *did* resolve and then had its node replaced (a list re-key, a portal migration) or its identifying attribute swapped in place used to fail **identically to "never matched"**, sending you off looking for a typo. Now the artifact distinguishes them:
-  ```
-  ⚠ Selector "#row-4" matched 6× during this poll (+0.00s to +0.41s) then stopped matching
-    — the node was likely replaced, or its identifying attribute changed in place.
-  ```
-  It leads the artifacts when present, and stays quiet when the selector genuinely never matched (the ordinary "could not find" failure already says that). Rides the same `BilobaConfigPollTrajectory` switch as the trajectory below.
-- **"Click dispatched onto a covered element"** — the occluded-click diagnosis. Plain `b.Click` stays **occlusion-blind by design** and still succeeds through an overlay; but since a swallowed click fails *downstream* pointing nowhere useful, the click records a hit-test and reports it if the spec fails:
-  ```
-  ⚠ Click on "#submit" was dispatched while <div#overlay.modal-scrim> was the topmost
-    element at its centre — the click may have been swallowed.
-    Consider Eventually("#submit").Should(b.BeClickable()) or b.Realistic().Click("#submit").
-  ```
-  Diagnostic only — it never changes whether a spec passes, and it never appears unless one fails.
-- **"Network handler never ran (shadowed by an earlier handler)"** — network handlers are first-match-wins, so a handler registered for a URL an earlier handler already claims is **dead code that never announces itself**. Deadly across an `Ordered` container, where `Prepare()` doesn't run between the `It`s and handlers accumulate (see `biloba:flaky-specs` Smell 6). Biloba names both call sites:
-  ```
-  ⚠ A ModifyResponse handler registered at network_test.go:231 never ran — an earlier ModifyResponse
-    handler (registered at network_test.go:223) claimed 1 matching response(s) first.
-  ```
-  Only reported when a handler **never fired** *and* was shadowed at least once — so a catch-all that loses one URL to a specific stub while claiming others stays silent. If an interception gate times out only when the spec runs with the rest of the suite, read this note first. **Note the limit:** it is a *failure* artifact, so it can't help with shadowing's other presentation — a leftover **stateful** handler (an "only the first match" counter that has already counted) claiming the response and passing it through untouched, which leaves the app behaving normally and the spec **green**. Only your own assertion on interception state (`Eventually(hold.Count).Should(Equal(1))`) catches that one — see `biloba:flaky-specs` Smell 6.
-- **Two failure *messages* that now self-explain** (no artifact to go read): a two-axis getter that times out because the **property** never became defined — rather than because the element never appeared — says the element was present the whole time, names the undefined property, and prints the exact `b.AllowMissing("disabled")` to paste (see `biloba:flaky-specs` Smell 5). And a failed `BePrecededBy`/`BeFollowedBy` reports the order it actually observed (`Actually: #o-first comes BEFORE #o-second.`) — usually enough to spot an inverted assertion at a glance.
-- **Poll trajectory** — when the failure is an `Eventually(...)` over a *polled read* (a `b.Run`/`b.RunAsync` evaluation, a value getter, or a geometry getter) that timed out, Biloba attaches the `(elapsed, value)` series of that read under "Poll trajectory" (on by default; `BilobaConfigPollTrajectory(false)` to disable). Gomega's `Timed out … Expected <120>` only shows the *final* value; the trajectory shows what it did over the whole deadline, which **is** the diagnosis. Read the shape: a **flat** line (one row, `held ×N`) means the product computed the value once and never reconciled — a product bug, not a short timeout; a **monotone** staircase means latency (it nearly made it — widen the timeout); a **dip-then-rebound** means a late reflow shoved it back. This turns "read the product source to guess why the poll never converged" into "read the artifact and know." See `biloba:flaky-specs` Smell 4 for the product-side fix.
+**"Network handler never ran (shadowed by an earlier handler)"** — handlers are first-match-wins, so one registered for a URL an earlier handler claims is dead code. Deadly across an `Ordered` container, where `Prepare()` doesn't run between `It`s. Both call sites are named.
 
-Call them yourself at any point, not just on failure:
+```
+⚠ A ModifyResponse handler registered at network_test.go:231 never ran — an earlier ModifyResponse
+  handler (registered at network_test.go:223) claimed 1 matching response(s) first.
+```
+
+Reported only when a handler **never fired** *and* was shadowed at least once. **Limit:** it's a failure artifact, so it cannot surface shadowing's other presentation — a leftover *stateful* handler claiming the response, passing it through untouched, spec **green**. Only your own `Eventually(hold.Count).Should(Equal(1))` catches that (`biloba:flaky-specs` §6).
+
+### Two failure *messages* that self-explain
+
+- A two-axis getter timing out because the **property** never became defined says the element was present, names the property, and prints the `b.AllowMissing("disabled")` to paste (`biloba:flaky-specs` §5).
+- A failed `BePrecededBy`/`BeFollowedBy` reports the order actually observed (`Actually: #o-first comes BEFORE #o-second.`) — enough to spot an inverted assertion.
+
+## Look at the page yourself, any time
 
 ```go
 fmt.Println(b.Outline())     // indented DOM
 fmt.Println(b.A11yOutline()) // accessibility tree: role + accessible name per node
 AddReportEntry("DOM before click", b.Outline(), ReportEntryVisibilityFailureOrVerbose)
+b.Run("document.querySelectorAll('.card').length")   // quick count probe
 ```
 
-`b.A11yOutline()` (the role/name view a screen reader works from) is often *more* useful than raw HTML for reasoning about what a page *means*; it's not auto-attached — call it explicitly.
+`b.A11yOutline()` is **not** auto-attached — call it explicitly. It's often more useful than raw HTML for reasoning about what a page *means*.
 
-**Attach app/store state to a failure.** For an optimistic-UI or state-heavy app the *store* is far more diagnostic than the DOM (the DOM may be the pre-confirmation copy — see `biloba:flaky-specs`). Snapshot it on every failure with a `ReportAfterEach` that introspects via `b.Run`:
+**Attach app/store state to every failure.** For a state-heavy or optimistic-UI app the store beats the DOM (which may be the pre-confirmation copy):
 
 ```go
 ReportAfterEach(func(report SpecReport) {
@@ -71,51 +90,50 @@ ReportAfterEach(func(report SpecReport) {
 })
 ```
 
-Guard the read (`?? null`) so a crashed/half-loaded page doesn't turn the snapshot itself into a failure. (That's a *snapshot* for diagnosis. To **wait** on app state as part of the spec — proving the browser folded a server response — use the polling `b.GetJSValue("window.__APP_STATE__", &s)`; see `biloba:flaky-specs` Smell 3.)
+Keep the `?? null` so a crashed page doesn't turn the snapshot itself into a failure. (That's a *snapshot*. To **wait** on app state as part of a spec, use `b.GetJSValue` — `biloba:flaky-specs` §3.)
 
-**Page-side `console.log` for live debugging.** All page `console.*` output is forwarded to the `GinkgoWriter` (each argument rendered, space-separated). Objects are rendered from CDP's **shallow** preview, so a nested/large object logs lossily (deep fields collapse). When you're logging a state object to chase a DOM/React timing bug, build one string yourself — `console.log('state ' + JSON.stringify(obj))` — to get the full value instead of the truncated preview. Same idea for a quick count probe: `b.Run("document.querySelectorAll('.card').length")` returns the number directly (no need to reach into the outline).
+**Page `console.*` streams to the `GinkgoWriter`**, each argument rendered space-separated. Objects come from CDP's **shallow** preview, so nested/large objects log lossily. Build the string yourself when you need the whole value: `console.log('state ' + JSON.stringify(obj))`.
 
-**`HaveInnerText`/`GetInnerText` timing out on content that's clearly there.** If a `GetInnerText`/`HaveInnerText` assertion on freshly-changed or dynamically-added content spins until timeout in headless even though the text is plainly in the DOM (and in the outline), it's almost certainly `innerText` returning a stale/partial value — it's computed from layout, which can lag a DOM change before a paint settles. Switch to the layout-independent `HaveTextContent`/`GetTextContent` (reads `textContent` straight off the tree) or to a plain existence assertion.
+## Two headless quirks that look like Biloba bugs
 
-**App logic driven by `requestAnimationFrame` that mysteriously never runs under headless.** Not a Biloba bug — an environment quirk worth recognizing: on a **fully static page**, `chrome-headless-shell` can leave `requestAnimationFrame` **unscheduled after the first scroll** (nothing is animating, so no frame is produced), which wedges any app code that drives itself off an rAF loop. If a spec hangs or times out waiting on something an rAF callback is supposed to do — and only under the default headless lane — that's the shape. Confirm it by probing whether the callback ever fires — install a counter and read it with a **coalescing `b.Run`**, `b.Run("window.__rafTicks ?? 0")`, not `b.GetJSValue`: here "the counter never appeared" is the *answer*, and `GetJSValue` would sit waiting for it (see the absence-is-meaningful note in `biloba:flaky-specs` Smell 3). Then either drive the work off a real event, or run that spec under `HighFidelityHeadless()`/`BILOBA_INTERACTIVE=true` where a compositor is actually producing frames.
+- **`HaveInnerText`/`GetInnerText` timing out on text that's plainly in the outline.** `innerText` is computed from layout and can return a stale/partial value before a paint settles. Switch to `HaveTextContent`/`GetTextContent` (reads `textContent` off the tree) or to a plain existence assertion.
+- **`requestAnimationFrame` never firing.** On a **fully static page**, `chrome-headless-shell` can leave rAF unscheduled after the first scroll (nothing animating ⇒ no frames), wedging app code driven off an rAF loop. Shape: a hang/timeout only in the default headless lane. Confirm with a counter read through a **coalescing `b.Run`** — `b.Run("window.__rafTicks ?? 0")`, **not** `b.GetJSValue`, which would sit waiting for a counter that never appears. Fix: drive the work off a real event, or run that spec under `HighFidelityHeadless()`/`BILOBA_INTERACTIVE=true`.
 
-## Inline images (interactive terminals)
+## Env vars
 
-Biloba emits inline images only when the terminal supports them — Kitty, iTerm2, or Sixel (VS Code's terminal), auto-detected. Control it with `BILOBA_INLINE_SCREENSHOTS=iterm|kitty|sixel|none`:
+| Var | Effect |
+|---|---|
+| `BILOBA_SCREENSHOTS_DIR=./artifacts` | where failure screenshots are written |
+| `BILOBA_OUTLINE_MAX=131072` | raise the outline byte cap; `0`/`off` = no truncation |
+| `BILOBA_INLINE_SCREENSHOTS=iterm\|kitty\|sixel\|none` | force an inline-image protocol, or `none` to disable the blob (the file path is still printed — use `none` in CI and in Claude Code, where base64 is noise) |
+| `BILOBA_PROBE_TERMINAL=true` | actively query the TTY for Sixel support when env detection finds nothing |
+| `BILOBA_INTERACTIVE=true` | headful high-fidelity run that pauses on failure until `^C` |
 
-- `none` — disable the inline blob entirely (use in CI or in Claude Code, where the base64 is pure noise; the screenshot *file* path is still printed).
-- a protocol name — force it regardless of detected terminal.
-- `BILOBA_PROBE_TERMINAL=true` — actively query the TTY for Sixel support when env detection finds nothing.
+Inline images are auto-detected (Kitty, iTerm2, Sixel/VS Code) and only emitted when the terminal supports them.
 
-## Config knobs (`ConnectToChrome`)  — explicit settings win, per knob
+## Config knobs (`ConnectToChrome`)
 
-Each boolean takes an optional bool (no arg = `true`); automation only fills knobs you left untouched.
+Each boolean takes an optional bool (no arg = `true`). **Explicit settings win, per knob** — automation only fills knobs you left untouched.
 
-- `BilobaConfigScreenshotsToDir(dir)` — write each tab's failure screenshot to `dir` (prints the absolute path).
-- `BilobaConfigFailureOutlines(...bool)` — force the DOM outline on/off.
-- `BilobaConfigInlineScreenshots(...bool)` — force the inline blob on/off.
-- `BilobaConfigFailureScreenshots(...bool)` — failure screenshots on/off (default on).
-- `BilobaConfigPollTrajectory(...bool)` — the poll-trajectory artifact on/off (default on).
-- `BilobaConfigProgressReportScreenshots(...bool)` — screenshots on Ginkgo progress reports (default on).
+- `BilobaConfigScreenshotsToDir(dir)` — write each tab's failure screenshot there (prints the absolute path).
+- `BilobaConfigFailureOutlines(...bool)` / `BilobaConfigInlineScreenshots(...bool)` — force on/off.
+- `BilobaConfigFailureScreenshots(...bool)` (default on) / `BilobaConfigPollTrajectory(...bool)` (default on) / `BilobaConfigProgressReportScreenshots(...bool)` (default on).
 - `BilobaConfigFailureScreenshotsSize(w,h)` / `BilobaConfigProgressReportScreenshotSize(w,h)`.
 - `BilobaConfigDebugLogging(...bool)` — stream all CDP traffic to the `GinkgoWriter` (verbose).
 
-Example — CI that only redirects the directory still keeps the automation default of outlines-on:
-
 ```go
+// CI that only redirects the directory still keeps the automation default of outlines-on:
 b = biloba.ConnectToChrome(GinkgoT(), biloba.BilobaConfigScreenshotsToDir("./artifacts"))
 ```
 
-## Interactive debugging
-
-Watch a focused failing spec in a real browser and pause on failure:
+## Watch it live
 
 ```bash
 BILOBA_INTERACTIVE=true ginkgo --focus="..."
 ```
 
-Runs headful (high fidelity), prints the failure, and waits until you `^C`. Use a small handful of focused specs, in serial. (`SpinUpChrome(GinkgoT(), biloba.ChromeFlags(chromedp.Flag("headless", false)))` does the same in code.)
+Headful, high fidelity, prints the failure and waits for `^C`. Use a small handful of focused specs, in serial. (`SpinUpChrome(GinkgoT(), biloba.ChromeFlags(chromedp.Flag("headless", false)))` does the same in code.)
 
-## Progress reports (a hang, not a failure)
+## A hang, not a failure
 
-Biloba emits a screenshot on Ginkgo [progress reports](https://onsi.github.io/ginkgo/#getting-visibility-into-long-running-specs) — on a spec timeout, a `PollProgressAfter` spec, or on demand: `^T` (SIGINFO) on macOS, `SIGUSR2` on Linux. Handy when a spec is stuck rather than failing.
+Biloba screenshots Ginkgo [progress reports](https://onsi.github.io/ginkgo/#getting-visibility-into-long-running-specs) — on a spec timeout, a `PollProgressAfter` spec, or on demand: `^T` (SIGINFO) on macOS, `SIGUSR2` on Linux.

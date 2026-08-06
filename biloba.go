@@ -1035,10 +1035,10 @@ func (b *Biloba) Close() error {
 	return nil
 }
 
-// targetOpTimeout bounds the two places Biloba can otherwise wedge on a target that is mid-teardown:
-// waiting for a closing tab to disappear, and attaching to a target during registration.  It is
-// generous - these operations normally complete in tens of milliseconds - and only ever elapses for
-// a target that is, in fact, going away.
+// targetOpTimeout bounds waiting for a closing tab to disappear, which can otherwise wedge on a
+// target that is mid-teardown.  It is generous - the wait normally completes in tens of milliseconds
+// - and only ever elapses for a target that is, in fact, going away.  Attaching during registration
+// used to share this budget; it now has its own, see tabAttachTimeout.
 const targetOpTimeout = 5 * time.Second
 
 // A freshly created or app-spawned target can transiently fail (not wedge) its first attach under
@@ -1048,6 +1048,17 @@ const (
 	tabProbeAttempts     = 3
 	tabProbeRetryBackoff = 50 * time.Millisecond
 )
+
+// tabAttachTimeout bounds the attach probe in registerTabFor.  It is deliberately far more generous
+// than targetOpTimeout: that one detects a target that is going away, an inherently local question,
+// while this one waits on a brand-new target's first Runtime.evaluate - which contends with every
+// other Ginkgo process driving the same shared Chrome.  Under -p in the full-headless lane a
+// perfectly healthy attach can take seconds, and treating that as a wedge is not free: the target is
+// discarded, and once all newTabAttempts are spent NewTab hands back the nil tab its own comment
+// promises never to return, so b.NewTab().Navigate(...) panics on a nil receiver instead of failing
+// with a message.  A true wedge still cannot be unblocked by a context timeout, so the watchdog has
+// to stay - it just needs to be slow enough that only a real wedge trips it.
+const tabAttachTimeout = 20 * time.Second
 
 // NewTab re-creates the target from scratch this many times if registration can't attach to it, so it
 // never hands the caller a nil tab (which b.NewTab().Navigate(...) would panic on).
@@ -1244,7 +1255,7 @@ func (b *Biloba) registerTabFor(c context.Context, cancel context.CancelFunc) *B
 		select {
 		case probeErr = <-probeDone:
 			// got a result: nil => attached; non-nil => transient, retry on the same context
-		case <-time.After(targetOpTimeout):
+		case <-time.After(tabAttachTimeout):
 			cancel()
 			return nil
 		}

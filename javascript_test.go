@@ -259,10 +259,14 @@ var _ = Describe("Javascript", func() {
 
 		It("treats null as a legitimate value that returns immediately, without retrying", func() {
 			b.Run(`window.__biloba_null_val = null`)
+			// A long timeout with a wide margin, like the other "it did not wait out the timeout"
+			// specs: retrying would burn the full 10s, so returning inside 2s is the proof.  (A tight
+			// 200ms/150ms pair measured the same thing but left only 50ms of headroom, which a single
+			// CDP round-trip can exceed on a loaded machine in the full-headless lane.)
 			start := time.Now()
-			result := b.WithTimeout(200 * time.Millisecond).GetJSValue("window.__biloba_null_val")
+			result := b.WithTimeout(10 * time.Second).GetJSValue("window.__biloba_null_val")
 			Ω(result).Should(BeNil())
-			Ω(time.Since(start)).Should(BeNumerically("<", 150*time.Millisecond))
+			Ω(time.Since(start)).Should(BeNumerically("<", time.Second*2))
 		})
 
 		It("decodes into a typed pointer, dodging the float64 default", func() {

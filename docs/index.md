@@ -577,7 +577,7 @@ Eventually(b).Should(b.HaveURL("http://example.com/table-of-contents"))
 Eventually(b).Should(b.HaveURL(HaveSuffix("/table-of-contents")))
 ```
 
-Both [capture](#capturing-values-from-matchers) - which matters more here than most places, since the url is exactly the sort of thing that can change again the moment after you assert on it.  Take it from the assertion rather than following up with `GetLocation`:
+`HaveURL` and `HaveTitle` both [capture](#capturing-values-from-matchers).  A url can change again the moment after you assert on it, so take it from the assertion instead of following up with `GetLocation`:
 
 ```go
 var url string
@@ -962,7 +962,7 @@ The intuition: a method polls (and accepts every knob) when it is *waiting for t
 
 ### Capturing Values from Matchers
 
-One shape shows up in nearly every browser suite: **wait until something is true, then use the value that made it true.**  You need the block id of the figure frame that finally rendered, the url you finally landed on, the count that finally settled.  The obvious way to write it is to assert, then read:
+You'll often need to **wait until something is true, then use the value that made it true**: the block id of the figure frame that finally rendered, the url you finally landed on, the count that finally settled.  The obvious way to write that is to assert, then read:
 
 ```go
 /* === don't do this === */
@@ -970,18 +970,18 @@ Eventually(".figure-frame").Should(b.HaveAttribute("data-block-id", Not(BeEmpty(
 blockID := b.GetAttribute(".figure-frame", "data-block-id").(string)
 ```
 
-That's **two reads of a page that is still moving** - the classic time-of-check/time-of-use shape.  Between the assertion and the getter the app can repaint, replace the node, or re-key it, and you walk away holding a value that nothing ever asserted on.  The failure doesn't land here, either: the read succeeds, `blockID` is just empty, and the spec blows up two assertions later pointing nowhere.  This is not hypothetical - it cost a real user the better part of a day.
+But that reads a moving page twice.  Between the assertion and the getter the app can repaint, replace the node, or re-key it - and you end up holding a value that nothing ever asserted on.  The failure doesn't land here, either: the read succeeds, `blockID` is just empty, and the spec fails two assertions later, somewhere else entirely.
 
-So every Biloba matcher that *reads a value off the page* also hands you that value, from the read that satisfied it.  Chain `.Capture(&target)`:
+So every Biloba matcher that *reads a value off the page* will also hand you that value - the one from the read that satisfied it.  Chain `.Capture(&target)`:
 
 ```go
 var blockID string
 Eventually(".figure-frame").Should(b.HaveAttribute("data-block-id", Not(BeEmpty())).Capture(&blockID))
 ```
 
-One read, one poll, and `blockID` holds exactly what the matcher saw when it passed.
+One poll, one read, and `blockID` holds what the matcher saw when it passed.
 
-**Which matchers can capture.**  Any matcher that has a value to show you in its failure message has one to give you:
+**Which matchers can capture.**  If a matcher shows you a value in its failure message, it can give you that value:
 
 | | |
 |---|---|
@@ -1004,36 +1004,36 @@ var posters []string
 Eventually("div.comment").Should(b.EachHaveProperty("dataset.poster").Capture(&posters))
 ```
 
-An "is it there?" matcher has to look at the value to answer, so it may as well give it to you - which is why the argument-less `EachHaveInnerText()`/`EachHaveTextContent()` (they route through `EachHaveProperty`'s existence-only form) capture the whole slice too.
+An existence check has to look at the value to answer, so it hands the value over too - that includes the argument-less `EachHaveInnerText()`/`EachHaveTextContent()`, which route through `EachHaveProperty`'s existence-only form and so capture the whole slice.
 
-Matchers that read **no value** - `Exist`, `BeVisible`, `BeEnabled`, `BeClickable`, `BeChecked`, `BeFocused`, the relational [geometry](#geometry) matchers (`BeAbove`, `Encloses`, `BeInViewport`, …) - and the [actions-as-matchers](#interacting-with-elements) (`Click`, `SetValue`, `Type`, …) keep returning a plain Gomega matcher, so `.Capture` doesn't compile on them.  That's deliberate: there is no honest value for `Eventually(sel).Should(b.BeVisible().Capture(&x))` to give you, and a compile error is a better answer than a zero value.
+Matchers that read **no value** - `Exist`, `BeVisible`, `BeEnabled`, `BeClickable`, `BeChecked`, `BeFocused`, the relational [geometry](#geometry) matchers (`BeAbove`, `Encloses`, `BeInViewport`, …) - and the [actions-as-matchers](#interacting-with-elements) (`Click`, `SetValue`, `Type`, …) keep returning a plain Gomega matcher, so `.Capture` doesn't compile on them.  That's deliberate: there's no value for `Eventually(sel).Should(b.BeVisible().Capture(&x))` to hand back, and a compile error beats a zero value.
 
-Two matchers *do* read something and still keep the plain interface.  [`b.MatchColor`](#geometry) runs JavaScript to normalize both colors, but it's a **sub-matcher** you hand to `HaveComputedStyle` - capture off `HaveComputedStyle` itself and you get the resolved style.  [`b.HaveMadeRequest`](#observing-requests) is a builder-style query rather than a value matcher (it chains `.WithMethod(...)`, like `HaveCookie` chains its refinements); it renders the requests it observed in its failure message, and when you want the request itself, `b.AllRequests().Find(b.RequestMatching(...))` is the same query used as a predicate.
+Two matchers *do* read something and still keep the plain interface.  [`b.MatchColor`](#geometry) runs JavaScript to normalize both colors, but it's a **sub-matcher** you hand to `HaveComputedStyle` - capture off `HaveComputedStyle` itself and you get the resolved style.  [`b.HaveMadeRequest`](#observing-requests) is a builder-style query rather than a value matcher (it chains `.WithMethod(...)`, like `HaveCookie` chains its refinements); it lists the requests it observed in its failure message, and when you want the request itself, `b.AllRequests().Find(b.RequestMatching(...))` is the same query used as a predicate.
 
-**The rules are small, and worth knowing exactly:**
+**The rules:**
 
 - **Capture writes only when the matcher matches.**  Under `ShouldNot`/`NotTo` the assertion passes precisely when the matcher *didn't* match, so nothing is captured and your variable keeps its zero value.  If you want the value, capture it with a separate `Should`.
-- **While polling, the target is overwritten on every successful attempt.**  When the assertion finally passes, it holds the value from the attempt that passed - which is the whole point.
+- **While polling, the target is overwritten on every successful attempt.**  So when the assertion finally passes, it holds the value from the attempt that passed.
 - **The decode is typed.**  Biloba decodes into your pointer the way `encoding/json` does, so a JavaScript number lands in an `*int` as `3` rather than `float64(3)`, and a JSON object lands in your struct.  No casts, no [`float64` gotcha](#running-arbitrary-javascript).
 - **A genuine type mismatch fails fast.**  Capturing a string into an `*int` can never come true, so Biloba stops the poll immediately (via Gomega's `StopTrying`) instead of burning the timeout to tell you about a bug in your spec.
 - **You can narrow a JavaScript object, but not one of Biloba's structs.**  Capturing a JSON object into a struct that picks out only the fields you care about is a normal, supported thing to do (that's the [`HaveJSONAttribute`](#properties) case).  Capturing a `Box`, `ScrollOffset`, `BoxDelta`, or `Cookie` into a *different* struct is rejected instead: those structs share field names and carry no json tags, so a `Box` would otherwise decode into a `ScrollOffset` in silence, filling `Top`/`Left` and zeroing the rest.  Capture into the matching type (or into an `any`) and read the fields you want off it.
 - **`.Capture(&x)` returns a *new* matcher and leaves the original alone.**  So a matcher stashed in a variable can be reused with different targets without the second capture stealing the first's - `Eventually("#a").Should(m.Capture(&idA))` followed by `Eventually("#b").Should(m.Capture(&idB))` does what it looks like.  `HaveCookie`'s `.Capture` behaves the same way, and composes with the `.WithX` refinements in either order.
 - `target` must be a non-nil pointer.
 
-**One asymmetry to keep in mind**, and it's a feature: [`b.EvaluateTo`](#running-arbitrary-javascript) hands its sub-matcher the **raw** JSON-decoded value - a `[]any` of `map[string]any` - while `Capture` gives you the typed thing.  So you match with `HaveKeyWithValue` and capture into your struct slice:
+**One asymmetry to keep in mind:** [`b.EvaluateTo`](#running-arbitrary-javascript) hands its sub-matcher the **raw** JSON-decoded value - a `[]any` of `map[string]any` - while `Capture` gives you the typed value.  So you match with `HaveKeyWithValue` and capture into your struct slice:
 
 ```go
-type FoldEntry struct {
-	Fidelity string `json:"fidelity"`
-	Seq      int    `json:"seq"`
+type SaveEntry struct {
+	Status string `json:"status"`
+	Seq    int    `json:"seq"`
 }
 
-var log []FoldEntry
-Eventually(`window.__foldLog`).Should(b.EvaluateTo(ContainElement(HaveKeyWithValue("fidelity", "text"))).Capture(&log))
+var log []SaveEntry
+Eventually(`window.__saveLog`).Should(b.EvaluateTo(ContainElement(HaveKeyWithValue("status", "saved"))).Capture(&log))
 Ω(log[0].Seq).Should(Equal(1))
 ```
 
-Finally, the same decode rules power an **optional trailing pointer** on the value-getters - `GetProperty`, `GetAttribute`, `GetValue`, and their `Current*ForEach` snapshots - exactly like [`b.Run`](#running-arbitrary-javascript) and `b.GetJSValue` have always had:
+Finally, the same decode rules power an **optional trailing pointer** on the value-getters - `GetProperty`, `GetAttribute`, `GetValue`, and their `Current*ForEach` snapshots - just like [`b.Run`](#running-arbitrary-javascript) and `b.GetJSValue` have always had:
 
 ```go
 var width int
@@ -1081,7 +1081,7 @@ Eventually("img.thumbnail").Should(b.HaveCount(BeNumerically(">", 10)))
 
 if no elements match the `selector`, `Count/HaveCount` return `0`.  Obviously.
 
-That "obviously" has a sharp edge when you assert an **upper bound**: `Eventually(".row").Should(b.HaveCount(BeNumerically("<=", 3)))` is satisfied by *zero* rows, so it passes instantly on a page that never rendered the list at all - which is usually the failure you were guarding against.  There's no way around that (zero really is `<= 3`), so when you mean "some, but not too many", say both halves:
+That "obviously" has a sharp edge when you assert an **upper bound**: `Eventually(".row").Should(b.HaveCount(BeNumerically("<=", 3)))` is satisfied by *zero* rows, so it passes instantly on a page that never rendered the list at all - usually the very failure you were guarding against.  Zero really is `<= 3`, so when you mean "some, but not too many", say both halves:
 
 ```go
 Eventually(".row").Should(b.HaveCount(And(BeNumerically(">", 0), BeNumerically("<=", 3))))
@@ -1237,14 +1237,14 @@ list := b.CurrentInnerTextForEach("ol.movies li")
 
 will return the individual inner texts for each list element under all `<ol>`s with class `movies`.  If no elements are found `list` will be an empty slice.  The `Current*ForEach` getters are **snapshots** - they read the matches as they are *right now* and never poll.  When the elements appear asynchronously, gate on their count first with `Eventually("ol.movies li").Should(b.HaveCount(n))` and *then* read - but be careful to avoid flakes here as the DOM may have changed between the two atomic operations.
 
-That "empty slice when nothing matches" is a timing hazard, and it is *also* an honesty hazard - because an empty slice **satisfies every negated collection matcher**:
+That "empty slice when nothing matches" is a timing hazard, and it is also a **vacuity** hazard: an empty slice satisfies every negated collection matcher.
 
 ```go
 /* === passes when zero rows rendered === */
 Expect(b.CurrentInnerTextForEach(".row")).NotTo(ContainElement("Error"))
 ```
 
-Nothing observed, assertion green.  A spec that meant "none of the rows says Error" quietly became "there were no rows," which is the white-screen failure it was written to catch.  The `HaveCount` gate fixes both problems at once - it is what makes the negation *about something*:
+A spec that meant "none of the rows says Error" has quietly become "there were no rows" - the white-screen failure it was written to catch.  The `HaveCount` gate fixes both problems at once; it's what gives the negation something to be about:
 
 ```go
 Eventually(".row").Should(b.HaveCount(3))
@@ -1279,7 +1279,7 @@ Like every `Each*` matcher, `EachHaveInnerText` requires **at least one** match:
   Consistently(b.ByTextContains("Draft").Within("#published-list")).ShouldNot(b.Exist())
   ```
 
-  The anchor is not ceremony.  A locator whose `.Within`/`.Containing` scope doesn't resolve [matches nothing](#selecting-by-locator) - so if `#published-list` never renders, the unanchored `Consistently` passes instantly and keeps passing for its full duration, having observed nothing at all.  That is precisely the white-screen failure this guard exists to catch, and it is the one case where it goes green.  Every scoped negation wants an anchor; `Consistently` especially, because its passing feels like *more* evidence rather than less.
+  The anchor earns its keep.  A locator whose `.Within`/`.Containing` scope doesn't resolve [matches nothing](#selecting-by-locator) - so if `#published-list` never renders, the unanchored `Consistently` passes instantly and keeps passing for its full duration, having observed nothing at all.  That's the white-screen failure this guard exists to catch, sailing right through it.  Anchor every scoped negation, and `Consistently` most of all: a long green `Consistently` reads like *more* evidence when it can be none.
 
 ---
 
@@ -1336,7 +1336,7 @@ var href string
 b.GetAttribute("#link", "href", &href)
 ```
 
-And when you're waiting for the attribute *and* want its value, don't do both - `HaveAttribute` [captures](#capturing-values-from-matchers), in either form:
+And when you're waiting for the attribute *and* want its value, don't do both.  `HaveAttribute` [captures](#capturing-values-from-matchers), in either form:
 
 ```go
 var blockID string
@@ -1630,14 +1630,14 @@ p.Filter("id", Not(ContainSubstring("new-user"))) //returns `SliceOfProperties` 
 
 `Find` returns the matching `Properties` object or `nil` if none is found; `Filter` returns `SliceOfProperties` with matching elements (possibly empty if none matched).  This lets you fetch all the properties you might need to assert on and then efficiently dig through the `SliceOfProperties` in your test to make assertions.
 
-> **Watch the composition of those two conveniences.**  `Find` returns `nil` when nothing matches, and the typed getters on `Properties` return the zero value for anything they don't have.  Each is reasonable alone; together they turn "no such element" into a perfectly plausible-looking reading:
+> **Don't chain `Find` straight into a getter.**  `Find` returns `nil` when nothing matches, and the typed getters on `Properties` return the zero value for anything they don't have.  Chain them and "no such element" reads as a perfectly plausible answer:
 >
 > ```go
 > /* === passes when there is no element named Bob at all === */
 > Expect(p.Find("dataset.name", "Bob").GetBool("disabled")).To(BeFalse())
 > ```
 >
-> A missing element and a present-but-enabled element are indistinguishable at the assertion.  Split the two questions so the first one is actually asked:
+> A missing element and a present-but-enabled element look identical at the assertion.  Split the two questions so the first one actually gets asked:
 >
 > ```go
 > bob := p.Find("dataset.name", "Bob")
@@ -1680,20 +1680,20 @@ Eventually(".hero .sec").Should(b.HaveOffsetTopWithin(".scroller", BeNumerically
 
 `HaveOffsetTopWithin`/`HaveOffsetLeftWithin` take the container plus an expected matcher (or a plain value, compared with `Equal`).  All of the getters honor `WithTimeout`/`WithPolling`/`WithContext` and `Immediate()`; the matcher forms are configured through the `Eventually`/`Expect` that polls them.
 
-**A geometry matcher is a claim about an element that is there.**  Every geometry probe distinguishes two things that look alike: an element that is *present but not laid out yet* (a zero-area box) is a silent "not ready" - so the positive direction keeps polling through late layout, exactly as you'd want - while an element that is **not there at all** is an **error**.  That second half is deliberate, and it is the one thing to know when upgrading: Gomega never counts an assertion satisfied while its matcher is erroring, in *either* direction, so a missing element can no longer satisfy `ShouldNot`.  That's the fix for `Ω("#toast").ShouldNot(b.BeInViewport())` passing forever against a page that never rendered `#toast` - but it also means the **wait-for-teardown** spec has to change its verb:
+**A geometry matcher asks *where* an element is, not *whether* it is.**  Every geometry probe treats two similar-looking situations differently.  An element that is present but not laid out yet (a zero-area box) is a quiet "not ready", so the positive direction keeps polling through late layout.  An element that isn't there at all is an **error**.  Gomega never counts an assertion satisfied while its matcher is erroring - in either direction - so a missing element can't satisfy `ShouldNot`.  That's what keeps `Ω("#toast").ShouldNot(b.BeInViewport())` from passing forever against a page that never rendered `#toast`.  It also means a **wait-for-teardown** spec needs a different verb:
 
 ```go
 /* === no longer works: it used to pass the moment the toast left the DOM; now it times out === */
 Eventually("#toast").ShouldNot(b.BeInViewport())
 
-/* === say it with the matchers that are about existence === */
+/* === use the matchers that are about existence === */
 Eventually("#toast").ShouldNot(b.Exist())
 Eventually("#toast").Should(b.HaveCount(0))
 ```
 
-The same applies to `HaveBoundingBox`, `HaveScrollOffset`, `HaveOffsetTopWithin`/`HaveOffsetLeftWithin`, `HaveGapBetween`, the pairwise matchers below, and to `Consistently(sel).ShouldNot(...)` where `sel` is conditionally rendered.  Reach for `Exist`/`HaveCount` when the question is *whether the element is there*, and for the geometry matchers when the question is *where it is*.  This is how [`BeVisible`/`BeEnabled`/`BeClickable`](#existence-counting-visibility-and-interactibility) have always behaved, so the convention is now uniform rather than split down the middle.  (When the pairwise or offset probes are the ones that can't find something, the failure names *which* selector went missing - subject, container, or other.)
+The same applies to `HaveBoundingBox`, `HaveScrollOffset`, `HaveOffsetTopWithin`/`HaveOffsetLeftWithin`, `HaveGapBetween`, the pairwise matchers below, and to `Consistently(sel).ShouldNot(...)` where `sel` is conditionally rendered.  Use `Exist`/`HaveCount` for "is it there", and the geometry matchers for "where is it".  [`BeVisible`/`BeEnabled`/`BeClickable`](#existence-counting-visibility-and-interactibility) have always worked this way, so the convention is uniform.  (When a pairwise or offset probe is the one that can't find something, the failure names *which* selector went missing - subject, container, or other.)
 
-Layout is the place where a second read is *most* likely to disagree with the first, so when you need the measurement after asserting on it, [capture](#capturing-values-from-matchers) it off the matcher rather than following up with a getter:
+Layout is where a second read is most likely to disagree with the first, so when you need the measurement after asserting on it, [capture](#capturing-values-from-matchers) it off the matcher instead of following up with a getter:
 
 ```go
 var box biloba.Box
@@ -2579,7 +2579,7 @@ cookie, ok := b.GetCookies().Find(b.CookieMatching("session").WithPath("/admin")
 admins := b.GetCookies().Filter(b.CookieMatching(ContainSubstring("session")))
 ```
 
-`HaveCookie` [captures](#capturing-values-from-matchers) too - chain `.Capture(&cookie)` (in any order relative to the refinements) to keep the cookie that satisfied *every* refinement, rather than polling for it and then hunting it down again with `GetCookies().Find`:
+`HaveCookie` [captures](#capturing-values-from-matchers) too - chain `.Capture(&cookie)` (in any order relative to the refinements) to keep the cookie that satisfied *every* refinement, instead of polling for it and then looking it up again with `GetCookies().Find`:
 
 ```go
 var cookie biloba.Cookie
@@ -2621,7 +2621,7 @@ b.LocalStorage().Get("user", &user)
 
 `Get` takes an optional pointer argument to decode into a specific type (just like [`b.Run`](#running-arbitrary-javascript)).  Without it, `Get` returns the decoded value as type `any` (so numbers come back as `float64`).  `Get` returns `nil` for a missing key.  Values written to storage by the page itself that aren't valid JSON (e.g. a plain `localStorage.setItem("k", "v")`) are returned as their raw string.
 
-> **A missing key leaves your variable at its zero value.**  `Get` is not an assertion - when the key isn't there it simply doesn't write, so `var count int; b.LocalStorage().Get("count", &count)` leaves `count` at `0` and `Expect(count).To(Equal(0))` passes for two very different reasons.  When the key's *presence* is part of what you're testing, assert it - `Expect(b).To(b.HaveLocalStorageItem("count"))` - or capture straight off the matcher (below) so the value you hold is one that was actually there.
+> **A missing key leaves your variable at its zero value.**  `Get` is not an assertion - when the key isn't there it simply doesn't write.  So `var count int; b.LocalStorage().Get("count", &count)` leaves `count` at `0`, and `Expect(count).To(Equal(0))` passes for two very different reasons.  When the key's *presence* is part of what you're testing, assert it with `Expect(b).To(b.HaveLocalStorageItem("count"))`, or capture straight off the matcher (below) so the value you hold is one that was really there.
 
 #### Asserting on Storage
 
@@ -2635,7 +2635,7 @@ Eventually(b).Should(b.HaveLocalStorageItem("count", BeNumerically(">", 0)))
 Expect(b).To(b.HaveSessionStorageItem("token", ContainSubstring("ABCD")))
 ```
 
-Both of these [capture](#capturing-values-from-matchers), so a "wait for it, then use it" step stays a single read - and, unlike `Get`, a captured value is one the assertion actually observed:
+Both of these [capture](#capturing-values-from-matchers), so "wait for it, then use it" stays a single read - and unlike `Get`, a captured value is one the assertion actually observed:
 
 ```go
 var count int
@@ -2683,7 +2683,7 @@ You can override these by registering a series of dialog handlers.  You can have
 You register a handler by calling any of the following:
 
 - `b.HandleAlertDialogs()`
-- `b.HandleBeforeUnloadDialogs()`
+- `b.HandleBeforeunloadDialogs()`
 - `b.HandleConfirmDialogs()`
 - `b.HandlePromptDialogs()`
 
@@ -2717,7 +2717,7 @@ b.HandlePromptDialogs().MatchingMessage("What dinner entree would you prefer?").
 b.HandlePromptDialogs().MatchingMessage("What beverage would you prefer?").WithResponse(true).WithText("Coffee")
 
 //deny any onbeforeunload dialogs - note that `MatchingMessage` will not work with `beforeunload` dialogs as a custom message cannot be set.
-b.HandleBeforeUnloadDialogs().WithResponse(false) 
+b.HandleBeforeunloadDialogs().WithResponse(false) 
 ```
 
 if you hang on to the `DialogHandler` reference you can remove it later like so:
@@ -3044,7 +3044,7 @@ That's a small API.  The reason it exists is not small, and it's worth slowing d
 
 **When you assert that "the app handled the server's response," there are two obvious signals that both look like proof - and neither one is.**
 
-- **The DOM.** In any app with optimistic UI, the click handler writes the new value *synchronously*, before a single byte goes over the wire.  So `Eventually("#name").Should(b.HaveInnerText("Jane"))` passes the instant the click handler runs.  It proves your click handler ran.  It says nothing about whether a response ever came back, let alone whether the app folded it in.
+- **The DOM.** In any app with optimistic UI, the click handler writes the new value *synchronously*, before a single byte goes over the wire.  So `Eventually("#name").Should(b.HaveInnerText("Jane"))` passes the instant the click handler runs.  It proves your click handler ran.  It says nothing about whether a response ever came back, let alone whether the app applied it.
 - **A Go-side HTTP read.**  Reaching out from your spec to `GET /api/users` and checking the payload bypasses the browser's event loop *entirely*.  It proves the **server** persisted something.  It does not prove the **tab** ever processed the response.
 
 Both of these can be green while the tab has done nothing at all with the result.  That's the flake: the spec's next step assumes reconciliation has happened, and most of the time it has.
@@ -3052,8 +3052,8 @@ Both of these can be green while the tab has done nothing at all with the result
 The fix is to make the app say so itself.  Have it log its own decisions to a `window.__x` path, and poll *that* - which is a one-liner:
 
 ```go
-// have the app record each fold as it happens
-b.Run(`app.store.on("fold", () => {
+// have the app record each store update as it happens
+b.Run(`app.store.on("update", () => {
 	window.__storeLog = window.__storeLog || []
 	window.__storeLog.push(app.store.state)
 })`)
@@ -3061,22 +3061,22 @@ b.Run(`app.store.on("fold", () => {
 b.Click("#save")
 
 var log []string
-b.GetJSValue("window.__storeLog", &log)   // blocks until the tab actually folds the response
+b.GetJSValue("window.__storeLog", &log)   // blocks until the tab actually applies the response
 Ω(log).Should(HaveExactElements("saving", "saved"))
 ```
 
 Now the barrier is a *renderer-side* fact: the value can't exist unless the browser ran the code that produced it.
 
-#### The load-bearing detail in that example: the log is created *lazily*
+#### That example only works because the log is created *lazily*
 
-Look again at where `window.__storeLog` comes into existence.  It is created **by the subscriber**, on the first fold - so "the global is defined" and "at least one fold has happened" are the same event.  That coincidence is what makes the comment on that line true.
+Notice where `window.__storeLog` comes into existence: the subscriber creates it, on the first update.  So "the global is defined" and "at least one update has landed" are the same event, which is what makes the comment on that line true.
 
-**`GetJSValue` gates on definedness and nothing else.**  It does not know what the value means.  Point it at a log your app creates *eagerly* and the barrier evaporates:
+**`GetJSValue` waits for the value to be defined and nothing more.**  It doesn't know what the value means.  Point it at a log your app creates *eagerly* and you're waiting for nothing:
 
 ```go
 /* === looks identical.  gates nothing. === */
 b.Run(`window.__storeLog = []`)                  // created up front...
-b.Run(`app.store.on("fold", () => window.__storeLog.push(app.store.state))`)
+b.Run(`app.store.on("update", () => window.__storeLog.push(app.store.state))`)
 
 b.Click("#save")
 
@@ -3085,11 +3085,11 @@ b.GetJSValue("window.__storeLog", &log)          // returns [] on the very first
 Ω(log).Should(HaveExactElements("saving", "saved"))   // ...and now this races
 ```
 
-`window.__storeLog` is defined immediately, so `GetJSValue` returns on its first evaluation having waited for nothing at all.  What was supposed to be the one signal that cannot be faked is now a no-op, and the spec is green.  Worse: it is green *and it never flakes on a fast machine*, so nothing ever draws your attention to it.
+`window.__storeLog` is defined immediately, so `GetJSValue` returns on its first evaluation.  The one signal that couldn't be faked has become a no-op - and on a fast machine the spec is green every time, so nothing ever draws your attention to it.
 
-This isn't a contrived counter-example - **eager creation is the natural way to write a product-path log.**  A ring buffer that has to be live for a real session gets assigned at store construction, not on first use.  If the global you're gating on is a real diagnostic your app ships (rather than one your spec installed a moment ago), assume it's eager until you've read the code.
+Eager creation is also the normal way to write a log your app actually ships: a ring buffer that has to be live for a real session gets assigned at store construction, not on first use.  So if you're gating on a real diagnostic rather than one your spec installed a moment ago, assume it's eager until you've read the code.
 
-The fix, when your readiness condition is a **predicate over the value** rather than its mere existence, is [`b.EvaluateTo`](#running-arbitrary-javascript) plus [`.Capture`](#capturing-values-from-matchers) - one read, one poll, typed result:
+When your readiness condition is a **predicate over the value** rather than its mere existence, use [`b.EvaluateTo`](#running-arbitrary-javascript) plus [`.Capture`](#capturing-values-from-matchers) - one poll, one read, typed result:
 
 ```go
 var log []string
@@ -3097,11 +3097,11 @@ Eventually(`window.__storeLog`).Should(b.EvaluateTo(HaveLen(2)).Capture(&log))
 Ω(log).Should(HaveExactElements("saving", "saved"))
 ```
 
-The rule of thumb: reach for `GetJSValue` when *existence* is the fact you're waiting on, and for `EvaluateTo(...).Capture(...)` when the value has to reach some state.  If you can't say in one sentence why the global cannot exist before the thing you care about has happened, you want the second one.
+Rule of thumb: `GetJSValue` when *existence* is the fact you're waiting on, `EvaluateTo(...).Capture(...)` when the value has to reach some state.  If you can't say in one sentence why the global cannot exist before the thing you care about has happened, use the second one.
 
-#### When absence is meaningful, `GetJSValue` is the wrong tool
+#### When absence is meaningful, use `b.Run` instead
 
-Because `GetJSValue` **waits** for existence, it cannot express a probe where the global being missing is itself a valid reading.  It has exactly one way to report "not there": burn the timeout and fail the spec.  So any of these want a plain [`b.Run`](#running-arbitrary-javascript) with a defensive coalesce instead:
+`GetJSValue` **waits** for existence, so it can't express a probe where a missing global is itself a valid reading - its only way to report "not there" is to burn the timeout and fail the spec.  These all want a plain [`b.Run`](#running-arbitrary-javascript) with a defensive `|| []`:
 
 ```go
 // a write ledger that legitimately doesn't exist on about:blank between navigations -
@@ -3124,10 +3124,10 @@ b.Run(`window.__sentinel === "planted"`, &survived)
 
 // a baseline taken before an action, which may legitimately be zero
 var before int
-b.Run(`(window.__foldLog || []).length`, &before)
+b.Run(`(window.__saveLog || []).length`, &before)
 ```
 
-In every one of these the coalesce isn't sloppiness to be tidied up into a "proper" barrier - it *is* the assertion.  `b.Run` is a one-shot read that reports what is there right now, including nothing, which is exactly what a probe over an optional global needs.  (For the third one especially: a `GetJSValue` would happily wait for a sentinel to *appear*, which is the opposite of proving it was never cleared.)
+In each of these the `|| []` *is* the assertion, not sloppiness to be tidied up into a "proper" barrier.  `b.Run` is a one-shot read that reports what's there right now, including nothing - which is what a probe over an optional global needs.  The third one especially: `GetJSValue` would happily wait for the sentinel to *appear*, which is the opposite of proving it was never cleared.
 
 A few more details that make `GetJSValue` pleasant to use:
 
@@ -3136,7 +3136,7 @@ A few more details that make `GetJSValue` pleasant to use:
 - **The optional pointer decodes into a concrete type**, exactly like `b.Run` - which is how you sidestep the JSON-`float64` gotcha (`var n int; b.GetJSValue("app.numRecords", &n)`).  Without a pointer you get `any`, and numbers arrive as `float64`.
 - **It's a [polling method](#interacting-with-elements)**, so it honors `WithTimeout`/`WithPolling`/`WithContext` and `Immediate()`.
 
-Finally - and this is the distinction the two traps above both turn on - `GetJSValue` *fetches a value once it exists*.  When you'd rather poll until a **condition** holds, reach for its sibling matcher [`b.EvaluateTo`](#running-arbitrary-javascript), and [`.Capture`](#capturing-values-from-matchers) the value that satisfied it so you don't re-read the page:
+Finally, the distinction both traps above turn on: `GetJSValue` *fetches a value once it exists*.  When you'd rather poll until a **condition** holds, reach for its sibling matcher [`b.EvaluateTo`](#running-arbitrary-javascript), and [`.Capture`](#capturing-values-from-matchers) the value that satisfied it so you don't re-read the page:
 
 ```go
 Eventually("window.__storeLog.length").Should(b.EvaluateTo(BeNumerically(">", 0)))
@@ -3285,9 +3285,9 @@ Response interception is a heavier mode than the request-stage handlers: the tab
 >
 > Biloba now names this for you: when a handler never fires *and* an earlier handler claimed its URL, the failure output reports both registration sites.  That catches the dead-handler case.
 
-> **Shadowing is silent in *both* directions, and the other direction reads as success.**  A shadowed handler that is *stateless* does nothing, so the spec that registered it usually fails somewhere obvious.  A shadowed handler that is **stateful** can be half-firing - still doing its job for the earlier spec's state while doing nothing for yours - and that looks exactly like everything working.
+> **A shadowed handler can also fail by looking like success.**  A *stateless* shadowed handler does nothing, so the spec that registered it usually fails somewhere obvious.  A **stateful** one can be half-firing - still doing its job for the earlier spec's state while doing nothing for yours - and that looks like everything working.
 >
-> The canonical shape is the hand-rolled first-only gate:
+> The usual shape is a hand-rolled first-only gate:
 >
 > ```go
 > var intercepted int32
@@ -3297,9 +3297,9 @@ Response interception is a heavier mode than the request-stage handlers: the tab
 > })
 > ```
 >
-> Its counter already reached `1` in the earlier `It`.  So in the later `It` the leftover handler still *claims* the response - and passes it straight through, unheld.  The page behaves completely normally.  Nothing hangs, nothing 500s, no request is missing; the only thing that stays at zero is the *later* spec's own counter.  "The hold worked" is precisely what a shadowed hold looks like from the app's side, which is why this one survives review.
+> Its counter already reached `1` in the earlier `It`.  So in the later `It` the leftover handler still *claims* the response - and passes it straight through, unheld.  The page behaves normally: nothing hangs, nothing 500s, no request goes missing.  The only thing that stays at zero is the *later* spec's own counter.  From the app's side a shadowed hold and a working hold look the same, which is why this one survives review.
 >
-> The dead-handler report above doesn't catch it (the handler *did* fire - for someone else).  What catches it is asserting that your gate actually engaged: `Eventually(hold.Count).Should(Equal(1))`.  Count the interceptions you expect, always - and prefer [`b.HoldResponse`](#holding-a-response-hostage) over hand-rolling the gate in the first place, since it carries that counter for you.
+> The dead-handler report above doesn't catch it - the handler *did* fire, just for someone else.  What catches it is asserting that your gate engaged: `Eventually(hold.Count).Should(Equal(1))`.  Always count the interceptions you expect - and prefer [`b.HoldResponse`](#holding-a-response-hostage) over hand-rolling the gate, since it carries that counter for you.
 
 ### Holding a response hostage
 
@@ -3314,9 +3314,9 @@ hold.Release()          // now let the stale response land
 Eventually(".user").Should(b.HaveInnerText("Jane"))
 ```
 
-This is **the** tool for testing optimistic-UI reconciliation, which is the dominant flake class in any app with a server: a response arrives while the user has already moved on, and the app has to decide whether to fold it in or drop it on the floor.  Forcing the arrival order is the only honest way to test that decision.  At a 1% natural rate, "I ran it 30 times and it was green" proves essentially nothing - you need to *make* the race happen, every time.
+This is **the** tool for testing optimistic-UI reconciliation, which is the dominant flake class in any app with a server: a response arrives while the user has already moved on, and the app has to decide whether to apply it or drop it on the floor.  Forcing the arrival order is the only honest way to test that decision.  At a 1% natural rate, "I ran it 30 times and it was green" proves essentially nothing - you need to *make* the race happen, every time.
 
-**Say the default out loud, because it decides how the rest of the spec behaves: a hold freezes *every* matching response, not just the first.**  Register a hold on `/api/save` and the second save's response is frozen too, sitting behind the first.  A bare `Release()` then frees all of them at once and *stops holding* - it's terminal.  That default is the right one for the common case (one request, one response, one race), but it means the two most interesting orderings need a knob.
+**Know the default, it shapes the rest of the spec: a hold freezes *every* matching response, not just the first.**  Register a hold on `/api/save` and the second save's response is frozen too, sitting behind the first.  A bare `Release()` frees all of them at once and *stops holding* - it's terminal.  That's right for the common case (one request, one response, one race), but the two more interesting orderings need a knob.
 
 The API:
 
@@ -3330,15 +3330,15 @@ The API:
 | `hold.ReleaseNext()` | release the oldest response still held, and stay **armed**.  Fails the spec if nothing is currently held (`Await()` first). |
 | `hold.Count()` | how many matching responses have been intercepted so far - held *or* passed through under a `Limit`.  A snapshot, but safe to poll: `Eventually(hold.Count).Should(Equal(1))`. |
 
-**`Limit(1)` is how you say "hold #1 while #2 lands."**  Two rapid saves where the *first* response must resolve *last* is the ordering a default hold can never produce, because it freezes the second response as well:
+**`Limit(1)` is how you say "hold #1 while #2 lands."**  Two rapid saves where the *first* response must resolve *last* is an ordering a default hold can never produce, since it freezes the second response as well:
 
 ```go
 hold := b.HoldResponse(ContainSubstring("/api/save")).Limit(1)
 
 b.Click("#save")                              // the first save's response is held
 hold.Await()
-b.Click("#save")                              // the second save's response flies past and folds
-Eventually(hold.Count).Should(Equal(2))       // ...and the counter proves it really did
+b.Click("#save")                              // the second save's response goes straight through
+Eventually(hold.Count).Should(Equal(2))       // ...and the counter proves it did
 
 hold.Release()                                // now the FIRST response lands - last
 Eventually("#status").Should(b.HaveInnerText("Saved"))
@@ -3419,9 +3419,9 @@ Eventually(b).Should(b.BeNetworkIdle())
 
 In keeping with Biloba's pragmatism, "idle" means the in-flight count has reached zero - Biloba does not wait for a quiet period (à la `networkidle0`).  If you need to wait for one specific request to complete, assert on its effect directly instead.
 
-> **That example has a hole in it, and it's on the *leading* edge.**  `Eventually` evaluates its matcher immediately, at `t=0` - before Chrome's `requestWillBeSent` for the click's fetch has even reached Biloba.  The in-flight count is still zero, so `BeNetworkIdle` passes on its very first evaluation, having observed no network activity whatsoever.  On a fast machine it is green every single time, and it is waiting for nothing.
+> **That example has a hole in it, on the *leading* edge.**  `Eventually` evaluates its matcher immediately, at `t=0` - before Chrome's `requestWillBeSent` for the click's fetch has reached Biloba.  The in-flight count is still zero, so `BeNetworkIdle` passes on its first evaluation, having observed no network activity at all.  On a fast machine it's green every time, and it waited for nothing.
 >
-> The fix is to anchor on the request you're actually waiting for, *then* wait for quiet:
+> Anchor on the request you're actually waiting for, *then* wait for quiet:
 >
 > ```go
 > b.Click("#refresh")
@@ -3429,7 +3429,7 @@ In keeping with Biloba's pragmatism, "idle" means the in-flight count has reache
 > Eventually(b).Should(b.BeNetworkIdle())                                   // ...and it finished
 > ```
 >
-> This is a different hazard from the no-quiet-period caveat above, which is about the *trailing* edge (a later request that hasn't started yet can still slip in after idle).  Both have the same shape - "idle" is only meaningful relative to activity you have independently pinned down - and both are why an effect-based assertion (`Eventually(".user").Should(b.HaveCount(2))`) beats a network-shaped one whenever you can write it.
+> This is a different hazard from the no-quiet-period caveat above, which is about the *trailing* edge: a later request that hasn't started yet can still slip in after idle.  Both come down to the same thing - "idle" only means something relative to activity you've independently pinned down - and both are why an effect-based assertion (`Eventually(".user").Should(b.HaveCount(2))`) beats a network-shaped one whenever you can write one.
 
 `BeNetworkIdle` tracks **HTTP** requests only - its in-flight count is keyed on the `Network.requestWillBeSent`/`Network.loadingFinished` request IDs Chrome reports.  A long-lived **WebSocket** does not register as an in-flight request, so it will not keep `BeNetworkIdle` perpetually busy (nor will `BeNetworkIdle` wait for a particular WS frame to arrive - wait on that frame's observable effect instead).
 

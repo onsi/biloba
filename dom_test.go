@@ -2213,11 +2213,16 @@ var _ = Describe("DOM manipulators and matchers", func() {
 
 		It("captures the value from the attempt that finally passed", func() {
 			// the class changes stage-a -> stage-b -> stage-c while we poll; only the last attempt
-			// matches, and that is the classList Capture must hand back
-			b.Run(`document.getElementById("counter").className = "stage-a"
-				setTimeout(() => { document.getElementById("counter").className = "stage-b" }, 150)
-				setTimeout(() => { document.getElementById("counter").className = "stage-c" }, 300)`)
+			// matches, and that is the classList Capture must hand back.
+			//
+			// Pin stage-a BEFORE scheduling the timers.  Asserting it afterwards raced them: the
+			// synchronous read had to beat the 150ms timer, and a single CDP round-trip can miss that
+			// window on a loaded machine, leaving the spec looking at stage-b.
+			b.Run(`document.getElementById("counter").className = "stage-a"`)
 			Ω("#counter").Should(b.HaveClass("stage-a"))
+
+			b.Run(`setTimeout(() => { document.getElementById("counter").className = "stage-b" }, 150)
+				setTimeout(() => { document.getElementById("counter").className = "stage-c" }, 300)`)
 
 			var classes []string
 			Eventually("#counter").WithTimeout(time.Second * 5).WithPolling(time.Millisecond * 10).Should(b.HaveClass("stage-c").Capture(&classes))
@@ -2358,7 +2363,10 @@ var _ = Describe("Failure diagnostics", func() {
 	Describe("the detached-node signal", func() {
 		It("reports a selector that matched during the poll and then stopped matching", func() {
 			b.Run("detachRowAfterLookups(2)")
-			b.WithTimeout(time.Millisecond*500).WithPolling(time.Millisecond*10).GetProperty("#row-4", "neverDefined")
+			// Same reason as the swap spec below: the deadline has to leave room for the two
+			// lookups the fixture counts. The node is gone after the 2nd, so the reported count
+			// stays 2 however long the poll runs.
+			b.WithTimeout(time.Second*3).WithPolling(time.Millisecond*10).GetProperty("#row-4", "neverDefined")
 			ExpectFailures(ContainSubstring("Timed out after"))
 			Ω(b.DetachedNodeNoteForTest()).Should(SatisfyAll(
 				ContainSubstring(`⚠ Selector "#row-4" matched 2× during this poll`),
@@ -2369,7 +2377,11 @@ var _ = Describe("Failure diagnostics", func() {
 
 		It("reports a selector whose identifying attribute was swapped in place", func() {
 			b.Run("swapRowIdAfterLookups(2)")
-			b.WithTimeout(time.Millisecond*500).WithPolling(time.Millisecond*10).GetProperty("#row-swap", "neverDefined")
+			// The fixture counts LOOKUPS rather than milliseconds so the swap is deterministic
+			// whatever the poll rate - but the deadline still has to be long enough for those two
+			// lookups to happen. At 500ms two CDP round-trips can miss the window on a loaded
+			// machine in the full-headless lane, the swap never fires, and no note is recorded.
+			b.WithTimeout(time.Second*3).WithPolling(time.Millisecond*10).GetProperty("#row-swap", "neverDefined")
 			ExpectFailures(ContainSubstring("Timed out after"))
 			Ω(b.DetachedNodeNoteForTest()).Should(ContainSubstring(`⚠ Selector "#row-swap" matched`))
 			Ω("#row-swapped").Should(b.Exist()) // the node itself is still there - only the selector stopped resolving
