@@ -1,3 +1,155 @@
+## 0.14.0
+
+## Breaking Changes
+
+- **A missing element no longer vacuously satisfies a negated geometry assertion.**  The relational
+  geometry matchers used to report "no" for an element that isn't there, which `ShouldNot` happily
+  accepted - so `ShouldNot(b.BeAbove(...))` passed on a page where neither element had rendered.  A
+  selector that doesn't resolve is now an error in both directions.  Likewise `b.BeChecked()` on an
+  element that has no `checked` property (a `<div>`, a mis-typed selector) errors instead of quietly
+  reading `false` and satisfying `ShouldNot`.
+
+  **This takes a legitimate spec with it, so here is the replacement idiom.**  Gomega counts an
+  assertion satisfied only when the matcher answers as desired AND does not error - in *either*
+  direction - so a geometry matcher can no longer be satisfied by an element going away:
+
+      // used to pass the moment the toast left the DOM; now it times out
+      Eventually("#toast").ShouldNot(b.BeInViewport())
+
+      // assert disappearance with the matchers that are ABOUT existence
+      Eventually("#toast").ShouldNot(b.Exist())
+      Eventually("#toast").Should(b.HaveCount(0))
+
+  The same goes for `HaveBoundingBox`, `HaveScrollOffset`, `HaveOffsetTopWithin`/`HaveOffsetLeftWithin`,
+  `HaveGapBetween`, the pairwise matchers, and any `Consistently(sel).ShouldNot(...)` on a
+  conditionally-rendered `sel`.  `Exist`/`HaveCount` answer "is it there?"; the geometry matchers
+  answer "where is it?" and presuppose it is.  That is how `BeVisible`/`BeEnabled`/`BeClickable` have
+  always behaved, so the convention is now uniform rather than split.
+- Every matcher that reads a value off the page now returns `*biloba.ValueMatcher` rather than
+  `types.GomegaMatcher` (see Features).  `*ValueMatcher` *is* a `types.GomegaMatcher`, so call sites
+  and variable assignments are unaffected; only code that type-switches on the concrete return needs
+  attention.  Two value-reading matchers deliberately keep the bare interface: `MatchColor` (it does
+  run JS to normalize both colors, but it is a *sub-matcher* you hand to `HaveComputedStyle` - capture
+  off that instead) and `HaveMadeRequest` (a builder-style `*RequestQuery` with its own `.WithMethod`
+  chain, which already renders the requests it observed in its failure message).
+
+## Features
+
+- **`.Capture(&target)` on the value-bearing matchers.**  Asserting with a matcher and *then*
+  calling a getter for the value is two reads of a page that may have changed in between - the
+  classic TOCTOU shape, and one that fails two assertions later pointing nowhere.  Capture hands you
+  the value from the winning read:
+
+      var blockID string
+      Eventually(".figure-frame").Should(b.HaveAttribute("data-block-id", Not(BeEmpty())).Capture(&blockID))
+
+  It writes only on a successful match (so nothing is captured under `ShouldNot`), decodes into the
+  Go type you asked for (a JS number lands in an `*int` as `3`, not `float64(3)`), and fails fast on
+  a genuine type mismatch rather than waiting out the timeout.  Matchers that read no value - `Exist`,
+  `BeVisible`, the relational geometry matchers - and the actions-as-matchers keep returning a bare
+  matcher, so `.Capture` does not compile on them, by design.  `HaveCookie` gained it too.
+
+  Two rules worth knowing up front: the target lives **on the matcher** (`.Capture` records it and
+  hands the matcher back), so build a fresh matcher per assertion rather than reusing a stored one
+  that would keep writing into the first target; and you can narrow a *JavaScript object* into a
+  struct that reads a subset of its fields, but capturing one of Biloba's own structs (`Box`,
+  `ScrollOffset`, `BoxDelta`, `Cookie`) into a *different* struct is rejected rather than half-filled
+  in silence - capture into the matching type, or an `any`.
+
+  Existence-only matcher forms capture too: `HaveProperty(name)`, `HaveAttribute(name)`, and
+  `EachHaveProperty(name)` (and so the argument-less `EachHaveInnerText()`/`EachHaveTextContent()`)
+  read the value in the same round-trip they use to answer "is it there?", and hand it back.
+- **Optional trailing decode pointers on the getters.**  `GetProperty`, `GetAttribute`, `GetValue`,
+  and the `CurrentPropertyForEach`/`CurrentAttributeForEach`/`CurrentValueForEach` snapshots now take
+  an optional trailing pointer, like `GetJSValue`/`Run` always have: `b.GetProperty("#row",
+  "offsetWidth", &n)` puts `3` in an `int`.  They still return the value too.
+- **`b.HoldResponse` can hold one response while another passes through.**  A hold used to be
+  all-or-nothing and terminal - it froze *every* match, and `Release()` freed them all and stopped
+  holding forever - which left two orderings inexpressible (and a spec written naively for one of
+  them passing vacuously).  Now:
+  - `.Limit(n)` holds at most n matching responses concurrently; further matches pass straight
+    through untouched (still counted), and capacity re-opens on release.  `Limit(1)` is how you say
+    "hold response #1 while response #2 lands and folds".  The limit is consulted as each response
+    arrives, so set it when you build the hold: lowering it later never releases responses already
+    held, and raising it never retroactively holds one that already flew past.
+  - `hold.Release(r)` releases just the response `Await()` handed you and stays **armed**.
+  - `hold.ReleaseNext()` releases the oldest response still held and stays armed - which is what
+    makes "hold, release, then hold the *next* response for the same URL" work in one `It` (a second
+    `HoldResponse` for the same URL is dead code under first-match-wins).
+  - `Await()` returns the oldest response still *held*, skipping ones that passed through under a
+    `Limit`.
+
+  Bare `hold.Release()` keeps exactly its previous release-everything-and-stop semantics.
+
+## Fixes
+
+- **`b.NewTab()` could return a nil tab under heavy parallel load, so `b.NewTab().Navigate(...)`
+  panicked on a nil receiver.**  Registering a tab probes the fresh target to force chromedp to
+  attach, guarded by a watchdog that existed to catch a target wedged mid-teardown - and that
+  watchdog shared the 5s budget used for detecting a target going away.  But the attach waits on a
+  brand-new target's first evaluation, which contends with every other Ginkgo process driving the
+  same shared Chrome, so under `-p` in the full-headless lane a perfectly healthy attach could exceed
+  5s.  It was then discarded as wedged, and once all three re-creation attempts were spent `NewTab`
+  handed back the nil tab it promises never to return.  The attach probe now has its own, far more
+  generous budget, so only a real wedge trips it.
+
+## Docs
+
+- Fixed a wrong method name in the docs: the beforeunload dialog handler is
+  `b.HandleBeforeunloadDialogs()` (lowercase `u`), not `HandleBeforeUnloadDialogs()`.  The documented
+  spelling did not compile.
+- The bundled agent skills (`plugins/biloba/skills/`) were audited and tightened - roughly a third
+  smaller overall, with `flaky-specs` restructured around a symptom/cause/fix triage table.  No
+  guidance was dropped.  Three gaps were filled along the way: `XPath.AncestorNotSelf`/
+  `DescendantNotSelf` were undocumented and `Ancestor()` was described as plain ancestry when it
+  emits `ancestor-or-self::`; `SelectText`'s substring form and `b.Occurrence(n)` were missing;
+  `b.RunErr` and realistic-mode's `ClickEachImmediately` were absent.
+- New **[Capturing values from matchers](https://onsi.github.io/biloba/#capturing-values-from-matchers)**
+  section: what captures, what deliberately doesn't, and the exact rules (writes only on a match,
+  overwritten each successful polling attempt, typed decode, fail-fast on mismatch, the target lives
+  on the matcher, JS objects narrow but Biloba's structs don't).  Includes the
+  `EvaluateTo` asymmetry - the sub-matcher sees the raw JSON-decoded value, Capture gives you the
+  typed struct.
+- **The `b.GetJSValue` app-state barrier now names the detail its own worked example depends on.**
+  The blessed pattern only gates because the log is created *lazily*, by the subscriber - so
+  "defined" and "at least one fold happened" coincide.  `GetJSValue` gates on definedness and nothing
+  else: point it at a log the app creates *eagerly* (the natural implementation for a product-path
+  ring buffer) and it returns `[]` on the first tick, gating nothing, in a barrier whose whole
+  purpose is to be the signal that cannot be faked - and it never flakes, so nothing draws attention
+  to it.  The docs state the trap, give the counter-example, and give the fix: when the readiness
+  condition is a *predicate over the value* rather than its definedness, use `b.EvaluateTo(...)` +
+  `.Capture(&log)`.
+- **`GetJSValue` is the wrong tool wherever absence is meaningful.**  Because it waits for existence
+  it cannot express a probe where a missing global is itself a valid reading - a ledger that is
+  absent on `about:blank`, a `window.__renderErrors` that is absent on a page that never booted, a
+  sentinel whose *survival* is the assertion, a baseline that may legitimately be empty.  Those are
+  `b.Run` with a defensive coalesce, and the docs now say so rather than leaving it looking sloppy.
+- **Network handler shadowing is silent in both directions.**  Already documented: handlers are
+  first-match-wins, so a later handler for a claimed URL is dead code, and inside an `Ordered`
+  container handlers accumulate.  Newly documented: a shadowed *stateful* handler can be silently
+  **half-firing**, which reads as success.  The `atomic.AddInt32(&n, 1) == 1` gate whose counter
+  already reached 1 in an earlier spec still claims the response and passes it through *unheld* - the
+  page behaves normally, nothing hangs, and only the later spec's own counter stays 0.  The
+  dead-handler report can't catch that one; `Eventually(hold.Count).Should(Equal(1))` can.
+- **Vacuous-pass findings, documented where they bite:**
+  - A `Locator` whose `.Within`/`.Containing` scope doesn't resolve matches nothing - so the blessed
+    negation recipe `Consistently(b.ByTextContains("Draft").Within("#published-list")).ShouldNot(b.Exist())`
+    passes instantly and permanently when `#published-list` never renders, which is the exact
+    white-screen failure it was written to catch.  The anchored form (assert the scope exists first)
+    is now the blessed one.
+  - `BeNetworkIdle` passes on the *leading* edge: `b.Click("#refresh")` then
+    `Eventually(b).Should(b.BeNetworkIdle())` evaluates at t=0, before `requestWillBeSent` arrives,
+    having observed nothing.  Anchor with `HaveMadeRequest` first, then wait for idle.
+  - The `Current*ForEach` getters return an empty slice on no match, which silently satisfies negated
+    collection matchers.  The `HaveCount` gate the docs already recommended for *timing* reasons is
+    also what keeps a *negative* assertion honest.
+  - `SliceOfProperties.Find` returns nil and every typed getter on a nil `Properties` returns a zero
+    value - so `p.Find("dataset.name", "Bob").GetBool("disabled")` compares equal to `false` when
+    there is no such element at all.  Both halves were documented; the composition now is.
+  - `Storage.Get(key, &out)` leaves your variable at its zero value when the key is absent.
+  - Upper-bound count assertions are satisfied by zero matches; when you mean "some, but not too
+    many", use a two-sided bound.
+
 ## 0.13.0
 
 ## Breaking Changes
