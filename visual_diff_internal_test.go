@@ -599,3 +599,41 @@ func TestDiagnoseTruncatesRegionList(t *testing.T) {
 	g.Expect(out).NotTo(ContainSubstring("unchanged:"))
 	g.Expect(strings.Count(out, "pixels\n")).To(Equal(maxReportedRegions))
 }
+
+// A max channel delta in the low single digits is a verdict, not a statistic: it says no pixel
+// changed meaningfully, so the cause is the renderer rather than the page.  Getting that wrong costs
+// an hour of hunting for an element that never moved.
+func TestDiagnoseAmplitudeVerdict(t *testing.T) {
+	g := NewWithT(t)
+
+	// a soft band that differs by 3 on every channel - a shadow compositing into a clipped capture
+	base := vdImage(200, 100, vdGrey)
+	act := vdClone(base)
+	vdFill(act, image.Rect(0, 90, 200, 96), color.NRGBA{0x67, 0x67, 0x67, 0xff})
+	d, err := compareScreenshots(vdEncode(g, base), vdEncode(g, act), screenshotTolerance{})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(d.MaxChannelDelta).To(Equal(3))
+
+	out := d.diagnose("choropleth", screenshotPaths{})
+	g.Expect(out).To(ContainSubstring("every differing pixel differs by <= 3 — a rasterisation or compositing difference, not a content change"))
+	g.Expect(out).To(ContainSubstring("b.ChannelTolerance(3)"))
+	// the geometry is still reported: the verdict narrows the cause, it does not replace the location
+	g.Expect(out).To(ContainSubstring("changed region: one box"))
+
+	// a real content change says nothing of the sort
+	act = vdClone(base)
+	vdFill(act, image.Rect(0, 90, 200, 96), vdBlack)
+	d, err = compareScreenshots(vdEncode(g, base), vdEncode(g, act), screenshotTolerance{})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(d.diagnose("choropleth", screenshotPaths{})).NotTo(ContainSubstring("rasterisation"))
+
+	// and the boundary is a boundary, not a gradient
+	for delta, expected := range map[int]bool{rasterizationChannelDelta: true, rasterizationChannelDelta + 1: false} {
+		act = vdClone(base)
+		shade := uint8(int(vdGrey.R) + delta)
+		vdFill(act, image.Rect(0, 90, 200, 96), color.NRGBA{shade, shade, shade, 0xff})
+		d, err = compareScreenshots(vdEncode(g, base), vdEncode(g, act), screenshotTolerance{})
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(strings.Contains(d.diagnose("x", screenshotPaths{}), "rasterisation")).To(Equal(expected), "delta %d", delta)
+	}
+}

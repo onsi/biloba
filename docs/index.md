@@ -3729,6 +3729,8 @@ screenshot "home-desktop" updated — 38,160 of 1,017,600 pixels changed (3.75%)
 
 So update mode captures repeatedly until **three captures in a row compare equal** (under whatever tolerance you configured), and writes that one.  Three rather than two: a page cycling through a handful of renderings shows any two captures the same often enough to fool a pair.  The pause before each capture grows, and every gap is a different length — 100ms, 140, 200, 280, 380, 500, 640 — because a *fixed* sampling period is the whole problem: sample a 160ms animation every 160ms and every pair matches, so the page looks settled while it plainly isn't.  Since the gaps grow by a different amount each time, no animation period can line up with a run of three.  The loop is bounded at eight captures.
 
+**A settle can't see a change that hasn't started.**  The rule above defeats anything *periodic*, which is what it's for.  It is powerless against a one-shot change that hasn't begun: three captures agree because nothing has happened yet, the baseline is written, and the change lands afterwards.  Mid-load is caught; *pre*-load is not — and pre-load is the more common race, since a cold `display: swap` fetch hasn't even started when the first capture fires.  So Biloba awaits `document.fonts.ready` before every capture, on both paths, which removes the overwhelmingly common case.  Anything else that lands late and isn't a font — a lazy image decode, a late `ResizeObserver` — you still have to gate yourself before generating.  Worth holding onto as a general shape: **the poll protects the comparison, not the write.**
+
 This is the same "consecutive equal reads" rule Biloba already uses to decide an element has stopped moving before a [realistic interaction](#realistic-interactions).  It costs about half a second for a page that settles at once, and around two seconds of waiting in the worst case.  That's a deliberate trade: update mode is a rare, explicit operation, and an untrustworthy baseline is paid for on every run afterwards.
 
 If the page never settles, Biloba **still writes the last capture** and says so:
@@ -3788,7 +3790,47 @@ The `unchanged:` line is the complement, and it is often the faster read — "ev
 
 `max channel delta` is the worst single-channel difference anywhere in the image, counted across *all* pixels including the ones a channel tolerance absorbed.  It's how you tell "the tolerance is doing its job" from "the tolerance is one notch away from hiding a real change."
 
+When that number is in the low single digits it is a verdict rather than a statistic, so Biloba says it as one:
+
+```
+  1,264 of 166,848 pixels differ (0.76%), max channel delta 3
+  every differing pixel differs by <= 3 — a rasterisation or compositing difference, not a content
+  change (absorb it with b.ChannelTolerance(3), or look for a shadow or gradient bleeding into the
+  capture)
+```
+
+The distinction decides your whole response — tolerate this, or go find what moved — and it is easy to walk past a small number while hunting for an element that never changed.  A change to what is *on* the page moves a channel by dozens or hundreds; subpixel antialiasing, a dithered gradient, or a composited shadow landing on a clipped capture moves one by a handful.  The threshold is deliberately low, so a faint real change is still reported as an ordinary one.
+
 This is the [poll trajectory](#outline) idea applied to pixels.  The artifact is useful, but saying in words what shape the failure had is what turns it into a diagnosis.
+
+#### An element capture can only contain what the browser painted
+
+`b.CaptureScreenshotOf` and an element-subject `HaveScreenshot` clip to the element's box and work fine **below the document fold** — Biloba expands the main frame's viewport for the capture, so nothing needs scrolling.
+
+That expansion applies to the **document** scroller.  It does nothing for an **inner** one.  In an app-shell layout — fixed chrome, and a `overflow: auto` pane that does the scrolling, which is most SPAs — an element scrolled out of that pane's visible band was never painted, and the capture comes back as a flat rectangle of the pane's background.
+
+This is worth a section because of what happens next: **a blank capture is perfectly stable.**  Written as a baseline it matches itself on every run, on every machine, forever.  It is a green assertion comparing nothing.
+
+So Biloba checks.  Before an element capture it walks the subject's ancestors for the first one that clips (`overflow` anything but `visible`, `<html>` and `<body>` excluded — that's the case already handled) and measures how much of the subject survives:
+
+- **Nothing survives** → the visual comparison refuses.  On an assertion it's an ordinary retryable failure, because an element may legitimately still be scrolling in while the `Eventually` polls; under `BILOBA_UPDATE_SCREENSHOTS` it stops dead rather than writing the blank PNG.
+- **Some of it survives** → a warning, once per assertion, and the comparison proceeds.  Capturing a subject that straddles the edge of a pane is occasionally what you meant.
+- `b.CaptureScreenshotOf` only ever warns — it's a debugging tool, and an honest blank PNG with a note beats a failed spec.
+
+The message names the clipping ancestor, which is the part you can't see from the call site:
+
+```
+NONE of the element matching .figure was painted: it is inside div#reader-pane, which clips it, and
+only 0% of the element falls within that clip.
+A screenshot can only contain what the browser actually rendered, so the rest of this capture is
+whatever div#reader-pane paints behind it - not the element.
+Scroll it into the container's visible band before capturing:
+  b.ScrollIntoView(".figure", b.WithinScroller("div#reader-pane"))
+```
+
+Do what it says.  `b.ScrollIntoView` with `b.WithinScroller` scrolls the pane rather than the page; gate on `b.BeInViewport(b.Fully())` afterwards if the scroll is animated.
+
+An `overflow: hidden` ancestor that isn't actually cutting the subject off — a card clipping its own rounded corners — is not reported.  The check is about what got painted, not about what could clip in principle.
 
 #### Determinism
 
@@ -3807,6 +3849,10 @@ A relative timestamp is the case that kills a naive baseline on the first day: "
 That stylesheet goes into **every open shadow root** as well as into the document, and is removed from all of them afterwards.  A `*` rule in a document stylesheet doesn't cross a shadow boundary, so a web component would otherwise keep animating — and keep blinking its caret — right through the capture.  A **closed** shadow root can't be reached from script at all, so a component that uses one is left alone; if a capture of such a component won't settle, that's a likely cause.
 
 **A page that never stops changing — only partly handled.**  The settle rule that update mode runs (three consecutive equal captures, at deliberately unequal intervals) defeats any page animating on a fixed period.  It cannot certify a page that has only two or three distinct renderings: something alternating between two frames can come out the same three times in a row by chance, and no sampling schedule fixes that.  The freeze above already removes CSS animations, transitions, and the caret, so what's left in practice is a hand-rolled JavaScript pulse — a `setInterval` swapping a class, a canvas redrawing itself.  The backstop is the never-settled warning plus the fact that the next normal run fails; when either shows up, mask the region rather than re-running the update.
+
+**A late one-shot change — mostly handled, and the exception is worth knowing.**  Web fonts are the common case, and Biloba waits for `document.fonts.ready` before every capture, on both paths.  What the settle rule *cannot* see is a one-shot change that has not started yet from some other source — a lazy image decode, a late `ResizeObserver`: three captures 100ms and 140ms apart all agree because nothing has happened, the baseline is written, and the change lands at 400ms.  This is the one place where the two paths have genuinely different guarantees: **the poll protects the comparison, not the write.**  An assertion re-captures on every attempt and rides a late change out; a baseline write passes on the first settled capture it takes and has no second chance.  If a subject depends on something that lands late and isn't a font, gate the update on it yourself before generating the baseline.
+
+**Nondeterminism that belongs to no element — use tolerance, not `b.Mask`.**  `b.Mask` takes selectors, so it can only paint out things that *are* elements.  A composited box-shadow bleeding into a clipped capture, a gradient dithered a shade differently, an antialiased edge — none of these have a node to name, and there is no rectangle to paint.  `b.ChannelTolerance(delta)` is the tool for those, and the [diagnosis](#reading-the-diagnosis) tells you when you're looking at one: a `max channel delta` in the low single digits means no pixel changed meaningfully.  Measure the amplitude out of the failure and write that number at the call site.
 
 **Scrollbars — not handled.**  Whether a scrollbar is drawn as an overlay or takes real layout width depends on the platform, on an OS setting, and on macOS on whether a mouse happens to be attached.  A classic scrollbar takes width away from the content next to it, so the same page lays out differently and a baseline captured on one machine can be wrong on another for reasons that have nothing to do with your app.  Prefer element captures over whole-page ones where you can — they're clipped to the element's box.  When you do need the whole page, hide the scrollbars yourself: a `::-webkit-scrollbar { display: none }` rule in the page, or `emulation.SetScrollbarsHidden(true)` through the [chromedp escape hatch](#codechromedpcode-breaking-the-fourth-wall).
 
@@ -3853,6 +3899,10 @@ Eventually(b).Should(b.HaveScreenshot("home", b.InColorSchemes("light", "dark"))
 ```
 
 Each scheme gets its own baseline — `home-light.png` and `home-dark.png` — and a failure names the scheme it belongs to (`home (prefers-color-scheme: dark)`).  Without the option Biloba doesn't emulate `prefers-color-scheme` at all and stores a single `home.png`.
+
+**The emulation drives the media query, so your app has to be listening to it.**  An app with a manual theme override — a tri-state `system`/`light`/`dark` toggle that puts `data-theme` on `<html>` — only follows `prefers-color-scheme` while it's in its follow-the-system state.  A spec that has pinned the theme (directly, through a helper, or through a leftover stored preference) captures **the same rendering twice** and writes it to both `home-light.png` and `home-dark.png`.  Both baselines look right.  Both comparisons pass.  Forever.  The filename is the only thing claiming the dark rendering was ever exercised.
+
+Biloba warns when it sees it — if two schemes in one assertion produce byte-identical captures, you get a note saying so, once per assertion, on the write path as well as the assert path.  There's no legitimate reason to want two identical baselines under two names, so treat it as a real finding: check what pinned the theme.
 
 This retires a helper family that every themed app ends up writing: the `captureBothThemes(name)` that flips an emulation override, shoots twice, and forgets to reset the override on the failure path.  Biloba resets it for you, on every path — and there's a second line of defense behind that, because the override is a *target-level* one that survives navigation, so a single dropped teardown would leave every later spec in that process rendering in the emulated scheme with nothing to show for it.  If the reset fails Biloba prints a warning naming the scheme the tab is stuck in, and the next `b.Prepare()` clears the leftover override.  A warning like that in your output means a teardown was dropped; the following spec has already been cleaned up for you.
 

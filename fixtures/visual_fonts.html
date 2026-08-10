@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en-US">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Late Font Swap Testpage</title>
+
+    <!-- A one-shot late reflow of the shape a web font produces: nothing is happening when the first
+         captures are taken, so update mode's three-consecutive-equal-captures rule settles on the
+         PRE-swap rendering and banks it as the baseline.  The swap then lands and every later run
+         compares against a baseline of a page that no longer exists.  The gate below stands in for
+         document.fonts.ready so the timing is deterministic instead of depending on a real font fetch.
+    -->
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 400px;
+            height: 200px;
+            background-color: #ffffff;
+        }
+
+        #hero {
+            width: 120px;
+            height: 60px;
+            margin: 20px;
+            background-color: #336699;
+        }
+
+        /* the reflow: the box is a different size once the "font" has swapped in */
+        #hero.swapped {
+            width: 260px;
+            height: 90px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="hero"></div>
+
+    <script>
+        // fontsReadyDelay has to clear the whole settle, not just its first three captures: a change
+        // that lands while the settle is still sampling restarts the streak and gets picked up anyway,
+        // which would make this fixture prove nothing.  1500ms is comfortably past the point where a
+        // settle that does not await fonts has finished and written its baseline.  Verified by removing
+        // the await and watching the spec fail.
+        var fontsReadyDelay = 1500
+        var resolveFonts
+        var gate = new Promise(function (resolve) { resolveFonts = resolve })
+        Object.defineProperty(document.fonts, "ready", { get: function () { return gate }, configurable: true })
+        setTimeout(function () {
+            document.getElementById("hero").classList.add("swapped")
+            resolveFonts(document.fonts)
+        }, fontsReadyDelay)
+    </script>
+</body>
+
+</html>

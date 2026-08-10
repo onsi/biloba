@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/onsi/biloba"
@@ -380,6 +381,145 @@ var _ = Describe("Visual assertions", func() {
 			mismatch("taller")
 			Ω(failure).Should(MatchRegexp(`baseline is \d+x\d+, actual is \d+x\d+`))
 			Ω(failure).ShouldNot(ContainSubstring("\033"))
+		})
+	})
+
+	// The settle defeats anything PERIODIC - it is built to - but it cannot see a one-shot change that
+	// has not started yet.  Three captures 100/140ms apart all agree while a cold font fetch is still in
+	// flight, and the swap lands afterwards.  The assert path rides that out by re-capturing every poll
+	// attempt; the WRITE path has no second chance, and it is the one producing the artifact everything
+	// else is compared against.
+	Describe("a one-shot change that lands after the settle would have finished", func() {
+		BeforeEach(func() {
+			b.Navigate(fixtureServer + "/visual_fonts.html")
+			Eventually("#hero").Should(b.Exist())
+		})
+
+		It("waits for web fonts before writing a baseline", func() {
+			generate("#hero", "hero")
+			// Wait for the swap before comparing.  Without this the assertion runs while the page is
+			// still pre-swap and matches a pre-swap baseline - the spec would pass for the wrong reason
+			// and prove nothing.  Once the swap has landed, a baseline written from the earlier frame is
+			// a different SIZE and cannot match.
+			Eventually("#hero.swapped").Should(b.Exist())
+			Eventually("#hero").Should(b.HaveScreenshot("hero"))
+		})
+	})
+
+	// A capture can only contain what the browser painted.  captureBeyondViewport expands the main
+	// frame's viewport, so a subject below the document fold captures fine - but a subject scrolled out
+	// of an INNER overflow:auto pane was never painted and comes back as flat pane background.  That
+	// blank capture is perfectly stable, so as a baseline it would pass forever while comparing nothing.
+	Describe("a subject clipped out of its own capture", func() {
+		printed := func() string { return string(gt.buffer.Contents()) }
+
+		BeforeEach(func() {
+			b.SetWindowSize(600, 400)
+			b.Navigate(fixtureServer + "/visual_scroller.html")
+			Eventually("#pane").Should(b.Exist())
+		})
+
+		It("refuses to compare a subject that is entirely outside its scroll container", func() {
+			g.Eventually("#offscreen-card").WithTimeout(300 * time.Millisecond).WithPolling(150 * time.Millisecond).Should(b.HaveScreenshot("offscreen"))
+			Ω(failure).Should(SatisfyAll(
+				ContainSubstring("NONE of the element matching #offscreen-card was painted"),
+				ContainSubstring("div#pane"),
+				ContainSubstring("b.WithinScroller"),
+			))
+		})
+
+		It("refuses to WRITE a baseline for it, rather than banking a blank one", func() {
+			// the assert path can retry into an element that is still scrolling in; update mode has no
+			// poll to save it, so this is the one that has to stop dead
+			func() {
+				defer b.SetUpdateScreenshotsForTest(true)()
+				g.Eventually("#offscreen-card").Should(b.HaveScreenshot("offscreen"))
+			}()
+			Ω(failure).Should(SatisfyAll(
+				ContainSubstring("Refusing to write a screenshot baseline for offscreen - the capture would be blank"),
+				ContainSubstring("NONE of the element matching #offscreen-card was painted"),
+			))
+			Ω(baseline("offscreen")).ShouldNot(BeAnExistingFile())
+		})
+
+		It("compares it happily once it has been scrolled into the container's band", func() {
+			b.ScrollIntoView("#offscreen-card", b.WithinScroller("#pane"))
+			Eventually("#offscreen-card").Should(b.BeInViewport(b.Fully()))
+			generate("#offscreen-card", "offscreen")
+			Eventually("#offscreen-card").Should(b.HaveScreenshot("offscreen"))
+			Ω(printed()).ShouldNot(ContainSubstring("was painted"))
+		})
+
+		It("warns but still compares when the container clips only part of the subject", func() {
+			generate("#straddling-card", "straddling")
+			Eventually("#straddling-card").Should(b.HaveScreenshot("straddling"))
+			Ω(printed()).Should(SatisfyAll(
+				ContainSubstring("Only part of the element matching #straddling-card was painted"),
+				ContainSubstring("div#pane"),
+			))
+		})
+
+		It("says nothing about a subject that is inside its container's band", func() {
+			generate("#visible-card", "visible")
+			Eventually("#visible-card").Should(b.HaveScreenshot("visible"))
+			Ω(printed()).ShouldNot(ContainSubstring("was painted"))
+		})
+
+		It("says nothing about an overflow:hidden ancestor that is not clipping the subject", func() {
+			// a rounded card clips its corners and nothing else - reporting it would fire on half the
+			// components in a real app
+			generate("#rounded-card", "rounded")
+			Eventually("#rounded-card").Should(b.HaveScreenshot("rounded"))
+			Ω(printed()).ShouldNot(ContainSubstring("was painted"))
+		})
+
+		It("says nothing about a subject below the document fold", func() {
+			// the case captureBeyondViewport already handles, and the one this check must never break
+			generate("#below-fold", "below-fold")
+			Eventually("#below-fold").Should(b.HaveScreenshot("below-fold"))
+			Ω(printed()).ShouldNot(ContainSubstring("was painted"))
+		})
+
+		It("warns rather than fails when the manual capture hits a clipped element", func() {
+			// CaptureScreenshotOf is a debugging tool - it hands back the honest blank PNG with a note
+			img := b.CaptureScreenshotOf("#offscreen-card")
+			Ω(img).ShouldNot(BeEmpty())
+			Ω(printed()).Should(ContainSubstring("NONE of the element matching #offscreen-card was painted"))
+		})
+	})
+
+	Describe("two colour schemes that render identically", func() {
+		printed := func() string { return string(gt.buffer.Contents()) }
+
+		BeforeEach(func() {
+			b.Navigate(fixtureServer + "/visual.html")
+			Eventually("#scheme").Should(b.Exist())
+		})
+
+		It("warns: both baselines pass, but only one rendering was ever exercised", func() {
+			// #box ignores prefers-color-scheme entirely, so light and dark capture the same pixels -
+			// which is what a suite with a pinned theme override looks like from in here
+			generate("#box", "box", b.InColorSchemes("light", "dark"))
+			Ω(printed()).Should(SatisfyAll(
+				ContainSubstring(`"box" captured byte-identical images under prefers-color-scheme`),
+				ContainSubstring("only one rendering was ever exercised"),
+			))
+		})
+
+		It("stays quiet when the two schemes really do render differently", func() {
+			generate("#scheme", "scheme", b.InColorSchemes("light", "dark"))
+			Ω(printed()).ShouldNot(ContainSubstring("byte-identical"))
+		})
+
+		It("warns once per assertion, however many times it is evaluated", func() {
+			// the warning diagnoses the SETUP, so it reads the same on every evaluation - said once per
+			// attempt it would bury whatever the assertion is actually reporting
+			generate("#box", "box", b.InColorSchemes("light", "dark"))
+			gt.buffer.Clear()
+			matcher := b.HaveScreenshot("box", b.InColorSchemes("light", "dark"))
+			Eventually("#box").Should(matcher)
+			Eventually("#box").Should(matcher)
+			Ω(strings.Count(printed(), "byte-identical")).Should(Equal(1))
 		})
 	})
 

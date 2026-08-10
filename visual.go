@@ -3,6 +3,7 @@ package biloba
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/png"
@@ -157,6 +158,11 @@ match for the assertion to pass:
 Each scheme gets its own baseline, named <name>-<scheme>.png.  Without this option Biloba does not
 emulate prefers-color-scheme at all and stores a single <name>.png.
 
+The emulation drives the media query, so an app with a manual theme override only follows it while
+that app is in its follow-the-system state.  A spec that has pinned the theme captures the same
+rendering under both schemes and writes it to both baselines - both pass, and neither asserts
+anything about the other scheme.  Biloba warns when two schemes capture byte-identical images.
+
 Read https://onsi.github.io/biloba/#visual-assertions to learn more about visual assertions
 */
 func (b *Biloba) InColorSchemes(schemes ...string) ScreenshotOption {
@@ -172,7 +178,15 @@ tab itself to compare the whole page:
 	Eventually(b).Should(b.HaveScreenshot("home-desktop"))
 
 Every attempt captures fresh and compares, so the poll is what waits out fonts loading and layout
-settling - the first attempt that matches is by construction the settled one.  Configure the
+settling - the first attempt that matches is by construction the settled one.  Note the asymmetry: the
+poll protects the comparison, not the baseline WRITE, which passes on the first settled capture it
+takes.  Every capture awaits document.fonts.ready for that reason; anything else that lands late is
+yours to gate before generating a baseline.
+
+An element subject is clipped to its box and works below the DOCUMENT fold, but a subject scrolled
+outside an inner overflow:auto container was never painted - Biloba refuses that comparison rather
+than letting a blank (and therefore permanently stable) capture become a baseline.  Scroll it in with
+[Biloba.ScrollIntoView] and [Biloba.WithinScroller] first.  Configure the
 Eventually/Expect that wraps it, not the matcher (WithTimeout and friends on HaveScreenshot are a
 hard error).  It composes:
 
@@ -234,6 +248,15 @@ type screenshotMatcher struct {
 	scheme string
 	diff   *screenshotDiff
 	actual []byte
+
+	// warned keys the one-shot warnings this matcher has already printed.  Everything here is a
+	// diagnosis of the SETUP rather than of the page, so it is the same on every poll attempt: printed
+	// per attempt it would bury the failure it is trying to explain.
+	warned map[string]bool
+	// captures holds this attempt's capture per colour scheme, so two schemes that render identically
+	// can be caught.  Reset at the top of every attempt - the comparison is between schemes within one
+	// attempt, never across attempts.
+	captures map[string][]byte
 }
 
 // match runs one full attempt: every configured colour scheme is captured and compared, and they must
@@ -246,6 +269,7 @@ func (m *screenshotMatcher) match(actual any) (bool, error) {
 		return false, err
 	}
 	m.record("", nil, nil)
+	m.captures = map[string][]byte{}
 	for _, scheme := range m.cfg.colorSchemes {
 		pass, err := m.matchScheme(tab, selector, scheme)
 		if err != nil {
@@ -284,16 +308,19 @@ func (m *screenshotMatcher) matchScheme(tab *Biloba, selector any, scheme string
 		// captureSettled.
 		img, err := m.captureSettled(tab, selector, scheme, label)
 		if err != nil {
-			return false, err
+			return false, m.refuseToWrite(label, err)
 		}
+		m.noteCapture(scheme, img)
 		baseline, readErr := os.ReadFile(baselinePath)
 		return m.updateBaseline(baselinePath, baseline, readErr, img, label)
 	}
 
-	img, err := tab.captureForComparison(selector, m.cfg, scheme)
+	img, clippedNote, err := tab.captureForComparison(selector, m.cfg, scheme)
+	m.warnClipped(clippedNote)
 	if err != nil {
 		return false, err
 	}
+	m.noteCapture(scheme, img)
 	baseline, readErr := os.ReadFile(baselinePath)
 
 	if os.IsNotExist(readErr) {
@@ -316,6 +343,62 @@ func (m *screenshotMatcher) matchScheme(tab *Biloba, selector any, scheme string
 	}
 	m.record(scheme, diff, img)
 	return false, nil
+}
+
+// refuseToWrite escalates the errors that update mode must not shrug off.  On the assert path a
+// clipped capture is an ordinary error: the Eventually retries, and an element still scrolling into
+// its container's band gets there.  Update mode passes on the first settled capture it takes, so the
+// same condition would write a blank PNG and call it a golden master.  There is no poll to save it,
+// which is exactly what StopTrying is for.
+func (m *screenshotMatcher) refuseToWrite(label string, err error) error {
+	var clipErr *clippedCaptureError
+	if errors.As(err, &clipErr) {
+		return gomega.StopTrying(fmt.Sprintf("Refusing to write a screenshot baseline for %s - the capture would be blank.\n\n%s", label, clipErr.Error()))
+	}
+	return err
+}
+
+// noteCapture records this attempt's capture for a colour scheme and warns when two schemes rendered
+// identically.  Two identical captures under two names is the quietest way a visual assertion can go
+// vacuous: prefers-color-scheme emulation only reaches an app while that app is following the system,
+// so a suite with a manual theme override (or a leftover localStorage value) writes the same picture
+// to home-light.png and home-dark.png.  Both baselines look right, both comparisons pass, and the
+// filename is the only thing claiming the dark rendering was ever exercised.
+func (m *screenshotMatcher) noteCapture(scheme string, img []byte) {
+	if len(m.cfg.colorSchemes) < 2 || m.captures == nil || len(img) == 0 {
+		return
+	}
+	for other, previous := range m.captures {
+		if bytes.Equal(previous, img) {
+			m.warnOnce("identical-schemes", "Warning: %q captured byte-identical images under prefers-color-scheme %q and %q.\nBoth baselines will be written and both comparisons will pass, but only one rendering was ever exercised - the other assertion cannot fail.\nprefers-color-scheme emulation only reaches an app while that app is following the system scheme; check that nothing in this spec (or a leftover stored preference) has pinned the theme.\n", m.name, other, scheme)
+			return
+		}
+	}
+	m.captures[scheme] = img
+}
+
+// warnClipped surfaces captureForComparison's partial-clip note, once per assertion.
+func (m *screenshotMatcher) warnClipped(note string) {
+	if note == "" {
+		return
+	}
+	m.warnOnce("clipped-capture", "Warning: %s\n", note)
+}
+
+// warnOnce prints a warning the first time this matcher hits a given condition.  Everything routed
+// through it diagnoses the SETUP, not the page, so it reads the same on every poll attempt - printed
+// per attempt it would bury whatever the assertion is actually reporting.
+func (m *screenshotMatcher) warnOnce(key string, format string, args ...any) {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+	if m.warned == nil {
+		m.warned = map[string]bool{}
+	}
+	if m.warned[key] {
+		return
+	}
+	m.warned[key] = true
+	m.b.gt.Printf(format, args...)
 }
 
 // record and lastFailure are the only access to the shared comparison state - see the note on
@@ -351,7 +434,8 @@ func (m *screenshotMatcher) captureSettled(tab *Biloba, selector any, scheme str
 		if attempt > 0 {
 			time.Sleep(screenshotSettleGap(attempt - 1))
 		}
-		current, err := tab.captureForComparison(selector, m.cfg, scheme)
+		current, clippedNote, err := tab.captureForComparison(selector, m.cfg, scheme)
+		m.warnClipped(clippedNote)
 		if err != nil {
 			return nil, err
 		}
@@ -475,10 +559,23 @@ func (m *screenshotMatcher) artifactPath(scheme string, kind string) string {
 // paint the masks in.  Everything it turns on is turned off by a defer - a freeze stylesheet or an
 // emulated colour scheme left behind on an error path would silently corrupt every later assertion in
 // this tab.
-func (b *Biloba) captureForComparison(selector any, cfg screenshotConfig, scheme string) ([]byte, error) {
+//
+// It also reports a clippedNote: the non-fatal half of the clipped-capture check, empty unless an
+// ancestor cut part of the element out of its own capture.  It comes back rather than being printed
+// here because the caller polls, and a warning about the setup should be said once.
+func (b *Biloba) captureForComparison(selector any, cfg screenshotConfig, scheme string) (img []byte, clippedNote string, err error) {
+	// Web fonts first, before anything is captured.  The poll protects the COMPARISON - a capture taken
+	// mid-swap simply doesn't match and the next attempt tries again - but it cannot protect the WRITE,
+	// which passes on the first settled capture it gets.  And a settle cannot see a change that has not
+	// started: three captures 100/140/200ms apart all agree while a cold display=swap fetch is still in
+	// flight, and the swap lands afterwards.  Awaiting document.fonts.ready costs one round trip once
+	// the fonts are in, and removes the most common one-shot late reflow there is.
+	if r := b.runBilobaFuncAsync("fontsReady"); r.Error() != nil {
+		return nil, "", r.Error()
+	}
 	if scheme != "" {
 		if err := b.emulateColorScheme(scheme); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		defer func() {
 			if err := b.emulateColorScheme(""); err != nil {
@@ -491,13 +588,11 @@ func (b *Biloba) captureForComparison(selector any, cfg screenshotConfig, scheme
 	}
 	if !cfg.animated {
 		if r := b.runBilobaFunc("freezeRendering"); r.Error() != nil {
-			return nil, r.Error()
+			return nil, "", r.Error()
 		}
 		defer func() { b.runBilobaFunc("unfreezeRendering") }()
 	}
 
-	var img []byte
-	var err error
 	// originX/originY place the captured image in document coordinates - the space the mask boxes are
 	// measured in.  A full-page capture starts at the document origin; an element capture starts at its
 	// clip.  cssWidth is the capture's width in CSS pixels, which is how we recover the device scale
@@ -507,23 +602,41 @@ func (b *Biloba) captureForComparison(selector any, cfg screenshotConfig, scheme
 		img, cssWidth, err = b.fullPageScreenshot()
 	} else {
 		var clip *page.Viewport
-		img, clip, err = b.elementScreenshot(selector)
+		var clipped *clippedCapture
+		img, clip, clipped, err = b.elementScreenshot(selector)
 		if clip != nil {
 			originX, originY, cssWidth = clip.X, clip.Y, clip.Width
 		}
+		if err == nil && clipped != nil && !clipped.fullyClipped() {
+			// Partial is a warning, not a refusal: the capture does contain the element, just with an
+			// unpainted band where the container cut it off.  That is occasionally what someone means
+			// (a subject deliberately captured at the edge of a pane), and the note is enough to tell
+			// the two apart.  The warning belongs to the matcher so it prints once, not once a poll.
+			clippedNote = clipped.describe(selector)
+		}
+		if err == nil && clipped.fullyClipped() {
+			// Refusing here is the whole point: an unpainted capture is a perfectly STABLE picture of
+			// nothing, so it would match itself on every run forever.  Left alone it becomes a golden
+			// master that compares nothing and can never fail - the exact failure mode this feature
+			// exists to prevent.  An ordinary error rather than StopTrying, because an element can
+			// legitimately still be scrolling into its container's band while the Eventually polls;
+			// update mode, which has no poll to save it, escalates this to StopTrying itself.
+			return nil, "", &clippedCaptureError{clipped: clipped, selector: selector}
+		}
 	}
 	if err != nil {
-		return nil, err
+		return nil, clippedNote, err
 	}
 
 	rects, err := b.maskRects(cfg.masks, img, originX, originY, cssWidth)
 	if err != nil {
-		return nil, err
+		return nil, clippedNote, err
 	}
 	if len(rects) == 0 {
-		return img, nil
+		return img, clippedNote, nil
 	}
-	return maskPNG(img, rects)
+	masked, err := maskPNG(img, rects)
+	return masked, clippedNote, err
 }
 
 // emulateColorScheme overrides prefers-color-scheme for this tab; the empty scheme clears the
@@ -641,6 +754,17 @@ func (b *Biloba) runBilobaFunc(name string, args ...any) *bilobaJSResponse {
 	b.ensureBiloba()
 	result := &bilobaJSResponse{}
 	if _, err := b.RunErr(b.JSFunc("_biloba."+name).Invoke(args...), result); err != nil {
+		result.Err = err.Error()
+	}
+	return result
+}
+
+// runBilobaFuncAsync is runBilobaFunc for the selector-less primitives that return a Promise (e.g.
+// fontsReady): it awaits the promise before decoding the response.
+func (b *Biloba) runBilobaFuncAsync(name string, args ...any) *bilobaJSResponse {
+	b.ensureBiloba()
+	result := &bilobaJSResponse{}
+	if _, err := b.runErr(b.JSFunc("_biloba."+name).Invoke(args...), true, result); err != nil {
 		result.Err = err.Error()
 	}
 	return result

@@ -588,13 +588,63 @@ if (!window["_biloba"]) {
         let top0 = view || window
         return { x: left + top0.scrollX, y: top + top0.scrollY, width: rect.width, height: rect.height }
     }
-    // boundingBox reports the first matching element's clip rectangle for page.CaptureScreenshot.
+    // describeNode names an element the way a failure message should: the tag, plus whichever of id
+    // and class actually narrow it down.  Enough for a reader to find the node in their own markup.
+    let describeNode = (n) => {
+        let s = n.tagName.toLowerCase()
+        if (n.id) s += "#" + n.id
+        let cls = (n.getAttribute("class") || "").trim()
+        if (cls) s += "." + cls.split(/\s+/).slice(0, 3).join(".")
+        return s
+    }
+    // clipperOf finds the ancestor that is CLIPPING an element out of its own capture, and reports how
+    // much of the element survives that clip.  This exists because a screenshot can only contain what
+    // the browser painted: captureBeyondViewport expands the MAIN FRAME's viewport, so an element
+    // below the document fold captures fine, but an element scrolled outside an inner overflow:auto
+    // pane was never painted and comes back as a flat rectangle of the pane's background.  A blank
+    // capture is stable, so as a baseline it passes forever while comparing nothing.
+    //
+    // The walk deliberately skips <html>/<body>: the document scroller is the case
+    // captureBeyondViewport already handles, and flagging it would fire on every ordinary
+    // below-the-fold capture.
+    let clipperOf = (n) => {
+        let rect = n.getBoundingClientRect()
+        let area = rect.width * rect.height
+        if (area <= 0) return null
+        let el = n.parentElement
+        while (el && el !== document.body && el !== document.documentElement) {
+            let s = getComputedStyle(el)
+            if (/(auto|scroll|hidden|clip)/.test(s.overflowX) || /(auto|scroll|hidden|clip)/.test(s.overflowY)) {
+                let r = el.getBoundingClientRect()
+                let w = Math.max(0, Math.min(rect.right, r.right) - Math.max(rect.left, r.left))
+                let h = Math.max(0, Math.min(rect.bottom, r.bottom) - Math.max(rect.top, r.top))
+                let visible = (w * h) / area
+                // 0.999 rather than 1: a fractional layout can leave a sub-pixel sliver outside the
+                // clip on a box that is, for every purpose anybody cares about, fully visible.
+                if (visible < 0.999) return { clipper: describeNode(el), visibleFraction: visible }
+            }
+            el = el.parentElement
+        }
+        return null
+    }
+    // boundingBox reports the first matching element's clip rectangle for page.CaptureScreenshot,
+    // along with the clipping ancestor (if any) that would leave part of that rectangle unpainted.
     // Errors on a zero-area element.
     b.boundingBox = one(n => {
         let box = docBox(n)
         if (box.width <= 0 || box.height <= 0) return rErr("DOM element has zero area")
+        let clipped = clipperOf(n)
+        if (clipped) { box.clipper = clipped.clipper; box.visibleFraction = clipped.visibleFraction }
         return rRes(box)
     })
+    // fontsReady resolves once the document's web fonts have finished loading.  A capture taken before
+    // a font swap lands measures text in the fallback face - which the ASSERT path rides out by
+    // re-capturing every poll attempt, but a baseline WRITE cannot, since it passes on the first
+    // attempt it settles on.  Async (returns a Promise); invoked with awaitPromise on the Go side.
+    b.fontsReady = () => {
+        if (!document.fonts || !document.fonts.ready) return Promise.resolve(r())
+        return document.fonts.ready.then(() => r(), () => r())
+    }
     // maskBoxes reports EVERY element matching ANY of the given selectors, in the same top-level
     // document coordinates boundingBox produces, so Go can paint those regions out of a capture before
     // comparing it against a baseline.  It takes the whole list rather than one selector at a time so

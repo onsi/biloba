@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en-US">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Inner Scroller Testpage</title>
+
+    <!-- The app-shell layout: the document itself never scrolls, an inner overflow:auto pane does.
+         captureBeyondViewport expands the MAIN FRAME's viewport, so anything scrolled out of #pane's
+         band was never painted and captures as flat #pane background.  #below-fold is the control:
+         it is below the document fold with no inner scroller in the way, which is the case that has
+         always worked and must keep working. -->
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 400px;
+            background-color: #ffffff;
+        }
+
+        #pane {
+            width: 300px;
+            height: 120px;
+            overflow: auto;
+            background-color: #dddddd;
+        }
+
+        #pane-content {
+            height: 900px;
+        }
+
+        /* in #pane's visible band from the start */
+        #visible-card {
+            width: 200px;
+            height: 60px;
+            margin: 10px;
+            background-color: #336699;
+        }
+
+        /* 700px down inside a 120px-tall pane: nothing of it is ever painted until #pane scrolls */
+        #offscreen-card {
+            position: relative;
+            top: 700px;
+            width: 200px;
+            height: 60px;
+            margin: 10px;
+            background-color: #cc6633;
+        }
+
+        /* straddles #pane's bottom edge: half painted, half not */
+        #straddling-card {
+            position: relative;
+            top: 20px;
+            width: 200px;
+            height: 100px;
+            margin: 10px;
+            background-color: #669933;
+        }
+
+        /* a plain document-scroll subject, far below the fold and inside nothing that clips */
+        #below-fold {
+            margin-top: 1200px;
+            width: 200px;
+            height: 60px;
+            background-color: #663399;
+        }
+
+        /* overflow:hidden, but its child fits entirely inside it - a clipping ancestor that is not
+           clipping anything, which must not be reported */
+        #rounded {
+            width: 240px;
+            height: 100px;
+            overflow: hidden;
+            border-radius: 12px;
+            background-color: #eeeeee;
+        }
+
+        #rounded-card {
+            width: 200px;
+            height: 60px;
+            margin: 20px;
+            background-color: #993366;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="pane">
+        <div id="pane-content">
+            <div id="visible-card"></div>
+            <div id="straddling-card"></div>
+            <div id="offscreen-card"></div>
+        </div>
+    </div>
+    <div id="rounded">
+        <div id="rounded-card"></div>
+    </div>
+    <div id="below-fold"></div>
+</body>
+
+</html>

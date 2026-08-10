@@ -63,7 +63,7 @@ screenshot "home-desktop" differs from baseline
 | `uniform shift of the whole image, 1px down` | something *above* the subject grew or moved — fix that, don't re-baseline. Never reported for an image thinner than ~16px on either axis (thin rule, focus ring, progress bar) — those get the box reading |
 | `baseline is 800x600, actual is 800x640 (40px taller)` | the box resized; no per-pixel story |
 
-`unchanged: everything below y=N` is the complement and usually the faster read. `max channel delta` counts every pixel, including those the channel tolerance absorbed. A **missing** baseline is a different failure — it says to re-run with `BILOBA_UPDATE_SCREENSHOTS=1`; never script your way past it.
+`unchanged: everything below y=N` is the complement and usually the faster read. `max channel delta` counts every pixel, including those the channel tolerance absorbed — and when it is in the low single digits Biloba adds `every differing pixel differs by <= N — a rasterisation or compositing difference, not a content change`. Believe it: nothing moved, so look for a shadow or gradient compositing into the capture rather than for an element. A **missing** baseline is a different failure — it says to re-run with `BILOBA_UPDATE_SCREENSHOTS=1`; never script your way past it.
 
 `Read` the `.diff.png` when the words aren't enough. A human at a terminal that renders images also gets it drawn under the diagnosis; you get the path instead, since inline images are off under an agent.
 

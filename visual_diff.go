@@ -608,6 +608,9 @@ func (d *screenshotDiff) diagnose(name string, paths screenshotPaths) string {
 	} else {
 		fmt.Fprintf(out, "  %s of %s pixels differ (%.2f%%), max channel delta %d\n",
 			withThousands(d.DifferingPixels), withThousands(d.TotalPixels), d.Fraction*100, d.MaxChannelDelta)
+		if line := d.amplitudeLine(); line != "" {
+			fmt.Fprintf(out, "  %s\n", line)
+		}
 		for _, line := range d.shapeLines() {
 			fmt.Fprintf(out, "  %s\n", line)
 		}
@@ -619,6 +622,27 @@ func (d *screenshotDiff) diagnose(name string, paths screenshotPaths) string {
 		fmt.Fprintf(out, "  %-9s %s\n", p[0], p[1])
 	}
 	return out.String()
+}
+
+// rasterizationChannelDelta is the largest per-channel difference that still reads as "the renderer
+// drew the same thing slightly differently."  Subpixel antialiasing, a composited shadow landing on a
+// clipped capture, a gradient dithered a shade over: all of these move a channel by a handful of
+// levels.  A change to what is ON the page moves one by dozens or hundreds.  Deliberately low - the
+// cost of missing a real content change that happens to be this faint is far higher than the cost of
+// staying quiet about a rasterisation difference of 9.
+const rasterizationChannelDelta = 8
+
+// amplitudeLine turns max channel delta from a statistic into a verdict.  It is the number that
+// decides the whole response to a failure - tolerate this, or go find what moved - and on its own it
+// reads as telemetry: a reader who has already located the changed region from the box list walks
+// straight past "max channel delta 3" and starts hunting for an element that is not there.  Saying it
+// in a sentence is the same instruction as the shape lines, applied to amplitude instead of geometry.
+func (d *screenshotDiff) amplitudeLine() string {
+	if d.DifferingPixels == 0 || d.MaxChannelDelta > rasterizationChannelDelta {
+		return ""
+	}
+	return fmt.Sprintf("every differing pixel differs by <= %d — a rasterisation or compositing difference, not a content change (absorb it with b.ChannelTolerance(%d), or look for a shadow or gradient bleeding into the capture)",
+		d.MaxChannelDelta, d.MaxChannelDelta)
 }
 
 // shapeLines is the verdict: given the same pixel counts, WHICH of the three bugs the feedback named

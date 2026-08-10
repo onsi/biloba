@@ -308,6 +308,18 @@ Don't work around it. Pre-writing baselines blind — a scripted "run with updat
 
 **And a tolerance widened until nothing can fail is the same bug with pixels.** `b.Tolerance(0.05)` on a small element can absorb an entire component; `b.ChannelTolerance(60)` absorbs a color change. Tune the suite-wide default (`BilobaConfigScreenshotTolerance` / `BilobaConfigScreenshotChannelTolerance`) once against real evidence, and treat a per-assertion tolerance that keeps growing as a signal the subject is nondeterministic — mask the region (`b.Mask`) instead of blurring the whole comparison. → `biloba:visual-assertions`
 
+**A blank capture is a stable capture.** An element capture works below the *document* fold — Biloba expands the main frame's viewport — but an element scrolled out of an **inner** `overflow: auto` pane was never painted, and comes back as a flat rectangle of the pane's background. Baseline that and it matches itself forever. This is the normal shape of any app-shell layout (fixed chrome, inner scrolling pane), so it is not exotic. Biloba now refuses the comparison and names the clipping ancestor; the fix is to scroll the pane first:
+
+```go
+b.ScrollIntoView(".figure", b.WithinScroller("#reader-pane"))
+Eventually(".figure").Should(b.BeInViewport(b.Fully()))
+Eventually(".figure").Should(b.HaveScreenshot("figure"))
+```
+
+Every structural gate in front of such a capture (`[data-rendered]` present, `svg` present) passes while the capture is blank — presence is not paintedness.
+
+**Two colour schemes that render identically assert one thing, not two.** `b.InColorSchemes("light","dark")` drives `prefers-color-scheme`, and an app with a manual theme override only follows that media query while it is in its follow-the-system state. A spec that pinned the theme (directly, via a helper, or via a leftover stored preference) writes the same pixels to `home-light.png` and `home-dark.png`. Both look right, both pass, and the dark assertion cannot fail. Biloba warns when two schemes in one assertion capture byte-identical images — treat that warning as a finding, not noise.
+
 Three more vacuous shapes live with their smell and are covered above: the **eagerly-created app-state barrier** (§3), the **inverted document-order assertion** (§4), the **shadowed stateful handler** (§6).
 
 ## 8. Two facts that prevent wrong diagnoses

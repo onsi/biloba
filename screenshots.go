@@ -193,7 +193,9 @@ func (b *Biloba) writeScreenshotToFile(img []byte, path string) string {
 }
 
 /*
-CaptureScreenshotOf(selector) returns a screenshot of the first element matching selector as a []byte array (you can decode it with the image package).  The screenshot is clipped to the element's bounding box and can capture an element below the fold without scrolling.  Same-origin >>>-pierced iframe elements are translated to top-level page coordinates.
+CaptureScreenshotOf(selector) returns a screenshot of the first element matching selector as a []byte array (you can decode it with the image package).  The screenshot is clipped to the element's bounding box and can capture an element below the document fold without scrolling.  Same-origin >>>-pierced iframe elements are translated to top-level page coordinates.
+
+A capture can only contain what the browser painted, and the below-the-fold expansion applies to the DOCUMENT scroller: an element scrolled outside an inner overflow:auto container was never painted and comes back as that container's background.  Biloba prints a warning naming the container when it sees this - scroll it in with [Biloba.ScrollIntoView] and [Biloba.WithinScroller] first.  ([Biloba.HaveScreenshot] refuses outright rather than warning, since a blank baseline would pass forever.)
 
 It is a waiting command: see [Biloba.CaptureScreenshot] for the WithTimeout/WithContext knobs it honors.
 
@@ -210,27 +212,73 @@ func (b *Biloba) CaptureScreenshotOf(selector any) []byte {
 // honors the WithTimeout/WithContext knobs a waiting command is allowed.
 func (b *Biloba) captureScreenshotOf(selector any) []byte {
 	b.gt.Helper()
-	img, _, err := b.elementScreenshot(selector)
+	img, _, clipped, err := b.elementScreenshot(selector)
 	if err != nil {
 		b.gt.Fatalf("Failed to capture screenshot of element:\n%s", err.Error())
 		return nil
 	}
+	// A warning rather than a failure: this is the manual capture, reached from a debugging session or
+	// an AddReportEntry, and handing back a blank-but-honest PNG with a note beats failing a spec that
+	// only wanted a look at the page.  The visual-regression path, where a blank capture would become a
+	// golden master, refuses instead - see captureForComparison.
+	if clipped != nil {
+		b.gt.Printf("Warning: %s\n", clipped.describe(selector))
+	}
 	return img
 }
+
+// clippedCapture describes an element that an ancestor is clipping out of its own capture: the
+// browser never painted the hidden part, so those pixels come back as whatever the clipping ancestor's
+// background is.  clipper names that ancestor and visibleFraction is how much of the element survives
+// it (0 means the capture is entirely unpainted).  A nil *clippedCapture means nothing is clipping.
+type clippedCapture struct {
+	clipper         string
+	visibleFraction float64
+}
+
+// fullyClipped reports the case worth refusing outright: none of the element was painted, so the
+// capture is a flat rectangle of the clipping ancestor's background.
+func (c *clippedCapture) fullyClipped() bool { return c != nil && c.visibleFraction <= 0 }
+
+// describe renders the note a failure message or a warning prints.  It names the clipping ancestor
+// because that is the part the reader cannot see from the call site: the selector they wrote is right
+// there in the spec, the container that swallowed it is somewhere up their markup.
+func (c *clippedCapture) describe(selector any) string {
+	what := "Only part of"
+	if c.fullyClipped() {
+		what = "NONE of"
+	}
+	return fmt.Sprintf("%s the element matching %v was painted: it is inside %s, which clips it, and only %.0f%% of the element falls within that clip.\nA screenshot can only contain what the browser actually rendered, so the rest of this capture is whatever %s paints behind it - not the element.\nScroll it into the container's visible band before capturing:\n  b.ScrollIntoView(%#v, b.WithinScroller(%q))",
+		what, selector, c.clipper, c.visibleFraction*100, c.clipper, selector, c.clipper)
+}
+
+// clippedCaptureError is what the visual-regression path returns for a fully clipped element.  It is
+// a distinct type so update mode can recognise it and escalate - see screenshotMatcher.refuseToWrite.
+type clippedCaptureError struct {
+	clipped  *clippedCapture
+	selector any
+}
+
+func (e *clippedCaptureError) Error() string { return e.clipped.describe(e.selector) }
 
 // elementScreenshot captures the first element matching selector, clipped to its bounding box, and
 // hands back the PNG along with the clip it used.  The clip is what turns a mask rectangle measured in
 // document coordinates into image coordinates, which is why the visual-regression path needs it back.
+// It also reports whether an ancestor clipped the element out of its own capture - see clippedCapture.
 // Unlike captureScreenshotOf it returns errors rather than failing the spec: a matcher polls it, and
 // an error there means "retry".
-func (b *Biloba) elementScreenshot(selector any) ([]byte, *page.Viewport, error) {
+func (b *Biloba) elementScreenshot(selector any) ([]byte, *page.Viewport, *clippedCapture, error) {
 	r := b.runBilobaHandler("boundingBox", selector)
 	if r.Error() != nil {
-		return nil, nil, r.Error()
+		return nil, nil, nil, r.Error()
 	}
 	box, ok := r.Result.(map[string]any)
 	if !ok {
-		return nil, nil, fmt.Errorf("unexpected bounding box result: %v", r.Result)
+		return nil, nil, nil, fmt.Errorf("unexpected bounding box result: %v", r.Result)
+	}
+	var clipped *clippedCapture
+	if clipper, ok := box["clipper"].(string); ok && clipper != "" {
+		clipped = &clippedCapture{clipper: clipper, visibleFraction: toFloat64(box["visibleFraction"])}
 	}
 	clip := &page.Viewport{
 		X:      toFloat64(box["x"]),
@@ -252,9 +300,9 @@ func (b *Biloba) elementScreenshot(selector any) ([]byte, *page.Viewport, error)
 		return captureErr
 	}))
 	if err != nil {
-		return nil, clip, err
+		return nil, clip, clipped, err
 	}
-	return img, clip, nil
+	return img, clip, clipped, nil
 }
 
 /*

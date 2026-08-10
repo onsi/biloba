@@ -1,6 +1,6 @@
 ---
 name: visual-assertions
-description: Assert that a page or element still looks right with Biloba's visual regression matcher (b.HaveScreenshot) — writing the assertion, the golden-master workflow for creating and updating committed baselines with BILOBA_UPDATE_SCREENSHOTS=1 (review the .actual.png, update mode settles to three consecutive equal captures before writing so a write is not instantaneous, the actionable "never settled" warning, commit the baselines dir, never set the var in CI, nothing prunes orphaned baselines), reading the text diagnosis of a failed comparison without opening an image, and the determinism tools (b.Mask for timestamps/avatars, the automatic animation freeze and b.Animated() to opt out, b.Tolerance/b.ChannelTolerance, b.InColorSchemes for light+dark). Also covers the two directories (committed baselines vs gitignored actual/diff artifacts) and the hazards Biloba does not solve (scrollbars, cross-platform font rendering, closed shadow roots, a JS pulse with only two or three renderings). Use when a spec needs to assert appearance, when a HaveScreenshot comparison failed, or when setting up visual regression in a suite.
+description: Assert that a page or element still looks right with Biloba's visual regression matcher (b.HaveScreenshot) — writing the assertion, the golden-master workflow for creating and updating committed baselines with BILOBA_UPDATE_SCREENSHOTS=1 (review the .actual.png, update mode settles to three consecutive equal captures before writing so a write is not instantaneous, the actionable "never settled" warning, commit the baselines dir, never set the var in CI, nothing prunes orphaned baselines), reading the text diagnosis of a failed comparison without opening an image, and the determinism tools (b.Mask for timestamps/avatars, the automatic animation freeze and b.Animated() to opt out, b.Tolerance/b.ChannelTolerance, b.InColorSchemes for light+dark). Also covers the two directories (committed baselines vs gitignored actual/diff artifacts), the ways a visual assertion can go silently vacuous (a subject clipped out of its own capture by an inner scroll container, two colour schemes that render identically), and the hazards Biloba does not solve (scrollbars, cross-platform font rendering, closed shadow roots, a JS pulse with only two or three renderings, a late one-shot change that is not a web font). Use when a spec needs to assert appearance, when a HaveScreenshot comparison failed, or when setting up visual regression in a suite.
 ---
 
 # Visual assertions
@@ -112,6 +112,7 @@ screenshot "home-desktop" differs from baseline
 
 - `unchanged: everything below y=44` is the complement and often the faster read. Printed only when a clear majority is untouched; silent on a shift or a scattered change.
 - `max channel delta` counts **all** pixels, including ones the channel tolerance absorbed — it tells you whether the tolerance is doing its job or is one notch from hiding a real change.
+- **When that number is in the low single digits Biloba says so in words**: `every differing pixel differs by <= 3 — a rasterisation or compositing difference, not a content change`. That decides your whole response. Don't go hunting for an element that moved; nothing moved. Look for a composited shadow or a dithered gradient bleeding into the capture, and absorb it with `b.ChannelTolerance` at that call site with the measured amplitude written there.
 - The `.diff.png` is the actual, washed out, with every differing pixel in magenta. `Read` it when the words aren't enough. A human running this in a terminal that renders images gets that diff drawn under the diagnosis; you get the path, because inline images are off under an agent. The words above are printed to both.
 - Every verdict is deliberately conservative — when no signature holds you get the plain box list. The **shift** verdict additionally never fires on an image thinner than ~16px on either axis (a thin rule, a focus ring, a slim progress bar captured as an element), because at that size the search describes itself rather than the page. Those get the box reading.
 
@@ -124,11 +125,15 @@ Same idea as the [poll trajectory](https://onsi.github.io/biloba/#outline): the 
 | A region that legitimately changes every run (relative timestamp, avatar, ad slot, build hash) | `b.Mask(sel...)` |
 | CSS animation / transition / blinking caret / smooth scroll | **automatic** — Biloba freezes rendering for the capture, inside open shadow roots too |
 | A page still moving when a baseline is written | **automatic in update mode** — three consecutive equal captures before the write |
+| A web font swapping in late | **automatic** — every capture awaits `document.fonts.ready` |
+| Unstable pixels that belong to no element (a composited shadow, a dithered gradient) | `b.ChannelTolerance(n)` — `b.Mask` takes selectors and cannot express this |
 | You are asserting *on* an animation and made it deterministic yourself | `b.Animated()` opts out of the freeze |
 | Antialiasing wobble between runs on the same machine | `b.ChannelTolerance(n)` (suite-wide: `BilobaConfigScreenshotChannelTolerance`) |
 | A handful of pixels anywhere | `b.Tolerance(fraction)` (suite-wide: `BilobaConfigScreenshotTolerance`) |
 | Light and dark themes | `b.InColorSchemes("light", "dark")` |
 | A JS pulse with only 2–3 distinct renderings | **not solved** — see below |
+| A subject scrolled out of an inner `overflow:auto` pane | **refused** — scroll the pane first, see below |
+| A late one-shot change that is *not* a font (lazy image decode, late `ResizeObserver`) | **not solved** — gate it yourself before generating |
 | Closed shadow roots | **not solved** — unreachable from script by design |
 | Scrollbars | **not solved** — see below |
 | Fonts across machines | **not solved** — see below |
@@ -142,6 +147,18 @@ Masking paints the matched elements flat gray **before the baseline is written a
 The freeze injects `animation: none; transition: none; caret-color: transparent; scroll-behavior: auto` for the duration of the capture and removes it after — `none`, not paused, because pausing freezes each animation at an arbitrary frame. It goes into **every open shadow root** as well as the document (a `*` rule in a document stylesheet doesn't cross a shadow boundary, so web components would otherwise animate straight through the capture) and is removed from all of them. **Closed** shadow roots can't be reached from script; a component using one is left animating, which is a likely cause when its capture won't settle.
 
 **A JS pulse with 2–3 renderings (not solved).** The three-consecutive-equal-captures rule defeats anything animating on a fixed period, but a page alternating between two frames can match three times by chance, and no sampling schedule fixes that. CSS animations, transitions, and the caret are already frozen, so what's left is a hand-rolled `setInterval`/canvas redraw. The backstop is the never-settled warning plus the next run failing — mask the region, don't re-run the update.
+
+**A subject inside an inner scroller (refused, with instructions).** An element capture works below the **document** fold — Biloba expands the main frame's viewport. It does nothing for an **inner** `overflow: auto` pane, which is how most app shells scroll. An element outside that pane's visible band was never painted, so the capture is a flat rectangle of pane background — and blank is *stable*, so as a baseline it would pass forever while comparing nothing. Structural gates don't catch it: `[data-rendered]` and `svg` are both present in a blank capture. Biloba refuses the comparison (and refuses to write the baseline), naming the clipping ancestor:
+
+```go
+b.ScrollIntoView(".figure", b.WithinScroller("#reader-pane"))
+Eventually(".figure").Should(b.BeInViewport(b.Fully()))
+Eventually(".figure").Should(b.HaveScreenshot("figure"))
+```
+
+A *partly* clipped subject warns and still compares — capturing something that straddles a pane edge is occasionally deliberate. An `overflow: hidden` ancestor that isn't cutting the subject off (a card clipping its own rounded corners) is not reported.
+
+**The poll protects the comparison, not the write.** An assertion re-captures every attempt and rides out a late change; a baseline write passes on the first settled capture and has no second chance. The settle defeats anything *periodic* but cannot see a one-shot change that hasn't started — three captures agree because nothing has happened yet. Fonts are handled (`document.fonts.ready` is awaited before every capture, on both paths); anything else that lands late is yours to gate before generating.
 
 **Scrollbars (not solved).** Overlay vs classic scrollbars change layout width, and that varies by platform, by OS setting, and on macOS by whether a mouse is attached. Prefer **element** captures over whole-page ones. If you need the page, hide them yourself: `::-webkit-scrollbar { display: none }` in the page, or `emulation.SetScrollbarsHidden(true)` via `b.Context`.
 
@@ -180,6 +197,8 @@ Eventually(b).Should(b.HaveScreenshot("home", b.InColorSchemes("light", "dark"))
 
 Captures and compares once per scheme with `prefers-color-scheme` emulated, and **all** must match. Baselines are `home-light.png` and `home-dark.png`; a failure names the scheme (`home (prefers-color-scheme: dark)`). Without the option Biloba doesn't emulate `prefers-color-scheme` at all and stores one `home.png`. The emulation is always reset, including on the error path — don't hand-roll a shoot-both-themes helper.
 
+**The emulation drives the media query — your app has to be listening.** An app with a manual theme override (a `system`/`light`/`dark` toggle that sets `data-theme` on `<html>`) only follows `prefers-color-scheme` while it is in its follow-the-system state. A spec that pinned the theme — directly, through a helper, or through a leftover stored preference — captures the same rendering twice and writes it to both baselines. Both look right, both pass, and the dark assertion cannot fail. Biloba warns when two schemes capture byte-identical images; treat it as a finding. → `biloba:flaky-specs` §7
+
 The override is **target-level and survives navigation**, so a dropped teardown would silently leave every later spec rendering in that scheme. Biloba warns when a reset fails (naming the stuck scheme) and `b.Prepare()` clears a leaked override before the next spec. If you see that warning, the leak is already handled — but it means the tab that produced it finished the spec in the emulated scheme.
 
 ## Pitfalls
@@ -187,4 +206,4 @@ The override is **target-level and survives navigation**, so a dropped teardown 
 - **Don't over-use it.** A visual assertion is a wide net: it fails on every change, intended or not. Reach for it where appearance *is* the contract (a chart, a themed rail, a print layout) and keep asserting text/counts/state with the ordinary matchers.
 - **Whole-page baselines are brittle** — any change anywhere fails them all. Prefer element captures.
 - **A `uniform shift` failure is not a re-baseline.** Something above the subject moved; fix that.
-- The matcher does no scrolling and no viewport changes: an element capture is clipped to the element's box and works below the fold.
+- The matcher does no scrolling and no viewport changes: an element capture is clipped to the element's box and works below the **document** fold. It does *not* reach inside an inner `overflow: auto` pane — see the determinism table above.
