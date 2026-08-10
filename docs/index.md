@@ -457,10 +457,12 @@ This installs a family of `biloba:*` skills that activate automatically while yo
 | `biloba:setup` | Wiring Biloba into your suite: bootstrap, `chrome-headless-shell`, the bootstrap variations. |
 | `biloba:write-tests` | Authoring specs: the dual immediate/matcher API, selecting elements, hermetic tests, multiple tabs. |
 | `biloba:realistic-mode` | The realistic interaction track (`b.Realistic()`) for occlusion/hover/drag/scroll/touch-sensitive flows. |
+| `biloba:visual-assertions` | Asserting appearance with [`b.HaveScreenshot`](#visual-assertions): baselines, masking, tolerance, and reading a failed comparison. |
 | `biloba:xpath` | Building selectors with the `b.XPath()` DSL. |
 | `biloba:api` | A one-line reference for every method and matcher. |
 | `biloba:explore-unfamiliar-page` | Orienting to a page you haven't seen, then drafting a starter spec. |
 | `biloba:debug-failures` | DOM outlines, screenshots, and the env/config knobs that surface them. |
+| `biloba:flaky-specs` | A spec that's flaky, order-dependent, or only fails under `-p`/CI — the smells and their polling fixes. |
 
 ### `chromedp`: Breaking the Fourth Wall
 
@@ -3629,6 +3631,228 @@ Riding along with these, and needing no configuration at all, is a set of **diag
 
 For example, a CI user who only wants screenshots in a specific folder sets `BilobaConfigScreenshotsToDir("./artifacts")` (or `BILOBA_SCREENSHOTS_DIR`) and *still* gets the automation default of outlines-on — they only overrode the directory.
 
+### Visual Assertions
+
+Sometimes the thing you want to assert is "this still looks the way it looked."  `b.HaveScreenshot(name)` is a Gomega matcher that captures the subject and compares it, pixel by pixel, against a committed baseline image:
+
+```go
+Eventually(".librarian").Should(b.HaveScreenshot("librarian-rail"))  // just this element
+Eventually(b).Should(b.HaveScreenshot("home-desktop"))               // the whole page
+```
+
+Apply it to a [selector](#working-with-the-dom) to compare a single element — clipped to its bounding box, exactly like [`b.CaptureScreenshotOf`](#capturing-screenshots) — or to the tab itself to compare the whole document.  It's an ordinary matcher, so it composes with the others:
+
+```go
+Eventually(".card").Should(SatisfyAll(b.BeInViewport(b.Fully()), b.HaveScreenshot("card")))
+```
+
+Baselines are read from `./biloba-baselines` as `<name>.png`.  The name may contain `/` — `b.HaveScreenshot("checkout/step-2")` looks for `biloba-baselines/checkout/step-2.png` — so a large suite can organize its baselines into folders.
+
+#### The comparison is what polls
+
+Note the `Eventually`.  `HaveScreenshot` returns a matcher you poll, and *every attempt captures the subject afresh and compares it again*.
+
+That matters more here than anywhere else in Biloba.  A screenshot assertion is the most layout-sensitive thing in a suite: a web font finishes loading and every text run reflows, an image decodes and the column below it moves, a `ResizeObserver` re-applies and shifts a border by a pixel, an animation frame loop takes a few frames to settle.  A single capture-and-compare would land somewhere in the middle of all that, and it would be the flakiest assertion you own.
+
+Because the comparison polls, the first attempt that matches is by construction the settled one.  You don't have to hand-roll a barrier for each of those reflows — the matcher waits out exactly the ones that would have moved your pixels.  Do give it a realistic deadline, though: Gomega's default `Eventually` timeout is one second, and a capture-and-compare is not free.
+
+```go
+Eventually(b).WithTimeout(10 * time.Second).Should(b.HaveScreenshot("home-desktop"))
+```
+
+Since you own the poll, configuring the matcher itself (`b.WithTimeout(d).HaveScreenshot(...)`) is a hard error — the same rule as every other [bare matcher](#which-methods-honor-which-knobs).  Configure the `Eventually`.
+
+#### Baselines and artifacts: two directories, two lifecycles
+
+Two kinds of PNG come out of this feature, and they want opposite things:
+
+- **Baselines** are the reference images.  They are few, small, reviewed, and **checked into git**.  They live in `./biloba-baselines`.
+- **Artifacts** are what a *failure* produces: `<name>.actual.png` (what Biloba just saw) and `<name>.diff.png` (that same image, washed out, with every differing pixel painted magenta).  They are throwaway and **gitignored**.  They ride along with the failure screenshots in `./biloba-screenshots`, or wherever `BilobaConfigScreenshotsToDir`/`BILOBA_SCREENSHOTS_DIR` points.  Unlike a failure screenshot — which an interactive human gets inline and never on disk — these always go to a file, so a failing comparison creates that directory whether or not you're running under automation.
+
+Conflating the two is how a repository ends up with a history that is mostly rejected PNGs.  So ignore the artifacts directory:
+
+```
+# .gitignore
+biloba-screenshots/
+```
+
+and commit `biloba-baselines/`.  Point the baselines somewhere else with `BilobaConfigScreenshotBaselinesDir(dir)` or `BILOBA_SCREENSHOT_BASELINES_DIR`.
+
+Artifact filenames are flat, so a baseline name with a `/` in it collapses to a single file — a failing `checkout/step-2` writes `checkout_step-2.actual.png`, rather than growing a directory tree in a folder nobody committed.
+
+#### The first run fails
+
+A brand new assertion has no baseline yet, and Biloba will not write one and pass.  It fails, and says exactly what to do:
+
+```
+There is no screenshot baseline for home-desktop.
+
+Expected to find one at:
+  /Users/you/app/biloba-baselines/home-desktop.png
+
+The screenshot Biloba just captured was written to:
+  /Users/you/app/biloba-screenshots/home-desktop.actual.png
+
+Review that image, then create the baseline by re-running with:
+  BILOBA_UPDATE_SCREENSHOTS=1
+
+Biloba will not create a missing baseline and pass: a spec that has never compared anything would read green in CI.
+```
+
+The reason is worth stating plainly.  If a missing baseline were written-and-passed, the first CI run of a new visual assertion would certify whatever the page happened to look like at that moment — including a broken page — and the spec would be green from birth, so nobody would ever go and look.  A loud failure the first time you run the spec is the only moment you are guaranteed to actually look at the image.
+
+#### The baseline workflow
+
+A baseline is a golden master: a human decided, once, that this is what the page should look like, and every later run is measured against that decision.  The workflow exists to make sure that decision actually gets made.
+
+**Creating a baseline.**
+
+1. Write the assertion and run the suite the normal way.  It fails with the no-baseline message above, and that message names the PNG Biloba just captured.
+2. **Open that `.actual.png` and decide whether it is correct.**  This is the step that matters.  It is your sign-off on the golden master, and it is the only point in the life of this assertion where you are guaranteed to be looking at the image.  The failure exists to hand it to you.  Don't skip it — and if you are an agent working on someone's suite, don't skip it on their behalf either; look at the image and say what you saw.
+3. Once you're satisfied, write the baseline by re-running with `BILOBA_UPDATE_SCREENSHOTS=1 ginkgo -r -p`.  Every visual assertion the run touches captures, waits for the page to settle (see below), writes its baseline, and passes.
+4. `git add` the baselines directory and commit it.  A baseline that isn't committed is regenerated from the current build on every machine, which means it always matches and the assertion asserts nothing.
+
+**Updating a baseline after an intentional change.**
+
+1. The normal run fails with the [diagnosis](#reading-the-diagnosis).  Read it and confirm the change is the one you meant to make.  This is the same sign-off as step 2 above; the diagnosis and the `.diff.png` are what you're signing off on.
+2. Re-run with `BILOBA_UPDATE_SCREENSHOTS=1`.
+3. Biloba prints a one-line summary of what it changed.  Put that line in the pull request description — git renders a changed PNG as a binary blob, so the sentence is the only part of the change a reviewer can actually read.
+
+```
+Updated the screenshot baseline for home-desktop:
+  /Users/you/app/biloba-baselines/home-desktop.png
+screenshot "home-desktop" updated — 38,160 of 1,017,600 pixels changed (3.75%), one box at (0,14)-(1272,44)
+```
+
+**Update mode waits for the page to settle before it writes.**  Writing a baseline is not a single capture, and it is worth knowing why.  Everywhere else in this section the `Eventually` is what waits out a font swapping in or a `ResizeObserver` re-applying — the first attempt that matches the baseline is by construction a settled one.  Update mode has no `Eventually` behind it: it passes on the first attempt no matter what it saw.  A baseline written mid font-load would bake that transient frame in, and every later run would then poll for a rendering that never comes back.  The assertion would be waiting to settle onto something that was never settled.
+
+So update mode captures repeatedly until **three captures in a row compare equal** (under whatever tolerance you configured), and writes that one.  Three rather than two: a page cycling through a handful of renderings shows any two captures the same often enough to fool a pair.  The pause before each capture grows, and every gap is a different length — 100ms, 140, 200, 280, 380, 500, 640 — because a *fixed* sampling period is the whole problem: sample a 160ms animation every 160ms and every pair matches, so the page looks settled while it plainly isn't.  Since the gaps grow by a different amount each time, no animation period can line up with a run of three.  The loop is bounded at eight captures.
+
+This is the same "consecutive equal reads" rule Biloba already uses to decide an element has stopped moving before a [realistic interaction](#realistic-interactions).  It costs about half a second for a page that settles at once, and around two seconds of waiting in the worst case.  That's a deliberate trade: update mode is a rare, explicit operation, and an untrustworthy baseline is paid for on every run afterwards.
+
+If the page never settles, Biloba **still writes the last capture** and says so:
+
+```
+The screenshot for home-desktop never settled: no 3 captures in a row matched, across 8 captures over 2.6s.
+Biloba wrote the last one, but a baseline captured from a page that is still changing will fail on every later run.
+Mask the changing region with b.Mask(...), or track down what is still moving.
+```
+
+It's a warning rather than a failure because the next normal run will fail on its own, and that's the right place to enforce it.  What that run can't tell you is that the baseline it's comparing against was never settled in the first place — this warning is that diagnosis, and it almost always means the spec needs a [`b.Mask`](#determinism).
+
+**Three things about update mode that are easy to get wrong.**
+
+- **It is suite-wide.**  `BILOBA_UPDATE_SCREENSHOTS` rewrites every baseline the run touches, not just the one you were looking at.  When you're accepting one intentional change, scope the run — `ginkgo --focus="the receipt"` or a Ginkgo label — instead of rewriting everything and hoping the rest was already correct.
+- **Never set it in CI.**  With it set, every visual assertion captures and passes, so the whole visual suite goes green without comparing anything.  It's an environment variable, so it's easy to add to a CI config once and never notice; a visual suite that can't fail is worse than no visual suite, because it reads like coverage.
+- **Nothing prunes orphaned baselines.**  Biloba only ever reads and writes baselines by name; it never deletes one.  Delete a spec, or rename it, and its PNG stays in the repository forever — and a rename quietly produces a second baseline rather than moving the first.  Delete the old file by hand when you rename or remove an assertion.
+
+**On spelling the variable.**  `BILOBA_UPDATE_SCREENSHOTS` takes the usual boolean words, case-insensitively and ignoring surrounding whitespace: `1`, `t`, `true`, `y`, `yes`, and `on` turn it on; `0`, `f`, `false`, `n`, `no`, `off`, and leaving it unset turn it off.  Set it to anything else and Biloba treats it as off **and tells you**:
+
+```
+BILOBA_UPDATE_SCREENSHOTS is set to "sure", which Biloba does not recognise as a boolean - treating it as off.  Use 1/true/yes/on to turn it on.
+```
+
+A knob like this one only does anything when it's set, so a spelling Biloba doesn't understand has to be a visible no-op rather than a silent one — "I ran with the update flag and nothing happened" is a miserable thing to debug.
+
+#### Reading the diagnosis
+
+When a comparison fails Biloba writes the two artifacts and puts a diagnosis in the failure message:
+
+```
+screenshot "home-desktop" differs from baseline
+  38,160 of 1,017,600 pixels differ (3.75%), max channel delta 221
+  changed region: one box, (0,14)-(1272,44)  [100% of the width, 4% of the height, at its top edge]
+  unchanged: everything below y=44
+  baseline: /Users/you/app/biloba-baselines/home-desktop.png
+  actual:   /Users/you/app/biloba-screenshots/home-desktop.actual.png
+  diff:     /Users/you/app/biloba-screenshots/home-desktop.diff.png
+```
+
+The images are right there when you want them.  But the *shape* of the change usually tells you what happened before you open anything, and that's what the middle lines are for:
+
+| The diagnosis says | What it usually means |
+|---|---|
+| `one box`, full width, at the top edge | the header or banner changed, and nothing else did |
+| `one box` in the middle, a small part of the image | the component you actually touched |
+| `changed regions: 3 boxes` | several independent changes — each is listed with its own pixel count, largest first (capped at five, then `… and N more`) |
+| `scattered — 25 regions spread across the image` | every text run moved a little: a web font failed to load, or rendered differently |
+| `uniform shift of the whole image, 1px down (dx=0, dy=1)` | nothing changed *inside* the subject; something above or before it grew or moved |
+| `baseline is 800x600, actual is 800x640 (40px taller)` | the box itself resized, and there is no per-pixel story to tell on top of that |
+
+The last two exist because bounding boxes alone can't distinguish them from an ordinary change.  A page that moved down one pixel produces one enormous region covering the whole image — true, and completely unhelpful; a font that failed to load produces a hundred tiny ones.  Both readings are conservative: a shift is only reported when applying that offset explains most of the difference, and "scattered" needs many regions, all small, spread across both axes.  The shift verdict also has a size floor — an image thinner than about sixteen pixels on either axis never gets one, because at that size every candidate offset slides most of the image off the edge and the winner would describe the search rather than the page.  So an element capture of a thin rule, a focus ring, or a slim progress bar falls through to the box reading instead.  If no signature holds you get the plain box list, which is what you would have read for yourself anyway.
+
+The `unchanged:` line is the complement, and it is often the faster read — "everything below y=44" rules out the entire body of the page in one line.  It's printed only when a clear majority of the image really is untouched, and it stays quiet on a shift or a scattered change, where the bounding box isn't the story.
+
+`max channel delta` is the worst single-channel difference anywhere in the image, counted across *all* pixels including the ones a channel tolerance absorbed.  It's how you tell "the tolerance is doing its job" from "the tolerance is one notch away from hiding a real change."
+
+This is the [poll trajectory](#outline) idea applied to pixels.  The artifact is useful, but saying in words what shape the failure had is what turns it into a diagnosis.
+
+#### Determinism
+
+A baseline is only as good as the page's ability to render the same pixels twice.  Biloba handles some of the usual obstacles for you; others it doesn't, and it's better to know which is which.
+
+**Regions that legitimately change every run — mask them.**  `b.Mask(selectors...)` paints every matching element flat gray before the comparison:
+
+```go
+Eventually(b).Should(b.HaveScreenshot("dashboard", b.Mask(".relative-timestamp", b.ByTestID("avatar"))))
+```
+
+A relative timestamp is the case that kills a naive baseline on the first day: "3 minutes ago" becomes "4 minutes ago" and a perfectly healthy dashboard starts failing for no reason at all.  Mask it and the rest of the dashboard is still under assertion.  The same paint is applied before a baseline is written and before every comparison, so both sides are always masked identically, and a selector that matches nothing is a no-op — masking an element that's only sometimes on the page must not fail the assertion.
+
+**Animations, transitions, and the blinking text caret — handled.**  For the duration of each capture Biloba injects a stylesheet that sets `animation: none`, `transition: none`, a transparent `caret-color`, and `scroll-behavior: auto`, and removes it again afterwards.  (It's `animation: none` rather than pausing the animations: pausing freezes each one at whatever frame it happened to reach, which is the nondeterminism we're trying to remove.)  If the animation *is* the thing you're asserting on, and you've made it deterministic yourself, opt out with `b.Animated()`.
+
+That stylesheet goes into **every open shadow root** as well as into the document, and is removed from all of them afterwards.  A `*` rule in a document stylesheet doesn't cross a shadow boundary, so a web component would otherwise keep animating — and keep blinking its caret — right through the capture.  A **closed** shadow root can't be reached from script at all, so a component that uses one is left alone; if a capture of such a component won't settle, that's a likely cause.
+
+**A page that never stops changing — only partly handled.**  The settle rule that update mode runs (three consecutive equal captures, at deliberately unequal intervals) defeats any page animating on a fixed period.  It cannot certify a page that has only two or three distinct renderings: something alternating between two frames can come out the same three times in a row by chance, and no sampling schedule fixes that.  The freeze above already removes CSS animations, transitions, and the caret, so what's left in practice is a hand-rolled JavaScript pulse — a `setInterval` swapping a class, a canvas redrawing itself.  The backstop is the never-settled warning plus the fact that the next normal run fails; when either shows up, mask the region rather than re-running the update.
+
+**Scrollbars — not handled.**  Whether a scrollbar is drawn as an overlay or takes real layout width depends on the platform, on an OS setting, and on macOS on whether a mouse happens to be attached.  A classic scrollbar takes width away from the content next to it, so the same page lays out differently and a baseline captured on one machine can be wrong on another for reasons that have nothing to do with your app.  Prefer element captures over whole-page ones where you can — they're clipped to the element's box.  When you do need the whole page, hide the scrollbars yourself: a `::-webkit-scrollbar { display: none }` rule in the page, or `emulation.SetScrollbarsHidden(true)` through the [chromedp escape hatch](#codechromedpcode-breaking-the-fourth-wall).
+
+**Font rendering across machines — not handled either.**  Text rendering is not portable.  Subpixel antialiasing, hinting, and font fallback all differ between macOS and Linux, so the same page rendered on your Mac and on a Linux CI box produces images that differ in every glyph — which shows up as exactly the scattered diff described above.  The honest model is that **a baseline belongs to the platform that produced it.**  Either generate baselines on the same platform CI runs on, or give each platform its own directory:
+
+```go
+b = biloba.ConnectToChrome(GinkgoT(),
+	biloba.BilobaConfigScreenshotBaselinesDir(filepath.Join("baselines", runtime.GOOS)),
+)
+```
+
+Tolerance absorbs same-platform antialiasing — two runs on one machine, or a Chrome upgrade that nudges a few edges.  It does not absorb Mac↔Linux: the tolerance you would need for that is large enough to absorb real changes too.
+
+#### Tolerance
+
+Two independent knobs, both exact (`0`) by default:
+
+- **`b.ChannelTolerance(delta)`** decides which pixels *count* as different: a pixel is only counted when one of its R/G/B/A channels differs by more than `delta`.  This is the antialiasing and subpixel-rendering absorber — a text edge that shifts by a few levels doesn't change what the page looks like.
+- **`b.Tolerance(fraction)`** decides how many of those pixels are acceptable: at most `fraction` (0..1) of the compared pixels may differ.
+
+They compose: channel tolerance filters, fraction tolerance counts what's left.  Set both once for the whole suite:
+
+```go
+b = biloba.ConnectToChrome(GinkgoT(),
+	biloba.BilobaConfigScreenshotTolerance(0.001),     // up to 0.1% of the pixels may differ…
+	biloba.BilobaConfigScreenshotChannelTolerance(4),  // …counting only those off by more than 4 levels
+)
+```
+
+and override per assertion only where one comparison genuinely needs different slack:
+
+```go
+Eventually(".prose").Should(b.HaveScreenshot("prose", b.ChannelTolerance(8)))
+```
+
+That's the shape on purpose.  A suite-wide default is one number, tuned once, with the whole suite as evidence — and when a browser upgrade shifts antialiasing everywhere you change it in one place.  A tolerance number written out at two hundred call sites is a suite nobody can reason about, and each of those numbers is easy to quietly widen until the assertion can no longer fail.
+
+#### Light and dark in one assertion
+
+`b.InColorSchemes(schemes...)` captures and compares the subject once per scheme, with `prefers-color-scheme` emulated to each value, and requires all of them to match:
+
+```go
+Eventually(b).Should(b.HaveScreenshot("home", b.InColorSchemes("light", "dark")))
+```
+
+Each scheme gets its own baseline — `home-light.png` and `home-dark.png` — and a failure names the scheme it belongs to (`home (prefers-color-scheme: dark)`).  Without the option Biloba doesn't emulate `prefers-color-scheme` at all and stores a single `home.png`.
+
+This retires a helper family that every themed app ends up writing: the `captureBothThemes(name)` that flips an emulation override, shoots twice, and forgets to reset the override on the failure path.  Biloba resets it for you, on every path — and there's a second line of defense behind that, because the override is a *target-level* one that survives navigation, so a single dropped teardown would leave every later spec in that process rendering in the emulated scheme with nothing to show for it.  If the reset fails Biloba prints a warning naming the scheme the tab is stuck in, and the next `b.Prepare()` clears the leftover override.  A warning like that in your output means a teardown was dropped; the following spec has already been cleaned up for you.
+
 ### Outline
 
 `b.Outline()` returns the current page DOM as indented, human-readable text — a compact structural view of what's on the page.  This is the primary tool for understanding _why_ a selector didn't match when a spec fails:
@@ -3777,6 +4001,15 @@ The boolean options take an optional bool — calling them with no argument mean
 - `BilobaConfigFailureScreenshotsSize(width, height)` specifies the window size to use when generating a screenshot on failure
 - `BilobaConfigProgressReportScreenshotSize(width, height)` specifies the window size to use when generating a screenshot when progress reports are requested
 - `BilobaConfigScreenshotsToDir(dir)` writes each tab's failure screenshot to a PNG file in the given directory and prints the absolute path to test output (see [Saving screenshots to files](#capturing-screenshots))
+- `BilobaConfigScreenshotBaselinesDir(dir)` says where [`b.HaveScreenshot`](#visual-assertions)'s committed baselines live (default `./biloba-baselines`)
+- `BilobaConfigScreenshotTolerance(fraction)` sets the suite-wide default for how much of a [visual comparison](#visual-assertions) may differ — at most `fraction` (0..1) of the pixels (default `0`, exact)
+- `BilobaConfigScreenshotChannelTolerance(delta)` sets the suite-wide default per-channel slack — a pixel only counts as differing when one of its R/G/B/A channels differs by more than `delta` (default `0`, exact)
+
+A few environment variables round these out:
+
+- `BILOBA_SCREENSHOT_BASELINES_DIR` does the same thing as `BilobaConfigScreenshotBaselinesDir` at runtime (the option wins if both are set)
+- `BILOBA_UPDATE_SCREENSHOTS=1` makes every [visual assertion](#visual-assertions) capture and write its baseline instead of comparing against it, printing what changed.  It accepts `1`/`t`/`true`/`y`/`yes`/`on` (and `0`/`f`/`false`/`n`/`no`/`off`), case-insensitively; a value it doesn't recognise is treated as off and warns rather than doing nothing quietly
+- `BILOBA_SCREENSHOTS_DIR`, `BILOBA_INLINE_SCREENSHOTS`, `BILOBA_OUTLINE_MAX`, and `BILOBA_PROBE_TERMINAL` are covered above in [Failure artifacts](#failure-artifacts-humans-ci-and-agents), [Inline image gating](#inline-image-gating), and [Outline](#outline)
 
 ### Debugging
 

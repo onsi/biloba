@@ -127,6 +127,61 @@ func (b *Biloba) ShadowedHandlersNoteForTest() string {
 	return b.renderShadowedHandlers()
 }
 
+// SetVisualDirsForTest points the root's visual-regression directories - the committed baselines and
+// the (gitignored) artifacts destination HaveScreenshot writes actual/diff PNGs to - at
+// test-controlled locations, so visual_test.go can generate its baselines into a per-spec TempDir
+// instead of committing pixels that vary by machine.  Returns a restore func: the suite's b is shared
+// and created once, so a leaked value would corrupt every later spec.
+func (b *Biloba) SetVisualDirsForTest(baselinesDir string, screenshotsDir string) func() {
+	prevBaselines, prevScreenshots := b.root.baselinesDir, b.root.screenshotsDir
+	b.root.baselinesDir, b.root.screenshotsDir = baselinesDir, screenshotsDir
+	return func() { b.root.baselinesDir, b.root.screenshotsDir = prevBaselines, prevScreenshots }
+}
+
+// SetUpdateScreenshotsForTest flips the BILOBA_UPDATE_SCREENSHOTS behavior for visual_test.go.
+// Returns a restore func.
+func (b *Biloba) SetUpdateScreenshotsForTest(update bool) func() {
+	prev := b.root.updateScreenshots
+	b.root.updateScreenshots = update
+	return func() { b.root.updateScreenshots = prev }
+}
+
+// ScreenshotSettleScheduleForTest exposes the gaps update mode leaves between the captures it
+// compares, in order, so visual_test.go can assert on the schedule itself rather than on wall-clock
+// timings that a loaded machine makes noisy.
+func ScreenshotSettleScheduleForTest() []time.Duration {
+	schedule := []time.Duration{}
+	for n := range screenshotSettleAttempts - 1 {
+		schedule = append(schedule, screenshotSettleGap(n))
+	}
+	return schedule
+}
+
+// EmulateColorSchemeForTest applies (or, with the empty string, clears) a prefers-color-scheme
+// override on this tab, so visual_test.go can simulate the capture whose deferred teardown never
+// landed and assert that the next Prepare() cleans it up.
+func (b *Biloba) EmulateColorSchemeForTest(scheme string) error {
+	return b.emulateColorScheme(scheme)
+}
+
+// TruthyEnvForTest exposes truthyEnv (and its unrecognised-value warning) for visual_test.go,
+// so the spelling table can be exercised without standing up a Biloba per spelling.
+func (b *Biloba) TruthyEnvForTest(name string) bool { return b.truthyEnv(name) }
+
+// ScreenshotToleranceForTest exposes the resolved suite-wide visual tolerance.
+func (b *Biloba) ScreenshotToleranceForTest() (fraction float64, channel int) {
+	return b.root.screenshotTolerance.fraction, b.root.screenshotTolerance.channel
+}
+
+// UpdateScreenshotsForTest exposes the resolved BILOBA_UPDATE_SCREENSHOTS setting.
+func (b *Biloba) UpdateScreenshotsForTest() bool { return b.root.updateScreenshots }
+
+// VisualBaselinesDirForTest exposes the resolved baselines directory.
+func (b *Biloba) VisualBaselinesDirForTest() string { return b.visualBaselinesDir() }
+
+// VisualArtifactsDirForTest exposes the resolved actual/diff artifacts directory.
+func (b *Biloba) VisualArtifactsDirForTest() string { return b.visualArtifactsDir() }
+
 // TabScreenshotForTest is a test-accessible view of tabScreenshot.
 type TabScreenshotForTest struct {
 	Title            string

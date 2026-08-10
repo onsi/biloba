@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en-US">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Visual Regression Testpage</title>
+
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 400px;
+            height: 300px;
+            background-color: #ffffff;
+        }
+
+        #box {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 200px;
+            height: 120px;
+            background-color: #336699;
+        }
+
+        /* .taller changes #box's SIZE, which is the dimension-mismatch path: an element capture
+           clipped to a taller box produces a PNG the baseline cannot be compared against pixel by
+           pixel.  This is what an element getting taller because its text changed looks like. */
+        #box.taller {
+            height: 190px;
+        }
+
+        /* a uniform +3 shift on every channel: small enough for ChannelTolerance(6) to absorb */
+        #box.shifted {
+            background-color: #36699c;
+        }
+
+        /* #dot is invisible until .spot: it changes 144 of #box's 24,000 pixels and nothing else */
+        #dot {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            width: 12px;
+            height: 12px;
+            background-color: #336699;
+        }
+
+        #box.spot #dot {
+            background-color: #ffcc00;
+        }
+
+        #scheme {
+            position: absolute;
+            top: 180px;
+            left: 20px;
+            width: 120px;
+            height: 80px;
+            background-color: #eeeeee;
+        }
+
+        /* the dark rendering reads a custom property so a spec can change what only dark mode shows */
+        @media (prefers-color-scheme: dark) {
+            #scheme {
+                background-color: var(--dark-bg, #222222);
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="box">
+        <div id="dot"></div>
+    </div>
+    <div id="scheme"></div>
+</body>
+
+</html>

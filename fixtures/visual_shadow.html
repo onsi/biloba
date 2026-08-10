@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en-US">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Visual Shadow DOM Testpage</title>
+
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 300px;
+            height: 200px;
+            background-color: #ffffff;
+        }
+
+        #widget {
+            display: block;
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 160px;
+            height: 100px;
+            padding: 10px;
+            box-sizing: border-box;
+            background-color: #ffffff;
+        }
+
+        /* .outlined repaints the light-DOM host, so a spec can make the comparison fail without
+           touching anything inside the shadow root */
+        #widget.outlined {
+            background-color: #ffcc00;
+        }
+    </style>
+</head>
+
+<body>
+    <visual-widget id="widget"></visual-widget>
+
+    <script>
+        class VisualWidget extends HTMLElement {
+            constructor() {
+                super()
+                const root = this.attachShadow({ mode: "open" })
+                // The animation lives inside the shadow root, where a `*` rule in a document
+                // stylesheet cannot reach it: the capture freeze has to inject its stylesheet into
+                // this root too or the element keeps flashing through the capture.  Frozen, it
+                // renders the flat #00aa00 the keyframes never touch.
+                root.innerHTML = `
+                    <style>
+                        .flashing {
+                            width: 140px;
+                            height: 80px;
+                            background-color: #00aa00;
+                            animation: flash 240ms linear infinite;
+                        }
+
+                        @keyframes flash {
+                            0%   { background-color: #cc0000; }
+                            33%  { background-color: #0000cc; }
+                            66%  { background-color: #cccc00; }
+                            100% { background-color: #cc0000; }
+                        }
+                    </style>
+                    <div class="flashing"></div>
+                `
+                // freezeLog records the freeze stylesheet arriving in and leaving this shadow root,
+                // so a spec can observe a freeze that only exists for the duration of a capture.
+                window.freezeLog = []
+                let present = false
+                new MutationObserver(function () {
+                    let now = !!root.getElementById("_biloba-freeze")
+                    if (now !== present) {
+                        present = now
+                        window.freezeLog.push(now ? "added" : "removed")
+                    }
+                }).observe(root, { childList: true })
+            }
+        }
+        customElements.define("visual-widget", VisualWidget)
+    </script>
+</body>
+
+</html>

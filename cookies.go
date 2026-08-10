@@ -191,9 +191,10 @@ func (b *Biloba) ClearCookies() {
 	}
 }
 
-// resetBrowsingState clears cookies and web storage so the reusable root tab starts each
-// spec from a clean slate. It is called from Prepare() and is best-effort: errors are
-// ignored rather than failing the spec, since this runs on the critical between-specs path.
+// resetBrowsingState clears cookies, web storage and any leaked prefers-color-scheme emulation so
+// the reusable root tab starts each spec from a clean slate. It is called from Prepare() and is
+// best-effort: errors are ignored rather than failing the spec, since this runs on the critical
+// between-specs path.
 //
 // Cookies are cleared at the browser-context level, so this is origin-agnostic. Local and
 // session storage are origin-scoped, so we clear the current origin's storage via JS while
@@ -205,6 +206,7 @@ func (b *Biloba) resetBrowsingState() {
 		return storage.ClearCookies().WithBrowserContextID(b.browserContextID).Do(ctx)
 	})
 	b.RunErr(`try { window.localStorage.clear(); window.sessionStorage.clear(); } catch (e) {}`)
+	b.clearLeakedColorSchemeEmulation()
 }
 
 // runWithBrowserExecutor runs f against the browser-level CDP executor (as opposed to the

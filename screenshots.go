@@ -210,15 +210,27 @@ func (b *Biloba) CaptureScreenshotOf(selector any) []byte {
 // honors the WithTimeout/WithContext knobs a waiting command is allowed.
 func (b *Biloba) captureScreenshotOf(selector any) []byte {
 	b.gt.Helper()
+	img, _, err := b.elementScreenshot(selector)
+	if err != nil {
+		b.gt.Fatalf("Failed to capture screenshot of element:\n%s", err.Error())
+		return nil
+	}
+	return img
+}
+
+// elementScreenshot captures the first element matching selector, clipped to its bounding box, and
+// hands back the PNG along with the clip it used.  The clip is what turns a mask rectangle measured in
+// document coordinates into image coordinates, which is why the visual-regression path needs it back.
+// Unlike captureScreenshotOf it returns errors rather than failing the spec: a matcher polls it, and
+// an error there means "retry".
+func (b *Biloba) elementScreenshot(selector any) ([]byte, *page.Viewport, error) {
 	r := b.runBilobaHandler("boundingBox", selector)
 	if r.Error() != nil {
-		b.gt.Fatalf("Failed to capture screenshot of element:\n%s", r.Error())
-		return nil
+		return nil, nil, r.Error()
 	}
 	box, ok := r.Result.(map[string]any)
 	if !ok {
-		b.gt.Fatalf("Failed to capture screenshot of element:\nunexpected bounding box result: %v", r.Result)
-		return nil
+		return nil, nil, fmt.Errorf("unexpected bounding box result: %v", r.Result)
 	}
 	clip := &page.Viewport{
 		X:      toFloat64(box["x"]),
@@ -227,7 +239,6 @@ func (b *Biloba) captureScreenshotOf(selector any) []byte {
 		Height: toFloat64(box["height"]),
 		Scale:  1,
 	}
-	// TODO: roadmap §7 masking (cover other selectors before capturing) is not yet supported.
 	cctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
 	var img []byte
@@ -241,10 +252,9 @@ func (b *Biloba) captureScreenshotOf(selector any) []byte {
 		return captureErr
 	}))
 	if err != nil {
-		b.gt.Fatalf("Failed to capture screenshot of element:\n%s", err.Error())
-		return nil
+		return nil, clip, err
 	}
-	return img
+	return img, clip, nil
 }
 
 /*

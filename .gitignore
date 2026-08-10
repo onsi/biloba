@@ -20,3 +20,9 @@ browser
 report.md
 CHANGELOG-TMP.md
 /comparison/
+# Failure artifacts - screenshots on failure, plus the .actual/.diff pair a failed
+# visual assertion writes.  Baselines live in a SEPARATE directory and ARE committed.
+biloba-screenshots/
+# The parallel-run handshake file (process 1 publishes the browser WebSocket URL here).
+# Normally cleaned up; an interrupted run leaves one behind.
+.biloba-config-*

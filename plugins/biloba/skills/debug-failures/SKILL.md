@@ -1,6 +1,6 @@
 ---
 name: debug-failures
-description: See why a Biloba spec failed or flaked — the on-failure artifacts (DOM outline + screenshots + poll trajectory of the timed-out read + the detached-node "matched then stopped matching" signal + the occluded-click diagnosis naming what covered the target), how Biloba auto-adapts to humans vs CI vs AI agents, the env vars and config knobs that surface them (BILOBA_SCREENSHOTS_DIR, BILOBA_INLINE_SCREENSHOTS, BILOBA_OUTLINE_MAX, BILOBA_INTERACTIVE, BilobaConfig*), attaching app/store state to a failure, headless quirks (stale innerText, unscheduled requestAnimationFrame), and using b.Outline()/b.A11yOutline() to understand why a selector didn't match. Use when a browser spec is failing or flaky and you need visibility, or to configure failure output for CI/agents. For *preventing* flakes (single-shot reads, avoiding b.Immediate(), optimistic-UI) see biloba:flaky-specs.
+description: See why a Biloba spec failed or flaked — the on-failure artifacts (DOM outline + screenshots + poll trajectory of the timed-out read + the visual-regression diagnosis with its .actual.png/.diff.png, the "never settled" warning an update run prints + the detached-node "matched then stopped matching" signal + the occluded-click diagnosis naming what covered the target), how Biloba auto-adapts to humans vs CI vs AI agents, the env vars and config knobs that surface them (BILOBA_SCREENSHOTS_DIR, BILOBA_SCREENSHOT_BASELINES_DIR, BILOBA_UPDATE_SCREENSHOTS, BILOBA_INLINE_SCREENSHOTS, BILOBA_OUTLINE_MAX, BILOBA_INTERACTIVE, BilobaConfig*), attaching app/store state to a failure, headless quirks (stale innerText, unscheduled requestAnimationFrame), and using b.Outline()/b.A11yOutline() to understand why a selector didn't match. Use when a browser spec is failing or flaky and you need visibility, or to configure failure output for CI/agents. For *preventing* flakes (single-shot reads, avoiding b.Immediate(), optimistic-UI) see biloba:flaky-specs.
 ---
 
 # Debugging Biloba failures
@@ -24,8 +24,9 @@ So an agent or CI run needs nothing: `ginkgo -r -p`, then read the outline and t
 1. **Console errors** — any `console.error`/`console.assert` before the failure, replayed under "Console errors logged before this failure" at the **top** of the failure block. On a JS crash (a React error boundary) this is the root cause.
 2. **`⚠` diagnostic notes** — they name the cause outright.
 3. **Poll trajectory** — what the timed-out read did over the whole deadline.
-4. **Screenshot** — `Read` the printed PNG path.
-5. **DOM outline** — "DOM Outline for: '<title>'": indented DOM, `<script>/<style>/<svg>` bodies pruned, whitespace collapsed, capped at 32 KB. Past `... [truncated]`? Raise the cap with **`BILOBA_OUTLINE_MAX`** — a byte count (`=131072`), or `0`/`off` for the whole DOM.
+4. **Visual diagnosis** — only on a failed `b.HaveScreenshot`: pixel counts plus the *shape* of the change, in words, before you open any image.
+5. **Screenshot** — `Read` the printed PNG path.
+6. **DOM outline** — "DOM Outline for: '<title>'": indented DOM, `<script>/<style>/<svg>` bodies pruned, whitespace collapsed, capped at 32 KB. Past `... [truncated]`? Raise the cap with **`BILOBA_OUTLINE_MAX`** — a byte count (`=131072`), or `0`/`off` for the whole DOM.
 
 ### Poll trajectory
 
@@ -38,6 +39,43 @@ When an `Eventually` over a polled read (`b.Run`/`b.RunAsync`, a value getter, a
 | **dip-then-rebound** | a late reflow shoved it back | settle layout before asserting |
 
 On by default; `BilobaConfigPollTrajectory(false)` disables it (and the detached-node signal).
+
+### Visual diagnosis (a failed `b.HaveScreenshot`) → `biloba:visual-assertions`
+
+Two extra PNGs land in the screenshots dir — `<name>.actual.png` (what Biloba saw) and `<name>.diff.png` (the actual, washed out, differing pixels in magenta) — and the failure message says what moved:
+
+```
+screenshot "home-desktop" differs from baseline
+  38,160 of 1,017,600 pixels differ (3.75%), max channel delta 221
+  changed region: one box, (0,14)-(1272,44)  [100% of the width, 4% of the height, at its top edge]
+  unchanged: everything below y=44
+  baseline: /Users/you/app/biloba-baselines/home-desktop.png
+  actual:   /Users/you/app/biloba-screenshots/home-desktop.actual.png
+  diff:     /Users/you/app/biloba-screenshots/home-desktop.diff.png
+```
+
+| Shape line | Means |
+|---|---|
+| `one box`, full width, top edge | the header/banner changed |
+| `one box`, small, mid-image | the component you touched |
+| `changed regions: N boxes` (largest first, capped at 5) | several independent changes |
+| `scattered — N regions spread across the image` | a web font failed to load or rendered differently |
+| `uniform shift of the whole image, 1px down` | something *above* the subject grew or moved — fix that, don't re-baseline. Never reported for an image thinner than ~16px on either axis (thin rule, focus ring, progress bar) — those get the box reading |
+| `baseline is 800x600, actual is 800x640 (40px taller)` | the box resized; no per-pixel story |
+
+`unchanged: everything below y=N` is the complement and usually the faster read. `max channel delta` counts every pixel, including those the channel tolerance absorbed. A **missing** baseline is a different failure — it says to re-run with `BILOBA_UPDATE_SCREENSHOTS=1`; never script your way past it.
+
+**"never settled" — printed during an update run, not on a failure.** Update mode captures until three in a row match before writing. When that never happens it writes the last capture anyway and prints:
+
+```
+The screenshot for home-desktop never settled: no 3 captures in a row matched, across 8 captures over 2.6s.
+Biloba wrote the last one, but a baseline captured from a page that is still changing will fail on every later run.
+Mask the changing region with b.Mask(...), or track down what is still moving.
+```
+
+The run stays green, so this is easy to scroll past — don't. The baseline just written is unsettled and the next normal run will fail against it. Add a `b.Mask(...)` for the moving region (or stop the page moving), then re-run the update. Re-running the update alone changes nothing. → `biloba:visual-assertions`
+
+**"Failed to clear the emulated prefers-color-scheme"** — a dropped `b.InColorSchemes` teardown. The override is target-level and survives navigation, so `b.Prepare()` clears the leak before the next spec; the spec that printed the warning, though, finished rendering in the emulated scheme. Read any odd-looking screenshot from that spec with that in mind.
 
 ### The `⚠` diagnostic notes
 
@@ -103,7 +141,9 @@ Keep the `?? null` so a crashed page doesn't turn the snapshot itself into a fai
 
 | Var | Effect |
 |---|---|
-| `BILOBA_SCREENSHOTS_DIR=./artifacts` | where failure screenshots are written |
+| `BILOBA_SCREENSHOTS_DIR=./artifacts` | where failure screenshots — and the visual `.actual.png`/`.diff.png` artifacts — are written |
+| `BILOBA_SCREENSHOT_BASELINES_DIR=./baselines` | where `b.HaveScreenshot`'s **committed** baselines live (default `./biloba-baselines`) |
+| `BILOBA_UPDATE_SCREENSHOTS=1` | capture and (re)write every visual baseline the run touches instead of comparing; prints what changed. Accepts `1/t/true/y/yes/on` (off: `0/f/false/n/no/off`), case-insensitive; **any other value warns and is treated as off**. Suite-wide — scope it with `--focus`. **Never set it in CI**: every visual assertion then passes unconditionally |
 | `BILOBA_OUTLINE_MAX=131072` | raise the outline byte cap; `0`/`off` = no truncation |
 | `BILOBA_INLINE_SCREENSHOTS=iterm\|kitty\|sixel\|none` | force an inline-image protocol, or `none` to disable the blob (the file path is still printed — use `none` in CI and in Claude Code, where base64 is noise) |
 | `BILOBA_PROBE_TERMINAL=true` | actively query the TTY for Sixel support when env detection finds nothing |
@@ -120,6 +160,8 @@ Each boolean takes an optional bool (no arg = `true`). **Explicit settings win, 
 - `BilobaConfigFailureScreenshots(...bool)` (default on) / `BilobaConfigPollTrajectory(...bool)` (default on) / `BilobaConfigProgressReportScreenshots(...bool)` (default on).
 - `BilobaConfigFailureScreenshotsSize(w,h)` / `BilobaConfigProgressReportScreenshotSize(w,h)`.
 - `BilobaConfigDebugLogging(...bool)` — stream all CDP traffic to the `GinkgoWriter` (verbose).
+- `BilobaConfigScreenshotBaselinesDir(dir)` — where `b.HaveScreenshot` reads/writes committed baselines (default `./biloba-baselines`; commit that dir, gitignore the screenshots dir).
+- `BilobaConfigScreenshotTolerance(fraction)` / `BilobaConfigScreenshotChannelTolerance(delta)` — suite-wide visual-comparison defaults, both `0` (exact) by default; `b.Tolerance(...)`/`b.ChannelTolerance(...)` override per assertion. → `biloba:visual-assertions`
 
 ```go
 // CI that only redirects the directory still keeps the automation default of outlines-on:

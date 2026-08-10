@@ -525,6 +525,47 @@ func BilobaConfigScreenshotsToDir(dir string) func(*Biloba) {
 }
 
 /*
+Pass BilobaConfigScreenshotBaselinesDir to [ConnectToChrome] to tell [Biloba.HaveScreenshot] where the committed visual-regression baselines live.  It defaults to ./biloba-baselines.
+
+Baselines are a different kind of file from failure screenshots: they are few, small, reviewed, and checked in, which is why they get their own directory instead of sharing the (gitignored) screenshots directory that the actual/diff artifacts are written to.
+
+The BILOBA_SCREENSHOT_BASELINES_DIR environment variable does the same thing at runtime (this option wins if both are set).
+
+Read https://onsi.github.io/biloba/#visual-assertions to learn more about visual assertions
+*/
+func BilobaConfigScreenshotBaselinesDir(dir string) func(*Biloba) {
+	return func(b *Biloba) {
+		b.baselinesDir = dir
+	}
+}
+
+/*
+Pass BilobaConfigScreenshotTolerance to [ConnectToChrome] to set the suite-wide default for how much of a [Biloba.HaveScreenshot] comparison may differ: at most fraction (0..1) of the compared pixels.  It defaults to 0 - exact.
+
+This is the number worth tuning, once, for a whole suite; [Biloba.Tolerance] overrides it for a single assertion that genuinely needs different slack.
+
+Read https://onsi.github.io/biloba/#visual-assertions to learn more about visual assertions
+*/
+func BilobaConfigScreenshotTolerance(fraction float64) func(*Biloba) {
+	return func(b *Biloba) {
+		b.screenshotTolerance.fraction = fraction
+	}
+}
+
+/*
+Pass BilobaConfigScreenshotChannelTolerance to [ConnectToChrome] to set the suite-wide default per-channel slack for [Biloba.HaveScreenshot]: a pixel only counts as differing when one of its R/G/B/A channels differs by more than delta.  It defaults to 0 - exact.
+
+This is the antialiasing absorber; [Biloba.ChannelTolerance] overrides it for a single assertion.
+
+Read https://onsi.github.io/biloba/#visual-assertions to learn more about visual assertions
+*/
+func BilobaConfigScreenshotChannelTolerance(delta int) func(*Biloba) {
+	return func(b *Biloba) {
+		b.screenshotTolerance.channel = delta
+	}
+}
+
+/*
 Call ConnectToChrome(GinkgoT()) to connect to a Chrome browser
 
 Returns a *Biloba struct that you use to interact with the browser
@@ -561,6 +602,18 @@ func ConnectToChrome(ginkgoT GinkgoTInterface, options ...BilobaConfigOption) *B
 			b.screenshotsDir = defaultAutomationScreenshotsDir
 		}
 	}
+
+	// Visual-regression baselines resolve the same explicit-option-wins way, but they always land
+	// somewhere: unlike failure screenshots (which a human happily reads inline and never writes), a
+	// baseline has to be a file, whether or not this is an automated run.
+	if b.baselinesDir == "" {
+		if dir := os.Getenv("BILOBA_SCREENSHOT_BASELINES_DIR"); dir != "" {
+			b.baselinesDir = dir
+		} else {
+			b.baselinesDir = defaultScreenshotBaselinesDir
+		}
+	}
+	b.updateScreenshots = b.truthyEnv("BILOBA_UPDATE_SCREENSHOTS")
 
 	if b.ChromeConnection.WebSocketURL == "" {
 		var cc ChromeConnection
@@ -774,6 +827,23 @@ type Biloba struct {
 	progressReportScreenshotHeight int
 	screenshotsDir                 string
 
+	// Visual regression (see HaveScreenshot).  baselinesDir holds the committed baselines and is
+	// resolved in ConnectToChrome; screenshotTolerance is the suite-wide default that a per-assertion
+	// Tolerance/ChannelTolerance overrides; updateScreenshots is BILOBA_UPDATE_SCREENSHOTS.  All three
+	// live on the root tab and are read through b.root.
+	baselinesDir        string
+	screenshotTolerance screenshotTolerance
+	updateScreenshots   bool
+
+	// colorSchemeEmulated records whether this TARGET currently carries an emulated
+	// prefers-color-scheme (see InColorSchemes).  Unlike the freeze stylesheet, which lives in the
+	// page and dies with a navigation, emulation.SetEmulatedMedia is a target-level override that
+	// outlives Navigate - so Prepare() clears it, but only when this flag says there is something to
+	// clear (Prepare runs before every spec and an unconditional CDP round trip there is not free).
+	// It is a pointer so the shallow clone-with-a-flag views (Realistic() and friends) share the
+	// tab's one flag instead of each getting a copy that the tab never sees.
+	colorSchemeEmulated *bool
+
 	// pollTrajectory opts a suite into recording the (elapsed, value) trajectory of polled reads and
 	// attaching the most-recent series on failure (see BilobaConfigPollTrajectory).  Off by default.
 	pollTrajectory bool
@@ -821,6 +891,7 @@ func newBiloba(ginkgoT GinkgoTInterface) *Biloba {
 		pollTrajectory:            true,
 		probes:                    &probeRecorder{},
 		occlusions:                &occlusionRecorder{},
+		colorSchemeEmulated:       new(bool),
 	}
 	return b
 }

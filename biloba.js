@@ -568,14 +568,14 @@ if (!window["_biloba"]) {
         let inViewport = translatable && cx >= 0 && cy >= 0 && cx <= window.innerWidth && cy <= window.innerHeight
         return { x: cx, y: cy, inViewport: inViewport, hittable: hittable, enabled: !n.disabled }
     }
-    // boundingBox reports the first matching element's clip rectangle for page.CaptureScreenshot, in
-    // CSS pixels relative to the TOP-LEVEL document (so x/y already include page scroll).  Like
-    // measurePoint it walks the frameElement chain so an element inside a same-origin iframe is
-    // translated to top-level page coordinates; the final +scrollX/+scrollY converts the top-level
-    // viewport rect into document coordinates.  Errors on a zero-area element.
-    b.boundingBox = one(n => {
+    // docBox reports an element's rectangle in CSS pixels relative to the TOP-LEVEL document (so x/y
+    // already include page scroll).  Like measurePoint it walks the frameElement chain so an element
+    // inside a same-origin iframe is translated to top-level page coordinates; the final
+    // +scrollX/+scrollY converts the top-level viewport rect into document coordinates.  This is the
+    // coordinate space page.CaptureScreenshot clips in, which is why both the element-capture clip and
+    // the visual-regression mask rectangles are measured with it.
+    let docBox = (n) => {
         let rect = n.getBoundingClientRect()
-        if (rect.width <= 0 || rect.height <= 0) return rErr("DOM element has zero area")
         let left = rect.left, top = rect.top, view = n.ownerDocument.defaultView
         try {
             while (view && view.frameElement) {
@@ -586,8 +586,57 @@ if (!window["_biloba"]) {
             }
         } catch (e) { } // cross-origin frame: cannot translate; fall back to local coordinates
         let top0 = view || window
-        return rRes({ x: left + top0.scrollX, y: top + top0.scrollY, width: rect.width, height: rect.height })
+        return { x: left + top0.scrollX, y: top + top0.scrollY, width: rect.width, height: rect.height }
+    }
+    // boundingBox reports the first matching element's clip rectangle for page.CaptureScreenshot.
+    // Errors on a zero-area element.
+    b.boundingBox = one(n => {
+        let box = docBox(n)
+        if (box.width <= 0 || box.height <= 0) return rErr("DOM element has zero area")
+        return rRes(box)
     })
+    // maskBoxes reports EVERY element matching ANY of the given selectors, in the same top-level
+    // document coordinates boundingBox produces, so Go can paint those regions out of a capture before
+    // comparing it against a baseline.  It takes the whole list rather than one selector at a time so
+    // b.Mask(a, b, c) measures all three in ONE atomic read of the page - a capture happens on every
+    // poll attempt, and three round trips could each see a different frame.  A selector that matches
+    // nothing contributes nothing rather than erroring - masking an element that is only sometimes on
+    // the page must not fail the assertion - and zero-area elements are dropped since there is nothing
+    // to paint over.
+    b.maskBoxes = (ss) => rRes(ss.flatMap(s => selEach(s)).map(docBox).filter(x => x.width > 0 && x.height > 0))
+    // freezeRendering pins the page in its deterministic un-animated state for a visual capture: CSS
+    // animations and transitions off, the blinking text caret invisible, smooth scrolling off.  It is
+    // `animation: none` rather than `animation-play-state: paused` on purpose - pausing freezes each
+    // animation at whatever frame it happened to reach, which is the nondeterminism we are trying to
+    // remove, while none resets to the un-animated rendering.  The stylesheet goes into every OPEN
+    // shadow root as well as the document: a `*` rule in a document stylesheet does not apply inside a
+    // shadow root, so without this a web component would keep animating - and keep blinking its caret -
+    // right through the capture.  Closed shadow roots cannot be reached and are left alone by design.
+    // Idempotent, as is unfreezeRendering.
+    let freezeCSS = "*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; scroll-behavior: auto !important; }"
+    // freezeRoots is the document plus every open shadow root under it (collectElements already
+    // descends open roots, so nested components are included).  ShadowRoot inherits getElementById from
+    // DocumentFragment, so the idempotence check below reads the same on either kind of root; only the
+    // append target differs.
+    let freezeRoots = () => [document, ...collectElements(document).filter(el => el.shadowRoot).map(el => el.shadowRoot)]
+    b.freezeRendering = () => {
+        for (let root of freezeRoots()) {
+            if (root.getElementById("_biloba-freeze")) continue
+            let s = document.createElement("style")
+            s.id = "_biloba-freeze"
+            s.textContent = freezeCSS
+            let host = (root === document) ? document.head : root
+            host.appendChild(s)
+        }
+        return rRes(true)
+    }
+    b.unfreezeRendering = () => {
+        for (let root of freezeRoots()) {
+            let s = root.getElementById("_biloba-freeze")
+            if (s) s.remove()
+        }
+        return rRes(true)
+    }
     // scrollToStablePoint backs single-element realistic interactions: it scrolls the element to the
     // viewport center, waits for its box to stop moving (two consecutive animation frames with the
     // same rect - bounded so a perpetually-animating element can't hang), then returns measurePoint.

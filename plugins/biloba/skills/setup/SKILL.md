@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Wire Biloba into your project's Ginkgo suite — go get, the bootstrap file (SynchronizedBeforeSuite + Prepare), installing chrome-headless-shell, choosing high-fidelity vs the fast headless shell, the three bootstrap variations (shared vs per-process browser, reusable vs fresh tab), window size, and running the suite. Use when setting up Biloba in a repo or changing the suite-level Chrome lifecycle.
+description: Wire Biloba into your project's Ginkgo suite — go get, the bootstrap file (SynchronizedBeforeSuite + Prepare), installing chrome-headless-shell, choosing high-fidelity vs the fast headless shell, the three bootstrap variations (shared vs per-process browser, reusable vs fresh tab), window size, the .gitignore split between the throwaway screenshots directory and the committed visual baselines directory, and running the suite. Use when setting up Biloba in a repo or changing the suite-level Chrome lifecycle.
 ---
 
 # Setting up Biloba in your suite
@@ -120,7 +120,21 @@ Per-process browsers and fresh-tab-per-spec can be combined.
 
 `ConnectToChrome(GinkgoT(), ...)` carries Biloba-specific config — mostly failure artifacts (outlines, screenshots, inline images) → `biloba:debug-failures`. Under CI or an AI agent, **failure artifacts need zero config**: Biloba auto-detects and emits a DOM outline plus screenshot files on disk.
 
-## 5. Run it
+## 5. Two directories, and your `.gitignore`
+
+Biloba writes into two directories with opposite lifecycles. Get this right up front:
+
+```
+# .gitignore
+biloba-screenshots/
+```
+
+- **`biloba-screenshots/` — ignore it.** Failure screenshots, plus the `.actual.png`/`.diff.png` artifacts a failed visual assertion produces. Throwaway output, regenerated every run. (`BILOBA_SCREENSHOTS_DIR` / `BilobaConfigScreenshotsToDir(dir)` moves it — on CI, point it at a directory you upload as a build artifact.)
+- **`biloba-baselines/` — commit it.** The reference PNGs `b.HaveScreenshot` compares against: few, small, reviewed. Only created once you write a visual assertion. (`BILOBA_SCREENSHOT_BASELINES_DIR` / `BilobaConfigScreenshotBaselinesDir(dir)` moves it.) → `biloba:visual-assertions`
+
+Committing the artifacts directory is how a repo's history ends up mostly rejected PNGs; gitignoring the baselines makes every visual assertion fail on a fresh clone.
+
+## 6. Run it
 
 ```bash
 ginkgo -r -p                 # parallel — Biloba is built for this

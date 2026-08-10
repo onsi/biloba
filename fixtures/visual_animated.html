@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en-US">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Visual Animation Testpage</title>
+
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 300px;
+            height: 200px;
+            background-color: #ffffff;
+        }
+
+        /* #animated renders red while its animation is running and green once the freeze stylesheet
+           sets `animation: none` - both keyframes are the same colour so the running state is itself
+           deterministic, which makes the two renderings a stable pair to assert on. */
+        #animated {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 120px;
+            height: 80px;
+            background-color: #00aa00;
+            animation: reddish 100000s linear forwards;
+        }
+
+        @keyframes reddish {
+            from { background-color: #aa0000; }
+            to   { background-color: #aa0000; }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="animated"></div>
+</body>
+
+</html>

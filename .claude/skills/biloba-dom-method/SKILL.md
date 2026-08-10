@@ -1,6 +1,6 @@
 ---
 name: biloba-dom-method
-description: How to add a new DOM interaction or matcher to Biloba (a browser-action method like Click/SetValue/HaveProperty). Use when adding or modifying a browser-side primitive that touches biloba.js and the Go wrapper, or when implementing the dual immediate/matcher API. Covers the JS bridge, the gcustom matcher pattern, capturable value matchers (*ValueMatcher/.Capture) and the getters' optional decode pointer, missing-element-is-an-error vs silent-retry, first-vs-all (Each) variants, tests, and docs.
+description: How to add a new DOM interaction or matcher to Biloba (a browser-action method like Click/SetValue/HaveProperty). Use when adding or modifying a browser-side primitive that touches biloba.js and the Go wrapper, or when implementing the dual immediate/matcher API. Covers the JS bridge, the gcustom matcher pattern (including a matcher whose failure message has a side effect, which embeds CustomGomegaMatcher and overrides FailureMessage), capturable value matchers (*ValueMatcher/.Capture) and the getters' optional decode pointer, missing-element-is-an-error vs silent-retry, when to return gomega.StopTrying, first-vs-all (Each) variants, tests, and docs.
 ---
 
 # Adding a DOM method/matcher to Biloba
@@ -48,6 +48,23 @@ func (b *Biloba) BeVisible() types.GomegaMatcher {
 }
 ```
 For matchers that wrap a sub-matcher or need a rich failure message, stash state in a `data` map and use `.WithTemplate(...)` (see `HaveCount`, `HaveProperty`, `HaveClass`). Use `matcherOrEqual(expected)` to accept either a Gomega matcher or a literal value.
+
+**A failure message with a SIDE EFFECT can't be a template.** A template renders state; it cannot *produce* state. When rendering the message has to do work — `HaveScreenshot` writes the `.actual.png` and `.diff.png` artifacts as it explains the comparison — the matcher stops being a plain `gcustom.MakeMatcher(...)` value and becomes a struct that **embeds `gcustom.CustomGomegaMatcher`** (so `Match` and the negated form come for free) and **overrides `FailureMessage`** (see `screenshotMatcher` in `visual.go`):
+
+```go
+type screenshotMatcher struct {
+	gcustom.CustomGomegaMatcher
+	// …state the failing attempt left behind…
+}
+
+func (m *screenshotMatcher) match(actual any) (bool, error) { /* …stash the failing comparison… */ }
+func (m *screenshotMatcher) FailureMessage(actual any) string { /* …write artifacts, then render… */ }
+
+m := &screenshotMatcher{...}
+m.CustomGomegaMatcher = gcustom.MakeMatcher(m.match)
+```
+
+The reason to bother is that `FailureMessage` runs **once**, at the deadline, while `Match` runs on every poll attempt — so the disk write happens for the one comparison that actually failed rather than for each of the dozens that merely hadn't settled yet. Keep the side effect best-effort and quiet (a failing spec should report the assertion, not a disk error) and stash whatever the message needs on the struct during `Match`.
 
 **Decide what a missing element means for your matcher.** `(false, nil)` is "not ready, retry" — which is right under `Eventually`, but it also means `ShouldNot(yourMatcher)` **passes vacuously** against a page that never rendered the element at all. When the matcher's whole point is that the element is there and has some quality, make a genuine not-found an **error** — from the JS side (`one(...)`, or a hand-rolled `sel()` + `notFound(...)` for a two-selector probe, as the geometry handlers do) or from the Go side (`notFoundSelectorError(selector)`, which is how the existence-only `HaveProperty` restores the error its `poll(...)`-backed handler swallows). Make it a deliberate choice, not a default.
 
@@ -152,6 +169,7 @@ That sharp edge is now **self-explaining**, and a new two-axis getter must keep 
 Keep the not-found/ready/error distinction inside one round-trip so polling stays clean:
 - `(false, nil)` = **not ready** → `Eventually` retries.
 - `(false, err)` = **genuine JS error** → Gomega does NOT abort the poll; it retries and surfaces the error inside the "Timed out after…" message at the deadline. True fail-fast on a real error happens only under `Immediate()` (which uses `Expect` = single evaluation). Do **not** special-case errors to abort the poll — that re-introduces the flake.
+- `(false, gomega.StopTrying(msg))` = **a condition that can never come true** → stop the poll now and report `msg`. Reserve it for exactly that: a state no amount of waiting can change. The reference cases are `HaveScreenshot`'s **missing baseline file** (the file will not appear because the spec kept asking) and an undecodable PNG, alongside `decodeCapture`'s wrong-target-type. Waiting out a full timeout to say "there is no baseline" would bury the one instruction the user needs. A page that hasn't settled yet is *never* one of these — keep it `(false, nil)`.
 
 ### The four-bucket model and `guardConfig`
 

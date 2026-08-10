@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en-US">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Visual Settling Testpage</title>
+
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 400px;
+            height: 300px;
+            background-color: #ffffff;
+        }
+
+        #settling {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 160px;
+            height: 100px;
+            background-color: #cc0000;
+        }
+
+        #settling.settled {
+            background-color: #00aa44;
+        }
+
+        #churn {
+            position: absolute;
+            top: 20px;
+            left: 220px;
+            width: 140px;
+            height: 100px;
+            background-color: #000000;
+        }
+
+        #periodic {
+            position: absolute;
+            top: 160px;
+            left: 240px;
+            width: 120px;
+            height: 60px;
+            background-color: #000000;
+        }
+
+        #counter-card {
+            position: absolute;
+            top: 160px;
+            left: 20px;
+            width: 200px;
+            height: 60px;
+            background-color: #f0f0f0;
+        }
+
+        #counter {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            width: 120px;
+            height: 24px;
+            overflow: hidden;
+            font: 16px/24px monospace;
+            color: #000000;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="settling"></div>
+    <div id="churn"></div>
+    <div id="periodic"></div>
+    <div id="counter-card">
+        <div id="counter">0</div>
+    </div>
+
+    <script>
+        var settleDelay = 600
+        var settleTimer = null
+
+        // resetSettling(hold) puts #settling back in its unsettled state.  With hold it stays there
+        // forever, so a spec can assert on the unsettled rendering without racing a timer.
+        function resetSettling(hold) {
+            if (settleTimer) clearTimeout(settleTimer)
+            settleTimer = null
+            document.getElementById("settling").classList.remove("settled")
+            if (!hold) {
+                settleTimer = setTimeout(function () {
+                    document.getElementById("settling").classList.add("settled")
+                }, settleDelay)
+            }
+        }
+
+        var churnTimer = null
+
+        // churnFor(duration) ramps #churn through greys every 40ms for duration milliseconds and then
+        // leaves it on a final colour and marks it .settled.  Two things matter here.  The repaints
+        // are driven from JS rather than a CSS animation because the capture freeze turns CSS
+        // animations off, and this fixture exists to keep changing under a capture.  And the ramp is
+        // monotonic rather than a short cycle of colours, so no two moments during the churn ever
+        // render the same grey: a cycle can alias with the interval between two captures and look
+        // settled when it is not.
+        function churnFor(duration) {
+            if (churnTimer) clearInterval(churnTimer)
+            var el = document.getElementById("churn"), start = Date.now()
+            var paint = function (v) { el.style.backgroundColor = "rgb(" + v + "," + v + "," + v + ")" }
+            el.classList.remove("settled")
+            paint(0)
+            churnTimer = setInterval(function () {
+                var elapsed = Date.now() - start
+                if (elapsed >= duration) {
+                    clearInterval(churnTimer)
+                    churnTimer = null
+                    el.style.backgroundColor = "#0055aa"
+                    el.classList.add("settled")
+                    return
+                }
+                paint(Math.round(250 * elapsed / duration))
+            }, 40)
+        }
+
+        var periodicTimer = null
+
+        // startPeriodicChurn() cycles #periodic through four shades every 40ms, so it repeats exactly
+        // every 160ms and never stops - which is roughly what a fixed 100ms capture interval samples
+        // at once the capture round trip is counted (see screenshotSettleStreak in visual.go for why
+        // the real schedule grows instead).  This is the page that has to keep failing to settle.
+        // Started on demand - nothing else needs it running.
+        function startPeriodicChurn() {
+            if (periodicTimer) return
+            var el = document.getElementById("periodic"), i = 0
+            var shades = ["#000000", "#444444", "#888888", "#cccccc"]
+            periodicTimer = setInterval(function () {
+                el.style.backgroundColor = shades[(i++) % shades.length]
+            }, 40)
+        }
+
+        var ticks = 0
+        setInterval(function () {
+            ticks++
+            document.getElementById("counter").textContent = String(ticks)
+        }, 30)
+
+        resetSettling(false)
+    </script>
+</body>
+
+</html>

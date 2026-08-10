@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en-US">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Visual Sampling Testpage</title>
+
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 300px;
+            height: 200px;
+            background-color: #ffffff;
+        }
+
+        #adversary {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 160px;
+            height: 100px;
+            background-color: #3366aa;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="adversary"></div>
+
+    <script>
+        // Biloba injects <style id="_biloba-freeze"> into the head for the duration of every capture,
+        // so counting those insertions counts captures.  That lets this page react to the captures
+        // themselves, which is what makes the two settle-schedule assertions in visual_test.go
+        // deterministic rather than a question of this machine's capture cadence.  See
+        // screenshotSettleStreak in visual.go for the schedule they are checking.
+        window.captureTimes = []
+        var captures = 0, wasFrozen = false
+
+        new MutationObserver(function () {
+            var frozen = !!document.getElementById("_biloba-freeze")
+            if (frozen === wasFrozen) return // the freeze coming back out again, or unrelated head churn
+            wasFrozen = frozen
+            if (!frozen) return
+            captures++
+            window.captureTimes.push(Date.now())
+            // Two captures out of every three render the same: a settle check that stops at two
+            // matching captures declares this page settled, one that wants three never does.
+            document.getElementById("adversary").style.backgroundColor = (captures % 3 === 0) ? "#aa3300" : "#3366aa"
+        }).observe(document.head, { childList: true })
+    </script>
+</body>
+
+</html>

@@ -1,6 +1,6 @@
 ---
 name: overview
-description: The Biloba mental model for writing browser tests in your own Ginkgo/Gomega suite — the three principles and the consequences they have for how you write specs (pragmatic simulation, poll-by-default, drop-to-chromedp). Use this first when you start working with Biloba in a project, or to decide whether Biloba fits a testing task. Routes to the other biloba:* skills.
+description: The Biloba mental model for writing browser tests in your own Ginkgo/Gomega suite — the three principles and the consequences they have for how you write specs (pragmatic simulation, poll-by-default, drop-to-chromedp, visual regression against committed baselines). Use this first when you start working with Biloba in a project, or to decide whether Biloba fits a testing task. Routes to the other biloba:* skills.
 ---
 
 # Biloba: the mental model
@@ -24,6 +24,7 @@ Biloba is a browser-testing framework for Go, built on [chromedp](https://github
 **3. Conciseness via Ginkgo and Gomega.**
 
 - **Most methods don't return errors** — errors become Ginkgo test failures for you.
+- **Appearance is assertable too.** `Eventually(sel).Should(b.HaveScreenshot("name"))` compares the element (or the whole tab) against a committed baseline PNG, re-capturing on every poll attempt so the comparison waits out fonts and reflow. A missing baseline fails loudly rather than being written and passed. → `biloba:visual-assertions`
 - **Biloba polls by default.** A fully-applied call (`b.Click("#go")`, `b.GetProperty(sel, "href")`) polls until the element is ready, acts/reads once, then stops. The under-applied form returns a Gomega matcher *you* wrap in `Eventually`/`Consistently`. This dual API is the core pattern — learn it in `biloba:write-tests`. (`b.Immediate()` opts back into act-once/fail-fast; rarely needed.)
 - `console.log` streams to the `GinkgoWriter`; a failing `console.assert` fails the spec.
 
@@ -70,6 +71,7 @@ Use it for geolocation, cross-origin frames, or any CDP feature without a native
 | Authoring specs (dual API, locators, interactions, hermetic tests, multi-tab) | `biloba:write-tests` |
 | Looking up a method or matcher | `biloba:api` |
 | Realistic interactions (occlusion, `:hover`, drag, scroll, touch) | `biloba:realistic-mode` |
+| Asserting appearance / visual regression baselines | `biloba:visual-assertions` |
 | Building XPath selectors | `biloba:xpath` |
 | Testing a page/app you haven't seen | `biloba:explore-unfamiliar-page` |
 | A spec failed and you want to see why | `biloba:debug-failures` |

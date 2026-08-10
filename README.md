@@ -94,6 +94,18 @@ Describe("a simple chat app", func() {
 		Eventually(b.ByRole("button").WithName("React").Within(last)).Should(tabSally.BeVisible())
 	})
 
+	It("renders a message bubble exactly as designed", func() {
+		tabSally.SetValue("#input", "Hey Jane")
+		tabSally.Click(b.ByRole("button").WithName("Send"))
+
+		// compare against a committed baseline — masking the volatile timestamp,
+		// in both themes.  A failure says what moved and where, in words.
+		Eventually(b.ByRole("listitem").Within("#conversation").Last()).Should(
+			tabSally.HaveScreenshot("message-bubble",
+				tabSally.Mask(".timestamp"),
+				tabSally.InColorSchemes("light", "dark")))
+	})
+
 	It("shows an error when a message fails to send", func() {
 		tabSally.AbortRequest(ContainSubstring("/messages")) // make the send fail, hermetically
 		tabSally.SetValue("#input", "Hey Jane")
@@ -166,6 +178,8 @@ biloba-fast runs the suite **~3.2× faster in parallel / ~4.0× serial** than Pl
 Biloba automatically captures and emits screenshots and any JavaScript console output when tests fail.  It even hooks into Ginkgo's progress emitter infrastructure so `^T`/`SIGNIFO` on a mac (`SIGUSR2` on linux) will spit out a screenshot.
 
 Screenshots are great for humans but won't show up in most CI systems and don't help AI agents.  Biloba autodetects when it's being run in CI or by an agent and spits out DOM outlines and puts screenshot files on disk instead automatically.
+
+The same instinct shapes `b.HaveScreenshot`, Biloba's visual-regression matcher: when a comparison against a committed baseline fails, Biloba writes the usual `.actual.png`/`.diff.png` pair *and* tells you in words what changed — how many pixels, where the changed boxes are, and whether the shape of the change reads as one region, a uniform shift, or something scattered across every text run.  Those three are different bugs, and you can tell them apart without opening an image.
 
 ### Using Biloba with Claude Code
 

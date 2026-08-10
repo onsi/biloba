@@ -1,6 +1,6 @@
 ---
 name: write-tests
-description: Author good Biloba specs in your own Ginkgo/Gomega suite — the dual immediate/matcher API (act now vs. return a matcher you poll with Eventually), capturing a matcher's observed value with .Capture instead of asserting-then-re-reading, first-vs-all naming, the navigate-then-readiness-anchor shape (gate on the DOM, then read GetLocation), selecting elements (CSS targeting stable hooks as the default, semantic role/text/label locators, anchoring a locator scope so a negative assertion isn't vacuous, the >>> piercing combinator, XPath), the interaction vocabulary (click variants, drag, scroll, tap, text selection), realistic mode for occlusion/hover smoke tests, hermetic tests via request stubbing/aborting/modifying/holding, the GetJSValue app-state barrier (and when it gates nothing), multi-tab flows, and seeding state. Use when writing or reviewing Biloba browser tests.
+description: Author good Biloba specs in your own Ginkgo/Gomega suite — the dual immediate/matcher API (act now vs. return a matcher you poll with Eventually), capturing a matcher's observed value with .Capture instead of asserting-then-re-reading, first-vs-all naming, the navigate-then-readiness-anchor shape (gate on the DOM, then read GetLocation), selecting elements (CSS targeting stable hooks as the default, semantic role/text/label locators, anchoring a locator scope so a negative assertion isn't vacuous, the >>> piercing combinator, XPath), the interaction vocabulary (click variants, drag, scroll, tap, text selection), realistic mode for occlusion/hover smoke tests, visual regression with b.HaveScreenshot against a committed baseline, hermetic tests via request stubbing/aborting/modifying/holding, the GetJSValue app-state barrier (and when it gates nothing), multi-tab flows, and seeding state. Use when writing or reviewing Biloba browser tests.
 ---
 
 # Writing Biloba specs
@@ -104,6 +104,7 @@ Eventually("#dashboard-root").Should(b.Exist())     // proves the navigation lan
 | computed style | `b.HaveComputedStyle(prop, …)` / `b.HaveComputedStyleNumeric(prop, …)`; color across syntaxes `b.HaveComputedStyle(prop, b.MatchColor("var(--tok)"))`; getters `b.GetComputedStyle`/`GetComputedStyleNumeric`/`NormalizeColor` |
 | scroll a target into view (instant) | `b.ScrollIntoView(sel)` — options `b.WithinScroller(container)`, `b.AtTopOffset(px)` |
 | an arbitrary JS expression | `Eventually(expr).Should(b.EvaluateTo(matcher))` |
+| it still *looks* like this | `b.HaveScreenshot("name")` against a committed baseline → `biloba:visual-assertions` |
 
 - `EvaluateTo`/`Run` decode JS numbers to **float64** — `BeNumerically("==", n)`, not `Equal(intLiteral)`.
 - **`BePrecededBy`/`BeFollowedBy` read subject-first**: `Eventually(X).Should(b.BeFollowedBy(Y))` ⇔ X comes **BEFORE** Y. A backwards one passes silently — also assert the inverse doesn't hold.
@@ -220,6 +221,19 @@ Eventually("#passage").Should(b.SelectRange(4, 9))
 ```
 
 Read back what's selected: `Eventually("window.getSelection().toString()").Should(b.EvaluateTo("quick"))`.
+
+## Asserting appearance → `biloba:visual-assertions`
+
+When the contract really is "it still looks like this" (a chart, a themed rail, a print layout), `b.HaveScreenshot(name)` compares the subject against a **committed** baseline PNG. Always under `Eventually` — every attempt re-captures and re-compares, so the poll waits out font loading, a `ResizeObserver`, and rAF settling.
+
+```go
+Eventually(".chart").WithTimeout(10*time.Second).Should(b.HaveScreenshot("revenue-chart"))
+Eventually(b).Should(b.HaveScreenshot("home", b.Mask(".relative-timestamp"), b.InColorSchemes("light", "dark")))
+```
+
+The **first run fails** — Biloba never writes a missing baseline and passes. Look at the `.actual.png` it wrote, then create the baseline with `BILOBA_UPDATE_SCREENSHOTS=1 ginkgo -r -p`. Baselines go in `./biloba-baselines` (commit them); the `.actual.png`/`.diff.png` a failure writes are gitignored artifacts. Options: `b.Mask`, `b.Tolerance`, `b.ChannelTolerance`, `b.Animated`, `b.InColorSchemes`. Animations, transitions, and the caret are frozen for you (inside open shadow roots too), and an update run settles the page before writing; scrollbars, cross-platform font rendering, and closed shadow roots are not covered — details in `biloba:visual-assertions`.
+
+Keep it a wide net used narrowly: it fails on every change, intended or not. Text, counts, and state still belong to the ordinary matchers.
 
 ## Realistic mode — a handful of smoke tests → `biloba:realistic-mode`
 
