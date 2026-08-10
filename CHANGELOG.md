@@ -1,3 +1,10 @@
+## 0.15.0
+
+### Features
+
+- Visual regression: `Eventually(sel).Should(b.HaveScreenshot("name"))` (or `Eventually(b).Should(...)` for the whole page) compares the subject against a committed baseline on every poll attempt, so the poll waits out fonts, `ResizeObserver`, and rAF settling.  Configure it with `b.Mask(...)`, `b.Tolerance(...)`, `b.ChannelTolerance(...)`, `b.Animated()`, and `b.InColorSchemes(...)`; set suite-wide defaults with `BilobaConfigScreenshotBaselinesDir`, `BilobaConfigScreenshotTolerance`, and `BilobaConfigScreenshotChannelTolerance`.  Every capture freezes CSS animations, transitions, the text caret, and smooth scrolling — in the document and in every open shadow root (`b.Animated()` opts out).  Baselines live in `./biloba-baselines` (`BILOBA_SCREENSHOT_BASELINES_DIR`) and are meant to be committed; a missing one fails loudly and tells you to re-run with `BILOBA_UPDATE_SCREENSHOTS=1`, which also reports in words what an update changed.  Update mode captures until three in a row come out the same before writing, so a baseline isn't caught mid font-load; if the page never settles it writes the last capture and warns that the baseline will fail on every later run.  A failing comparison writes the gitignored `.actual.png`/`.diff.png` next to the failure screenshots and says what moved, where, and by how much — the "uniform shift" verdict is withheld on captures too thin for the offset search to mean anything.  `BILOBA_UPDATE_SCREENSHOTS` accepts `1/t/true/y/yes/on` (and `0/f/false/n/no/off`) and warns on a value it doesn't recognise instead of silently doing nothing.  A `prefers-color-scheme` override that fails to clear is reported, and `b.Prepare()` clears the leftover.
+- `AllowMissing` (and `Capture`) can now keep "absent" and "present but empty" apart: decode into a pointer to a pointer (`var key *string; b.GetAttribute(sel, b.AllowMissing("data-key"), &key)`) and absent leaves it nil while present allocates.  This always worked; it is now guaranteed and documented.
+
 ## 0.14.1
 
 ## Features
