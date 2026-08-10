@@ -1,3 +1,19 @@
+## 0.15.1
+
+## Features
+
+- A failed `b.HaveScreenshot` now draws its diff image inline in the terminal, underneath the written diagnosis, when a human is driving a terminal that renders inline images.  It is gated by the same `BilobaConfigInlineScreenshots` / `BILOBA_INLINE_SCREENSHOTS` knob as the failure screenshots, so CI and AI agents still get words and file paths.  The written diagnosis - what changed, where, and by how much - is printed either way, and only the diff is drawn: the baseline and actual stay as paths.
+
+- A capture no longer disturbs the page it is capturing unless it has to.  Reaching content outside the viewport means expanding the viewport, and a responsive page observes that - `matchMedia` flips, `resize` fires, and an app that re-renders on its breakpoint can unmount the very subtree being captured, so the spec fails on the line *after* the capture, polling for an element its own capture destroyed.  Biloba now skips the expansion for an element already fully in view, and for a full-page capture of a document that fits the viewport (the app-shell case).  The clip is interpreted in page coordinates either way, so the pixels are unchanged.  When the expansion is unavoidable and the subject does disappear across the capture, Biloba says so: `the element matching X was present before this capture and gone after it`.
+
+- An element capture that an inner scroll container has clipped out of existence is no longer silently blank.  An element capture works below the *document* fold, but a subject scrolled outside an inner `overflow: auto` pane was never painted and comes back as flat container background - and a blank capture is stable, so as a baseline it would pass forever while comparing nothing.  `b.HaveScreenshot` now refuses that comparison (and refuses to write the baseline under `BILOBA_UPDATE_SCREENSHOTS`), naming the clipping ancestor and the `b.ScrollIntoView(..., b.WithinScroller(...))` that fixes it.  A partly clipped subject warns and still compares; `b.CaptureScreenshotOf` warns rather than failing.
+
+- Every visual capture now awaits `document.fonts.ready`.  Update mode's settle defeats anything periodic but cannot see a one-shot change that has not started - three captures agree while a cold `display: swap` fetch is still in flight, and the swap lands afterwards.  The poll protects the comparison, not the write, and this closes the common case on the write path.
+
+- Two colour schemes in one `b.InColorSchemes` assertion that capture byte-identical images now produce a warning.  `prefers-color-scheme` emulation only reaches an app while that app is following the system scheme, so a suite with a pinned theme writes the same pixels to `<name>-light.png` and `<name>-dark.png`: both baselines look right, both comparisons pass, and the dark assertion cannot fail.
+
+- The visual diagnosis now reads a low `max channel delta` as a verdict rather than leaving it as a statistic: `every differing pixel differs by <= 3 — a rasterisation or compositing difference, not a content change`.  That distinction decides the whole response to a failure - absorb it with `b.ChannelTolerance`, or go find what moved.
+
 ## 0.15.0
 
 ### Features
