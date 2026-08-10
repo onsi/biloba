@@ -3649,6 +3649,15 @@ Eventually(".card").Should(SatisfyAll(b.BeInViewport(b.Fully()), b.HaveScreensho
 
 Baselines are read from `./biloba-baselines` as `<name>.png`.  The name may contain `/` — `b.HaveScreenshot("checkout/step-2")` looks for `biloba-baselines/checkout/step-2.png` — so a large suite can organize its baselines into folders.
 
+**What this catches that nothing else does.**  Every other assertion in this document reads something the page reports about itself: text content, an attribute, a property, a bounding box.  A visual assertion reads what the page actually drew.  That difference only matters for one class of bug — the ones where everything you can query is correct and the rendering still isn't:
+
+- **Text clipped by a box that was measured too early.**  A container sized to fit its label before the web font arrived keeps the fallback font's measurements.  The DOM holds the whole string, `innerText` returns the whole string, and the last few characters are cut off on screen.
+- **Content that isn't in the DOM at all.**  A `<canvas>`, a WebGL scene, a chart library that rasterizes rather than emitting nodes.  There is nothing to select.
+- **Colour and contrast.**  A cascade change that recolours text to within a shade of its background leaves every selector, class, and computed-style read you'd think to write looking healthy.
+- **Layering.**  An element painted over another by a stacking-context change: both are present, both have real boxes, and one of them can't be read.
+
+A suite made entirely of DOM assertions passes all of these, because none of them move a selector, a property, or a box.  That's the argument for spending a baseline on something — not "assert everything visually", but "assert visually the places where the pixels are the only place the bug can show up."  Everywhere else, the ordinary matchers are cheaper to write, cheaper to read, and fail with a better message.
+
 #### The comparison is what polls
 
 Note the `Eventually`.  `HaveScreenshot` returns a matcher you poll, and *every attempt captures the subject afresh and compares it again*.

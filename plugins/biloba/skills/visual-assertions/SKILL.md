@@ -206,6 +206,7 @@ The override is **target-level and survives navigation**, so a dropped teardown 
 ## Pitfalls
 
 - **Don't over-use it.** A visual assertion is a wide net: it fails on every change, intended or not. Reach for it where appearance *is* the contract (a chart, a themed rail, a print layout) and keep asserting text/counts/state with the ordinary matchers.
+- **Do reach for it where the pixels are the only witness.** Every other matcher reads what the page reports about itself; this one reads what it drew. The gap between those is a real class of bug: text clipped by a box measured before the font loaded (the DOM has the whole string), content that isn't in the DOM at all (`<canvas>`, WebGL), a recolour to within a shade of the background, an element painted over another by a stacking-context change. A DOM-only suite passes all of them.
 - **Whole-page baselines are brittle** — any change anywhere fails them all. Prefer element captures.
 - **A `uniform shift` failure is not a re-baseline.** Something above the subject moved; fix that.
 - The matcher does no scrolling and no viewport changes: an element capture is clipped to the element's box and works below the **document** fold. It does *not* reach inside an inner `overflow: auto` pane — see the determinism table above.
