@@ -3601,6 +3601,7 @@ When inline images are disabled:
 
 - The inline-image escape sequence is **never emitted**, eliminating ~70 KB of unreadable output per tab per failure.
 - If `BilobaConfigScreenshotsToDir` is configured, the file path is still printed and included in the failure report so that tools that can render PNG files (e.g. Claude Code's `Read` tool) can show the screenshot.
+- A failed [visual assertion](#visual-assertions) stops drawing its diff image, but still writes the `.actual.png` and `.diff.png` files and still prints its written diagnosis — what changed, where, and by how much.
 - The DOM text outline (see [Outline](#outline)), if you've enabled it, is attached on failure regardless of this setting.
 
 #### Failure artifacts: humans, CI, and agents
@@ -3667,7 +3668,7 @@ Since you own the poll, configuring the matcher itself (`b.WithTimeout(d).HaveSc
 Two kinds of PNG come out of this feature, and they want opposite things:
 
 - **Baselines** are the reference images.  They are few, small, reviewed, and **checked into git**.  They live in `./biloba-baselines`.
-- **Artifacts** are what a *failure* produces: `<name>.actual.png` (what Biloba just saw) and `<name>.diff.png` (that same image, washed out, with every differing pixel painted magenta).  They are throwaway and **gitignored**.  They ride along with the failure screenshots in `./biloba-screenshots`, or wherever `BilobaConfigScreenshotsToDir`/`BILOBA_SCREENSHOTS_DIR` points.  Unlike a failure screenshot — which an interactive human gets inline and never on disk — these always go to a file, so a failing comparison creates that directory whether or not you're running under automation.
+- **Artifacts** are what a *failure* produces: `<name>.actual.png` (what Biloba just saw) and `<name>.diff.png` (that same image, washed out, with every differing pixel painted magenta).  They are throwaway and **gitignored**.  They ride along with the failure screenshots in `./biloba-screenshots`, or wherever `BilobaConfigScreenshotsToDir`/`BILOBA_SCREENSHOTS_DIR` points.  Unlike a failure screenshot — which an interactive human gets inline and never on disk — these always go to a file, so a failing comparison creates that directory whether or not you're running under automation.  The diff is *also* drawn inline for a human at a capable terminal; see [Reading the diagnosis](#reading-the-diagnosis).
 
 Conflating the two is how a repository ends up with a history that is mostly rejected PNGs.  So ignore the artifacts directory:
 
@@ -3767,6 +3768,8 @@ screenshot "home-desktop" differs from baseline
   actual:   /Users/you/app/biloba-screenshots/home-desktop.actual.png
   diff:     /Users/you/app/biloba-screenshots/home-desktop.diff.png
 ```
+
+If you're a human at a terminal that can render images, the diff is drawn right below that block, so you can see what changed without opening anything.  It's the same knob as every other inline image — `BilobaConfigInlineScreenshots` and `BILOBA_INLINE_SCREENSHOTS`, see [Inline image gating](#inline-image-gating) — so under CI or an AI agent the drawing is skipped.  The words above are printed either way; they're the half a CI log and an agent can read.  Only the diff is drawn: the baseline and the actual stay as paths, since three full-page PNGs in one failure message is a lot of terminal to scroll past.
 
 The images are right there when you want them.  But the *shape* of the change usually tells you what happened before you open anything, and that's what the middle lines are for:
 

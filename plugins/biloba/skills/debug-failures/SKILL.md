@@ -65,6 +65,8 @@ screenshot "home-desktop" differs from baseline
 
 `unchanged: everything below y=N` is the complement and usually the faster read. `max channel delta` counts every pixel, including those the channel tolerance absorbed. A **missing** baseline is a different failure — it says to re-run with `BILOBA_UPDATE_SCREENSHOTS=1`; never script your way past it.
 
+`Read` the `.diff.png` when the words aren't enough. A human at a terminal that renders images also gets it drawn under the diagnosis; you get the path instead, since inline images are off under an agent.
+
 **"never settled" — printed during an update run, not on a failure.** Update mode captures until three in a row match before writing. When that never happens it writes the last capture anyway and prints:
 
 ```

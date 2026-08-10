@@ -286,42 +286,51 @@ func (b *Biloba) CaptureScreenshotOfToFile(selector any, path string) string {
 }
 
 func (b *Biloba) asImgCat(img []byte) string {
-	buf := &bytes.Buffer{}
-	buf.WriteString("\033]1337;File=;inline=1:")
-	encoder := base64.NewEncoder(base64.StdEncoding, buf)
-	_, err := encoder.Write(img)
-	if err != nil {
-		b.gt.Fatalf("Failed to capture screenshot:\n%s", err.Error())
-	}
-	encoder.Close()
-	buf.WriteString("\033\\")
+	return b.asInlineImage(img, inlineImageITerm)
+}
 
-	return buf.String()
+// encodeInlineImage encodes a PNG into the escape sequence for the given terminal inline-image
+// protocol, returning "" for inlineImageNone.  It reports an encoding error instead of failing the
+// test: asInlineImage is the caller that turns the error into a Fatalf, but a failure message being
+// rendered (see visual.go) cannot do that - it runs while a spec is already failing, and during a
+// progress report it runs on Ginkgo's goroutine.
+func encodeInlineImage(img []byte, proto inlineImageProtocol) (string, error) {
+	buf := &bytes.Buffer{}
+	switch proto {
+	case inlineImageITerm:
+		buf.WriteString("\033]1337;File=;inline=1:")
+		encoder := base64.NewEncoder(base64.StdEncoding, buf)
+		if _, err := encoder.Write(img); err != nil {
+			return "", err
+		}
+		encoder.Close()
+		buf.WriteString("\033\\")
+	case inlineImageKitty:
+		if err := rasterm.KittyCopyPNGInline(buf, bytes.NewReader(img), rasterm.KittyImgOpts{}); err != nil {
+			return "", err
+		}
+	case inlineImageSixel:
+		paletted, err := pngToPaletted(img)
+		if err != nil {
+			return "", err
+		}
+		if err := rasterm.SixelWriteImage(buf, paletted); err != nil {
+			return "", err
+		}
+	default:
+		return "", nil
+	}
+	return buf.String(), nil
 }
 
 // asInlineImage encodes a PNG screenshot into the escape sequence for the given
 // terminal inline-image protocol.  Returns "" for inlineImageNone.
 func (b *Biloba) asInlineImage(img []byte, proto inlineImageProtocol) string {
-	buf := &bytes.Buffer{}
-	switch proto {
-	case inlineImageITerm:
-		return b.asImgCat(img)
-	case inlineImageKitty:
-		if err := rasterm.KittyCopyPNGInline(buf, bytes.NewReader(img), rasterm.KittyImgOpts{}); err != nil {
-			b.gt.Fatalf("Failed to encode kitty screenshot:\n%s", err.Error())
-		}
-	case inlineImageSixel:
-		paletted, err := pngToPaletted(img)
-		if err != nil {
-			b.gt.Fatalf("Failed to encode sixel screenshot:\n%s", err.Error())
-		}
-		if err := rasterm.SixelWriteImage(buf, paletted); err != nil {
-			b.gt.Fatalf("Failed to encode sixel screenshot:\n%s", err.Error())
-		}
-	default:
-		return ""
+	encoded, err := encodeInlineImage(img, proto)
+	if err != nil {
+		b.gt.Fatalf("Failed to encode inline screenshot:\n%s", err.Error())
 	}
-	return buf.String()
+	return encoded
 }
 
 // pngToPaletted decodes a PNG and dithers it down to a 256-color paletted image,

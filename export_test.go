@@ -138,6 +138,16 @@ func (b *Biloba) SetVisualDirsForTest(baselinesDir string, screenshotsDir string
 	return func() { b.root.baselinesDir, b.root.screenshotsDir = prevBaselines, prevScreenshots }
 }
 
+// SetInlineScreenshotsForTest flips the shared root's inline-screenshots flag - the one
+// BilobaConfigInlineScreenshots sets and automation detection clears - so visual_test.go can assert
+// both sides of the human/agent gate on the diff image without standing up a second Biloba.  Returns
+// a restore func.
+func (b *Biloba) SetInlineScreenshotsForTest(enabled bool) func() {
+	prev := b.root.inlineScreenshots
+	b.root.inlineScreenshots = enabled
+	return func() { b.root.inlineScreenshots = prev }
+}
+
 // SetUpdateScreenshotsForTest flips the BILOBA_UPDATE_SCREENSHOTS behavior for visual_test.go.
 // Returns a restore func.
 func (b *Biloba) SetUpdateScreenshotsForTest(update bool) func() {

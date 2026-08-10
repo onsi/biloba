@@ -495,7 +495,9 @@ func BilobaConfigProgressReportScreenshotSize(width, height int) func(*Biloba) {
 /*
 Pass BilobaConfigInlineScreenshots to [ConnectToChrome] to control whether Biloba emits inline-image escape sequences in failure and progress-report output.
 
-It is on by default (subject to terminal support) when a human is driving, and off under automation (CI or an AI agent).  BilobaConfigInlineScreenshots(false) suppresses the inline blob explicitly; BilobaConfigInlineScreenshots() forces it on even under automation.  When inline images are off, Biloba still captures screenshots and writes them to the configured directory (if any); the file path is printed to test output.
+It governs both the on-failure/progress-report screenshots and the diff image [Biloba.HaveScreenshot] draws under a failed visual comparison.
+
+It is on by default (subject to terminal support) when a human is driving, and off under automation (CI or an AI agent).  BilobaConfigInlineScreenshots(false) suppresses the inline blob explicitly; BilobaConfigInlineScreenshots() forces it on even under automation.  When inline images are off, Biloba still captures screenshots and writes them to the configured directory (if any); the file path is printed to test output.  A visual comparison's written diagnosis - what changed, where, and by how much - is printed either way.
 
 The BILOBA_INLINE_SCREENSHOTS=iterm|kitty|sixel|none environment variable selects (or disables, with "none") the inline-image protocol at runtime.
 

@@ -112,7 +112,7 @@ screenshot "home-desktop" differs from baseline
 
 - `unchanged: everything below y=44` is the complement and often the faster read. Printed only when a clear majority is untouched; silent on a shift or a scattered change.
 - `max channel delta` counts **all** pixels, including ones the channel tolerance absorbed — it tells you whether the tolerance is doing its job or is one notch from hiding a real change.
-- The `.diff.png` is the actual, washed out, with every differing pixel in magenta. `Read` it when the words aren't enough.
+- The `.diff.png` is the actual, washed out, with every differing pixel in magenta. `Read` it when the words aren't enough. A human running this in a terminal that renders images gets that diff drawn under the diagnosis; you get the path, because inline images are off under an agent. The words above are printed to both.
 - Every verdict is deliberately conservative — when no signature holds you get the plain box list. The **shift** verdict additionally never fires on an image thinner than ~16px on either axis (a thin rule, a focus ring, a slim progress bar captured as an element), because at that size the search describes itself rather than the page. Those get the box reading.
 
 Same idea as the [poll trajectory](https://onsi.github.io/biloba/#outline): the words are the diagnosis, the image is the evidence. → `biloba:debug-failures`

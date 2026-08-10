@@ -317,6 +317,72 @@ var _ = Describe("Visual assertions", func() {
 		})
 	})
 
+	// The diagnosis has two halves and they are not equals.  The words are the half everything can
+	// read - an agent, a CI log, a terminal with no image support - so they are printed unconditionally;
+	// the drawn diff rides along underneath only when a human is at a terminal that can render it.
+	Describe("drawing the diff into the terminal", func() {
+		var origInline, origTermProgram string
+
+		BeforeEach(func() {
+			origInline, origTermProgram = os.Getenv("BILOBA_INLINE_SCREENSHOTS"), os.Getenv("TERM_PROGRAM")
+			os.Unsetenv("TERM_PROGRAM") // so only BILOBA_INLINE_SCREENSHOTS decides, wherever this suite runs
+			DeferCleanup(func() {
+				os.Setenv("BILOBA_INLINE_SCREENSHOTS", origInline)
+				os.Setenv("TERM_PROGRAM", origTermProgram)
+			})
+			b.Navigate(fixtureServer + "/visual.html")
+			Eventually("#box").Should(b.Exist())
+			generate("#box", "box")
+		})
+
+		// mismatch makes #box differ from the baseline it was just given, then runs the comparison that
+		// fails - leaving the rendered diagnosis in failure.
+		mismatch := func(mutation string) {
+			GinkgoHelper()
+			b.Run("document.getElementById('box').classList.add('" + mutation + "')")
+			g.Eventually("#box").WithTimeout(2 * time.Second).WithPolling(200 * time.Millisecond).Should(b.HaveScreenshot("box"))
+			Ω(failure).Should(ContainSubstring(`screenshot "box" differs from baseline`))
+		}
+
+		It("draws the diff underneath the written diagnosis", func() {
+			os.Setenv("BILOBA_INLINE_SCREENSHOTS", "iterm")
+			mismatch("spot")
+			Ω(failure).Should(SatisfyAll(
+				ContainSubstring("changed region: one box,"),
+				saysPath("diff:", artifact("box.diff")),
+				// the image comes after the words and the paths, never instead of them
+				MatchRegexp(`(?s)diff:.*\033\]1337`),
+			))
+		})
+
+		It("speaks only words when the terminal cannot draw images", func() {
+			os.Setenv("BILOBA_INLINE_SCREENSHOTS", "none")
+			mismatch("spot")
+			Ω(failure).Should(SatisfyAll(
+				ContainSubstring("changed region: one box,"),
+				saysPath("diff:", artifact("box.diff")),
+			))
+			Ω(failure).ShouldNot(ContainSubstring("\033"))
+			readPNG(artifact("box.diff")) // the artifact is still written; only the drawing is skipped
+		})
+
+		It("speaks only words when an agent is driving, however capable the terminal", func() {
+			os.Setenv("BILOBA_INLINE_SCREENSHOTS", "iterm")
+			DeferCleanup(b.SetInlineScreenshotsForTest(false))
+			mismatch("spot")
+			Ω(failure).Should(saysPath("diff:", artifact("box.diff")))
+			Ω(failure).ShouldNot(ContainSubstring("\033"))
+		})
+
+		It("draws nothing when there is no diff image to draw", func() {
+			// a size change has no per-pixel diff to render, so there is nothing to put on the screen
+			os.Setenv("BILOBA_INLINE_SCREENSHOTS", "iterm")
+			mismatch("taller")
+			Ω(failure).Should(MatchRegexp(`baseline is \d+x\d+, actual is \d+x\d+`))
+			Ω(failure).ShouldNot(ContainSubstring("\033"))
+		})
+	})
+
 	Describe("masking", func() {
 		BeforeEach(func() {
 			b.Navigate(fixtureServer + "/visual_dynamic.html")

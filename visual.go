@@ -183,7 +183,9 @@ may contain "/" to organise them into subdirectories.  A MISSING baseline fails 
 being written and passed - a spec that has never compared anything would otherwise read green in CI -
 and says to re-run with BILOBA_UPDATE_SCREENSHOTS=1, which (re)writes baselines from a settled
 rendering and reports in words what changed.  A failing comparison writes the captured image and a
-rendered diff next to the failure screenshots and says what moved, where, and by how much.
+rendered diff next to the failure screenshots and says what moved, where, and by how much.  When a
+human is driving a terminal that can render images, the diff is also drawn inline underneath that
+diagnosis (see [BilobaConfigInlineScreenshots]); the words are printed either way.
 
 Configure it with [Biloba.Mask], [Biloba.Tolerance], [Biloba.ChannelTolerance], [Biloba.Animated], and
 [Biloba.InColorSchemes].
@@ -406,10 +408,34 @@ func (m *screenshotMatcher) FailureMessage(actual any) string {
 	if baselinePath, err := m.baselinePath(scheme); err == nil {
 		paths.Baseline = baselinePath
 	}
-	if diffPNG, err := diff.encodeDiffPNG(); err == nil && diffPNG != nil {
+	var diffPNG []byte
+	if encoded, err := diff.encodeDiffPNG(); err == nil && encoded != nil {
+		diffPNG = encoded
 		paths.Diff = writeVisualArtifact(m.artifactPath(scheme, "diff"), diffPNG)
 	}
-	return diff.diagnose(label, paths)
+	return diff.diagnose(label, paths) + m.inlineDiffImage(diffPNG)
+}
+
+// inlineDiffImage draws the diff PNG into the terminal, below the written diagnosis, when a human is
+// driving a terminal that can render images.  The words come first and they come always: they are the
+// half that an agent, a CI log, and a terminal that cannot draw images can all read, so the picture is
+// an addition to the diagnosis rather than a substitute for it.
+//
+// Only the diff is drawn.  It is the one image that carries what the sentences cannot - which pixels
+// moved, and where - while the baseline and the actual stay as paths: three full-page PNGs stacked in
+// a single failure message is more terminal than anyone wants to scroll past.
+//
+// Encoding errors are swallowed rather than reported.  This runs while a spec is already failing, and
+// a complaint about PNG encoding would displace the diagnosis the spec is actually failing for.
+func (m *screenshotMatcher) inlineDiffImage(diffPNG []byte) string {
+	if len(diffPNG) == 0 || !m.b.root.inlineScreenshotsEnabled() {
+		return ""
+	}
+	inline, err := encodeInlineImage(diffPNG, detectInlineImageProtocol())
+	if err != nil || inline == "" {
+		return ""
+	}
+	return "\n" + inline + "\n"
 }
 
 func (m *screenshotMatcher) NegatedFailureMessage(actual any) string {
