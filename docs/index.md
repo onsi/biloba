@@ -3803,6 +3803,34 @@ The distinction decides your whole response — tolerate this, or go find what m
 
 This is the [poll trajectory](#outline) idea applied to pixels.  The artifact is useful, but saying in words what shape the failure had is what turns it into a diagnosis.
 
+#### A capture tries not to disturb the page it is capturing
+
+Reaching content outside the viewport is not free.  Chrome does it by expanding the layout viewport and putting it back, and **the page observes that**: `matchMedia` queries flip, `resize` fires, and an app that renders off its breakpoint will re-run the effect that owns a subtree and unmount it.  If the subject being captured lives in that subtree, the capture destroys its own subject — and the spec fails on whatever it does *next*, polling for an element that was there a line ago.  That reads as a mystery flake, and it points nowhere near the capture.
+
+So Biloba expands the viewport only when it actually has to:
+
+| Capture | Expands the viewport? |
+|---|---|
+| An element already fully in view | **No** |
+| An element outside the viewport | Yes — that's the only way to reach it |
+| A full page whose document fits the viewport (the app-shell case: an inner pane scrolls, the document never does) | **No** |
+| A full page taller or wider than the viewport | Yes |
+
+The clip is interpreted in page coordinates either way, so the pixels are identical — the only difference is whether the page gets told its viewport moved.  For a suite that captures what it can see, that's every capture.
+
+When the expansion *is* unavoidable and the page does re-render itself out from under the capture, Biloba says so rather than leaving you to find it:
+
+```
+the element matching .card__swatches was present before this capture and gone after it.
+Reaching content outside the viewport requires expanding it, and a responsive page can observe
+that: a matchMedia flip or a resize handler that re-renders on the breakpoint will unmount the
+subtree being captured, taking component-local state with it.
+Capture a subject that is already fully in view (b.ScrollIntoView, then gate on
+b.BeInViewport(b.Fully())) and Biloba will not touch the viewport at all.
+```
+
+Do what it says: scroll the subject in and gate on it, and the expansion — and the flap — stop happening.
+
 #### An element capture can only contain what the browser painted
 
 `b.CaptureScreenshotOf` and an element-subject `HaveScreenshot` clip to the element's box and work fine **below the document fold** — Biloba expands the main frame's viewport for the capture, so nothing needs scrolling.

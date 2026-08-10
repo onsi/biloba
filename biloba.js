@@ -627,14 +627,37 @@ if (!window["_biloba"]) {
         }
         return null
     }
+    // fullyInViewport reports whether an element's box lies entirely within the TOP-LEVEL visual
+    // viewport.  This is what decides whether a capture needs Chrome's captureBeyondViewport, which is
+    // not free: it drives the layout viewport down and back, and a responsive page OBSERVES that -
+    // matchMedia flips, a resize fires, and an app that re-renders on its breakpoint can unmount the
+    // very subject being captured.  A subject already in view needs none of it.
+    //
+    // Conservative on every uncertainty: a cross-origin frame we cannot translate through reports
+    // false, which keeps the old always-expand behaviour for the case we cannot reason about.
+    let fullyInViewport = (n) => {
+        let rect = n.getBoundingClientRect()
+        let left = rect.left, top = rect.top, view = n.ownerDocument.defaultView
+        try {
+            while (view && view.frameElement) {
+                let fe = view.frameElement, fr = fe.getBoundingClientRect()
+                left += fr.left + fe.clientLeft
+                top += fr.top + fe.clientTop
+                view = view.parent
+            }
+            let top0 = view || window
+            return left >= 0 && top >= 0 && left + rect.width <= top0.innerWidth && top + rect.height <= top0.innerHeight
+        } catch (e) { return false } // cross-origin frame: cannot translate, so assume it is not
+    }
     // boundingBox reports the first matching element's clip rectangle for page.CaptureScreenshot,
-    // along with the clipping ancestor (if any) that would leave part of that rectangle unpainted.
-    // Errors on a zero-area element.
+    // along with the clipping ancestor (if any) that would leave part of that rectangle unpainted and
+    // whether the element is already fully in view.  Errors on a zero-area element.
     b.boundingBox = one(n => {
         let box = docBox(n)
         if (box.width <= 0 || box.height <= 0) return rErr("DOM element has zero area")
         let clipped = clipperOf(n)
         if (clipped) { box.clipper = clipped.clipper; box.visibleFraction = clipped.visibleFraction }
+        box.inViewport = fullyInViewport(n)
         return rRes(box)
     })
     // fontsReady resolves once the document's web fonts have finished loading.  A capture taken before

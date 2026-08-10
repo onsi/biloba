@@ -24,6 +24,7 @@ Failure *artifacts* (outlines, screenshots, poll trajectory) → `biloba:debug-f
 | Green in test, broken against a real server | Asserted the optimistic DOM, or a Go-side HTTP read | barrier on app state | [3](#3-optimistic-ui--server-reconciliation) |
 | "I ran it 30× and it was green" | The ordering was never forced | `b.HoldResponse` | [3](#3-optimistic-ui--server-reconciliation) |
 | Click appears to do nothing | Overlay swallowed it (fast `Click` is occlusion-blind) | `b.BeClickable()` gate, or `b.Realistic()` | [2](#2-actions-that-dont-poll) |
+| Intermittent "could not find DOM element" on the line *after* a capture | The capture expanded the viewport; the page re-rendered on its breakpoint and unmounted the subject | capture something already in view (scroll, gate on `b.BeInViewport(b.Fully())`) | [7](#7-assertions-that-cannot-fail) |
 | Assertion passes but asserts the opposite of your intent | Inverted `BePrecededBy`/`BeFollowedBy` | also assert the inverse doesn't hold | [4](#4-layout-geometry-and-document-order) |
 
 ## 1. Reads you take yourself
@@ -307,6 +308,10 @@ Don't work around it. Pre-writing baselines blind — a scripted "run with updat
 **`BILOBA_UPDATE_SCREENSHOTS` set in CI turns the entire visual suite green.** In update mode every visual assertion captures, writes its baseline, and passes — no comparison happens at all. It's an environment variable, so it gets added to a CI config once, during a legitimate baseline refresh, and then stays. Nothing fails, nothing looks wrong, and the suite reads as coverage while proving nothing. Grep the CI config for it before trusting a green visual run, and keep the variable to local, scoped invocations (`ginkgo --focus=…`).
 
 **And a tolerance widened until nothing can fail is the same bug with pixels.** `b.Tolerance(0.05)` on a small element can absorb an entire component; `b.ChannelTolerance(60)` absorbs a color change. Tune the suite-wide default (`BilobaConfigScreenshotTolerance` / `BilobaConfigScreenshotChannelTolerance`) once against real evidence, and treat a per-assertion tolerance that keeps growing as a signal the subject is nondeterministic — mask the region (`b.Mask`) instead of blurring the whole comparison. → `biloba:visual-assertions`
+
+**A capture used to be able to destroy its own subject.** Reaching content outside the viewport means expanding it, and a responsive page observes that — `matchMedia` flips, `resize` fires, and an app that re-renders on its breakpoint unmounts the subtree being captured, taking component-local state with it. The spec then fails on the line *after* the capture, polling for an element that was there a moment ago. Biloba now expands the viewport only when it has to (a subject outside the viewport, or a document bigger than the viewport) and says so when a subject vanishes across a capture: `the element matching X was present before this capture and gone after it`.
+
+If you see that message, or an intermittent "could not find DOM element" on the line following a capture: **capture something already in view**. `b.ScrollIntoView(sel)`, gate on `b.BeInViewport(b.Fully())`, then capture — Biloba touches nothing.
 
 **A blank capture is a stable capture.** An element capture works below the *document* fold — Biloba expands the main frame's viewport — but an element scrolled out of an **inner** `overflow: auto` pane was never painted, and comes back as a flat rectangle of the pane's background. Baseline that and it matches itself forever. This is the normal shape of any app-shell layout (fixed chrome, inner scrolling pane), so it is not exotic. Biloba now refuses the comparison and names the clipping ancestor; the fix is to scroll the pane first:
 

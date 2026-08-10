@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en-US">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Capture Viewport Perturbation Testpage</title>
+
+    <!-- A responsive app's-eye view of what a capture does to it.  The page records every resize the
+         browser dispatches, every innerWidth it ever observes, and every matchMedia flip - which is
+         what a real app is actually reacting to when it decides it is on a phone and unmounts a rail.
+         A capture that leaves the layout viewport alone leaves all three counters at zero. -->
+    <style>
+        html, body { margin: 0; padding: 0; width: 400px; height: 300px; background-color: #ffffff; }
+        #box { width: 200px; height: 120px; margin: 20px; background-color: #336699; }
+        #tall { height: 1500px; }
+    </style>
+</head>
+
+<body>
+    <div id="box"></div>
+    <div id="tall"></div>
+
+    <script>
+        window.resizeEvents = 0
+        window.observedWidths = []
+        window.mediaFlips = 0
+
+        var record = function () {
+            var w = window.innerWidth
+            if (window.observedWidths.indexOf(w) === -1) window.observedWidths.push(w)
+        }
+        record()
+
+        window.addEventListener("resize", function () { window.resizeEvents++; record() })
+
+        // the media query a responsive app hangs its layout mode off
+        var phone = window.matchMedia("(max-width: 100px)")
+        var onFlip = function () { window.mediaFlips++ }
+        if (phone.addEventListener) phone.addEventListener("change", onFlip)
+        else phone.addListener(onFlip)
+
+        window.resetCaptureProbe = function () {
+            window.resizeEvents = 0
+            window.mediaFlips = 0
+            window.observedWidths = []
+            record()
+        }
+
+        // armSelfDestruct stands in for the responsive app that unmounts a subtree when it decides it
+        // is on a phone: #doomed sits below the fold (so its capture must expand the viewport) and
+        // removes itself the moment the media query flips.  This is the shape that makes a capture
+        // destroy its own subject.
+        window.armSelfDestruct = function () {
+            var doomed = document.createElement("div")
+            doomed.id = "doomed"
+            doomed.style.cssText = "position:absolute;top:1200px;left:0;width:150px;height:80px;background-color:#cc3366"
+            document.body.appendChild(doomed)
+            // Reacting to the change event itself, not to e.matches: the collapse and the restore
+            // coalesce into one dispatch, so by the time a listener runs the query already reads back
+            // at its original value.  What the page reliably observes is THAT its layout mode changed,
+            // which is exactly what makes a framework re-run the effect that owns this subtree.
+            var phone = window.matchMedia("(max-width: 100px)")
+            var destroy = function () {
+                var n = document.getElementById("doomed")
+                if (n) n.remove()
+            }
+            if (phone.addEventListener) phone.addEventListener("change", destroy)
+            else phone.addListener(destroy)
+        }
+    </script>
+</body>
+
+</html>

@@ -136,11 +136,45 @@ func (b *Biloba) captureScreenshot() []byte {
 	ctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
 	var img []byte
-	err := chromedp.Run(ctx, chromedp.FullScreenshot(&img, 100))
+	err := chromedp.Run(ctx, capturePageAction(&img, nil))
 	if err != nil {
 		b.gt.Fatalf("Failed to capture screenshot:\n%s", err.Error())
 	}
 	return img
+}
+
+// capturePageAction captures the whole document as a PNG, and optionally reports the document's width
+// in CSS pixels (which is what the visual-regression path divides by to recover the device scale
+// factor).  Both come out of the same round trip, so they describe the same layout.
+//
+// It expands the viewport only when the document is actually bigger than it - see expandsViewport for
+// why that expansion is worth avoiding.  When the content already fits, the expanded capture and the
+// plain one are the same pixels, so skipping it changes nothing except that the page stops being told
+// its viewport resized.  That is the app-shell case: a document that never scrolls because an inner
+// pane does.
+func capturePageAction(img *[]byte, cssWidth *float64) chromedp.ActionFunc {
+	return func(ctx context.Context) error {
+		_, _, _, cssLayoutViewport, _, cssContentSize, err := page.GetLayoutMetrics().Do(ctx)
+		if err != nil {
+			return err
+		}
+		if cssWidth != nil {
+			*cssWidth = cssContentSize.Width
+		}
+		// Exact equality, not "fits within": anything looser and the two captures could differ in size,
+		// which would invalidate every baseline taken with the other one.  Chrome reports both in CSS
+		// pixels off the same layout, so a document that measures equal really is the viewport.
+		fits := cssLayoutViewport != nil &&
+			cssContentSize.Width == float64(cssLayoutViewport.ClientWidth) &&
+			cssContentSize.Height == float64(cssLayoutViewport.ClientHeight) &&
+			cssContentSize.X == 0 && cssContentSize.Y == 0
+		*img, err = page.CaptureScreenshot().
+			WithFromSurface(true).
+			WithCaptureBeyondViewport(!fits).
+			WithFormat(page.CaptureScreenshotFormatPng).
+			Do(ctx)
+		return err
+	}
 }
 
 /*
@@ -212,7 +246,7 @@ func (b *Biloba) CaptureScreenshotOf(selector any) []byte {
 // honors the WithTimeout/WithContext knobs a waiting command is allowed.
 func (b *Biloba) captureScreenshotOf(selector any) []byte {
 	b.gt.Helper()
-	img, _, clipped, err := b.elementScreenshot(selector)
+	img, _, notes, err := b.elementScreenshot(selector)
 	if err != nil {
 		b.gt.Fatalf("Failed to capture screenshot of element:\n%s", err.Error())
 		return nil
@@ -221,10 +255,20 @@ func (b *Biloba) captureScreenshotOf(selector any) []byte {
 	// an AddReportEntry, and handing back a blank-but-honest PNG with a note beats failing a spec that
 	// only wanted a look at the page.  The visual-regression path, where a blank capture would become a
 	// golden master, refuses instead - see captureForComparison.
-	if clipped != nil {
-		b.gt.Printf("Warning: %s\n", clipped.describe(selector))
+	if notes.clipped != nil {
+		b.gt.Printf("Warning: %s\n", notes.clipped.describe(selector))
+	}
+	if notes.vanished {
+		b.gt.Printf("Warning: %s\n", vanishedDuringCaptureMessage(selector))
 	}
 	return img
+}
+
+// vanishedDuringCaptureMessage names what just happened to a page that re-rendered itself out from
+// under its own capture.  Without this the spec fails on whatever it does NEXT - polling for an
+// element that was there a line ago - and points nowhere near the capture that removed it.
+func vanishedDuringCaptureMessage(selector any) string {
+	return fmt.Sprintf("the element matching %v was present before this capture and gone after it.\nReaching content outside the viewport requires expanding it, and a responsive page can observe that: a matchMedia flip or a resize handler that re-renders on the breakpoint will unmount the subtree being captured, taking component-local state with it.\nCapture a subject that is already fully in view (b.ScrollIntoView, then gate on b.BeInViewport(b.Fully())) and Biloba will not touch the viewport at all.", selector)
 }
 
 // clippedCapture describes an element that an ancestor is clipping out of its own capture: the
@@ -261,24 +305,52 @@ type clippedCaptureError struct {
 
 func (e *clippedCaptureError) Error() string { return e.clipped.describe(e.selector) }
 
+// captureNotes carries what a capture noticed about its own subject, alongside the pixels.  Both
+// entries are diagnoses of the setup rather than of the page, so callers that poll print them once.
+type captureNotes struct {
+	// clipped is set when an ancestor cut the subject out of its own capture.
+	clipped *clippedCapture
+	// vanished is set when the subject was there before the capture and gone after - see the note on
+	// expandsViewport for how a capture manages to do that to a page.
+	vanished bool
+}
+
+// expandsViewport reports whether capturing this box needs Chrome's captureBeyondViewport, and is
+// the whole of the fix for a capture that changes the page it is capturing.
+//
+// captureBeyondViewport is what lets an element capture reach content below the document fold
+// without scrolling, and it is not free: Chrome drives the layout viewport down and back to do it,
+// and the page OBSERVES that.  matchMedia flips, a resize fires, and a responsive app that renders
+// off its breakpoint can unmount and remount the subtree being captured - taking the subject, and any
+// component-local state in it, with it.  The spec then polls for an element its own capture destroyed,
+// which surfaces as an intermittent timeout pointing at the line AFTER the capture.
+//
+// A subject already fully in view needs none of that: the clip is interpreted in page coordinates
+// either way, so the same pixels come back without touching the viewport.  That is the common case,
+// and it is every case for a suite that captures what it can see.
+func expandsViewport(box map[string]any) bool {
+	inViewport, ok := box["inViewport"].(bool)
+	return !(ok && inViewport)
+}
+
 // elementScreenshot captures the first element matching selector, clipped to its bounding box, and
 // hands back the PNG along with the clip it used.  The clip is what turns a mask rectangle measured in
 // document coordinates into image coordinates, which is why the visual-regression path needs it back.
-// It also reports whether an ancestor clipped the element out of its own capture - see clippedCapture.
+// It also reports what the capture noticed about its subject - see captureNotes.
 // Unlike captureScreenshotOf it returns errors rather than failing the spec: a matcher polls it, and
 // an error there means "retry".
-func (b *Biloba) elementScreenshot(selector any) ([]byte, *page.Viewport, *clippedCapture, error) {
+func (b *Biloba) elementScreenshot(selector any) ([]byte, *page.Viewport, captureNotes, error) {
+	notes := captureNotes{}
 	r := b.runBilobaHandler("boundingBox", selector)
 	if r.Error() != nil {
-		return nil, nil, nil, r.Error()
+		return nil, nil, notes, r.Error()
 	}
 	box, ok := r.Result.(map[string]any)
 	if !ok {
-		return nil, nil, nil, fmt.Errorf("unexpected bounding box result: %v", r.Result)
+		return nil, nil, notes, fmt.Errorf("unexpected bounding box result: %v", r.Result)
 	}
-	var clipped *clippedCapture
 	if clipper, ok := box["clipper"].(string); ok && clipper != "" {
-		clipped = &clippedCapture{clipper: clipper, visibleFraction: toFloat64(box["visibleFraction"])}
+		notes.clipped = &clippedCapture{clipper: clipper, visibleFraction: toFloat64(box["visibleFraction"])}
 	}
 	clip := &page.Viewport{
 		X:      toFloat64(box["x"]),
@@ -287,6 +359,7 @@ func (b *Biloba) elementScreenshot(selector any) ([]byte, *page.Viewport, *clipp
 		Height: toFloat64(box["height"]),
 		Scale:  1,
 	}
+	beyondViewport := expandsViewport(box)
 	cctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
 	var img []byte
@@ -295,14 +368,23 @@ func (b *Biloba) elementScreenshot(selector any) ([]byte, *page.Viewport, *clipp
 		img, captureErr = page.CaptureScreenshot().
 			WithClip(clip).
 			WithFromSurface(true).
-			WithCaptureBeyondViewport(true).
+			WithCaptureBeyondViewport(beyondViewport).
 			Do(ctx)
 		return captureErr
 	}))
 	if err != nil {
-		return nil, clip, clipped, err
+		return nil, clip, notes, err
 	}
-	return img, clip, clipped, nil
+	// Only worth asking when the viewport was actually perturbed: the subject was demonstrably there a
+	// moment ago (we just measured it), so if it is gone now, the capture is what removed it.  Saying
+	// that costs one round trip and replaces an investigation - the spec's next assertion will
+	// otherwise poll for a missing element and blame the line it is on.
+	if beyondViewport {
+		if stillThere := b.runBilobaHandler("exists", selector); stillThere.Error() == nil && !stillThere.Success {
+			notes.vanished = true
+		}
+	}
+	return img, clip, notes, nil
 }
 
 /*

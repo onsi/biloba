@@ -3,6 +3,7 @@ package biloba_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"image"
 	_ "image/png"
 	"os"
@@ -56,6 +57,17 @@ var _ = Describe("Visual assertions", func() {
 
 	saysPath := func(label string, path string) OmegaMatcher {
 		return MatchRegexp(regexp.QuoteMeta(label) + `\s+` + regexp.QuoteMeta(path))
+	}
+
+	// centerPixelOf is how a spec asserts a capture actually contains its subject.  Comparing a capture
+	// against a baseline generated the same way cannot tell you that: two blank images match.
+	centerPixelOf := func(img []byte) string {
+		GinkgoHelper()
+		decoded, _, err := image.Decode(bytes.NewReader(img))
+		Ω(err).ShouldNot(HaveOccurred())
+		bounds := decoded.Bounds()
+		r, g, bl, _ := decoded.At(bounds.Dx()/2, bounds.Dy()/2).RGBA()
+		return fmt.Sprintf("#%02x%02x%02x", r>>8, g>>8, bl>>8)
 	}
 
 	Describe("the happy path", func() {
@@ -473,8 +485,12 @@ var _ = Describe("Visual assertions", func() {
 			Ω(printed()).ShouldNot(ContainSubstring("was painted"))
 		})
 
-		It("says nothing about a subject below the document fold", func() {
-			// the case captureBeyondViewport already handles, and the one this check must never break
+		It("says nothing about a subject below the document fold, and captures it for real", func() {
+			// The case captureBeyondViewport already handles, and the one this check must never break.
+			// Assert on the PIXELS, not just on generate-then-compare: a capture that came back blank
+			// would be compared against an equally blank baseline and pass while proving nothing - which
+			// is the very failure this Describe is about.
+			Ω(centerPixelOf(b.CaptureScreenshotOf("#below-fold"))).Should(Equal("#663399"))
 			generate("#below-fold", "below-fold")
 			Eventually("#below-fold").Should(b.HaveScreenshot("below-fold"))
 			Ω(printed()).ShouldNot(ContainSubstring("was painted"))
@@ -485,6 +501,80 @@ var _ = Describe("Visual assertions", func() {
 			img := b.CaptureScreenshotOf("#offscreen-card")
 			Ω(img).ShouldNot(BeEmpty())
 			Ω(printed()).Should(ContainSubstring("NONE of the element matching #offscreen-card was painted"))
+		})
+	})
+
+	// Reaching content outside the viewport means expanding the viewport, and a responsive page
+	// OBSERVES that: matchMedia flips, resize fires, and an app that renders off its breakpoint can
+	// unmount the subtree being captured - so the capture destroys its own subject and the spec's NEXT
+	// assertion polls for an element that no longer exists.  A subject already in view needs none of
+	// that expansion, and the fixture counts what the page was told.
+	Describe("what a capture does to the page it is capturing", func() {
+		// expectUndisturbed asserts the page was never told its viewport moved.  mediaFlips is the one
+		// that matters most: a resize handler is opt-in, but an app reading its breakpoint through
+		// matchMedia re-renders off exactly this.
+		expectUndisturbed := func() {
+			GinkgoHelper()
+			var resizes, mediaFlips int
+			b.Run("window.resizeEvents", &resizes)
+			b.Run("window.mediaFlips", &mediaFlips)
+			Ω(resizes).Should(Equal(0), "the page observed a resize during a capture")
+			Ω(mediaFlips).Should(Equal(0), "the page's media queries flipped during a capture")
+		}
+		resizeCount := func() int {
+			GinkgoHelper()
+			var resizes int
+			b.Run("window.resizeEvents", &resizes)
+			return resizes
+		}
+
+		BeforeEach(func() {
+			b.SetWindowSize(600, 400)
+			b.Navigate(fixtureServer + "/visual_resize.html")
+			Eventually("#box").Should(b.Exist())
+		})
+
+		It("leaves the viewport alone when the subject is already in view", func() {
+			b.Run("resetCaptureProbe()")
+			b.CaptureScreenshotOf("#box")
+			expectUndisturbed()
+
+			b.Run("resetCaptureProbe()")
+			generate("#box", "box")
+			Eventually("#box").Should(b.HaveScreenshot("box"))
+			expectUndisturbed()
+		})
+
+		It("leaves the viewport alone for a full-page capture of a document that fits it", func() {
+			// the app-shell shape: the document never scrolls because an inner pane does
+			b.Run("document.getElementById('tall').remove(); document.documentElement.style.overflow='hidden'; document.body.style.cssText='margin:0;padding:0;width:600px;height:400px;overflow:hidden'")
+			b.Run("resetCaptureProbe()")
+			b.CaptureScreenshot()
+			expectUndisturbed()
+
+			b.Run("resetCaptureProbe()")
+			generate(b, "page")
+			Eventually(b).Should(b.HaveScreenshot("page"))
+			expectUndisturbed()
+		})
+
+		It("still reaches a subject below the fold, which is what the expansion is for", func() {
+			// the honest cost: a subject outside the viewport cannot be captured without expanding it.
+			// The pixels are what matter here - this is the guarantee the fix must not trade away.
+			b.Run("resetCaptureProbe()")
+			Ω(centerPixelOf(b.CaptureScreenshotOf("#tall"))).ShouldNot(BeEmpty())
+			Ω(resizeCount()).Should(BeNumerically(">", 0), "a below-the-fold capture legitimately expands the viewport")
+		})
+
+		It("says so when the capture removed its own subject", func() {
+			// the diagnosis for the residual case: a page that unmounts on a breakpoint change, with a
+			// subject outside the viewport, so the expansion is unavoidable
+			b.Run("armSelfDestruct()")
+			b.CaptureScreenshotOf("#doomed")
+			Ω(string(gt.buffer.Contents())).Should(SatisfyAll(
+				ContainSubstring("was present before this capture and gone after it"),
+				ContainSubstring("b.BeInViewport(b.Fully())"),
+			))
 		})
 	})
 

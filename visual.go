@@ -2,7 +2,6 @@ package biloba
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -602,10 +601,16 @@ func (b *Biloba) captureForComparison(selector any, cfg screenshotConfig, scheme
 		img, cssWidth, err = b.fullPageScreenshot()
 	} else {
 		var clip *page.Viewport
-		var clipped *clippedCapture
-		img, clip, clipped, err = b.elementScreenshot(selector)
+		var notes captureNotes
+		img, clip, notes, err = b.elementScreenshot(selector)
+		clipped := notes.clipped
 		if clip != nil {
 			originX, originY, cssWidth = clip.X, clip.Y, clip.Width
+		}
+		if err == nil && notes.vanished {
+			// The subject the comparison is about no longer exists, so whatever came back is not a
+			// picture of it.  Retryable, like the clipped case: the page may put it back.
+			return nil, vanishedDuringCaptureMessage(selector), errors.New(vanishedDuringCaptureMessage(selector))
 		}
 		if err == nil && clipped != nil && !clipped.fullyClipped() {
 			// Partial is a warning, not a refusal: the capture does contain the element, just with an
@@ -682,22 +687,18 @@ func (b *Biloba) clearLeakedColorSchemeEmulation() {
 // fullPageScreenshot captures the whole document and also reports its width in CSS pixels.  The two
 // come from the same round trip so they describe the same layout; the width is what maskRects divides
 // by to recover the device scale factor.
+//
+// It expands the viewport only when the document is actually taller or wider than it - see
+// expandsViewport for why that expansion is worth avoiding.  When the content already fits, the
+// expanded capture and the plain one are the same pixels, so skipping it changes nothing except that
+// the page stops being told its viewport resized.  That is the app-shell case: a document that never
+// scrolls because an inner pane does.
 func (b *Biloba) fullPageScreenshot() ([]byte, float64, error) {
 	ctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
 	var img []byte
 	var cssWidth float64
-	err := chromedp.Run(ctx,
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			_, _, _, _, _, cssContentSize, err := page.GetLayoutMetrics().Do(ctx)
-			if err != nil {
-				return err
-			}
-			cssWidth = cssContentSize.Width
-			return nil
-		}),
-		chromedp.FullScreenshot(&img, 100),
-	)
+	err := chromedp.Run(ctx, capturePageAction(&img, &cssWidth))
 	return img, cssWidth, err
 }
 
