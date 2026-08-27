@@ -194,9 +194,7 @@ Biloba ships a set of [Claude Code](https://claude.com/claude-code) skills as a 
 
 ### Writing tests in TypeScript
 
-Go and Ginkgo are where Biloba is at its best, and always will be.  But if your team has no Go in its repo, [**onsi/biloba-graft**](https://github.com/onsi/biloba-graft) is a Go daemon wrapping Biloba's engine with a TypeScript client driving it: you write specs in TypeScript, in your own runner, and the browser work is still Biloba's - so the majority of Biloba's features come across.  A few Go-shaped things don't (Gomega matcher composition, `StopTrying`, the `b.Context` chromedp escape hatch, `OncePerOrdered`); its [differences page](https://github.com/onsi/biloba-graft/blob/main/docs/differences.md) lists them all.
-
-It's a separate project, still under construction, and nothing is published yet.
+Go and Ginkgo are where Biloba is at its best, and always will be.  But if your team has no Go in its repo, [**onsi/biloba-graft**](https://github.com/onsi/biloba-graft) is a Go daemon wrapping Biloba's engine with a TypeScript client driving it: you write specs in TypeScript, in your own runner, and the browser work is still Biloba's - so the majority of Biloba's features come across.  A few Go-shaped things don't and its [differences page](https://github.com/onsi/biloba-graft/blob/main/docs/differences.md) lists them all.
 
 ---
 
