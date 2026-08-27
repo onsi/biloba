@@ -125,33 +125,80 @@ async function codeOf(operation: Promise<unknown>): Promise<string> {
   }
 }
 
-function pids(pattern: string): string[] {
-  return execSync(`pgrep -f -- ${JSON.stringify(pattern)} || true`).toString().trim().split("\n").filter(Boolean);
+/**
+ * Every process on the machine, as (pgid, pid, command line).
+ *
+ * `ps -A` rather than `-e`: BSD ps (macOS) reads `-e` as "also show the environment".  `-ww` keeps
+ * the command line from being truncated, which the matching below depends on.
+ */
+function processTable(): {pgid: number; pid: number; args: string}[] {
+  return execSync("ps -A -ww -o pgid=,pid=,args=").toString().split("\n").flatMap((line) => {
+    const fields = /^\s*(\d+)\s+(\d+)\s+(\S.*?)\s*$/.exec(line);
+    if (!fields?.[3]) return [];
+    return [{pgid: Number(fields[1]), pid: Number(fields[2]), args: fields[3]}];
+  });
 }
 
-function daemonCount(): number {
-  return pids("--chrome-ws-url").length;
+/**
+ * The shared Chrome's processes - and only those.
+ *
+ * The scoping is the whole point of this helper, because everything below SIGKILLs what it finds.
+ * A `pgrep -f chrome-headless-shell` would sweep the entire machine and take out a developer's own
+ * browser, a concurrent `make test`, or another checkout's suite.  globalSetup spawns the browser
+ * host detached (browser-manager.ts), so the host leads a process group of its own and every
+ * process Chrome forks beneath it inherits that group id - which turns the pid vitest handed us
+ * into an exact, per-run boundary.  It is the same boundary the harness already uses to stop the
+ * browser (`process.kill(-pid)`), and unlike a parent-walk it still holds for a renderer that has
+ * been reparented away from its zygote.  The host itself is excluded: these tests kill Chrome, not
+ * the daemon that is supposed to notice.
+ */
+function chromeProcesses(): {pid: number; args: string}[] {
+  const host = inject("chromePid");
+  return processTable()
+    .filter((entry) => entry.pgid === host && entry.pid !== host)
+    .map((entry) => ({pid: entry.pid, args: entry.args}));
+}
+
+/** Chrome's browser process: the group member that is neither the host nor a `--type=` helper. */
+function chromeBrowserProcesses(): {pid: number; args: string}[] {
+  return chromeProcesses().filter((entry) => !entry.args.includes("--type="));
 }
 
 function chromeIsRunning(): boolean {
-  return pids("chrome-headless-shell").length > 0;
+  return chromeBrowserProcesses().length > 0;
+}
+
+/**
+ * How many bilobads are attached to *this run's* Chrome.
+ *
+ * Daemons cannot be scoped by process group the way Chrome is - the one this test cares about is
+ * deliberately orphaned when its worker is killed - so they are matched on a marker instead, and
+ * the websocket URL already is one: it carries the port and the per-launch browser guid, so no
+ * other run on the machine can share it.  Counting a bare `--chrome-ws-url` would make the
+ * assertion below depend on nothing else on the box running a daemon.
+ */
+function daemonCount(): number {
+  const marker = `--chrome-ws-url=${inject("chromeWsUrl")}`;
+  return processTable().filter((entry) => entry.args.includes(marker)).length;
 }
 
 /** Kills the renderer processes, leaving the browser process alive - Chrome's "Aw, Snap". */
 function killRenderers(): void {
-  const renderers = pids("--type=renderer");
+  const renderers = chromeProcesses().filter((entry) => entry.args.includes("--type=renderer"));
   expect(renderers.length, "expected a renderer to be running").toBeGreaterThan(0);
-  for (const pid of renderers) {
-    try { process.kill(Number(pid), "SIGKILL"); } catch { /* already gone */ }
-  }
+  sigkill(renderers);
 }
 
 /** SIGKILL, so there is no orderly CDP shutdown - the daemon finds out the way it would if Chrome
  *  had crashed or been OOM-killed, which is the case worth testing. */
 function killSharedChrome(): void {
-  const running = pids("chrome-headless-shell");
-  expect(running.length, "expected a shared Chrome to be running").toBeGreaterThan(0);
-  for (const pid of running) {
-    try { process.kill(Number(pid), "SIGKILL"); } catch { /* already gone */ }
+  const chrome = chromeProcesses();
+  expect(chromeBrowserProcesses().length, "expected a shared Chrome to be running").toBeGreaterThan(0);
+  sigkill(chrome);
+}
+
+function sigkill(processes: readonly {pid: number}[]): void {
+  for (const {pid} of processes) {
+    try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
   }
 }

@@ -1,4 +1,4 @@
-import {mkdir, readdir, readFile, writeFile} from "node:fs/promises";
+import {mkdir, readdir, readFile, rename, writeFile} from "node:fs/promises";
 import {join} from "node:path";
 import {expect, inject} from "vitest";
 
@@ -38,7 +38,16 @@ export async function connectWorker(name: string): Promise<Worker> {
 export async function rendezvous(stage: string, name: string, expected: number, payload: unknown = {}): Promise<Record<string, unknown>[]> {
   const directory = join(inject("rendezvousDir"), stage);
   await mkdir(directory, {recursive: true});
-  await writeFile(join(directory, `${name}.json`), JSON.stringify({name, pid: process.pid, ...(payload as object)}));
+  // Arrive atomically.  writeFile creates the entry before it has any content, so a peer that
+  // listed the directory inside that window would count this worker as arrived and then throw
+  // inside JSON.parse on an empty read - a race that only shows up under load, in the one helper
+  // every file depends on.  Writing beside the barrier and rename()ing in makes the name and the
+  // content appear together (rename is atomic within a filesystem, and the run's rendezvous
+  // directory is one mkdtemp tree), so the reader below needs no tolerance for a half-written
+  // arrival.  The scratch file lives *outside* `directory` on purpose: in it, it would count.
+  const scratch = join(inject("rendezvousDir"), `.${stage}.${name}.${process.pid}.tmp`);
+  await writeFile(scratch, JSON.stringify({name, pid: process.pid, ...(payload as object)}));
+  await rename(scratch, join(directory, `${name}.json`));
 
   const deadline = Date.now() + 30_000;
   for (;;) {
