@@ -4058,6 +4058,26 @@ RootWebArea "My App"
 
 This is the same role/name view a screen reader works from (and that reasoning models increasingly rely on), so it's often *more* useful than raw HTML for understanding a page: nodes that are ignored for accessibility (and presentational `InlineTextBox` noise) are elided, while semantics like roles, names, and values are surfaced.  Use it when you want to reason about what the page *means* rather than how it's marked up.  Like `Outline()`, the output is capped at ~32 KB.  It is not auto-attached on failure - call it explicitly when you want it.
 
+### Collecting the files Biloba wrote
+
+Biloba writes PNGs to disk in a few places: the on-failure screenshots, the `.actual.png`/`.diff.png` a failed [visual assertion](#visual-assertions) produces, the baselines `BILOBA_UPDATE_SCREENSHOTS` writes, and any `b.CaptureScreenshotToFile(path)` you asked for.  It announces every one of them in the test output.
+
+`b.Artifacts()` is that same information as data, for when you'd rather *do* something with the files than read their paths - upload them to your CI artifact store, say:
+
+```go
+ReportAfterEach(func(report SpecReport) {
+	for _, artifact := range b.Artifacts() {
+		uploadToCIArtifactStore(artifact.Path)
+	}
+})
+```
+
+Each `biloba.Artifact` carries a `Kind` (`biloba.ScreenshotArtifact`, `VisualActualArtifact`, `VisualDiffArtifact`, or `VisualBaselineArtifact`), an absolute `Path`, and a `Label` - the tab title for a failure screenshot, the baseline name for a visual artifact.
+
+The list is cleared by `b.Prepare()`, so it always describes the current spec.  One ordering detail matters: the on-failure screenshots are written by a cleanup, so you only see a complete list *after* that cleanup has run.  In Ginkgo that means a `ReportAfterEach` (as above) rather than an `AfterEach` - an `AfterEach` runs too early and will miss them.  The visual-regression artifacts are written during the spec, so they're there as soon as the assertion that produced them has failed.
+
+`Artifacts()` is a snapshot: it does not poll, and it rejects `WithTimeout`/`WithPolling`/`WithContext`/`Immediate`.
+
 ### Configuration
 
 Both `SpinUpChrome` and `ConnectToChrome` support a variety of configuration options.

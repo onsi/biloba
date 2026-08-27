@@ -19,6 +19,16 @@ Biloba detects the environment in `ConnectToChrome`. "Automation" = `CI` is set 
 
 So an agent or CI run needs nothing: `ginkgo -r -p`, then read the outline and the screenshot files. `BILOBA_SCREENSHOTS_DIR=./artifacts` points the directory elsewhere.
 
+**Uploading the files from CI:** `b.Artifacts()` returns what Biloba wrote this spec — failure screenshots, the visual `.actual`/`.diff`/baseline PNGs, and any `CaptureScreenshotToFile` — as `[]biloba.Artifact` (`Kind`, absolute `Path`, `Label`), so you don't parse the paths back out of the printed output. The failure screenshots are written by a cleanup, so read it from a `ReportAfterEach`; an `AfterEach` runs too early and misses them. `Prepare()` clears the list, so it always describes one spec.
+
+```go
+ReportAfterEach(func(report SpecReport) {
+	for _, artifact := range b.Artifacts() {
+		uploadToCIArtifactStore(artifact.Path)
+	}
+})
+```
+
 ## Read the artifacts in this order
 
 1. **Console errors** — any `console.error`/`console.assert` before the failure, replayed under "Console errors logged before this failure" at the **top** of the failure block. On a JS crash (a React error boundary) this is the root cause.

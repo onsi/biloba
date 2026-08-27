@@ -60,6 +60,7 @@ Repo-specific testing conventions (see `biloba_suite_test.go`):
 | Property get/set/match | `properties.go` | `properties_test.go` |
 | Geometry getters/matchers (GetBoundingBox/GetScrollOffset/GetOffsetTopWithin, pairwise/viewport/document-order, GetComputedStyle) | `geometry.go` | `geometry_test.go` |
 | Capturing a matcher's observed value (`*ValueMatcher`/`.Capture`) | `capture.go` | (exercised from each matcher's `*_test.go`) |
+| The files Biloba wrote this spec (`Artifact`/`Artifacts()`) | `artifacts.go` | `artifacts_test.go` |
 | Poll-trajectory failure artifact | `probe_trajectory.go` | `probe_trajectory_internal_test.go` |
 | Visual regression (`HaveScreenshot`, baselines, masking, the freeze) | `visual.go` | `visual_test.go` |
 | Image diff + the failure diagnosis it renders | `visual_diff.go` | `visual_diff_internal_test.go` |

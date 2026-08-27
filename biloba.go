@@ -825,6 +825,13 @@ type Biloba struct {
 	// error is usually the root cause and is otherwise buried in the streamed timeline.  Reset by Prepare().
 	consoleErrors []string
 
+	// artifacts accumulates the files Biloba wrote during the current spec (failure screenshots,
+	// visual actual/diff/baseline PNGs, explicit captures).  Lives on the root tab and is reset by
+	// Prepare().  artifactLock guards it: the visual-regression writes happen inside a matcher, on
+	// whatever goroutine Gomega is polling from.
+	artifacts    []Artifact
+	artifactLock *sync.Mutex
+
 	requests         []*Request
 	inflightRequests map[network.RequestID]bool
 	requestHandlers  []*requestHandler       // ordered, first-match-wins: stub / abort / modify-request
@@ -899,6 +906,7 @@ func newBiloba(ginkgoT GinkgoTInterface) *Biloba {
 	b := &Biloba{
 		gt:               ginkgoT,
 		lock:             &sync.Mutex{},
+		artifactLock:     &sync.Mutex{},
 		downloads:        map[string]*Download{},
 		downloadHistory:  map[string]time.Time{},
 		tabs:             map[target.ID]*Biloba{},
@@ -989,6 +997,7 @@ func (b *Biloba) Prepare() {
 	// only registered when failure artifacts are on - so clear them here too.  A detached-node signal
 	// or an occluded click carried over from the previous spec would diagnose the wrong spec.
 	b.resetPollDiagnostics()
+	b.resetArtifacts()
 
 	if b.failureScreenshots || b.failureOutlines {
 		b.gt.DeferCleanup(b.attachFailureArtifactsIfFailed)

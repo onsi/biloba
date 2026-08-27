@@ -212,3 +212,11 @@ func ResolveSpinUpOptionsForTest(options ...SpinUpOption) (highFidelity, autoIns
 
 // GooseConfigPathForTest exposes the (cwd-relative) handshake-file path SpinUpChrome writes.
 func GooseConfigPathForTest(process int) string { return gooseConfigPath(process) }
+
+// RunFailureArtifactCleanupForTest runs the on-failure artifact cleanup Prepare registers, so
+// artifacts_test.go can pin that it does not clear the artifact list on its way out - a consumer's
+// read window is after this cleanup, and an emptied list there is indistinguishable from a spec
+// that wrote nothing.
+func (b *Biloba) RunFailureArtifactCleanupForTest() {
+	b.attachFailureArtifactsIfFailed()
+}

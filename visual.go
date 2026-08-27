@@ -327,6 +327,7 @@ func (m *screenshotMatcher) matchScheme(tab *Biloba, selector any, scheme string
 		// reads green in CI.  So this is a failure - and a StopTrying one, since no amount of polling
 		// is going to conjure the file.
 		actualPath := writeVisualArtifact(m.artifactPath(scheme, "actual"), img)
+		m.b.recordArtifact(VisualActualArtifact, actualPath, label)
 		return false, gomega.StopTrying(missingBaselineMessage(label, baselinePath, actualPath))
 	}
 	if readErr != nil {
@@ -473,6 +474,7 @@ func (m *screenshotMatcher) updateBaseline(path string, previous []byte, readErr
 	if err := writeFileAtomically(path, img); err != nil {
 		return false, gomega.StopTrying(fmt.Sprintf("Failed to write the screenshot baseline for %s:\n  %s\n%s", label, path, err.Error()))
 	}
+	m.b.recordArtifact(VisualBaselineArtifact, path, label)
 	return true, nil
 }
 
@@ -488,6 +490,7 @@ func (m *screenshotMatcher) FailureMessage(actual any) string {
 	diff.analyze()
 	label := m.label(scheme)
 	paths := screenshotPaths{Actual: writeVisualArtifact(m.artifactPath(scheme, "actual"), img)}
+	m.b.recordArtifact(VisualActualArtifact, paths.Actual, label)
 	if baselinePath, err := m.baselinePath(scheme); err == nil {
 		paths.Baseline = baselinePath
 	}
@@ -495,6 +498,7 @@ func (m *screenshotMatcher) FailureMessage(actual any) string {
 	if encoded, err := diff.encodeDiffPNG(); err == nil && encoded != nil {
 		diffPNG = encoded
 		paths.Diff = writeVisualArtifact(m.artifactPath(scheme, "diff"), diffPNG)
+		m.b.recordArtifact(VisualDiffArtifact, paths.Diff, label)
 	}
 	return diff.diagnose(label, paths) + m.inlineDiffImage(diffPNG)
 }

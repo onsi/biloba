@@ -223,6 +223,7 @@ func (b *Biloba) writeScreenshotToFile(img []byte, path string) string {
 		return ""
 	}
 	b.gt.Printf("Screenshot written to: %s\n", absPath)
+	b.recordArtifact(ScreenshotArtifact, absPath, "")
 	return absPath
 }
 
@@ -554,6 +555,7 @@ func (b *Biloba) safeAllTabScreenshots(width int, height int) []tabScreenshot {
 			if mkErr := os.MkdirAll(b.root.screenshotsDir, 0755); mkErr == nil {
 				if writeErr := os.WriteFile(absPath, img, 0644); writeErr == nil {
 					ts.filePath = absPath
+					b.recordArtifact(ScreenshotArtifact, absPath, title)
 				}
 			}
 		}

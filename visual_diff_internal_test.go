@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"image/png"
 	"strings"
+	"sync"
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -364,7 +365,7 @@ func TestScreenshotMatcherFailureMessageRacesMatch(t *testing.T) {
 	vdFill(act, image.Rect(5, 5, 40, 30), vdRed)
 	baseData, actData := vdEncode(g, base), vdEncode(g, act)
 
-	tab := &Biloba{screenshotsDir: t.TempDir(), baselinesDir: t.TempDir()}
+	tab := &Biloba{screenshotsDir: t.TempDir(), baselinesDir: t.TempDir(), artifactLock: &sync.Mutex{}}
 	tab.root = tab
 	m := &screenshotMatcher{b: tab, name: "racy"}
 

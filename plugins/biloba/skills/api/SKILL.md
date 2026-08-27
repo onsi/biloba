@@ -262,6 +262,7 @@ Intercepts the **real** response and holds it in flight until you release it (th
 - `b.Outline()` → string (indented DOM) · `b.A11yOutline()` → string (accessibility tree: role + name).
 - `b.CaptureScreenshot()` → []byte (PNG) · `b.CaptureImgcatScreenshot()` → string · `b.CaptureScreenshotToFile(path)` → abs path.
 - `b.CaptureScreenshotOf(selector)` · `b.CaptureImgcatScreenshotOf(selector)` · `b.CaptureScreenshotOfToFile(selector, path)` — clipped to the first match (any selector; works below the fold and across `>>>`).
+- `b.Artifacts()` → `[]biloba.Artifact` (`Kind`/`Path`/`Label`) — the files Biloba wrote this spec: failure screenshots, visual `.actual`/`.diff`/baseline PNGs, `CaptureScreenshotToFile` output. Snapshot (rejects all knobs); cleared by `Prepare()`. Failure screenshots are written by a cleanup, so read from a `ReportAfterEach`, **not** an `AfterEach`.
 - `b.SetWindowSize(w, h, ...opt)` · `b.WindowSize()`. `SetWindowSize` registers its own `DeferCleanup` to restore the prior size — don't restore manually, and don't call it from inside another `DeferCleanup` (Ginkgo forbids nesting). Call it bare in `BeforeEach`/`BeforeAll`.
 
 ## Visual regression → `biloba:visual-assertions`
