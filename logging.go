@@ -54,7 +54,7 @@ func (b *Biloba) handleEventConsoleAPICalled(ev *runtime.EventConsoleAPICalled) 
 	}
 	if ev.Type == runtime.APITypeError || ev.Type == runtime.APITypeAssert {
 		b.lock.Lock()
-		b.consoleErrors = append(b.consoleErrors, strings.TrimSuffix(message, "\n"))
+		b.state.consoleErrors = append(b.state.consoleErrors, strings.TrimSuffix(message, "\n"))
 		b.lock.Unlock()
 	}
 	if ev.Type == runtime.APITypeAssert {

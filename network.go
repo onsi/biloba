@@ -94,8 +94,8 @@ func (b *Biloba) AllRequests() Requests {
 	b.guardConfig("AllRequests")
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	out := make(Requests, len(b.requests))
-	copy(out, b.requests)
+	out := make(Requests, len(b.state.requests))
+	copy(out, b.state.requests)
 	return out
 }
 
@@ -217,11 +217,11 @@ func (b *Biloba) BeNetworkIdle() types.GomegaMatcher {
 	return gcustom.MakeMatcher(func(_ *Biloba) (bool, error) {
 		b.lock.Lock()
 		defer b.lock.Unlock()
-		return len(b.inflightRequests) == 0, nil
+		return len(b.state.inflightRequests) == 0, nil
 	}).WithTemplate("Expected the tab to be network idle, but it has {{.Data}} in-flight request(s).", func() int {
 		b.lock.Lock()
 		defer b.lock.Unlock()
-		return len(b.inflightRequests)
+		return len(b.state.inflightRequests)
 	}())
 }
 
@@ -393,7 +393,7 @@ func (b *Biloba) StubRequest(url any, response StubResponse) *RequestStub {
 	b.lock.Lock()
 	resp := response
 	handler := &requestHandler{matcher: matcherOrEqual(url), stub: &resp, prov: newHandlerProvenance("StubRequest", "request")}
-	b.requestHandlers = append(b.requestHandlers, handler)
+	b.state.requestHandlers = append(b.state.requestHandlers, handler)
 	b.lock.Unlock()
 	b.ensureFetchEnabled()
 	return &RequestStub{b: b, prov: &handler.prov}
@@ -420,7 +420,7 @@ func (b *Biloba) AbortRequest(url any) *RequestAbort {
 	b.guardConfig("AbortRequest")
 	b.lock.Lock()
 	handler := &requestHandler{matcher: matcherOrEqual(url), abort: true, prov: newHandlerProvenance("AbortRequest", "request")}
-	b.requestHandlers = append(b.requestHandlers, handler)
+	b.state.requestHandlers = append(b.state.requestHandlers, handler)
 	b.lock.Unlock()
 	b.ensureFetchEnabled()
 	return &RequestAbort{b: b, prov: &handler.prov}
@@ -465,7 +465,7 @@ func (b *Biloba) ModifyRequest(url any) *RequestModification {
 	b.lock.Lock()
 	handler := &requestHandler{matcher: matcherOrEqual(url), modify: mod, prov: newHandlerProvenance("ModifyRequest", "request")}
 	mod.prov = &handler.prov
-	b.requestHandlers = append(b.requestHandlers, handler)
+	b.state.requestHandlers = append(b.state.requestHandlers, handler)
 	b.lock.Unlock()
 	b.ensureFetchEnabled()
 	return mod
@@ -600,7 +600,7 @@ func (b *Biloba) ModifyResponse(url any) *ResponseModification {
 	b.guardConfig("ModifyResponse")
 	mod := &ResponseModification{b: b, matcher: matcherOrEqual(url), prov: newHandlerProvenance("ModifyResponse", "response")}
 	b.lock.Lock()
-	b.responseHandlers = append(b.responseHandlers, mod)
+	b.state.responseHandlers = append(b.state.responseHandlers, mod)
 	b.lock.Unlock()
 	b.ensureFetchEnabled()
 	return mod
@@ -735,7 +735,7 @@ func (b *Biloba) HoldResponse(url any) *ResponseHold {
 	}
 	mod := &ResponseModification{b: b, matcher: h.matcher, hold: h, using: h.intercept, prov: newHandlerProvenance("HoldResponse", "response")}
 	b.lock.Lock()
-	b.responseHandlers = append(b.responseHandlers, mod)
+	b.state.responseHandlers = append(b.state.responseHandlers, mod)
 	b.lock.Unlock()
 	b.ensureFetchEnabled()
 	b.gt.DeferCleanup(h.forceRelease)
@@ -1149,8 +1149,8 @@ func releaseHeldResponses(handlers []*ResponseModification) {
 func (b *Biloba) ensureFetchEnabled() {
 	b.gt.Helper()
 	b.lock.Lock()
-	needEnable := !b.fetchEnabled
-	b.fetchEnabled = true
+	needEnable := !b.state.fetchEnabled
+	b.state.fetchEnabled = true
 	b.lock.Unlock()
 
 	if !needEnable {
@@ -1174,11 +1174,11 @@ func (b *Biloba) ensureFetchEnabled() {
 func (b *Biloba) requestHandlerFor(url string) *requestHandler {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	if len(b.requestHandlers) == 0 {
+	if len(b.state.requestHandlers) == 0 {
 		return nil
 	}
 	var winner *requestHandler
-	for _, h := range b.requestHandlers {
+	for _, h := range b.state.requestHandlers {
 		if match, _ := h.matcher.Match(url); match {
 			if winner == nil {
 				winner = h
@@ -1199,11 +1199,11 @@ func (b *Biloba) requestHandlerFor(url string) *requestHandler {
 func (b *Biloba) responseHandlerFor(url string) *ResponseModification {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	if len(b.responseHandlers) == 0 {
+	if len(b.state.responseHandlers) == 0 {
 		return nil
 	}
 	var winner *ResponseModification
-	for _, h := range b.responseHandlers {
+	for _, h := range b.state.responseHandlers {
 		if match, _ := h.matcher.Match(url); match {
 			if winner == nil {
 				winner = h
@@ -1224,7 +1224,7 @@ func (b *Biloba) responseHandlerFor(url string) *ResponseModification {
 func (b *Biloba) hasResponseHandlerFor(url string) bool {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	for _, h := range b.responseHandlers {
+	for _, h := range b.state.responseHandlers {
 		if match, _ := h.matcher.Match(url); match {
 			return true
 		}
@@ -1255,10 +1255,10 @@ func (b *Biloba) renderShadowedHandlers() string {
 			byAPI: p.shadower.api, byLocation: p.shadower.location.String(),
 		})
 	}
-	for _, h := range b.requestHandlers {
+	for _, h := range b.state.requestHandlers {
 		collect(&h.prov)
 	}
-	for _, h := range b.responseHandlers {
+	for _, h := range b.state.responseHandlers {
 		collect(&h.prov)
 	}
 	b.lock.Unlock()
@@ -1371,18 +1371,18 @@ func (b *Biloba) handleResponseStagePause(ev *fetch.EventRequestPaused) {
 func (b *Biloba) handleEventRequestWillBeSent(ev *network.EventRequestWillBeSent) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	b.requests = append(b.requests, newRequest(ev.Request, ev.Type))
-	b.inflightRequests[ev.RequestID] = true
+	b.state.requests = append(b.state.requests, newRequest(ev.Request, ev.Type))
+	b.state.inflightRequests[ev.RequestID] = true
 }
 
 func (b *Biloba) handleEventLoadingFinished(ev *network.EventLoadingFinished) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	delete(b.inflightRequests, ev.RequestID)
+	delete(b.state.inflightRequests, ev.RequestID)
 }
 
 func (b *Biloba) handleEventLoadingFailed(ev *network.EventLoadingFailed) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	delete(b.inflightRequests, ev.RequestID)
+	delete(b.state.inflightRequests, ev.RequestID)
 }
