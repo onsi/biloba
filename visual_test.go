@@ -152,6 +152,45 @@ var _ = Describe("Visual assertions", func() {
 			readPNG(artifact("box.actual"))
 			Ω(baseline("box")).ShouldNot(BeAnExistingFile())
 		})
+
+		// "there is no baseline yet" is a different verdict from "it changed" - the response is to
+		// generate baselines, not to investigate a regression - so it gets an entry rather than a
+		// silence.  Recording nothing would leave a consumer unable to tell it apart from a spec that
+		// asserted nothing visually.
+		It("records a comparison saying the baseline is missing", func() {
+			g.Eventually("#box").WithTimeout(time.Second).Should(b.HaveScreenshot("box"))
+			Ω(failure).ShouldNot(BeEmpty())
+
+			Ω(b.VisualComparisons()).Should(HaveLen(1))
+			c := b.VisualComparisons()[0]
+			Ω(c.MissingBaseline).Should(BeTrue())
+			Ω(c.Match).Should(BeFalse())
+			Ω(c.Name).Should(Equal("box"))
+			Ω(c.BaselinePath).Should(Equal(baseline("box")))
+			Ω(c.ActualPath).Should(Equal(artifact("box.actual")))
+			Ω(c.DiffPath).Should(BeEmpty())
+			// nothing was compared, so every measurement stays zero
+			Ω(c.TotalPixels).Should(Equal(0))
+			Ω(c.DifferingPixels).Should(Equal(0))
+			Ω(c.DimensionMismatch).Should(BeFalse())
+		})
+
+		It("records the schemes it got to, when only one of them lacks a baseline", func() {
+			// give light a baseline but not dark, so light compares and passes before dark stops the poll
+			generate("#scheme", "scheme", b.InColorSchemes("light"))
+			Ω(baseline("scheme-light")).Should(BeAnExistingFile())
+			Ω(baseline("scheme-dark")).ShouldNot(BeAnExistingFile())
+			g.Eventually("#scheme").WithTimeout(time.Second).Should(b.HaveScreenshot("scheme", b.InColorSchemes("light", "dark")))
+			Ω(failure).Should(ContainSubstring("There is no screenshot baseline"))
+
+			comparisons := b.VisualComparisons()
+			Ω(comparisons).Should(HaveLen(2))
+			Ω(comparisons[0].ColorScheme).Should(Equal("light"))
+			Ω(comparisons[0].Match).Should(BeTrue())
+			Ω(comparisons[0].MissingBaseline).Should(BeFalse())
+			Ω(comparisons[1].ColorScheme).Should(Equal("dark"))
+			Ω(comparisons[1].MissingBaseline).Should(BeTrue())
+		})
 	})
 
 	Describe("update mode", func() {
@@ -816,6 +855,36 @@ var _ = Describe("Visual assertions", func() {
 			}
 			Ω(schemes).Should(ConsistOf("light", "dark"))
 			Ω(labels).Should(ConsistOf("scheme (prefers-color-scheme: light)", "scheme (prefers-color-scheme: dark)"))
+		})
+
+		// The bug this pins: matchScheme used to record a PASSING scheme inline, at the moment it
+		// measured it, while the failing scheme was recorded later from FailureMessage.  So a polling
+		// two-scheme assertion re-recorded its passing scheme on every tick - one real light+dark
+		// assertion polling ~3s produced 63 identical "light" entries and one "dark".  Measuring and
+		// recording answer to different clocks; the attempt buffer is what keeps them apart.
+		It("records one entry per scheme even when the assertion polls to its deadline", func() {
+			generate("#scheme", "scheme", b.InColorSchemes("light", "dark"))
+			// light still matches its baseline; dark no longer does, so this polls until it times out
+			b.Run(`document.documentElement.style.setProperty("--dark-bg", "#004488")`)
+			g.Eventually("#scheme").WithTimeout(time.Second).WithPolling(50 * time.Millisecond).
+				Should(b.HaveScreenshot("scheme", b.InColorSchemes("light", "dark")))
+			Ω(failure).ShouldNot(BeEmpty())
+
+			comparisons := b.VisualComparisons()
+			byScheme := map[string][]biloba.VisualComparison{}
+			for _, c := range comparisons {
+				byScheme[c.ColorScheme] = append(byScheme[c.ColorScheme], c)
+			}
+			// exactly one per scheme - not one per poll attempt
+			Ω(comparisons).Should(HaveLen(2), "got %d comparisons: %v", len(comparisons), byScheme)
+			Ω(byScheme["light"]).Should(HaveLen(1))
+			Ω(byScheme["dark"]).Should(HaveLen(1))
+			Ω(byScheme["light"][0].Match).Should(BeTrue())
+			Ω(byScheme["dark"][0].Match).Should(BeFalse())
+			// the failing scheme's entry carries the artifact paths FailureMessage wrote
+			Ω(byScheme["dark"][0].ActualPath).Should(Equal(artifact("scheme-dark.actual")))
+			Ω(byScheme["dark"][0].DiffPath).Should(Equal(artifact("scheme-dark.diff")))
+			Ω(byScheme["light"][0].ActualPath).Should(BeEmpty())
 		})
 
 		It("catches a change that is only visible in dark mode", func() {

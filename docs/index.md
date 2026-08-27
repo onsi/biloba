@@ -4122,11 +4122,13 @@ ReportAfterEach(func(report SpecReport) {
 })
 ```
 
-Each `biloba.VisualComparison` carries the baseline `Name` and the `Label` the diagnosis uses (name plus colour scheme, when [`InColorSchemes`](#light-and-dark-in-one-assertion) made more than one), whether it `Match`ed, the three file paths, the two image sizes, the tolerances it ran under, and the per-pixel numbers: `TotalPixels`, `DifferingPixels`, `Fraction`, `MaxChannelDelta`.  It also carries the shape verdicts — `Regions`, `RegionCount`, `Shifted`/`Shift`, `Scattered`.
+Each `biloba.VisualComparison` carries the baseline `Name` and the `Label` the diagnosis uses (name plus colour scheme, when [`InColorSchemes`](#light-and-dark-in-one-assertion) made more than one), whether it `Match`ed (and whether the baseline was missing entirely), the three file paths, the two image sizes, the tolerances it ran under, and the per-pixel numbers: `TotalPixels`, `DifferingPixels`, `Fraction`, `MaxChannelDelta`.  It also carries the shape verdicts — `Regions`, `RegionCount`, `Shifted`/`Shift`, `Scattered`.
 
 Those two groups age differently, and it's worth knowing which you're asserting on.  The measurements are *definitions*: given two PNGs and a tolerance there is one right answer, and Biloba won't quietly change what they mean.  The verdicts are tuned heuristics answering "what does this change *look* like" — their shape is stable, their thresholds are not, and Biloba retunes them as the diagnosis improves.  `Expect(c.RegionCount).To(Equal(1))` is a fair assertion; `Equal(7)` is a spec that will break on an improvement.
 
-Every comparison that *decided* an assertion is recorded, passing ones included — so an empty list means "this spec asserted nothing visually" rather than "everything passed".  `HaveScreenshot` polls, and the losing attempts aren't what the assertion is about, so they're not recorded.  Like `Artifacts()`, the list is cleared by `b.Prepare()` and it rejects the poll-config knobs.
+`MissingBaseline` is its own verdict, and worth branching on before the rest: there was nothing to compare against, so every measurement is zero and the response is to generate baselines rather than to investigate a regression.  `ActualPath` still points at the capture, so you can see what the baseline *would* have been.  Read the verdicts in order — `MissingBaseline`, then `DimensionMismatch`, then the per-pixel numbers.
+
+Only the attempt that *decided* an assertion is recorded, passing comparisons included — so an empty list means "this spec asserted nothing visually" rather than "everything passed".  `HaveScreenshot` polls, and the losing attempts aren't what the assertion is about.  Under `InColorSchemes` you get one entry per scheme the assertion actually *measured*: a failure stops at the first failing scheme, since that's the one the diagnosis is about, so a light-then-dark assertion failing on dark records both and one failing on light records only light.  Like `Artifacts()`, the list is cleared by `b.Prepare()` and it rejects the poll-config knobs.
 
 ### Configuration
 

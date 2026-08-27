@@ -244,12 +244,18 @@ type screenshotMatcher struct {
 	cfg  screenshotConfig
 
 	// The last failing comparison, kept so FailureMessage can render it.  scheme names which colour
-	// scheme it belongs to; actual is the masked PNG that produced it.  lock guards all three: match
-	// writes them, FailureMessage reads them, and the two run on different goroutines.
+	// scheme it belongs to; actual is the masked PNG that produced it.  lock guards these and attempt:
+	// match writes them, FailureMessage reads them, and the two run on different goroutines.
 	lock   sync.Mutex
 	scheme string
 	diff   *screenshotDiff
 	actual []byte
+
+	// attempt holds what THIS poll attempt measured, one entry per colour scheme it got to.  It is
+	// not the record: measuring and recording answer to different clocks, and fusing them is what made
+	// a polling two-scheme assertion re-record its passing scheme on every tick.  An attempt buffer
+	// costs one flush at each of the three moments that actually decide an assertion - see decide.
+	attempt []VisualComparison
 
 	// warned keys the one-shot warnings this matcher has already printed.  Everything here is a
 	// diagnosis of the SETUP rather than of the page, so it is the same on every poll attempt: printed
@@ -272,16 +278,36 @@ func (m *screenshotMatcher) match(actual any) (bool, error) {
 	}
 	m.record("", nil, nil)
 	m.captures = map[string][]byte{}
+	m.resetAttempt()
 	for _, scheme := range m.cfg.colorSchemes {
 		pass, err := m.matchScheme(tab, selector, scheme)
 		if err != nil {
+			// A retryable error leaves the buffer to the next attempt; a StopTrying ends the assertion
+			// right here and there is no later reporting hook, so this attempt is the decider.  decide
+			// clears the buffer, so a double call can never double-record.
+			if isTerminalSignal(err) {
+				m.decide()
+			}
 			return false, err
 		}
 		if !pass {
 			return false, nil // the first failing scheme is the one we diagnose
 		}
 	}
+	// every scheme matched: this attempt is the one the assertion passed on
+	m.decide()
 	return true, nil
+}
+
+// isTerminalSignal reports whether err ends the Eventually immediately rather than counting as a
+// failed attempt.  Gomega's exported PollingSignalError covers both StopTrying and TryAgainAfter and
+// does not say which it is - but every polling signal this matcher raises is a StopTrying (a missing
+// or unreadable baseline, an undecodable PNG, a refused write), so the distinction does not arise
+// here.  If HaveScreenshot ever grows a TryAgainAfter, this is the line to revisit: that one IS
+// retryable, and flushing on it would re-record the attempt that follows.
+func isTerminalSignal(err error) bool {
+	var signal gomega.PollingSignalError
+	return errors.As(err, &signal)
 }
 
 // subject resolves what the assertion was applied to.  The tab itself means a full-page capture
@@ -336,6 +362,10 @@ func (m *screenshotMatcher) matchScheme(tab *Biloba, selector any, scheme string
 		// is going to conjure the file.
 		actualPath := writeVisualArtifact(m.artifactPath(scheme, "actual"), img)
 		m.b.recordArtifact(VisualActualArtifact, actualPath, label)
+		// "there is no baseline yet" is its own verdict, not a variety of mismatch - a consumer has to
+		// act on it differently (generate baselines, not investigate a regression), so it gets an entry
+		// rather than a silence.  match() flushes it, since a StopTrying ends the assertion here.
+		m.noteAttempt(m.missingBaselineComparison(scheme, baselinePath, actualPath))
 		return false, gomega.StopTrying(missingBaselineMessage(label, baselinePath, actualPath))
 	}
 	if readErr != nil {
@@ -346,8 +376,10 @@ func (m *screenshotMatcher) matchScheme(tab *Biloba, selector any, scheme string
 	if err != nil {
 		return false, gomega.StopTrying(fmt.Sprintf("Failed to compare %s against its baseline:\n%s", label, err.Error()))
 	}
+	// Buffer either way, pass or fail.  The artifact paths of a FAILING comparison are not known until
+	// FailureMessage writes them, so that entry is completed there rather than here.
+	m.noteAttempt(m.comparison(scheme, diff, screenshotPaths{Baseline: baselinePath}))
 	if diff.Match {
-		m.b.recordVisualComparison(m.comparison(scheme, diff, screenshotPaths{Baseline: baselinePath}))
 		return true, nil
 	}
 	m.record(scheme, diff, img)
@@ -509,9 +541,11 @@ func (m *screenshotMatcher) FailureMessage(actual any) string {
 		paths.Diff = writeVisualArtifact(m.artifactPath(scheme, "diff"), diffPNG)
 		m.b.recordArtifact(VisualDiffArtifact, paths.Diff, label)
 	}
-	// This is the attempt that decides the assertion, and the only one whose numbers are about
-	// anything - see Biloba.VisualComparisons.
-	m.b.recordVisualComparison(m.comparison(scheme, diff, paths))
+	// The deadline decides the assertion, so this attempt's measurements are the ones that are about
+	// anything - see Biloba.VisualComparisons.  The failing scheme's entry was buffered without its
+	// artifact paths (they did not exist until the lines above), so complete it before flushing.
+	m.completeAttempt(scheme, m.comparison(scheme, diff, paths))
+	m.decide()
 	return diff.diagnose(label, paths) + m.inlineDiffImage(diffPNG)
 }
 

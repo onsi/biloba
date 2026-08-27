@@ -37,6 +37,14 @@ type VisualComparison struct {
 	// "this spec asserted nothing visually" rather than "everything passed".
 	Match bool
 
+	// MissingBaseline reports that there was no baseline to compare against - a distinct verdict from
+	// a mismatch, and one a consumer must act on differently: generate baselines with
+	// BILOBA_UPDATE_SCREENSHOTS, rather than investigate a regression.  Nothing was compared, so every
+	// measurement below stays zero; ActualPath still points at the capture Biloba wrote so you can look
+	// at what the baseline WOULD have been.  Read the verdicts in order: MissingBaseline, then
+	// DimensionMismatch, then the per-pixel numbers.
+	MissingBaseline bool
+
 	// BaselinePath, ActualPath and DiffPath are the files on disk, and are the same paths
 	// [Biloba.Artifacts] reports.  ActualPath and DiffPath are written only when a comparison fails,
 	// so they are empty on a passing one; DiffPath is also empty on a dimension mismatch, where there
@@ -101,7 +109,9 @@ type VisualRegion struct {
 /*
 VisualComparisons returns what every [Biloba.HaveScreenshot] assertion in the current spec measured, in the order the comparisons reported - passing ones included.  It is the failure message's prose diagnosis as data, for a reporter that wants to record the numbers rather than print the sentences, or for a spec that wants to assert on how an image changed.
 
-Only the comparison that DECIDED an assertion is recorded.  HaveScreenshot polls, so a page that settles compares many times; the losing attempts are not what the assertion is about and would swamp the list.  One assertion under [Biloba.InColorSchemes] records one comparison per scheme.
+Only the attempt that DECIDED an assertion is recorded.  HaveScreenshot polls, so a page that settles compares many times; the losing attempts are not what the assertion is about and would swamp the list.  Three things decide an assertion, and each records that attempt's measurements: every scheme matched, a missing or unreadable baseline stopped the poll, or the deadline arrived.
+
+An assertion under [Biloba.InColorSchemes] records one comparison per scheme it actually MEASURED, in the order it measured them - which on a failure is the schemes up to and including the first failing one, since that is the one the diagnosis is about.  So a light-then-dark assertion that fails on dark records both; one that fails on light records only light.
 
 The list is cleared by [Biloba.Prepare], so it always describes the current spec.  A failing comparison is recorded when the failure is reported, which in Ginkgo means the numbers are available from a ReportAfterEach alongside [Biloba.Artifacts]:
 
@@ -142,6 +152,68 @@ func (b *Biloba) resetVisualComparisons() {
 	root.artifactLock.Lock()
 	defer root.artifactLock.Unlock()
 	root.visualComparisons = nil
+}
+
+// resetAttempt drops the previous poll attempt's measurements.  Called at the top of every attempt,
+// alongside the other per-attempt state - see the note on screenshotMatcher.attempt.
+func (m *screenshotMatcher) resetAttempt() {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+	m.attempt = nil
+}
+
+// noteAttempt buffers one scheme's measurement for this attempt.
+func (m *screenshotMatcher) noteAttempt(comparison VisualComparison) {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+	m.attempt = append(m.attempt, comparison)
+}
+
+// completeAttempt replaces the buffered entry for scheme with a fully-formed one.  A FAILING
+// comparison is buffered by matchScheme while two of its parts are still missing: the artifact files
+// do not exist yet, and the expensive half of the analysis (the region clustering, the shift search,
+// the scattered verdict) is deliberately deferred to the one attempt that reports.  So the entry has
+// to be rebuilt once FailureMessage has done both - patching in the paths alone would leave every
+// shape verdict at its zero value, which reads exactly like "no regions found".
+func (m *screenshotMatcher) completeAttempt(scheme string, completed VisualComparison) {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+	for i := range m.attempt {
+		if m.attempt[i].ColorScheme == scheme {
+			m.attempt[i] = completed
+			return
+		}
+	}
+	m.attempt = append(m.attempt, completed)
+}
+
+// decide flushes this attempt's measurements into the spec's record, because something has just
+// decided the assertion: every scheme matched, a StopTrying ended the poll, or the deadline arrived.
+// It clears the buffer as it goes, so calling it twice for one assertion records nothing twice - which
+// is what lets each decision point call it without knowing whether another already did.
+func (m *screenshotMatcher) decide() {
+	m.lock.Lock()
+	decided := m.attempt
+	m.attempt = nil
+	m.lock.Unlock()
+	for _, comparison := range decided {
+		m.b.recordVisualComparison(comparison)
+	}
+}
+
+// missingBaselineComparison is the entry for a scheme whose baseline does not exist yet.  Nothing was
+// compared, so every measurement stays zero and MissingBaseline is the field that says why.
+func (m *screenshotMatcher) missingBaselineComparison(scheme string, baselinePath string, actualPath string) VisualComparison {
+	return VisualComparison{
+		Name:             m.name,
+		Label:            m.label(scheme),
+		ColorScheme:      scheme,
+		MissingBaseline:  true,
+		BaselinePath:     baselinePath,
+		ActualPath:       actualPath,
+		Tolerance:        m.cfg.tolerance.fraction,
+		ChannelTolerance: m.cfg.tolerance.channel,
+	}
 }
 
 // comparison assembles the VisualComparison for one decided comparison.  diff is nil only on the
