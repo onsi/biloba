@@ -13,7 +13,7 @@ The Biloba repo doubles as the marketplace:
 
 ## What you get
 
-All skills are namespaced under `biloba:` and activate when you're working in a Go repo with a Biloba/Ginkgo suite.
+All skills are namespaced under `biloba:` and activate when you're working in a Go repo with a Biloba/Ginkgo suite — except `biloba:typescript`, which covers the `vitest` client.
 
 | Skill | Use it when |
 |---|---|
@@ -27,6 +27,7 @@ All skills are namespaced under `biloba:` and activate when you're working in a 
 | `biloba:explore-unfamiliar-page` | You're writing tests against a page or app you haven't seen — orient first, then draft a spec. |
 | `biloba:debug-failures` | A spec failed and you want the DOM outline, a11y tree, and screenshots — and the env knobs that surface them. |
 | `biloba:flaky-specs` | A spec is flaky, order-dependent, or only fails under `-p`/CI — the single-shot-read and racing-interaction smells, and their polling fixes. |
+| `biloba:typescript` | You're writing browser tests in TypeScript/`vitest` rather than Go — the `bilobad` topology, server-side polling, and the API surface that exists today. |
 
 ## Versioning
 

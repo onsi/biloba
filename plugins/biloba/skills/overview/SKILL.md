@@ -1,11 +1,11 @@
 ---
 name: overview
-description: The Biloba mental model for writing browser tests in your own Ginkgo/Gomega suite — the three principles and the consequences they have for how you write specs (pragmatic simulation, poll-by-default, drop-to-chromedp, visual regression against committed baselines). Use this first when you start working with Biloba in a project, or to decide whether Biloba fits a testing task. Routes to the other biloba:* skills.
+description: The Biloba mental model for writing browser tests in your own Ginkgo/Gomega suite — the three principles and the consequences they have for how you write specs (pragmatic simulation, poll-by-default, drop-to-chromedp, visual regression against committed baselines). Use this first when you start working with Biloba in a project, or to decide whether Biloba fits a testing task. Covers the Go/Ginkgo client; for the TypeScript/vitest client see biloba:typescript. Routes to the other biloba:* skills.
 ---
 
 # Biloba: the mental model
 
-Biloba is a browser-testing framework for Go, built on [chromedp](https://github.com/chromedp/chromedp), for **Ginkgo** and **Gomega**. You don't `. import` it — you drive everything through a `*biloba.Biloba` value (conventionally `b`). Canonical docs: <https://onsi.github.io/biloba/> — pin to the version you `go get`'d (the API may shift pre-1.0).
+Biloba is a browser-testing framework for Go, built on [chromedp](https://github.com/chromedp/chromedp), for **Ginkgo** and **Gomega**. You don't `. import` it — you drive everything through a `*biloba.Biloba` value (conventionally `b`). There is also a TypeScript client for `vitest` suites — the principles below still apply, but the API and wiring differ → `biloba:typescript`. Canonical docs: <https://onsi.github.io/biloba/> — pin to the version you `go get`'d (the API may shift pre-1.0).
 
 ## The three principles — and what they mean for your specs
 
@@ -76,3 +76,4 @@ Use it for geolocation, cross-origin frames, or any CDP feature without a native
 | Testing a page/app you haven't seen | `biloba:explore-unfamiliar-page` |
 | A spec failed and you want to see why | `biloba:debug-failures` |
 | A spec is flaky / order-dependent / only fails under `-p` or CI | `biloba:flaky-specs` |
+| Writing the tests in TypeScript/`vitest` instead of Go | `biloba:typescript` |

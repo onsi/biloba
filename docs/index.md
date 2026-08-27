@@ -515,7 +515,7 @@ Here are some of the ways Biloba integrates with Ginkgo and Gomega so you can fo
 
 ### Claude Code Skills
 
-Biloba ships a set of [Claude Code](https://claude.com/claude-code) skills as a **plugin**, so an agent writing tests against *your* app has Biloba's idioms on hand.  The Biloba repo doubles as the plugin marketplace, so installation is two commands.  From inside Claude Code:
+Biloba ships a set of [Claude Code](https://claude.com/claude-code) skills as a **plugin**, so an agent writing tests against *your* app has Biloba's idioms on hand - in Go, or [in TypeScript](#biloba-from-typescript).  The Biloba repo doubles as the plugin marketplace, so installation is two commands.  From inside Claude Code:
 
 ```
 /plugin marketplace add onsi/biloba
@@ -538,6 +538,7 @@ This installs a family of `biloba:*` skills that activate automatically while yo
 | `biloba:explore-unfamiliar-page` | Orienting to a page you haven't seen, then drafting a starter spec. |
 | `biloba:debug-failures` | DOM outlines, screenshots, and the env/config knobs that surface them. |
 | `biloba:flaky-specs` | A spec that's flaky, order-dependent, or only fails under `-p`/CI — the smells and their polling fixes. |
+| `biloba:typescript` | Driving Biloba from a `vitest` suite instead of Go — the daemon topology, locators, assertions, and what isn't ported yet. |
 
 ### `chromedp`: Breaking the Fourth Wall
 
@@ -610,7 +611,7 @@ chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
 
 ### The rest of these docs...
 
-...will cover the breadth of what Biloba offers today.  The focus will be less on exhaustively documenting every function (that's what the [go docs](https://pkg.go.dev/github.com/onsi/biloba) are for) and more on providing mental models and showcasing examples.
+...will cover the breadth of what Biloba offers today.  The focus will be less on exhaustively documenting every function (that's what the [go docs](https://pkg.go.dev/github.com/onsi/biloba) are for) and more on providing mental models and showcasing examples.  They describe Biloba's Go API throughout; if you're driving Biloba from a `vitest` suite instead, read them for the mental models and then see [Biloba from TypeScript](#biloba-from-typescript).
 
 ## Navigation
 
@@ -4243,5 +4244,194 @@ BILOBA_INTERACTIVE=true ginkgo
 ```
 
 Biloba will run with `headless` set to `false` and will emit the failure message when a spec fails and then pause until you send a `^C` signal to end the suite.  You should generally do this with a small handful of focused spec and only in serial (running in non-headless mode in parallel is... a lot).
+
+## Biloba from TypeScript
+
+Everything above drives Biloba from Go, through Ginkgo and Gomega.  There is also a TypeScript client, so a `vitest` suite can drive the same browser automation the same way.
+
+> **Status: prototype.**  The package (`@onsi/biloba-vitest-prototype`) is not published to npm yet - today you build it from this repo - and its API will shift more freely than the Go one does.  The [support policy](#support-policy) applies here twice over.  What follows describes what works today.
+
+### Why there's a daemon
+
+Biloba's [first principle](#performance-and-stability) is performance via parallelization: one shared Chrome, and each parallel process driving its own isolated tab.  That works in Go because Ginkgo's parallel processes are Go processes that can each hold a `chromedp` connection directly.
+
+`vitest` also parallelizes across worker *processes* - but they're Node processes, and the Chrome DevTools Protocol plumbing Biloba relies on lives in Go.  So the TypeScript client doesn't reimplement it.  Each worker spawns a small Go daemon, `bilobad`, and talks to it over a framed JSON protocol on stdin/stdout.  Every daemon attaches to one shared Chrome:
+
+```
+vitest worker 1  ──▶  bilobad  ──┐
+vitest worker 2  ──▶  bilobad  ──┼──▶  one shared Chrome
+vitest worker 3  ──▶  bilobad  ──┘
+```
+
+The shape is the same one the Go suite has always had - creating tabs is cheaper than creating browsers - with a process boundary drawn through the middle of it.
+
+This has a consequence worth internalizing early: **polling happens on the daemon, not in your test.**  When you write `expectText("ready", {timeoutMs: 1000})`, that is *one* request.  The daemon runs the whole retry loop in-process, next to Chrome, and answers once with the outcome and the trajectory it took to get there.  You are not paying a round trip per attempt, which is what makes a 5ms polling interval a reasonable thing to ask for.
+
+### Getting set up
+
+You need the daemon binary.  It builds out of this repo:
+
+```bash
+go build -o .bin/bilobad ./cmd/bilobad
+```
+
+Start one Chrome for the whole run in vitest's global setup, and hand its websocket url to the workers:
+
+```ts
+// global-setup.ts
+import {startSharedBrowser, type SharedBrowserProcess} from "@onsi/biloba-vitest-prototype";
+import type {TestProject} from "vitest/node";
+
+const daemonExecutable = process.env.BILOBA_DAEMON_EXECUTABLE;
+if (!daemonExecutable) throw new Error("BILOBA_DAEMON_EXECUTABLE is not set");
+
+let browser: SharedBrowserProcess | undefined;
+
+export async function setup(project: TestProject): Promise<void> {
+  browser = await startSharedBrowser({executable: daemonExecutable});
+  project.provide("chromeWsUrl", browser.wsURL);
+}
+
+export async function teardown(): Promise<void> {
+  await browser?.stop();
+}
+```
+
+Then, in each test file, connect a daemon of your own and open a session:
+
+```ts
+import {inject} from "vitest";
+import {connect, type Browser, type Session} from "@onsi/biloba-vitest-prototype";
+
+let browser: Browser;
+let session: Session;
+
+beforeAll(async () => {
+  browser = await connect({chromeWsUrl: inject("chromeWsUrl")});
+  session = await browser.openSession();
+});
+
+afterAll(async () => { await browser.close(); });
+```
+
+`connect` reads the daemon's path from `BILOBA_DAEMON_EXECUTABLE` when you don't pass `daemonExecutable`, which is usually how you'll wire it up; pass it explicitly when you'd rather not depend on the environment.  Omit `chromeWsUrl` and the daemon will launch a Chrome of its own - fine for a single file, wasteful for a suite.
+
+A `Session` is the TypeScript analogue of the root tab `b`: it owns its own browser context, so its cookies and storage are isolated from every other session.  `session.prepare()` is `b.Prepare()` - it resets the session between tests and is what makes reuse cheap:
+
+```ts
+beforeEach(async () => { await session.prepare(); });
+```
+
+### Navigating and selecting
+
+Navigation mirrors [the Go API](#navigation), including the insistence on a 200:
+
+```ts
+await session.navigate("http://example.com/search?q=foo");
+await session.navigateWithStatus("http://example.com/not-found", 404);
+```
+
+`navigate` asserting `200` is a deliberate assertion, not a transport rule.  An unexpected error page is a broken fixture far more often than it's the subject of the test, and letting one through surfaces three lines later as a baffling assertion failure rather than at the navigation that caused it.  When the 4xx page *is* what you meant to load, `navigateWithStatus` says so.
+
+Selecting elements is done with locators, which are lazy - building one talks to nobody:
+
+```ts
+session.locator("#content")                            // css
+session.getByTestId("name")                            // [data-testid="name"]
+session.getByText("Save", {exact: true})               // by text content
+session.getByRole("button", {name: "Increment"})       // by ARIA role, optionally by accessible name
+session.locator(".row").first()                        // just the first match
+```
+
+These are the same ideas as Biloba's [Go selectors](#selecting-dom-elements), in the vocabulary a TypeScript reader will expect.
+
+### Acting and asserting
+
+Actions and assertions hang off a locator, and every one of them polls:
+
+```ts
+await session.getByTestId("name").setValue("Ada");
+await session.getByRole("button", {name: "Increment"}).click();
+
+await session.locator("#count").expectText("1");
+await session.locator("#spinner").expectCount(0);
+await session.getByTestId("name").expectValue("Ada");
+await session.locator("a.home").expectAttribute("href", "/");
+await session.getByRole("heading", {name: "Dashboard"}).expectVisible();
+```
+
+Two assertions live on the session rather than a locator, because they're about the page as a whole:
+
+```ts
+await session.expectUrl("/dashboard", {pathname: true});
+await session.expectEvaluation("window.app.ready", true);
+```
+
+Every one of these takes `{timeoutMs, intervalMs, signal}`.  There's no `Immediate()` equivalent and no bare-matcher form - the [dual API](#interacting-with-elements) is a Gomega idiom, and TypeScript has no `Eventually` to hand a matcher to.  Polling isn't opt-in here; it's the only mode.
+
+An assertion resolves to an `AssertionResult` describing how it got there, which is occasionally useful and always available:
+
+```ts
+const result = await session.locator("#delayed").expectText("ready", {timeoutMs: 1_000, intervalMs: 5});
+expect(result.attemptCount).toBeGreaterThan(1);
+```
+
+### Running JavaScript
+
+`evaluate` reads an expression, or calls a function when you pass an arguments array:
+
+```ts
+const title = await session.evaluate<string>("document.title");
+const sum = await session.evaluate<number>("(a, b) => a + b", [40, 2]);
+const now = await session.evaluate<number>("() => Date.now()", []);
+```
+
+The distinction is the *presence* of the array, not its length - `[]` still means "call this".  That's deliberate: it means a zero-argument function doesn't have to be spelled differently from a two-argument one.
+
+Cookies work the way [they do in Go](#cookies), with `Date` accepted for expiry:
+
+```ts
+await session.setCookies([{name: "session", value: "abc123", path: "/"}]);
+```
+
+### When something fails
+
+Every failure arrives as a `BilobaError`, and it carries the context you'd otherwise have to go find:
+
+```ts
+try {
+  await session.locator("#never").expectText("ready", {timeoutMs: 500});
+} catch (error) {
+  const failure = error as BilobaError;
+  failure.code;            // "TIMEOUT"
+  failure.locator;         // 'locator("#never")'
+  failure.expected;        // "ready"
+  failure.trajectory;      // every attempt, with what it observed and why it retried
+  failure.domOutline;      // the DOM at failure time
+  failure.screenshotPath;  // a PNG, when the daemon was given an artifactDir
+}
+```
+
+That trajectory is the [poll trajectory](#outline) the Go suite attaches on failure, handed to you as data instead of rendered as text.  Pass `artifactDir` to `connect` to get screenshots written to disk.
+
+`failure.code` is worth narrowing on, because a few of the codes mean something quite specific:
+
+| Code | What happened |
+|---|---|
+| `TIMEOUT` | The poll ran out of time.  The ordinary assertion failure. |
+| `TARGET_NOT_FOUND` | No element matched the locator. |
+| `TARGET_NOT_READY` | The element matched but refused the operation - hidden, disabled.  Means *not yet*, so a retry might succeed. |
+| `NAVIGATION` | The page loaded with a status you didn't ask for.  Waiting will never fix it; see `navigateWithStatus`. |
+| `JAVASCRIPT_ERROR` | Your expression threw in the page. |
+| `INVALID_ARGUMENT` | The request was malformed - a cookie with no domain, say. |
+| `PAGE_CRASHED` | This session's renderer died.  The browser is fine; navigate again to recover. |
+| `BROWSER_GONE` | The shared Chrome exited or crashed underneath this worker. |
+| `DRIVER_CLOSED` | This worker's daemon died.  `daemonDetail` carries its stderr. |
+
+The last three exist so that a crash reports itself as a crash.  Chrome doesn't fail calls to a dead renderer - it stops answering them - so without a dedicated signal a crashed page looks exactly like an assertion that never came true, and sends you off to debug a test that was fine.
+
+### What isn't here yet
+
+The TypeScript client covers navigation, locators, actions, assertions, cookies, and evaluation.  It does **not** yet cover dialogs, downloads, network stubbing, screenshots-as-assertions, the XPath DSL, tab management, or realistic mode.  For those, the Go API remains the complete one.
 
 {% endraw  %}

@@ -5,7 +5,7 @@ description: Author good Biloba specs in your own Ginkgo/Gomega suite — the du
 
 # Writing Biloba specs
 
-Assumes the suite is wired (`biloba:setup`) and you know the principles (`biloba:overview`). Method list → `biloba:api`. XPath → `biloba:xpath`. Flakes → `biloba:flaky-specs`. Docs: <https://onsi.github.io/biloba/#working-with-the-dom>.
+Assumes a **Go/Ginkgo** suite, wired (`biloba:setup`), and that you know the principles (`biloba:overview`). Method list → `biloba:api`. XPath → `biloba:xpath`. Flakes → `biloba:flaky-specs`. Writing the specs in TypeScript/`vitest` instead → `biloba:typescript`. Docs: <https://onsi.github.io/biloba/#working-with-the-dom>.
 
 ## RULE — get these two right in the first draft
 

@@ -12,7 +12,7 @@
     {
       "name": "biloba",
       "source": "./plugins/biloba",
-      "description": "Write fast, stable browser tests with Biloba in your own Ginkgo suite: setup, the dual immediate/matcher API, the XPath DSL, a full API reference, page scaffolding, and failure debugging."
+      "description": "Write fast, stable browser tests with Biloba in your own Ginkgo suite: setup, the dual immediate/matcher API, the XPath DSL, a full API reference, page scaffolding, and failure debugging - plus the TypeScript/vitest client."
     }
   ]
 }

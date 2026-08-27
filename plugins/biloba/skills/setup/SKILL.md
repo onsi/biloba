@@ -1,11 +1,11 @@
 ---
 name: setup
-description: Wire Biloba into your project's Ginkgo suite — go get, the bootstrap file (SynchronizedBeforeSuite + Prepare), installing chrome-headless-shell, choosing high-fidelity vs the fast headless shell, the three bootstrap variations (shared vs per-process browser, reusable vs fresh tab), window size, the .gitignore split between the throwaway screenshots directory and the committed visual baselines directory, and running the suite. Use when setting up Biloba in a repo or changing the suite-level Chrome lifecycle.
+description: Wire Biloba into your project's Ginkgo suite — go get, the bootstrap file (SynchronizedBeforeSuite + Prepare), installing chrome-headless-shell, choosing high-fidelity vs the fast headless shell, the three bootstrap variations (shared vs per-process browser, reusable vs fresh tab), window size, the .gitignore split between the throwaway screenshots directory and the committed visual baselines directory, and running the suite. Use when setting up a Go/Ginkgo Biloba suite in a repo, or changing the suite-level Chrome lifecycle. Setting up the TypeScript/vitest client instead is biloba:typescript.
 ---
 
 # Setting up Biloba in your suite
 
-One-time wiring. Authoring model → `biloba:write-tests`. Mental model → `biloba:overview`. Docs: <https://onsi.github.io/biloba/#getting-started>.
+One-time wiring for a **Go/Ginkgo** suite. Authoring model → `biloba:write-tests`. Mental model → `biloba:overview`. Wiring a **TypeScript/`vitest`** suite instead → `biloba:typescript`. Docs: <https://onsi.github.io/biloba/#getting-started>.
 
 ## 1. Add Biloba and bootstrap a suite
 
