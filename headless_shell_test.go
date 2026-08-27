@@ -88,3 +88,29 @@ var _ = Describe("parsing the Chrome version", Label("no-browser"), func() {
 		Expect(biloba.MinimumSupportedChromeMajorForTest()).To(BeNumerically(">=", 100))
 	})
 })
+
+var _ = Describe("SpinUpOptions", Label("no-browser"), func() {
+	It("writes the handshake file by default", func() {
+		_, _, skip, _ := biloba.ResolveSpinUpOptionsForTest()
+		Ω(skip).Should(BeFalse())
+	})
+
+	It("suppresses the handshake file when SkipConfigFile is passed", func() {
+		// the file is written relative to the process' cwd, so an embedder that plumbs the
+		// ChromeConnection itself gets a stray dotfile in its working directory for nothing
+		Ω(biloba.GooseConfigPathForTest(1)).Should(HavePrefix("./"))
+		_, _, skip, _ := biloba.ResolveSpinUpOptionsForTest(biloba.SkipConfigFile())
+		Ω(skip).Should(BeTrue())
+	})
+
+	It("composes with the other spin-up options", func() {
+		hf, auto, skip, path := biloba.ResolveSpinUpOptionsForTest(
+			biloba.HighFidelityHeadless(),
+			biloba.AutoInstallHeadlessShell(),
+			biloba.SkipConfigFile(),
+			biloba.HeadlessShellPath("/tmp/shell"),
+		)
+		Ω([]bool{hf, auto, skip}).Should(HaveExactElements(true, true, true))
+		Ω(path).Should(Equal("/tmp/shell"))
+	})
+})

@@ -50,9 +50,27 @@ var _ = Describe("Keyboard input", func() {
 			Eventually("#submitted").Should(b.HaveInnerText("submitted: gophers"))
 		})
 
+		It("accepts a Locator in the immediate selector form", func() {
+			b.Type(b.ByLabel("Email"), "jane@example.com")
+			Ω(b.ByLabel("Email")).Should(b.HaveValue("jane@example.com"))
+			b.Type(b.ByCSS("#typewriter"), "x", biloba.Keys.Backspace, "y")
+			Ω("#typewriter").Should(b.HaveValue("y"))
+		})
+
+		It("sends a bare named key into a Locator (immediate selector form)", func() {
+			b.Type(b.ByCSS("#search-input"), "gophers")
+			b.Type(b.ByCSS("#search-input"), biloba.Keys.Enter)
+			Eventually("#submitted").Should(b.HaveInnerText("submitted: gophers"))
+		})
+
 		It("works as a matcher polled with Eventually", func() {
 			Eventually("#typewriter").Should(b.Type("hi"))
 			Ω("#typewriter").Should(b.HaveValue("hi"))
+		})
+
+		It("works as a matcher polled against a Locator", func() {
+			Eventually(b.ByLabel("Email")).Should(b.Type("hi"))
+			Ω(b.ByLabel("Email")).Should(b.HaveValue("hi"))
 		})
 
 		It("returns a matcher when the only payload is a named key", func() {
@@ -62,12 +80,12 @@ var _ = Describe("Keyboard input", func() {
 		})
 
 		It("polls by default, timing out when the element never appears", func() {
-			b.WithTimeout(100 * time.Millisecond).Type("#non-existing", "abc")
+			b.WithTimeout(100*time.Millisecond).Type("#non-existing", "abc")
 			ExpectFailures(ContainSubstring("Timed out after"))
 		})
 
 		It("polls by default, timing out when the element stays disabled", func() {
-			b.WithTimeout(100 * time.Millisecond).Type("#disabled-input", "abc")
+			b.WithTimeout(100*time.Millisecond).Type("#disabled-input", "abc")
 			ExpectFailures(ContainSubstring("Timed out after"))
 		})
 

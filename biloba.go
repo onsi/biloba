@@ -140,7 +140,7 @@ func (gc ChromeConnection) encode() []byte {
 }
 
 /*
-SpinUpOption configures how [SpinUpChrome] launches Chrome.  See [HighFidelityHeadless], [AutoInstallHeadlessShell], [HeadlessShellPath], [StartingWindowSize], and [ChromeFlags].
+SpinUpOption configures how [SpinUpChrome] launches Chrome.  See [HighFidelityHeadless], [AutoInstallHeadlessShell], [HeadlessShellPath], [StartingWindowSize], [SkipConfigFile], and [ChromeFlags].
 */
 type SpinUpOption func(*spinUpConfig)
 
@@ -149,6 +149,7 @@ type spinUpConfig struct {
 	highFidelity         bool
 	autoInstall          bool
 	headlessShellPath    string
+	skipConfigFile       bool
 }
 
 /*
@@ -178,6 +179,17 @@ Read https://onsi.github.io/biloba/#headless-fidelity-chrome-headless-shell-by-d
 */
 func HeadlessShellPath(path string) SpinUpOption {
 	return func(c *spinUpConfig) { c.headlessShellPath = path }
+}
+
+/*
+SkipConfigFile tells [SpinUpChrome] not to write the ./.biloba-config-<process> handshake file.
+
+By default SpinUpChrome writes that file so [ConnectToChrome] can find the browser's WebSocket URL without you plumbing the [ChromeConnection] yourself.  If you do plumb it - by returning it from SynchronizedBeforeSuite and passing [BilobaConfigWithChromeConnection], as the docs recommend - nothing ever reads the file, and it is just a stray dotfile in the working directory.  Pass SkipConfigFile to suppress it.
+
+Read https://onsi.github.io/biloba/#bootstrapping-biloba to learn more
+*/
+func SkipConfigFile() SpinUpOption {
+	return func(c *spinUpConfig) { c.skipConfigFile = true }
 }
 
 /*
@@ -359,9 +371,14 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...SpinUpOption) ChromeConne
 	components := strings.Split(string(bs), "\n")
 	cc.WebSocketURL = fmt.Sprintf("ws://127.0.0.1:%s%s", components[0], components[1])
 
-	os.WriteFile(gooseConfigPath(ginkgoT.ParallelProcess()), cc.encode(), 0744)
+	if !cfg.skipConfigFile {
+		os.WriteFile(gooseConfigPath(ginkgoT.ParallelProcess()), cc.encode(), 0744)
+	}
 	ginkgoT.DeferCleanup(func() error {
 		chromedp.Cancel(browserCtx)
+		if cfg.skipConfigFile {
+			return nil
+		}
 		// The config file is a throwaway; if something already removed it, that's success, not a
 		// teardown failure (a missing file here has shown up intermittently under `ginkgo --repeat`).
 		if err := os.Remove(gooseConfigPath(ginkgoT.ParallelProcess())); err != nil && !os.IsNotExist(err) {

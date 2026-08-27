@@ -2324,7 +2324,7 @@ Biloba waits until the **first** element matching `selector` exists, is visible,
 
 `Type` chooses between its two forms by its arguments (after held modifiers are stripped out):
 
-- **A selector followed by a payload** (two or more arguments, the first a `string`/`XPath`) → the **immediate** form above: the first argument is the element, the rest is what to type.
+- **A selector followed by a payload** (two or more arguments, the first a `string`, an `XPath`, or a `Locator`) → the **immediate** form above: the first argument is the element, the rest is what to type.
 - **Just a payload** - a single string, or one or more named `Keys` → the **matcher** form: it returns a Gomega matcher you poll yourself, with the selector supplied by `Eventually`:
 
 ```go
@@ -4068,6 +4068,7 @@ Both `SpinUpChrome` and `ConnectToChrome` support a variety of configuration opt
 - `biloba.AutoInstallHeadlessShell()` downloads `chrome-headless-shell` via Chrome for Testing if it can't be found locally, instead of failing with instructions.
 - `biloba.HeadlessShellPath(path)` points Biloba at a specific `chrome-headless-shell` binary (the `BILOBA_CHROME_HEADLESS_SHELL` environment variable does the same).
 - `biloba.StartingWindowSize(width, height)` sets the default window size for all tabs.
+- `biloba.SkipConfigFile()` stops `SpinUpChrome` from writing the `./.biloba-config-<process>` handshake file.  Biloba writes that file so `ConnectToChrome` can find the browser without you plumbing the `ChromeConnection` yourself.  If you do plumb it - by returning it from `SynchronizedBeforeSuite` and passing `BilobaConfigWithChromeConnection`, as [Bootstrapping Biloba](#bootstrapping-biloba) recommends - nothing reads the file and it's just a stray dotfile in your working directory.
 - `biloba.ChromeFlags(...)` passes raw [`chromedp.ExecAllocatorOption`s](https://pkg.go.dev/github.com/chromedp/chromedp#ExecAllocatorOption) through to the Chrome process, letting you control [all manner of Chrome settings](https://github.com/chromedp/chromedp/blob/696afbda1c13788a234e9ebc0f4cd5e19e744f02/allocate.go#L56-L84).
 
 For example, to watch the browser by running headful (which implies high fidelity):

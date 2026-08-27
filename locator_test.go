@@ -3,6 +3,7 @@ package biloba_test
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega/format"
 
 	"github.com/onsi/biloba"
 )
@@ -272,5 +273,14 @@ var _ = Describe("Role / text / label locators", func() {
 		It("filters by selected", func() {
 			Expect(b.GetProperty(b.ByRole("option").Selected(), "id")).To(Equal("opt-2"))
 		})
+	})
+
+})
+
+var _ = Describe("Rendering a Locator in a failure message", Label("no-browser"), func() {
+	It("gives Gomega the human-readable rendering, not a dump of unexported fields", func() {
+		loc := b.ByRole("button").WithName("Nope")
+		Expect(format.Object(loc, 1)).To(ContainSubstring(`role=button name="Nope"`))
+		Expect(format.Object(loc, 1)).NotTo(ContainSubstring("nameSet"))
 	})
 })

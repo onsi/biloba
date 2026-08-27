@@ -36,7 +36,7 @@ Selectors: CSS strings, `XPath` (`biloba:xpath`), or `Locator`s. `b.Immediate()`
 
 ## Lifecycle
 
-- `biloba.SpinUpChrome(GinkgoT(), ...SpinUpOption)` — start Chrome (process 1). Options: `HighFidelityHeadless()`, `AutoInstallHeadlessShell()`, `HeadlessShellPath(p)`, `StartingWindowSize(w,h)`, `ChromeFlags(...)`. → `biloba:setup`
+- `biloba.SpinUpChrome(GinkgoT(), ...SpinUpOption)` — start Chrome (process 1). Options: `HighFidelityHeadless()`, `AutoInstallHeadlessShell()`, `HeadlessShellPath(p)`, `StartingWindowSize(w,h)`, `SkipConfigFile()`, `ChromeFlags(...)`. → `biloba:setup`
 - `biloba.ConnectToChrome(GinkgoT(), ...BilobaConfig)` — open this process's root tab `b`. Config → `biloba:debug-failures`
 - `b.Prepare()` — reset the root tab between specs (`BeforeEach`, `OncePerOrdered`).
 - `b.Context` — the tab's `chromedp` context (escape hatch).
@@ -186,7 +186,7 @@ Each produces a genuine `window.getSelection()` range and dispatches `mouseup` (
 ## Keyboard  (real key events, via chromedp)
 
 - `b.Type(...)` (dual) — **the** element-targeted keyboard method: focuses (which scrolls into view), then genuine keystrokes (text **and** named `Keys.*`); **appends**. Arg disambiguation (after stripping modifiers):
-  - `b.Type(selector, payload...)` — polling form: selector + ≥1 payload arg. `b.Type("input", "hello", biloba.Keys.Enter)`.
+  - `b.Type(selector, payload...)` — polling form: selector (CSS string, `XPath`, or `Locator`) + ≥1 payload arg. `b.Type("input", "hello", biloba.Keys.Enter)`, `b.Type(b.ByLabel("Email"), "jane@example.com")`.
   - `b.Type(payload)` — matcher form: a single string, or one-or-more `Keys.*`. `Eventually("#in").Should(b.Type(biloba.Keys.Enter))`.
   - The matcher form can't mix leading text + trailing keys (`b.Type("hello", Keys.Enter)` reads as selector=`"hello"`). Use the polling form.
 - `b.SendKeysToWindowImmediately(...parts)` — **focus-free, no selector, no matcher, no poll**: lands on the focused element, else fires on `document`/window (global hotkeys). Gate it yourself: `Eventually(sel).Should(b.BeFocused())` then send. To type *into* an element use `b.Type`.

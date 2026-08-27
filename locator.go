@@ -488,6 +488,11 @@ func (l Locator) String() string {
 	return base
 }
 
+// GomegaString gives Gomega the Locator's human-readable rendering.  Gomega consults
+// GomegaStringer, not Stringer (format.UseStringerRepresentation is off by default), so
+// without this a failed assertion against a Locator prints a dump of its unexported fields.
+func (l Locator) GomegaString() string { return l.String() }
+
 // describeSelector renders any selector (CSS/XPath/Locator) for failure annotations.
 func describeSelector(selector any) string {
 	switch x := selector.(type) {

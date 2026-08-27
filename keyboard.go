@@ -250,7 +250,7 @@ func (b *Biloba) Type(args ...any) types.GomegaMatcher {
 
 	firstIsSelector := false
 	switch rest[0].(type) {
-	case string, XPath:
+	case string, XPath, Locator:
 		firstIsSelector = true
 	}
 

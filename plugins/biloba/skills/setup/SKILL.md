@@ -116,6 +116,7 @@ Per-process browsers and fresh-tab-per-spec can be combined.
 - `biloba.AutoInstallHeadlessShell()` — download the shell if missing.
 - `biloba.HeadlessShellPath(path)` — point at a specific shell binary.
 - `biloba.StartingWindowSize(w, h)` — default tab size (default `1024x768`); process-wide. Per-spec override: `b.SetWindowSize(w, h)` (self-restoring).
+- `biloba.SkipConfigFile()` — don't write the `./.biloba-config-<process>` handshake file. Only useful if you plumb the `ChromeConnection` through `SynchronizedBeforeSuite` yourself (as above); otherwise `ConnectToChrome` needs the file.
 - `biloba.ChromeFlags(...)` — raw `chromedp.ExecAllocatorOption`s (e.g. `chromedp.Flag("headless", false)` to watch).
 
 `ConnectToChrome(GinkgoT(), ...)` carries Biloba-specific config — mostly failure artifacts (outlines, screenshots, inline images) → `biloba:debug-failures`. Under CI or an AI agent, **failure artifacts need zero config**: Biloba auto-detects and emits a DOM outline plus screenshot files on disk.

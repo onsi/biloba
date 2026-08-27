@@ -199,3 +199,16 @@ type TabScreenshotForTest struct {
 	Failure          string
 	ImgcatScreenshot string
 }
+
+// ResolveSpinUpOptionsForTest applies SpinUpOptions to a fresh spinUpConfig and reports the
+// resolved settings biloba_suite_test.go asserts on.
+func ResolveSpinUpOptionsForTest(options ...SpinUpOption) (highFidelity, autoInstall, skipConfigFile bool, headlessShellPath string) {
+	cfg := &spinUpConfig{}
+	for _, option := range options {
+		option(cfg)
+	}
+	return cfg.highFidelity, cfg.autoInstall, cfg.skipConfigFile, cfg.headlessShellPath
+}
+
+// GooseConfigPathForTest exposes the (cwd-relative) handshake-file path SpinUpChrome writes.
+func GooseConfigPathForTest(process int) string { return gooseConfigPath(process) }
