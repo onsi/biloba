@@ -150,6 +150,11 @@ func Poll(ctx context.Context, policy PollPolicy, assertion Assertion) (PollResu
 		}
 		observation, matched, attemptErr := assertion(attemptCtx)
 		cancelAttempt()
+		if policy.Mode == PollConsistently && result.AttemptCount > 0 && attemptErr != nil && ctx.Err() == nil &&
+			errors.Is(pollCtx.Err(), context.DeadlineExceeded) && errors.Is(attemptErr, context.DeadlineExceeded) {
+			result.Duration = time.Since(started)
+			return result, nil
+		}
 		attempt := Attempt{
 			Number:      len(result.Attempts) + 1,
 			StartedAt:   attemptStarted,
