@@ -336,7 +336,7 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...SpinUpOption) ChromeConne
 		// workaround are skipped in the default mode.
 		var outerDims []int
 		if err := chromedp.Run(browserCtx, chromedp.Evaluate("[window.outerWidth, window.outerHeight]", &outerDims)); err != nil {
-			ginkgoT.Fatalf("failed to spin up chrome: %w", err)
+			ginkgoT.Fatalf("failed to spin up chrome: %s", err)
 			return ChromeConnection{}
 		}
 		if len(outerDims) == 2 {
@@ -344,7 +344,7 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...SpinUpOption) ChromeConne
 			cc.WindowHeight = outerDims[1]
 		}
 	} else if err := chromedp.Run(browserCtx, chromedp.Evaluate("1", nil)); err != nil {
-		ginkgoT.Fatalf("failed to spin up chrome: %w", err)
+		ginkgoT.Fatalf("failed to spin up chrome: %s", err)
 		return ChromeConnection{}
 	}
 
@@ -353,7 +353,7 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...SpinUpOption) ChromeConne
 
 	bs, err := os.ReadFile(filepath.Join(tmp, "DevToolsActivePort"))
 	if err != nil {
-		ginkgoT.Fatalf("failed to spin up chrome: %w", err)
+		ginkgoT.Fatalf("failed to spin up chrome: %s", err)
 		return ChromeConnection{}
 	}
 	components := strings.Split(string(bs), "\n")
@@ -625,12 +625,12 @@ func ConnectToChrome(ginkgoT GinkgoTInterface, options ...BilobaConfigOption) *B
 		}
 		data, err := os.ReadFile(configFilePath)
 		if err != nil {
-			ginkgoT.Fatalf("failed to load ChromeConnection: %w", err)
+			ginkgoT.Fatalf("failed to load ChromeConnection: %s", err)
 			return nil
 		}
 		err = json.Unmarshal(data, &cc)
 		if err != nil {
-			ginkgoT.Fatalf("failed to decode ChromeConnection: %w", err)
+			ginkgoT.Fatalf("failed to decode ChromeConnection: %s", err)
 			return nil
 		}
 		b.ChromeConnection = cc
@@ -651,21 +651,21 @@ func ConnectToChrome(ginkgoT GinkgoTInterface, options ...BilobaConfigOption) *B
 		)
 	}
 	if err := b.bootstrapIsolatedTab(allocatorContext, bootstrapOpts); err != nil {
-		ginkgoT.Fatalf("failed to connect to chrome: %w", err)
+		ginkgoT.Fatalf("failed to connect to chrome: %s", err)
 		return nil
 	}
 
 	// Give this root tab the high-fidelity viewport emulation (see applyHighFidelityViewport); a no-op
 	// in the default chrome-headless-shell lane.
 	if err := b.applyHighFidelityViewport(); err != nil {
-		ginkgoT.Fatalf("failed to set initial window size: %w", err)
+		ginkgoT.Fatalf("failed to set initial window size: %s", err)
 		return nil
 	}
 
 	// Make focus/blur events fire even though this headless tab never holds OS focus (see
 	// applyFocusEmulation).
 	if err := b.applyFocusEmulation(); err != nil {
-		ginkgoT.Fatalf("failed to enable focus emulation: %w", err)
+		ginkgoT.Fatalf("failed to enable focus emulation: %s", err)
 		return nil
 	}
 

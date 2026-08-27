@@ -84,7 +84,7 @@ func (b *Biloba) navigateWithStatus(url string, status int) *Biloba {
 	isHTTPError := err != nil && strings.Contains(err.Error(), "ERR_HTTP_RESPONSE_CODE_FAILURE")
 
 	if errors.Is(err, context.DeadlineExceeded) {
-		b.gt.Fatalf("timed out after %s navigating to %s: the navigation never completed (Chrome may have wedged)", timeout, url)
+		b.gt.Fatalf("Timed out after %s navigating to %s: the navigation never completed (Chrome may have wedged)", timeout, url)
 		return b
 	}
 
