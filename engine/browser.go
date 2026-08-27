@@ -14,6 +14,7 @@ import (
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/inspector"
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
@@ -21,10 +22,22 @@ import (
 type BrowserConfig struct {
 	ExecutablePath string
 	WebSocketURL   string
+	Mode           ChromeMode
+	Arguments      []string
 	WindowWidth    int
 	WindowHeight   int
 	ArtifactDir    string
 }
+
+// ChromeMode selects the Chrome process variant without coupling callers to chromedp flags.
+type ChromeMode string
+
+const (
+	// ChromeModeHeadlessShell uses the lightweight chrome-headless-shell defaults.
+	ChromeModeHeadlessShell ChromeMode = "headless-shell"
+	// ChromeModeHeadless launches a full Chrome executable in modern headless mode.
+	ChromeModeHeadless ChromeMode = "headless"
+)
 
 // Browser owns one supplied Chrome process and opens isolated runner-neutral sessions within it.
 type Browser struct {
@@ -45,6 +58,21 @@ func StartBrowser(ctx context.Context, config BrowserConfig) (*Browser, error) {
 	if config.ExecutablePath == "" {
 		return nil, &Error{Code: CodeBrowserStart, Operation: "start browser", Message: "ExecutablePath is required"}
 	}
+	if config.Mode != "" && config.Mode != ChromeModeHeadlessShell && config.Mode != ChromeModeHeadless {
+		return nil, &Error{Code: CodeInvalidArgument, Operation: "start browser", Message: "mode must be headless-shell or headless", Observed: config.Mode}
+	}
+	type chromeArgument struct {
+		name  string
+		value any
+	}
+	arguments := make([]chromeArgument, 0, len(config.Arguments))
+	for _, argument := range config.Arguments {
+		name, value, parseErr := parseChromeArgument(argument)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		arguments = append(arguments, chromeArgument{name: name, value: value})
+	}
 	width, height := config.WindowWidth, config.WindowHeight
 	if width <= 0 {
 		width = 1920
@@ -62,6 +90,14 @@ func StartBrowser(ctx context.Context, config BrowserConfig) (*Browser, error) {
 		chromedp.UserDataDir(profile),
 		chromedp.WSURLReadTimeout(60*time.Second),
 	)
+	switch config.Mode {
+	case "", ChromeModeHeadlessShell:
+	case ChromeModeHeadless:
+		opts = append(opts, chromedp.Flag("headless", "new"))
+	}
+	for _, argument := range arguments {
+		opts = append(opts, chromedp.Flag(argument.name, argument.value))
+	}
 	allocCtx, cancelAllocator := chromedp.NewExecAllocator(ctx, opts...)
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
 	cancel := func() {
@@ -82,6 +118,20 @@ func StartBrowser(ctx context.Context, config BrowserConfig) (*Browser, error) {
 		ctx: browserCtx, cancel: cancel, artifactDir: config.ArtifactDir,
 		sessions: map[*Session]struct{}{}, webSocketURL: wsURL,
 	}, nil
+}
+
+func parseChromeArgument(argument string) (string, any, error) {
+	if !strings.HasPrefix(argument, "--") || len(argument) <= 2 {
+		return "", nil, &Error{Code: CodeInvalidArgument, Operation: "start browser", Message: "Chrome arguments must use --name or --name=value", Observed: argument}
+	}
+	parts := strings.SplitN(strings.TrimPrefix(argument, "--"), "=", 2)
+	if len(parts) == 1 {
+		return parts[0], true, nil
+	}
+	if parts[0] == "" {
+		return "", nil, &Error{Code: CodeInvalidArgument, Operation: "start browser", Message: "Chrome argument name cannot be empty", Observed: argument}
+	}
+	return parts[0], parts[1], nil
 }
 
 func connectBrowser(ctx context.Context, config BrowserConfig) (*Browser, error) {
@@ -177,7 +227,7 @@ func (b *Browser) OpenSession(ctx context.Context) (*Session, error) {
 		cleanupExecutor := cdp.WithExecutor(cleanupCtx, chromedp.FromContext(b.ctx).Browser)
 		_ = target.DisposeBrowserContext(browserContextID).Do(cleanupExecutor)
 	}()
-	session, err := b.openTabLocked(ctx, browserContextID, true, browserExecutor)
+	session, err := b.openTabLocked(ctx, browserContextID, true, nil, browserExecutor)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +235,7 @@ func (b *Browser) OpenSession(ctx context.Context) (*Session, error) {
 	return session, nil
 }
 
-func (b *Browser) openTab(ctx context.Context, browserContextID cdp.BrowserContextID, ownsContext bool) (*Session, error) {
+func (b *Browser) openTab(ctx context.Context, browserContextID cdp.BrowserContextID, ownsContext bool, root *Session) (*Session, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
@@ -194,10 +244,10 @@ func (b *Browser) openTab(ctx context.Context, browserContextID cdp.BrowserConte
 	opCtx, cancel := executorContext(b.ctx, ctx)
 	defer cancel()
 	chrome := chromedp.FromContext(opCtx)
-	return b.openTabLocked(ctx, browserContextID, ownsContext, cdp.WithExecutor(opCtx, chrome.Browser))
+	return b.openTabLocked(ctx, browserContextID, ownsContext, root, cdp.WithExecutor(opCtx, chrome.Browser))
 }
 
-func (b *Browser) openTabLocked(ctx context.Context, browserContextID cdp.BrowserContextID, ownsContext bool, browserExecutor context.Context) (*Session, error) {
+func (b *Browser) openTabLocked(ctx context.Context, browserContextID cdp.BrowserContextID, ownsContext bool, root *Session, browserExecutor context.Context) (*Session, error) {
 	targetID, err := target.CreateTarget("about:blank").
 		WithBrowserContextID(browserContextID).
 		WithNewWindow(true).
@@ -224,12 +274,21 @@ func (b *Browser) openTabLocked(ctx context.Context, browserContextID cdp.Browse
 	}
 	session := &Session{
 		browser: b, ctx: tabCtx, cancel: cancelTab, browserContextID: browserContextID,
-		targetID: targetID, ownsContext: ownsContext, artifactDir: b.artifactDir,
+		targetID: targetID, ownsContext: ownsContext, artifactDir: b.artifactDir, root: root,
 	}
+	if ownsContext {
+		session.root = session
+	}
+	b.listenToSession(session)
+	b.sessions[session] = struct{}{}
+	return session, nil
+}
+
+func (b *Browser) listenToSession(session *Session) {
 	// Chrome announces a dead renderer once, on this target, and then goes quiet: subsequent CDP
 	// calls neither succeed nor fail, they simply never answer.  Catching the announcement is the
 	// only way to tell a crashed page from a slow one.
-	chromedp.ListenTarget(tabCtx, func(event any) {
+	chromedp.ListenTarget(session.ctx, func(event any) {
 		if _, ok := event.(*inspector.EventTargetCrashed); ok {
 			session.markCrashed()
 		}
@@ -239,9 +298,43 @@ func (b *Browser) openTabLocked(ctx context.Context, browserContextID cdp.Browse
 		if paused, ok := event.(*fetch.EventRequestPaused); ok {
 			session.handlePausedResponse(paused)
 		}
+		if console, ok := event.(*runtime.EventConsoleAPICalled); ok {
+			session.recordConsoleMessage(console)
+		}
 	})
-	b.sessions[session] = struct{}{}
-	return session, nil
+}
+
+// Sessions returns a stable snapshot of the targets this Browser currently owns or has discovered.
+func (b *Browser) Sessions() []*Session {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]*Session, 0, len(b.sessions))
+	for session := range b.sessions {
+		out = append(out, session)
+	}
+	return out
+}
+
+func (b *Browser) closeContextDescendants(ctx context.Context, root *Session) error {
+	// Discover browser-opened descendants before taking the snapshot, so Prepare invalidates handles
+	// for explicit siblings and popups alike.
+	b.mu.Lock()
+	closed := b.closed
+	b.mu.Unlock()
+	if !closed {
+		_, _ = root.Tabs(ctx)
+	}
+	var firstErr error
+	for _, session := range b.Sessions() {
+		if session != root && session.browserContextID == root.browserContextID {
+			if err := session.Close(); err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
+	}
+	return firstErr
 }
 
 func (b *Browser) Close() error {

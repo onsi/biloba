@@ -49,11 +49,14 @@ type Session struct {
 	cancel           context.CancelFunc
 	browserContextID cdp.BrowserContextID
 	targetID         target.ID
+	openerID         target.ID
 	ownsContext      bool
 	artifactDir      string
 	mu               sync.Mutex
 	requestMu        sync.Mutex
 	requests         []Request
+	consoleMu        sync.Mutex
+	consoleMessages  []ConsoleMessage
 	holdMu           sync.Mutex
 	holds            map[string]*responseHold
 	holdOrder        []string
@@ -61,6 +64,8 @@ type Session struct {
 	fetchEnabled     bool
 	closed           bool
 	installed        bool
+	root             *Session
+	initScriptIDs    []page.ScriptIdentifier
 	// crashed is closed by Chrome's Inspector.targetCrashed listener, which runs on chromedp's event
 	// goroutine rather than under mu - hence its own lock.  A channel rather than a bool because an
 	// operation already in flight has to be interrupted, not merely refused next time: CDP does not
@@ -69,6 +74,18 @@ type Session struct {
 	crashMu sync.Mutex
 	crashed chan struct{}
 }
+
+// ContextID identifies the isolated browser context shared by this session and its descendants.
+func (s *Session) ContextID() cdp.BrowserContextID { return s.browserContextID }
+
+// TargetID identifies this session's page target.
+func (s *Session) TargetID() target.ID { return s.targetID }
+
+// OpenerID identifies the target that opened this tab, or is empty for explicitly-created tabs.
+func (s *Session) OpenerID() target.ID { return s.openerID }
+
+// OwnsContext reports whether closing this session disposes its isolated browser context.
+func (s *Session) OwnsContext() bool { return s.ownsContext }
 
 // crashSignal is closed once this session's renderer dies, and replaced when a navigation recovers.
 func (s *Session) crashSignal() <-chan struct{} {
@@ -109,6 +126,11 @@ func (s *Session) hasCrashed() bool {
 }
 
 func (s *Session) Close() error {
+	if s.ownsContext && s.browser != nil {
+		ctx, cancel := context.WithTimeout(s.browser.ctx, 5*time.Second)
+		_ = s.browser.closeContextDescendants(ctx, s)
+		cancel()
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -154,14 +176,24 @@ func (s *Session) NewTab(ctx context.Context) (*Session, error) {
 	if browser == nil {
 		return nil, &Error{Code: CodeSessionClosed, Operation: "new tab", Message: "browser is closed"}
 	}
-	return browser.openTab(ctx, browserContextID, false)
+	return browser.openTab(ctx, browserContextID, false, s.contextRoot())
+}
+
+func (s *Session) contextRoot() *Session {
+	if s.root != nil {
+		return s.root
+	}
+	return s
 }
 
 // AddInitScript installs JavaScript that runs before every future document in this tab.
 func (s *Session) AddInitScript(ctx context.Context, script string) error {
 	return s.serial(ctx, "add init script", func(opCtx context.Context) error {
 		return chromedp.Run(opCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
-			_, err := page.AddScriptToEvaluateOnNewDocument(script).Do(runCtx)
+			identifier, err := page.AddScriptToEvaluateOnNewDocument(script).Do(runCtx)
+			if err == nil {
+				s.initScriptIDs = append(s.initScriptIDs, identifier)
+			}
 			return err
 		}))
 	})
@@ -177,11 +209,23 @@ func (s *Session) Activate(ctx context.Context) error {
 }
 
 func (s *Session) Prepare(ctx context.Context) error {
+	if s.ownsContext && s.browser != nil {
+		if err := s.browser.closeContextDescendants(ctx, s); err != nil {
+			return err
+		}
+	}
 	return s.serial(ctx, "prepare", func(opCtx context.Context) error {
 		if err := s.resetResponseHolds(opCtx); err != nil {
 			return err
 		}
 		s.clearRequests()
+		s.clearConsoleMessages()
+		for _, identifier := range s.initScriptIDs {
+			if err := chromedp.Run(opCtx, page.RemoveScriptToEvaluateOnNewDocument(identifier)); err != nil {
+				return err
+			}
+		}
+		s.initScriptIDs = nil
 		// Clear storage while the tab still has its current origin. about:blank has an opaque
 		// origin, so navigating first would leave localStorage behind for the next spec. A crashed
 		// renderer has already lost that storage and no longer answers evaluation requests, so skip
@@ -190,6 +234,9 @@ func (s *Session) Prepare(ctx context.Context) error {
 			_ = EvaluateContext(opCtx, `try { window.localStorage.clear(); window.sessionStorage.clear(); } catch (e) {}`, false, nil)
 		}
 		if err := ClearCookiesContext(opCtx, s.browserContextID); err != nil {
+			return err
+		}
+		if err := s.resetEmulation(opCtx); err != nil {
 			return err
 		}
 		navigateBlank := func() error {
@@ -272,6 +319,13 @@ func (s *Session) GetCookies(ctx context.Context) ([]Cookie, error) {
 		return readErr
 	})
 	return cookies, err
+}
+
+// ClearCookies clears every cookie in this session's isolated browser context.
+func (s *Session) ClearCookies(ctx context.Context) error {
+	return s.serial(ctx, "clear cookies", func(opCtx context.Context) error {
+		return ClearCookiesContext(opCtx, s.browserContextID)
+	})
 }
 
 func (s *Session) Evaluate(ctx context.Context, script string) (any, error) {
