@@ -423,6 +423,10 @@ func (l Locator) payload() (map[string]any, error) {
 	if l.nthSet {
 		p["nthSet"], p["nth"] = true, l.nth
 	}
+	// desc rides along so a failure raised in the browser can name the locator the way String()
+	// does.  biloba.js only ever has the encoded wire form, and rendering the raw JSON at a user
+	// leaks valueMode/nameSet and friends into the message.  locate() ignores the key.
+	p["desc"] = l.String()
 	return p, nil
 }
 

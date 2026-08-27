@@ -277,10 +277,54 @@ var _ = Describe("Role / text / label locators", func() {
 
 })
 
-var _ = Describe("Rendering a Locator in a failure message", Label("no-browser"), func() {
-	It("gives Gomega the human-readable rendering, not a dump of unexported fields", func() {
+var _ = Describe("Rendering a Locator in a failure message", func() {
+	It("gives Gomega the human-readable rendering, not a dump of unexported fields", Label("no-browser"), func() {
 		loc := b.ByRole("button").WithName("Nope")
 		Expect(format.Object(loc, 1)).To(ContainSubstring(`role=button name="Nope"`))
 		Expect(format.Object(loc, 1)).NotTo(ContainSubstring("nameSet"))
+	})
+
+	// The messages a browser-side failure raises annotate themselves with the selector.  A Locator's
+	// wire form is JSON, so without the desc it carries these read
+	// `...selector: {"by":"label","value":"Nope","valueMode":"exact"}` - the same class of leak as the
+	// unexported-field dump above, one layer down.
+	Describe("a failure raised in the browser", func() {
+		BeforeEach(func() {
+			b.Navigate(fixtureServer + "/locator.html")
+			Eventually("#heading").Should(b.Exist())
+		})
+
+		It("names the locator the way String() does when nothing matches", func() {
+			b.Immediate().Click(b.ByLabel("Nope"))
+			ExpectFailures(ContainSubstring(`could not find DOM element matching selector: label="Nope"`))
+		})
+
+		It("renders a nested locator too", func() {
+			b.Immediate().Click(b.ByLabel("Nope").Within(b.ByRole("form")))
+			ExpectFailures(ContainSubstring(`could not find DOM element matching selector: label="Nope" within(role=form)`))
+		})
+
+		It("renders it on a guard failure, not just a missing element", func() {
+			b.Immediate().Click(b.ByRole("button").Disabled())
+			ExpectFailures(ContainSubstring("DOM element is not enabled: role=button disabled"))
+		})
+
+		It("renders it on the realistic interaction path", func() {
+			b.Realistic().Immediate().Click(b.ByLabel("Nope"))
+			ExpectFailures(ContainSubstring(`could not find DOM element matching selector: label="Nope"`))
+		})
+
+		It("leaves CSS and XPath selectors exactly as they were", func() {
+			b.Immediate().Click("#nope")
+			ExpectFailures(ContainSubstring("could not find DOM element matching selector: #nope"))
+
+			b.Immediate().Click(b.XPath().WithID("nope"))
+			ExpectFailures(ContainSubstring(`could not find DOM element matching selector: //*[@id="nope"]`))
+		})
+
+		It("never leaks the wire encoding", func() {
+			b.Immediate().Click(b.ByLabel("Nope"))
+			ExpectFailures(Not(ContainSubstring("valueMode")))
+		})
 	})
 })

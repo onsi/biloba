@@ -237,8 +237,16 @@ if (!window["_biloba"]) {
     // matching" (the detached-node signature).  Purely diagnostic - nothing branches on it.
     let withFound = (result, found) => { result.found = found; return result }
     // ann renders a selector the way a failure message should show it: the "s"/"x"/"a" encoding prefix
-    // dropped, introduced by a colon so it reads as a trailing clause.
-    let ann = (s) => (typeof s == "string" ? ": " + s.slice(1) : "")
+    // dropped, introduced by a colon so it reads as a trailing clause.  A locator ("a") carries its
+    // own human rendering in desc - Go's Locator.String() - because its wire form is JSON, and a
+    // user should never be shown valueMode/nameSet in a failure message.
+    let ann = (s) => {
+        if (typeof s != "string") return ""
+        if (s.charAt(0) == "a") {
+            try { return ": " + (JSON.parse(s.slice(1)).desc || s.slice(1)) } catch (e) { return ": " + s.slice(1) }
+        }
+        return ": " + s.slice(1)
+    }
     // notFound is THE missing-element error - the one one() raises - factored out so the hand-rolled
     // multi-selector probes can raise the identical message.  label names WHICH selector went missing
     // when a handler takes more than one ("other "/"container "), so the failure points somewhere.
@@ -715,10 +723,10 @@ if (!window["_biloba"]) {
     // same rect - bounded so a perpetually-animating element can't hang), then returns measurePoint.
     // Async (returns a Promise); invoked with awaitPromise on the Go side.
     b.scrollToStablePoint = (s) => {
-        let ann = (typeof s == "string" ? ": " + s.slice(1) : "")
+        let errAnnotation = ann(s)
         let n = sel(s)
-        if (!n) return Promise.resolve(rErr("could not find DOM element matching selector" + ann))
-        if (!b.isVisible(n).success) return Promise.resolve(rErr("DOM element is not visible" + ann))
+        if (!n) return Promise.resolve(rErr("could not find DOM element matching selector" + errAnnotation))
+        if (!b.isVisible(n).success) return Promise.resolve(rErr("DOM element is not visible" + errAnnotation))
         n.scrollIntoView({ block: "center", inline: "center" })
         return new Promise(resolve => {
             let prev = null, frames = 0
@@ -752,10 +760,10 @@ if (!window["_biloba"]) {
     // center, waits for its box to stop moving (same stability wait as scrollToStablePoint), then
     // returns its top-left corner in top-level viewport coordinates.  Async (returns a Promise).
     b.scrollToStableCorner = (s) => {
-        let ann = (typeof s == "string" ? ": " + s.slice(1) : "")
+        let errAnnotation = ann(s)
         let n = sel(s)
-        if (!n) return Promise.resolve(rErr("could not find DOM element matching selector" + ann))
-        if (!b.isVisible(n).success) return Promise.resolve(rErr("DOM element is not visible" + ann))
+        if (!n) return Promise.resolve(rErr("could not find DOM element matching selector" + errAnnotation))
+        if (!b.isVisible(n).success) return Promise.resolve(rErr("DOM element is not visible" + errAnnotation))
         n.scrollIntoView({ block: "center", inline: "center" })
         return new Promise(resolve => {
             let prev = null, frames = 0

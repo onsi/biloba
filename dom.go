@@ -2128,11 +2128,10 @@ func (b *Biloba) InvokeWithEachImmediately(selector string, callableScript strin
 // reports a missing element as a silent retry - this keeps their fail-on-missing-element semantics
 // byte-identical to the boolean handlers they replaced.
 func notFoundSelectorError(selector any) error {
-	encoded, err := encodeSelector(selector)
-	if err != nil {
+	if _, err := encodeSelector(selector); err != nil {
 		return err
 	}
-	return fmt.Errorf("could not find DOM element matching selector: %s", encoded[1:])
+	return fmt.Errorf("could not find DOM element matching selector: %s", describeSelector(selector))
 }
 
 // decodeTarget validates the optional trailing decode pointer the value getters accept
