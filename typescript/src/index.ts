@@ -21,21 +21,27 @@ export type SerializableValue =
   | readonly SerializableValue[]
   | {readonly [key: string]: SerializableValue};
 
+// Option bags the caller *builds* spell their optional members `?: T | undefined` throughout.  The
+// project compiles with exactOptionalPropertyTypes, under which a bare `?: T` rejects an explicit
+// undefined - so `{timeoutMs: config.timeout}` or `{daemonExecutable: process.env.FOO}` would not
+// compile, and every caller threading a maybe-value through would have to write a conditional
+// spread.  Types Biloba *returns* (AssertionResult, PollObservation, BilobaError) keep the strict
+// form, where distinguishing absent from present-but-undefined is worth having.
 export interface WaitOptions {
-  timeoutMs?: number;
-  intervalMs?: number;
-  signal?: AbortSignal;
+  timeoutMs?: number | undefined;
+  intervalMs?: number | undefined;
+  signal?: AbortSignal | undefined;
 }
 
 export interface Cookie {
   name: string;
   value: string;
-  domain?: string;
-  path?: string;
-  expires?: Date | number;
-  secure?: boolean;
-  httpOnly?: boolean;
-  sameSite?: string;
+  domain?: string | undefined;
+  path?: string | undefined;
+  expires?: Date | number | undefined;
+  secure?: boolean | undefined;
+  httpOnly?: boolean | undefined;
+  sameSite?: string | undefined;
 }
 
 export interface PollObservation {
@@ -59,6 +65,9 @@ export type BilobaErrorCode =
   | "TIMEOUT"
   | "TARGET_NOT_FOUND"
   | "TARGET_NOT_READY"
+  /** A navigation landed on an HTTP status the caller did not ask for. Retrying will not change it -
+   *  pass `expectedStatus` to `navigate` if the error page is what you meant to test. */
+  | "NAVIGATION"
   | "JAVASCRIPT_ERROR"
   | "PROTOCOL_MISMATCH"
   | "DRIVER_CLOSED"
@@ -120,9 +129,9 @@ export interface Locator {
   click(options?: WaitOptions): Promise<void>;
   setValue(value: SerializableValue, options?: WaitOptions): Promise<void>;
   expectVisible(options?: WaitOptions): Promise<AssertionResult>;
-  expectText(expected: string, options?: WaitOptions & {exact?: boolean}): Promise<AssertionResult>;
+  expectText(expected: string, options?: WaitOptions & {exact?: boolean | undefined}): Promise<AssertionResult>;
   expectCount(expected: number, options?: WaitOptions): Promise<AssertionResult>;
-  expectAttribute(name: string, expected: string, options?: WaitOptions & {exact?: boolean}): Promise<AssertionResult>;
+  expectAttribute(name: string, expected: string, options?: WaitOptions & {exact?: boolean | undefined}): Promise<AssertionResult>;
   expectValue(expected: SerializableValue, options?: WaitOptions): Promise<AssertionResult>;
 }
 
@@ -130,14 +139,15 @@ export interface Session {
   readonly id: string;
   prepare(): Promise<void>;
   navigate(url: string, options?: WaitOptions): Promise<void>;
+  navigateWithStatus(url: string, expectedStatus: number, options?: WaitOptions): Promise<void>;
   setCookies(cookies: readonly Cookie[]): Promise<void>;
   evaluate<T = unknown>(expression: string, args?: readonly SerializableValue[], options?: WaitOptions): Promise<T>;
   close(): Promise<void>;
   locator(css: string): Locator;
   getByTestId(value: string): Locator;
-  getByText(value: string, options?: {exact?: boolean}): Locator;
-  getByRole(role: string, options?: {name?: string; exact?: boolean}): Locator;
-  expectUrl(expected: string, options?: WaitOptions & {exact?: boolean; pathname?: boolean}): Promise<AssertionResult>;
+  getByText(value: string, options?: {exact?: boolean | undefined}): Locator;
+  getByRole(role: string, options?: {name?: string | undefined; exact?: boolean | undefined}): Locator;
+  expectUrl(expected: string, options?: WaitOptions & {exact?: boolean | undefined; pathname?: boolean | undefined}): Promise<AssertionResult>;
   expectEvaluation(expression: string, expected: SerializableValue, options?: WaitOptions): Promise<AssertionResult>;
 }
 
@@ -149,11 +159,11 @@ export interface Browser {
 }
 
 export interface ConnectOptions {
-  daemonExecutable?: string;
-  chromePath?: string;
-  chromeWsUrl?: string;
-  artifactDir?: string;
-  signal?: AbortSignal;
+  daemonExecutable?: string | undefined;
+  chromePath?: string | undefined;
+  chromeWsUrl?: string | undefined;
+  artifactDir?: string | undefined;
+  signal?: AbortSignal | undefined;
 }
 
 export async function connect(options: ConnectOptions = {}): Promise<Browser> {

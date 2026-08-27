@@ -26,7 +26,7 @@ func SetCookiesContext(targetCtx context.Context, browserContextID cdp.BrowserCo
 		}
 		if cookie.Domain == "" {
 			if !IsUsableCookieOrigin(location) {
-				return &Error{Code: CodeActionFailed, Operation: "set cookies", Message: "cookie needs a Domain or a session navigated to an HTTP origin", Observed: cookie.Name}
+				return &Error{Code: CodeInvalidArgument, Operation: "set cookies", Message: "cookie needs a Domain or a session navigated to an HTTP origin", Observed: cookie.Name}
 			}
 			param.URL = location
 		}

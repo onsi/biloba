@@ -5,6 +5,7 @@ export type ErrorCode =
   | "TIMEOUT"
   | "TARGET_NOT_FOUND"
   | "TARGET_NOT_READY"
+  | "NAVIGATION"
   | "JAVASCRIPT_ERROR"
   | "PROTOCOL_MISMATCH"
   | "DRIVER_CLOSED"
@@ -55,6 +56,7 @@ export interface SessionRequest {
 export interface NavigateRequest {
   sessionId: string;
   url: string;
+  expectedStatus?: number;
 }
 
 export interface PollOptions {

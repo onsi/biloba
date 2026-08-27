@@ -34,7 +34,7 @@ func (s *engineSession) Execute(ctx context.Context, operation protocol.Operatio
 	started := time.Now()
 	switch operation.Kind {
 	case protocol.OperationNavigate:
-		return oneAttempt(started, s.session.Navigate(ctx, operation.URL))
+		return oneAttempt(started, s.session.NavigateWithStatus(ctx, operation.URL, operation.ExpectedStatus))
 	case protocol.OperationSetCookies:
 		cookies := make([]engine.Cookie, len(operation.Cookies))
 		for i, cookie := range operation.Cookies {
@@ -356,6 +356,38 @@ func expectedDescription(operation protocol.Operation) string {
 	}
 }
 
+// engineProtocolCodes is the whole engine-to-protocol error vocabulary, in one place.  A code that
+// is missing here reaches the client as a generic DRIVER_ERROR - which reads as "the daemon broke"
+// for a failure the page caused, and buries the one thing the client could act on (a page-level
+// JavaScript error is JAVASCRIPT_ERROR; a navigation that never landed leaves the target not
+// ready).  The two codes with no honest counterpart are listed with the reason rather than left
+// out, so a code added to the engine shows up as a missing key - see the exhaustiveness spec in
+// main_test.go - instead of silently inheriting a plausible-looking default.
+var engineProtocolCodes = map[engine.ErrorCode]protocol.ErrorCode{
+	engine.CodeInvalidSelector: protocol.CodeInvalidArgument,
+	engine.CodeInvalidArgument: protocol.CodeInvalidArgument,
+	engine.CodeSessionClosed:   protocol.CodeTargetNotFound,
+	engine.CodeNotFound:        protocol.CodeTargetNotFound,
+	// The target was found and refused the operation - a click on a hidden element.  That is a page
+	// state, not a driver fault, and it is the one bucket where a retry might succeed.
+	engine.CodeActionFailed: protocol.CodeTargetNotReady,
+	// A navigation that landed on a status the caller did not ask for.  Deliberately not
+	// TARGET_NOT_READY: the page loaded fine, so waiting will never change the answer.
+	engine.CodeNavigation:    protocol.CodeNavigation,
+	engine.CodeJavaScript:    protocol.CodeJavaScript,
+	engine.CodeInvalidScript: protocol.CodeJavaScript,
+	engine.CodeBrowserGone:   protocol.CodeBrowserGone,
+	engine.CodePageCrashed:   protocol.CodePageCrashed,
+	engine.CodeCanceled:      protocol.CodeCancelled,
+	engine.CodeTimeout:       protocol.CodeTimeout,
+	engine.CodeDeadline:      protocol.CodeTimeout,
+	// No counterpart, deliberately.  Both are the daemon failing to bring its own Chrome up, before
+	// there is a session to report against - BROWSER_GONE means a live Chrome died underneath a
+	// worker, which is a different thing to tell a client.
+	engine.CodeBrowserStart: protocol.CodeDriver,
+	engine.CodeIO:           protocol.CodeDriver,
+}
+
 func engineRPCError(err error) error {
 	// A ProtocolError that travelled out through the engine (an engine.Fatal wrapping one, say)
 	// already knows its own code - do not flatten it to DRIVER_ERROR on the way past.
@@ -367,22 +399,9 @@ func engineRPCError(err error) error {
 	if !errors.As(err, &engineErr) {
 		return protocol.NewError(protocol.CodeDriver, err.Error())
 	}
-	switch engineErr.Code {
-	case engine.CodeInvalidSelector:
-		return protocol.NewError(protocol.CodeInvalidArgument, engineErr.Error())
-	case engine.CodeSessionClosed, engine.CodeNotFound:
-		return protocol.NewError(protocol.CodeTargetNotFound, engineErr.Error())
-	case engine.CodeBrowserGone:
-		return protocol.NewError(protocol.CodeBrowserGone, engineErr.Error())
-	case engine.CodeInvalidScript:
-		return protocol.NewError(protocol.CodeJavaScript, engineErr.Error())
-	case engine.CodePageCrashed:
-		return protocol.NewError(protocol.CodePageCrashed, engineErr.Error())
-	case engine.CodeCanceled:
-		return protocol.NewError(protocol.CodeCancelled, engineErr.Error())
-	case engine.CodeDeadline, engine.CodeTimeout:
-		return protocol.NewError(protocol.CodeTimeout, engineErr.Error())
-	default:
-		return protocol.NewError(protocol.CodeDriver, engineErr.Error())
+	code, ok := engineProtocolCodes[engineErr.Code]
+	if !ok {
+		code = protocol.CodeDriver
 	}
+	return protocol.NewError(code, engineErr.Error())
 }

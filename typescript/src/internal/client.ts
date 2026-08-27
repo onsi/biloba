@@ -93,12 +93,30 @@ class ClientSession implements Session {
     await this.#transport.navigate({sessionId: this.id, url}, options);
   }
 
+  // Mirrors the Go runner's NavigateWithStatus.  navigate() asserting 200 is what makes a broken
+  // fixture fail at the navigation rather than as a baffling assertion three lines later; this is
+  // the way to say the 4xx/5xx page is the page you meant to load.
+  async navigateWithStatus(url: string, expectedStatus: number, options: WaitOptions = {}): Promise<void> {
+    this.#assertOpen();
+    await this.#transport.navigate({sessionId: this.id, url, expectedStatus}, options);
+  }
+
   async setCookies(cookies: readonly Cookie[]): Promise<void> {
     this.#assertOpen();
     await this.#transport.setCookies({
       sessionId: this.id,
+      // The public Cookie lets a caller pass an explicit undefined for any optional member; the
+      // generated wire type does not.  Spreading each field only when it is set is what keeps that
+      // convenience from reaching the protocol - and omitted vs. present-and-undefined encode
+      // identically anyway, since JSON.stringify drops both.
       cookies: cookies.map(({expires, ...cookie}) => ({
-        ...cookie,
+        name: cookie.name,
+        value: cookie.value,
+        ...(cookie.domain !== undefined && {domain: cookie.domain}),
+        ...(cookie.path !== undefined && {path: cookie.path}),
+        ...(cookie.secure !== undefined && {secure: cookie.secure}),
+        ...(cookie.httpOnly !== undefined && {httpOnly: cookie.httpOnly}),
+        ...(cookie.sameSite !== undefined && {sameSite: cookie.sameSite}),
         ...(expires !== undefined && {
           expiresUnix: typeof expires === "number" ? expires : expires.getTime() / 1_000,
         }),
