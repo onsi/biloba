@@ -17,12 +17,13 @@ import {
   type Cookie,
   type Expectation,
   type ExpectedValue,
-  type Locator,
   type HeldResponse,
+  type Locator,
   type ResponseHold,
   type SerializableValue,
   type Session,
   type WaitOptions,
+  type XPathExpression,
 } from "../index.js";
 import {StdioTransport} from "./stdio-transport.js";
 
@@ -223,6 +224,10 @@ class ClientSession implements Session {
 
   locator(css: string): Locator {
     return new ClientLocator(this, {kind: "CSS", value: css, match: "EXACT", first: false});
+  }
+
+  xpath(expression: string | XPathExpression): Locator {
+    return new ClientLocator(this, {kind: "XPATH", value: expression.toString(), match: "EXACT", first: false});
   }
 
   getByTestId(value: string): Locator {

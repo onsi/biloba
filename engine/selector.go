@@ -41,6 +41,8 @@ type selectorFilter struct {
 
 func CSS(value string) Selector { return Selector{kind: "css", value: value} }
 
+func XPath(value string) Selector { return Selector{kind: "xpath", value: value} }
+
 func TestID(value string) Selector { return Selector{kind: "testid", value: value} }
 
 func Text(value string, mode MatchMode) Selector {
@@ -101,6 +103,9 @@ func (s Selector) Encoded() string {
 	if s.kind == "css" && s.isUnrefined() {
 		return "s" + s.value
 	}
+	if s.kind == "xpath" && s.isUnrefined() {
+		return "x" + s.value
+	}
 	payload := s.payload()
 	encoded, _ := json.Marshal(payload)
 	return "a" + string(encoded)
@@ -109,7 +114,7 @@ func (s Selector) Encoded() string {
 func (s Selector) payload() map[string]any {
 	payload := map[string]any{"by": s.kind}
 	switch s.kind {
-	case "css":
+	case "css", "xpath":
 		payload["value"] = s.value
 	case "testid":
 		payload["value"], payload["attr"] = s.value, "data-testid"
@@ -160,6 +165,8 @@ func (s Selector) Description() string {
 	switch s.kind {
 	case "css":
 		description = fmt.Sprintf("locator(%q)", s.value)
+	case "xpath":
+		description = fmt.Sprintf("xpath(%q)", s.value)
 	case "testid":
 		description = fmt.Sprintf("getByTestId(%q)", s.value)
 	case "text":

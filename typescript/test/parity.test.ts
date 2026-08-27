@@ -17,6 +17,7 @@ import {
   Keys,
   endsWith,
   startSharedBrowser,
+  xpath,
   type Browser,
   type Session,
   type SharedBrowserProcess,
@@ -88,6 +89,7 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     await session.getByTestId("name").setValue("Ada");
     await session.getByTestId("name").expectValue("Ada");
     await session.getByRole("button", {name: "Increment"}).click();
+    await session.xpath(xpath("button").withText("Increment")).expectVisible();
     await session.locator(".row")
       .filter({hasText: "Ada"})
       .within("#results")

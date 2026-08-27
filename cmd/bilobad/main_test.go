@@ -92,6 +92,15 @@ var _ = Describe("bilobad", func() {
 		))
 	})
 
+	It("adapts XPath locators to the engine encoding", func() {
+		selector, err := selectorFromProtocol(protocol.Locator{
+			Kind: protocol.LocatorXPath, Value: `//button[text()="Save"]`,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(selector.Encoded()).To(Equal(`x//button[text()="Save"]`))
+	})
+
 	It("adapts typed matcher trees and polling modes to the engine", func() {
 		expectation, err := expectationFromProtocol(protocol.Expectation{
 			Kind: protocol.ExpectAll,

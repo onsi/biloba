@@ -26,6 +26,128 @@ export type SerializableValue =
   | readonly SerializableValue[]
   | {readonly [key: string]: SerializableValue};
 
+export interface XPathExpression {
+  toString(): string;
+  hasAttr(attribute: string): XPathExpression;
+  withAttr(attribute: string, value: string): XPathExpression;
+  withAttrStartsWith(attribute: string, value: string): XPathExpression;
+  withAttrContains(attribute: string, value: string): XPathExpression;
+  withText(value: string): XPathExpression;
+  withTextStartsWith(value: string): XPathExpression;
+  withTextContains(value: string): XPathExpression;
+  withID(id: string): XPathExpression;
+  withClass(className: string): XPathExpression;
+  not(predicate: XPathExpression): XPathExpression;
+  or(...predicates: readonly XPathExpression[]): XPathExpression;
+  and(...predicates: readonly XPathExpression[]): XPathExpression;
+  child(tag?: string): XPathExpression;
+  parent(): XPathExpression;
+  descendant(tag?: string): XPathExpression;
+  ancestor(tag?: string): XPathExpression;
+  descendantNotSelf(tag?: string): XPathExpression;
+  ancestorNotSelf(tag?: string): XPathExpression;
+  followingSibling(tag?: string): XPathExpression;
+  precedingSibling(tag?: string): XPathExpression;
+  withChildMatching(childPath: XPathExpression): XPathExpression;
+  first(): XPathExpression;
+  nth(position: number): XPathExpression;
+  last(): XPathExpression;
+}
+
+class XPathBuilder implements XPathExpression {
+  constructor(private readonly expression: string) {}
+
+  toString(): string { return this.expression; }
+  hasAttr(attribute: string): XPathExpression { return this.append(`[@${attribute}]`); }
+  withAttr(attribute: string, value: string): XPathExpression { return this.append(`[@${attribute}=${quoteXPath(value)}]`); }
+  withAttrStartsWith(attribute: string, value: string): XPathExpression {
+    return this.append(`[starts-with(@${attribute}, ${quoteXPath(value)})]`);
+  }
+  withAttrContains(attribute: string, value: string): XPathExpression {
+    return this.append(`[contains(@${attribute}, ${quoteXPath(value)})]`);
+  }
+  withText(value: string): XPathExpression { return this.append(`[text()=${quoteXPath(value)}]`); }
+  withTextStartsWith(value: string): XPathExpression {
+    return this.append(`[starts-with(text(), ${quoteXPath(value)})]`);
+  }
+  withTextContains(value: string): XPathExpression {
+    return this.append(`[contains(text(), ${quoteXPath(value)})]`);
+  }
+  withID(id: string): XPathExpression { return this.withAttr("id", id); }
+  withClass(className: string): XPathExpression {
+    return this.append(`[contains(concat(' ',normalize-space(@class),' '),${quoteXPath(` ${className} `)})]`);
+  }
+  not(predicate: XPathExpression): XPathExpression {
+    return this.append(`[not(${predicateContent(predicate)})]`);
+  }
+  or(...predicates: readonly XPathExpression[]): XPathExpression {
+    return this.booleanPredicate("or", predicates);
+  }
+  and(...predicates: readonly XPathExpression[]): XPathExpression {
+    return this.booleanPredicate("and", predicates);
+  }
+  child(tag?: string): XPathExpression { return this.append(tag === undefined ? "/*" : `/${tag}`); }
+  parent(): XPathExpression { return this.append("/.."); }
+  descendant(tag?: string): XPathExpression { return this.append(tag === undefined ? "//*" : `//${tag}`); }
+  ancestor(tag?: string): XPathExpression {
+    return this.append(tag === undefined ? "/ancestor-or-self::*" : `/ancestor-or-self::${tag}`);
+  }
+  descendantNotSelf(tag?: string): XPathExpression {
+    return this.append(tag === undefined ? "/descendant::*" : `/descendant::${tag}`);
+  }
+  ancestorNotSelf(tag?: string): XPathExpression {
+    return this.append(tag === undefined ? "/ancestor::*" : `/ancestor::${tag}`);
+  }
+  followingSibling(tag?: string): XPathExpression {
+    return this.append(tag === undefined ? "/following-sibling::*" : `/following-sibling::${tag}`);
+  }
+  precedingSibling(tag?: string): XPathExpression {
+    return this.append(tag === undefined ? "/preceding-sibling::*" : `/preceding-sibling::${tag}`);
+  }
+  withChildMatching(childPath: XPathExpression): XPathExpression { return this.append(`[${childPath.toString()}]`); }
+  first(): XPathExpression { return this.append("[1]"); }
+  nth(position: number): XPathExpression {
+    if (!Number.isInteger(position)) {
+      throw new BilobaError({code: "INVALID_ARGUMENT", message: "XPath.nth requires an integer position"});
+    }
+    return this.append(`[${position}]`);
+  }
+  last(): XPathExpression { return this.append("[last()]"); }
+
+  private append(suffix: string): XPathExpression { return new XPathBuilder(this.expression + suffix); }
+  private booleanPredicate(operator: "and" | "or", predicates: readonly XPathExpression[]): XPathExpression {
+    return this.append(`[${predicates.map((predicate) => `(${predicateContent(predicate)})`).join(` ${operator} `)}]`);
+  }
+}
+
+function quoteXPath(value: string): string {
+  if (!value.includes(`"`)) return `"${value}"`;
+  return `concat(${value.split(`"`).map((component) => `"${component}"`).join(`,'"',`)})`;
+}
+
+function predicateContent(predicate: XPathExpression): string {
+  const value = predicate.toString();
+  return value.slice(1, -1);
+}
+
+function startsAsXPath(path: string): boolean {
+  return path.startsWith("/") || path.startsWith("./") || path.startsWith("(") || path.startsWith("*");
+}
+
+export function xpath(path?: string): XPathExpression {
+  if (path === undefined) return new XPathBuilder("//*");
+  return new XPathBuilder(startsAsXPath(path) ? path : `//${path}`);
+}
+
+export function relativeXPath(path?: string): XPathExpression {
+  if (path === undefined) return new XPathBuilder("./*");
+  return new XPathBuilder(startsAsXPath(path) ? path : `./${path}`);
+}
+
+export function xPredicate(): XPathExpression {
+  return new XPathBuilder("");
+}
+
 // Option bags the caller *builds* spell their optional members `?: T | undefined` throughout.  The
 // project compiles with exactOptionalPropertyTypes, under which a bare `?: T` rejects an explicit
 // undefined - so `{timeoutMs: config.timeout}` or `{daemonExecutable: process.env.FOO}` would not
@@ -217,6 +339,7 @@ export interface Session {
   sendKeys(keys: string, options?: WaitOptions): Promise<void>;
   close(): Promise<void>;
   locator(css: string): Locator;
+  xpath(expression: string | XPathExpression): Locator;
   getByTestId(value: string): Locator;
   getByText(value: string, options?: {exact?: boolean | undefined}): Locator;
   getByRole(role: string, options?: {name?: string | undefined; exact?: boolean | undefined}): Locator;

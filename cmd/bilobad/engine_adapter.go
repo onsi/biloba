@@ -400,6 +400,8 @@ func selectorFromProtocol(locator protocol.Locator) (engine.Selector, error) {
 	switch locator.Kind {
 	case protocol.LocatorCSS:
 		selector = engine.CSS(locator.Value)
+	case protocol.LocatorXPath:
+		selector = engine.XPath(locator.Value)
 	case protocol.LocatorTestID:
 		selector = engine.TestID(locator.Value)
 	case protocol.LocatorText:

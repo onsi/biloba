@@ -15,7 +15,7 @@ import (
 const Version = "1"
 
 var Capabilities = []string{
-	"locator.css", "locator.test_id", "locator.text", "locator.role", "locator.first",
+	"locator.css", "locator.xpath", "locator.test_id", "locator.text", "locator.role", "locator.first",
 	"session.prepare", "session.new_tab", "session.add_init_script", "session.activate", "navigation", "cookies", "action.click", "action.set_value", "action.realistic", "action.type", "action.send_keys", "action.drag_to",
 	"action.set_upload", "viewport.set", "evaluate", "evaluate.async", "assert.visible", "assert.text", "assert.count", "assert.attribute",
 	"assert.value", "assert.url", "assert.evaluate", "poll.server_side", "diagnostics.structured",
@@ -130,6 +130,7 @@ type LocatorKind uint8
 
 const (
 	LocatorCSS LocatorKind = iota + 1
+	LocatorXPath
 	LocatorTestID
 	LocatorText
 	LocatorRole
@@ -887,7 +888,7 @@ func locatorFromWireAt(locator *WireLocator, depth int) (Locator, *ProtocolError
 	if depth > 64 {
 		return Locator{}, NewError(CodeInvalidArgument, "locator nesting exceeds 64 levels")
 	}
-	kinds := map[string]LocatorKind{"CSS": LocatorCSS, "TEST_ID": LocatorTestID, "TEXT": LocatorText, "ROLE": LocatorRole, "AND": LocatorAnd, "OR": LocatorOr}
+	kinds := map[string]LocatorKind{"CSS": LocatorCSS, "XPATH": LocatorXPath, "TEST_ID": LocatorTestID, "TEXT": LocatorText, "ROLE": LocatorRole, "AND": LocatorAnd, "OR": LocatorOr}
 	kind, exists := kinds[locator.Kind]
 	if !exists {
 		return Locator{}, NewError(CodeInvalidArgument, "locator kind is required")

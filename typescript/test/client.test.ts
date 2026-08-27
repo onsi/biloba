@@ -12,6 +12,9 @@ import {
 	numeric,
   type AssertionResult,
   type Browser,
+  xpath,
+  relativeXPath,
+  xPredicate,
   type Cookie,
 } from "../src/index.js";
 import {connectWithTransport} from "../src/internal/client.js";
@@ -281,6 +284,56 @@ describe("Biloba TypeScript client", () => {
         },
       },
     });
+  });
+
+  it("serializes raw and composed XPath locators", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+
+    await session.xpath(`//button[text()="Save"]`).click();
+    await session.locator("article").filter({
+      has: session.xpath(xpath("h2").withText("Ada")),
+    }).expectVisible();
+
+    expect(requests.at(-2)).toMatchObject({
+      method: "Click",
+      request: {locator: {kind: "XPATH", value: `//button[text()="Save"]`}},
+    });
+    expect(requests.at(-1)).toMatchObject({
+      method: "Assert",
+      request: {
+        assertion: {
+          locator: {
+            kind: "CSS",
+            value: "article",
+            filters: [{kind: "CONTAINS", selector: {kind: "XPATH", value: `//h2[text()="Ada"]`}}],
+          },
+        },
+      },
+    });
+  });
+
+  it("builds the XPath DSL without involving the daemon", () => {
+    const habitat = xpath("div")
+      .withAttr("name", "habitat")
+      .not(xPredicate().withClass("hidden"))
+      .descendant("li")
+      .withTextContains(`Engli"sh`)
+      .last();
+
+    expect(habitat.toString()).toBe(
+      `//div[@name="habitat"][not(contains(concat(' ',normalize-space(@class),' ')," hidden "))]` +
+      `//li[contains(text(), concat("Engli",'"',"sh"))][last()]`,
+    );
+    expect(xpath().withID("save").toString()).toBe(`//*[@id="save"]`);
+    expect(xpath("(//ul)[3]").toString()).toBe("(//ul)[3]");
+    expect(relativeXPath("li").withText("Ada").toString()).toBe(`./li[text()="Ada"]`);
+    expect(xpath("ul").withChildMatching(relativeXPath("li").withText("Ada")).toString())
+      .toBe(`//ul[./li[text()="Ada"]]`);
+    expect(xpath("div").or(
+      xPredicate().withClass("warning"),
+      xPredicate().withClass("error"),
+    ).toString()).toContain(" or ");
   });
 
   it("serializes typed matchers, negation, polling modes, and immediate getters", async () => {
@@ -555,9 +608,12 @@ describe("published entry point", () => {
       "matches",
       "not",
       "numeric",
+      "relativeXPath",
       "startDaemon",
       "startSharedBrowser",
       "startsWith",
+      "xPredicate",
+      "xpath",
     ]);
   });
 });

@@ -66,7 +66,7 @@ export interface PollOptions {
 }
 
 export interface Locator {
-  kind: "CSS" | "TEST_ID" | "TEXT" | "ROLE" | "AND" | "OR";
+  kind: "CSS" | "XPATH" | "TEST_ID" | "TEXT" | "ROLE" | "AND" | "OR";
   value?: string;
   role?: string;
   name?: string;

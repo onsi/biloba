@@ -4351,10 +4351,27 @@ session.locator("#content")                            // css
 session.getByTestId("name")                            // [data-testid="name"]
 session.getByText("Save", {exact: true})               // by text content
 session.getByRole("button", {name: "Increment"})       // by ARIA role, optionally by accessible name
+session.xpath("//button[@name='save']")                 // a raw XPath expression
 session.locator(".row").first()                        // just the first match
 ```
 
 These are the same ideas as Biloba's [Go selectors](#selecting-dom-elements), in the vocabulary a TypeScript reader will expect.
+
+The XPath DSL is a runner-independent string builder.  Build an expression, then bind it to a session:
+
+```ts
+import {relativeXPath, xpath} from "@onsi/biloba-vitest-prototype";
+
+const save = xpath("button").withClass("primary").withText("Save");
+await session.xpath(save).click();
+
+const languageList = xpath("ul").withChildMatching(
+  relativeXPath("li").withText("Francais"),
+);
+await session.xpath(languageList).expectVisible();
+```
+
+The builder mirrors Go's XPath operations, including attributes, text, boolean predicates, tree axes, sibling axes, and XPath's one-based `first()`/`nth(position)`/`last()` positions.  Locator-level `.nth(index)` remains zero-based after the expression is bound with `session.xpath(...)`.
 
 ### Acting and asserting
 
@@ -4469,6 +4486,6 @@ The last three exist so that a crash reports itself as a crash.  Chrome doesn't 
 
 ### What isn't here yet
 
-The TypeScript client does not yet cover dialog handling, download capture and assertions, `HaveScreenshot` visual assertions, or the XPath DSL.  It supports the basic tab lifecycle, realistic `click`/`setValue`/`type`, request observation, and response holding, but the broader Go APIs in those areas remain Go-only.
+The TypeScript client does not yet cover dialog handling, download capture and assertions, or an equivalent of the Go `HaveScreenshot` visual assertion.  These are unported APIs, not limitations of the daemon architecture: dialog and download events can be surfaced by the engine and protocol, and visual comparison can have a TypeScript assertion API even though the literal Gomega matcher is Go-specific.  TypeScript supports the XPath DSL, basic tab lifecycle, realistic `click`/`setValue`/`type`, request observation, and response holding; the broader Go APIs in the remaining areas have not yet been threaded through the runner-neutral layers.
 
 {% endraw  %}

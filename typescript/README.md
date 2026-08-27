@@ -23,6 +23,7 @@ const session = await browser.openSession();
 await session.navigate("http://localhost:8080");
 await session.getByTestId("name").setValue("Ada");
 await session.getByRole("button", {name: "Increment"}).click();
+await session.xpath("//h1[text()='Dashboard']").expectVisible();
 await session.locator("#count").expectText("1");
 ```
 

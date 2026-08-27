@@ -1,6 +1,6 @@
 ---
 name: typescript
-description: Drive Biloba from a TypeScript/vitest suite instead of Go — daemon topology, sessions and sibling tabs, locators, actions and assertions, realistic click/setValue/type, poll modes, request observation and response holding, navigation, evaluation, and structured failures. Use when writing or debugging browser tests in TypeScript/vitest against Biloba, or when deciding between the Go and TypeScript clients. For the Go API use biloba:write-tests.
+description: Drive Biloba from a TypeScript/vitest suite instead of Go — daemon topology, sessions and sibling tabs, CSS/semantic/XPath locators, actions and assertions, realistic click/setValue/type, poll modes, request observation and response holding, navigation, evaluation, and structured failures. Use when writing or debugging browser tests in TypeScript/vitest against Biloba, or when deciding between the Go and TypeScript clients. For the Go API use biloba:write-tests.
 ---
 
 # Biloba from TypeScript
@@ -89,9 +89,24 @@ Lazy; building one talks to nobody.
 | `session.getByTestId("name")` | `[data-testid="name"]` |
 | `session.getByText("Save", {exact: true})` | by text content |
 | `session.getByRole("button", {name: "Increment"})` | by ARIA role, optionally accessible name |
+| `session.xpath("//button[@name='save']")` | raw XPath |
 | `.first()` | narrow to the first match |
 
 Prefer `getByRole`/`getByTestId` over brittle CSS, same as in Go.
+
+The XPath DSL is client-side. Build the expression, then bind it to the session:
+
+```ts
+import {relativeXPath, xpath} from "@onsi/biloba-vitest-prototype";
+
+const save = xpath("button").withClass("primary").withText("Save");
+await session.xpath(save).click();
+
+const list = xpath("ul").withChildMatching(relativeXPath("li").withText("Francais"));
+await session.xpath(list).expectVisible();
+```
+
+The builder includes attribute/text predicates, boolean predicates (`xPredicate()`), tree and sibling axes, and XPath's one-based `first()`/`nth(position)`/`last()`. Locator `.nth(index)` is zero-based after binding.
 
 ## 4. Actions and assertions
 
@@ -190,4 +205,4 @@ The last three exist so a crash reports itself as a crash: Chrome does not fail 
 
 ## 9. Not implemented in TypeScript
 
-Dialog handling, download capture and assertions, `HaveScreenshot` visual assertions, and the XPath DSL are **Go-only**. TypeScript supports the basic tab lifecycle, realistic `click`/`setValue`/`type`, request observation, and response holding; use Go when the broader APIs in those areas are required. Do not attempt a workaround through `evaluate`.
+Dialog handling, download capture and assertions, and an equivalent of Go's `HaveScreenshot` visual assertion have not yet been ported. These are gaps in the current engine/protocol surface, not architectural restrictions. TypeScript supports the XPath DSL, basic tab lifecycle, realistic `click`/`setValue`/`type`, request observation, and response holding. Do not attempt to recreate the missing APIs through `evaluate`.

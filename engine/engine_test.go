@@ -36,10 +36,17 @@ var _ = Describe("runner-neutral engine primitives", func() {
 
 	It("encodes the pilot locator forms for biloba.js", func() {
 		Expect(engine.CSS("main > button").Encoded()).To(Equal("smain > button"))
+		Expect(engine.XPath("//main//button").Encoded()).To(Equal("x//main//button"))
 		Expect(engine.TestID("save").Encoded()).To(HavePrefix("a"))
 		Expect(engine.Text("Saved", engine.Contains).First().Encoded()).To(ContainSubstring(`"nth":0`))
 		Expect(engine.Role("button", "Submit", engine.Exact).Encoded()).To(ContainSubstring(`"nameMode":"exact"`))
 		Expect(engine.Role("button", "Submit", engine.Exact).First().Description()).To(Equal(`getByRole("button", name="Submit", exact).first()`))
+	})
+
+	It("composes XPath with runner-neutral locators", func() {
+		selector := engine.XPath("//article").Containing(engine.XPath(".//h2[text()=\"Ada\"]"))
+		Expect(selector.Encoded()).To(ContainSubstring(`"selector":"x.//h2[text()=\"Ada\"]"`))
+		Expect(selector.Description()).To(Equal(`xpath("//article").containing(xpath(".//h2[text()=\"Ada\"]"))`))
 	})
 
 	It("encodes the locator composition used by the consumer suite", func() {
@@ -349,6 +356,17 @@ var _ = Describe("browser engine", func() {
 		result, err := session.Evaluate(ctx, "2")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(BeNumerically("==", 2))
+	})
+
+	It("executes XPath after locator-level composition", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+
+		text, err := session.Text(ctx, engine.XPath("//button").First())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(text.Value).To(Equal("Save"))
 	})
 
 	It("drives realistic pointer and keyboard input through the runner-neutral session", func(ctx SpecContext) {

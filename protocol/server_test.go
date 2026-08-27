@@ -141,6 +141,23 @@ var _ = Describe("driver protocol", func() {
 		Expect(locator.Filters[0].Value).To(Equal("Ada"))
 	})
 
+	It("carries XPath locators as typed selectors", func() {
+		recorder := &recordingSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+
+		Expect(client.call("click", protocol.LocatorRequest{
+			SessionID: opened.SessionID,
+			Locator:   &protocol.WireLocator{Kind: "XPATH", Value: `//button[text()="Save"]`},
+		}, nil)).To(Succeed())
+
+		locator := recorder.lastOperation().Locator
+		Expect(locator.Kind).To(Equal(protocol.LocatorXPath))
+		Expect(locator.Value).To(Equal(`//button[text()="Save"]`))
+	})
+
 	It("carries typed matcher trees and consistency polling", func() {
 		recorder := &recordingSession{}
 		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
