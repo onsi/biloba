@@ -4184,4 +4184,12 @@ BILOBA_INTERACTIVE=true ginkgo
 
 Biloba will run with `headless` set to `false` and will emit the failure message when a spec fails and then pause until you send a `^C` signal to end the suite.  You should generally do this with a small handful of focused spec and only in serial (running in non-headless mode in parallel is... a lot).
 
+## Writing Tests in TypeScript
+
+Go and Ginkgo are where Biloba is at its best, and always will be - the polling is Gomega's `Eventually`, the failure model is Ginkgo's, and matchers compose with the rest of Gomega.
+
+If your team has no Go in its repo, [**onsi/biloba-graft**](https://github.com/onsi/biloba-graft) is a Go daemon wrapping Biloba's engine with a TypeScript client driving it.  You write specs in TypeScript, in your own runner, and the browser work is still Biloba's - so the majority of Biloba's features come across.  A few Go-shaped things don't: composing matchers with `SatisfyAll`/`Not`/`Or`, `StopTrying`/`TryAgainAfter`, the [`b.Context`](#codechromedpcode-breaking-the-fourth-wall) chromedp escape hatch, and `OncePerOrdered`.  Its [differences page](https://github.com/onsi/biloba-graft/blob/main/docs/differences.md) lists them all.
+
+It's a separate project, still under construction, and nothing is published yet.  Biloba never depends on it.
+
 {% endraw  %}
