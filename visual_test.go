@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 	"image"
-	_ "image/png"
+	"image/png"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -169,10 +169,19 @@ var _ = Describe("Visual assertions", func() {
 			Ω(c.BaselinePath).Should(Equal(baseline("box")))
 			Ω(c.ActualPath).Should(Equal(artifact("box.actual")))
 			Ω(c.DiffPath).Should(BeEmpty())
-			// nothing was compared, so every measurement stays zero
+			// nothing was compared, so every measurement OF THE COMPARISON stays zero
 			Ω(c.TotalPixels).Should(Equal(0))
 			Ω(c.DifferingPixels).Should(Equal(0))
 			Ω(c.DimensionMismatch).Should(BeFalse())
+			// ...but the capture's own size is a fact about the file, not a measurement, and it is the
+			// size the baseline will be once blessed - so a consumer never has to decode the PNG for it
+			Ω(c.BaselineSize).Should(Equal(image.Point{}), "there is no baseline to have a size")
+			Ω(c.ActualSize.X).Should(BeNumerically(">", 0))
+			Ω(c.ActualSize.Y).Should(BeNumerically(">", 0))
+			decoded, err := png.DecodeConfig(bytes.NewReader(readPNG(artifact("box.actual"))))
+			Ω(err).ShouldNot(HaveOccurred())
+			Ω(c.ActualSize).Should(Equal(image.Point{X: decoded.Width, Y: decoded.Height}),
+				"should match the .actual.png Biloba wrote alongside it")
 		})
 
 		It("records the schemes it got to, when only one of them lacks a baseline", func() {

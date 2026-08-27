@@ -1,6 +1,10 @@
 package biloba
 
-import "image"
+import (
+	"bytes"
+	"image"
+	"image/png"
+)
 
 /*
 A VisualComparison is what one [Biloba.HaveScreenshot] comparison measured.  Get them with
@@ -40,9 +44,11 @@ type VisualComparison struct {
 	// MissingBaseline reports that there was no baseline to compare against - a distinct verdict from
 	// a mismatch, and one a consumer must act on differently: generate baselines with
 	// BILOBA_UPDATE_SCREENSHOTS, rather than investigate a regression.  Nothing was compared, so every
-	// measurement below stays zero; ActualPath still points at the capture Biloba wrote so you can look
-	// at what the baseline WOULD have been.  Read the verdicts in order: MissingBaseline, then
-	// DimensionMismatch, then the per-pixel numbers.
+	// measurement below stays zero - except ActualSize, which is a fact about the capture rather than a
+	// measurement of a comparison, and is populated.  BaselineSize stays zero because there is no
+	// baseline: zero baseline, real actual, is what this state looks like.  ActualPath points at the
+	// capture Biloba wrote, so you can see what the baseline WOULD have been before blessing it.  Read
+	// the verdicts in order: MissingBaseline, then DimensionMismatch, then the per-pixel numbers.
 	MissingBaseline bool
 
 	// BaselinePath, ActualPath and DiffPath are the files on disk, and are the same paths
@@ -202,9 +208,16 @@ func (m *screenshotMatcher) decide() {
 }
 
 // missingBaselineComparison is the entry for a scheme whose baseline does not exist yet.  Nothing was
-// compared, so every measurement stays zero and MissingBaseline is the field that says why.
-func (m *screenshotMatcher) missingBaselineComparison(scheme string, baselinePath string, actualPath string) VisualComparison {
-	return VisualComparison{
+// compared, so every measurement OF THE COMPARISON stays zero and MissingBaseline says why.
+//
+// ActualSize is the exception, and the distinction is worth keeping straight: it is a fact about the
+// capture rather than a measurement of a comparison, in the same category as ActualPath - which this
+// entry has always populated.  Biloba holds the capture bytes here, so leaving the size at zero next
+// to a populated path would invite the reading that the capture had none, and would make a consumer
+// decode the PNG to learn something Biloba already knew.  BaselineSize stays zero because there
+// genuinely is no baseline: zero baseline, real actual, is exactly this state.
+func (m *screenshotMatcher) missingBaselineComparison(scheme string, baselinePath string, actualPath string, actual []byte) VisualComparison {
+	out := VisualComparison{
 		Name:             m.name,
 		Label:            m.label(scheme),
 		ColorScheme:      scheme,
@@ -214,6 +227,12 @@ func (m *screenshotMatcher) missingBaselineComparison(scheme string, baselinePat
 		Tolerance:        m.cfg.tolerance.fraction,
 		ChannelTolerance: m.cfg.tolerance.channel,
 	}
+	// A capture that will not decode leaves the size at zero rather than failing: the assertion is
+	// already ending with a StopTrying about the missing baseline, and that is the useful message.
+	if decoded, err := png.DecodeConfig(bytes.NewReader(actual)); err == nil {
+		out.ActualSize = image.Point{X: decoded.Width, Y: decoded.Height}
+	}
+	return out
 }
 
 // comparison assembles the VisualComparison for one decided comparison.  diff is nil only on the

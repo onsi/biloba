@@ -365,7 +365,7 @@ func (m *screenshotMatcher) matchScheme(tab *Biloba, selector any, scheme string
 		// "there is no baseline yet" is its own verdict, not a variety of mismatch - a consumer has to
 		// act on it differently (generate baselines, not investigate a regression), so it gets an entry
 		// rather than a silence.  match() flushes it, since a StopTrying ends the assertion here.
-		m.noteAttempt(m.missingBaselineComparison(scheme, baselinePath, actualPath))
+		m.noteAttempt(m.missingBaselineComparison(scheme, baselinePath, actualPath, img))
 		return false, gomega.StopTrying(missingBaselineMessage(label, baselinePath, actualPath))
 	}
 	if readErr != nil {
