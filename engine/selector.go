@@ -45,6 +45,27 @@ func XPath(value string) Selector { return Selector{kind: "xpath", value: value}
 
 func TestID(value string) Selector { return Selector{kind: "testid", value: value} }
 
+// TestIDAttribute locates a test id using a caller-selected attribute.
+func TestIDAttribute(value, attribute string) Selector {
+	return Selector{kind: "testid", value: value, name: attribute}
+}
+
+func Label(value string, mode MatchMode) Selector {
+	return Selector{kind: "label", value: value, mode: normalizedMode(mode)}
+}
+
+func Placeholder(value string, mode MatchMode) Selector {
+	return Selector{kind: "placeholder", value: value, mode: normalizedMode(mode)}
+}
+
+func AltText(value string, mode MatchMode) Selector {
+	return Selector{kind: "alttext", value: value, mode: normalizedMode(mode)}
+}
+
+func Title(value string, mode MatchMode) Selector {
+	return Selector{kind: "title", value: value, mode: normalizedMode(mode)}
+}
+
 func Text(value string, mode MatchMode) Selector {
 	return Selector{kind: "text", value: value, mode: normalizedMode(mode)}
 }
@@ -117,7 +138,13 @@ func (s Selector) payload() map[string]any {
 	case "css", "xpath":
 		payload["value"] = s.value
 	case "testid":
-		payload["value"], payload["attr"] = s.value, "data-testid"
+		attribute := s.name
+		if attribute == "" {
+			attribute = "data-testid"
+		}
+		payload["value"], payload["attr"] = s.value, attribute
+	case "label", "placeholder", "alttext", "title":
+		payload["value"], payload["valueMode"] = s.value, normalizedMode(s.mode)
 	case "text":
 		payload["value"], payload["valueMode"] = s.value, normalizedMode(s.mode)
 	case "role":
@@ -168,7 +195,19 @@ func (s Selector) Description() string {
 	case "xpath":
 		description = fmt.Sprintf("xpath(%q)", s.value)
 	case "testid":
-		description = fmt.Sprintf("getByTestId(%q)", s.value)
+		if s.name == "" || s.name == "data-testid" {
+			description = fmt.Sprintf("getByTestId(%q)", s.value)
+		} else {
+			description = fmt.Sprintf("getByTestId(%q, attribute=%q)", s.value, s.name)
+		}
+	case "label":
+		description = fmt.Sprintf("getByLabel(%q, %s)", s.value, normalizedMode(s.mode))
+	case "placeholder":
+		description = fmt.Sprintf("getByPlaceholder(%q, %s)", s.value, normalizedMode(s.mode))
+	case "alttext":
+		description = fmt.Sprintf("getByAltText(%q, %s)", s.value, normalizedMode(s.mode))
+	case "title":
+		description = fmt.Sprintf("getByTitle(%q, %s)", s.value, normalizedMode(s.mode))
 	case "text":
 		description = fmt.Sprintf("getByText(%q, %s)", s.value, normalizedMode(s.mode))
 	case "role":
