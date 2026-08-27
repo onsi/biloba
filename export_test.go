@@ -127,6 +127,17 @@ func (b *Biloba) ShadowedHandlersNoteForTest() string {
 	return b.renderShadowedHandlers()
 }
 
+// WithThousandsForTest exposes the diagnosis's number formatting, so visual_test.go can assert that
+// VisualComparisons reports the same figures the prose does without re-implementing the commas.
+func WithThousandsForTest(n int) string {
+	return withThousands(n)
+}
+
+// ErroringHandlersNoteForTest exposes this tab's erroring-URL-matcher note for network_test.go.
+func (b *Biloba) ErroringHandlersNoteForTest() string {
+	return b.renderErroringHandlers()
+}
+
 // SetVisualDirsForTest points the root's visual-regression directories - the committed baselines and
 // the (gitignored) artifacts destination HaveScreenshot writes actual/diff PNGs to - at
 // test-controlled locations, so visual_test.go can generate its baselines into a per-spec TempDir

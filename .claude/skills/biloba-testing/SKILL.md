@@ -89,6 +89,10 @@ It("errors when the selector is malformed", func() {
 
 This `gt`/`ExpectFailures` path is also how you assert **hard errors from the four-bucket guards** — e.g. configuring a method that doesn't support a knob (`b.WithPolling(...).Navigate(...)`, `b.Immediate().Count(...)`) or configuring a bare matcher (`b.WithTimeout(d).Click()`). These are `gt.Fatalf` calls, so capture them with `ExpectFailures(ContainSubstring("does not support WithPolling"))` (or `ContainSubstring("returns a matcher")` for the bare-matcher guard).
 
+**`gt` also captures what Biloba *prints*.** `bilobaT` tees `Print`/`Printf`/`Println`/`Logf` into a `gbytes.Buffer` (`gt.buffer`) as well as the `GinkgoWriter`, so a warning that isn't a failure is still assertable: `Eventually(gt.buffer).Should(gbytes.Say(regexp.QuoteMeta(expected)))`. Use `Eventually`, not `Expect` — several of these are printed from CDP event goroutines (console forwarding, the erroring-URL-matcher note), so they arrive asynchronously. `gt.reset()` clears the buffer between specs.
+
+For an **on-failure report entry** — the diagnostic notes Biloba attaches when a spec fails — go through an `export_test.go` accessor rather than trying to observe the report: `ShadowedHandlersNoteForTest()`, `ErroringHandlersNoteForTest()`, `OccludedClicksNoteForTest()`. The note renderer is a pure function of recorded state, so the spec calls it directly and asserts on the string. That's also how you assert a note is *cleared* by `Prepare()`.
+
 For **matchers**, you usually don't go through `gt` — call `Match` directly and inspect the returned error:
 ```go
 match, err := b.BeVisible().Match("#non-existing")

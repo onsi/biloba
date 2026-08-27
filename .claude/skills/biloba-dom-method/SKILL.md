@@ -184,6 +184,11 @@ Not every method polls. `guardConfig(name, allowed...)` enforces which config kn
 
 Snapshot/one-shot methods call `b.guardConfig("Name")` (no knobs) right after `b.gt.Helper()`; waiting commands pass `knobTimeout, knobContext`. A bare-matcher method (Cat 6) or the under-applied form of a dual method uses `guardBareMatcher` instead.
 
+**Clone-with-a-flag views are a separate axis from the knobs.** `b.Realistic()`, `b.ViewportOnly()`, and the poll-config views all return a shallow copy of the tab with one field set (`rb := *b; rb.flag = true; return &rb`) — `guardConfig` governs the *knobs*, not these. Two rules when you add one:
+
+- Name it so it can't be mistaken for a getter on the same subject. `ViewportOnly()` rather than `Viewport()`, because `WindowSize()` already returns dimensions and a `Viewport()` returning a `*Biloba` would read as its sibling.
+- **A view that a method cannot honour must hard-error, not be silently ignored.** `b.ViewportOnly().CaptureScreenshotOf(sel)` fails via a small `guardViewportOnly(name)` guard; the `HaveScreenshot` path returns `StopTrying` (no amount of polling makes the flag mean something). Silently dropping the flag hands the caller a picture of the whole element with nothing to say their request was discarded — the same vacuity class as a baseline that compares nothing.
+
 **Naming conventions (poll-by-default).**
 - `Get*` (singular) → **polls** until the one element/value you asked about is present.
 - `Current*ForEach` → **snapshot** plural getter; no poll, `nil` per missing entry, empty slice when nothing matches (`CurrentPropertyForEach`, `CurrentAttributesForEach`, `CurrentValueForEach`, `CurrentInnerTextForEach`, `CurrentTextContentForEach`). Blessed wait pattern: `Eventually(sel).Should(b.HaveCount(n))` *then* read.

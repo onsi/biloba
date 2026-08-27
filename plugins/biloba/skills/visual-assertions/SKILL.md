@@ -118,6 +118,8 @@ screenshot "home-desktop" differs from baseline
 
 Same idea as the [poll trajectory](https://onsi.github.io/biloba/#outline): the words are the diagnosis, the image is the evidence. → `biloba:debug-failures`
 
+**The same diagnosis as data.** `b.VisualComparisons()` returns a `[]biloba.VisualComparison` — one per comparison that *decided* an assertion (one per scheme under `InColorSchemes`), passing ones included. It carries the paths, `Match`, `BaselineSize`/`ActualSize`/`DimensionMismatch`, the `Tolerance`/`ChannelTolerance` it ran under, `TotalPixels`/`DifferingPixels`/`Fraction`/`MaxChannelDelta`, and the verdicts `Regions`/`RegionCount`/`Shifted`/`Shift`/`Scattered`. Reach for it in a `ReportAfterEach` that records regressions, or when a spec wants to assert on *how* an image changed. **Don't parse the prose above for these numbers.** And mind which half you assert on: the measurements are definitions, the verdicts are tuned heuristics whose thresholds move — `RegionCount == 1` is fair, `== 7` breaks on an improvement.
+
 ## Determinism: which tool for which hazard
 
 | Hazard | Tool |
@@ -142,7 +144,7 @@ Same idea as the [poll trajectory](https://onsi.github.io/biloba/#outline): the 
 Eventually(b).Should(b.HaveScreenshot("dashboard", b.Mask(".relative-timestamp", b.ByTestID("avatar"))))
 ```
 
-Masking paints the matched elements flat gray **before the baseline is written and before every comparison**, so both sides are masked identically. A mask selector that matches nothing is a no-op. Any Biloba selector works (CSS, `XPath`, `Locator`).
+Masking paints the matched elements flat gray **on the capture** — before the baseline is written, and before every comparison — so both sides agree, because the baseline was itself written masked. That means **adding a mask to an assertion that already has a baseline makes it fail until you regenerate that baseline** with `BILOBA_UPDATE_SCREENSHOTS=1`: the stored image still has the unmasked region in it. A mask selector that matches nothing is a no-op. Any Biloba selector works (CSS, `XPath`, `Locator`).
 
 The freeze injects `animation: none; transition: none; caret-color: transparent; scroll-behavior: auto` for the duration of the capture and removes it after — `none`, not paused, because pausing freezes each animation at an arbitrary frame. It goes into **every open shadow root** as well as the document (a `*` rule in a document stylesheet doesn't cross a shadow boundary, so web components would otherwise animate straight through the capture) and is removed from all of them. **Closed** shadow roots can't be reached from script; a component using one is left animating, which is a likely cause when its capture won't settle.
 

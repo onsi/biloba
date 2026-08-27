@@ -75,6 +75,76 @@ var _ = Describe("Screenshots", func() {
 		})
 	})
 
+	// Biloba's page captures are of the whole document, which is what you want from a failure
+	// screenshot and is NOT what the user can actually see.  ViewportOnly() is the other question.
+	Describe("ViewportOnly", func() {
+		BeforeEach(func() {
+			b.Navigate(fixtureServer + "/element_screenshots.html")
+			Eventually("#box").Should(b.Exist())
+			b.SetWindowSize(200, 150)
+		})
+
+		It("captures only what is on screen, where the default captures the whole document", func() {
+			full, _, err := image.DecodeConfig(bytes.NewBuffer(b.CaptureScreenshot()))
+			Ω(err).ShouldNot(HaveOccurred())
+			// #below-the-fold sits at top:5000px, so the document is far taller than the window
+			Ω(full.Height).Should(BeNumerically(">", 5000))
+
+			viewport, _, err := image.DecodeConfig(bytes.NewBuffer(b.ViewportOnly().CaptureScreenshot()))
+			Ω(err).ShouldNot(HaveOccurred())
+			Ω(viewport.Width).Should(Equal(200))
+			Ω(viewport.Height).Should(Equal(150))
+		})
+
+		It("captures at the current scroll position", func() {
+			// #below-the-fold is the only red thing on this page, so "is there any red in the capture"
+			// is exactly "is it on screen" - and it does not depend on where in the viewport it lands.
+			capturedRed := func() bool {
+				img, _, err := image.Decode(bytes.NewBuffer(b.ViewportOnly().CaptureScreenshot()))
+				Ω(err).ShouldNot(HaveOccurred())
+				for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
+					for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
+						if r, g, _, _ := img.At(x, y).RGBA(); r>>8 > 200 && g>>8 < 60 {
+							return true
+						}
+					}
+				}
+				return false
+			}
+
+			// at the top of the document the green #box is on screen and the red #below-the-fold is not
+			img, _, err := image.Decode(bytes.NewBuffer(b.ViewportOnly().CaptureScreenshot()))
+			Ω(err).ShouldNot(HaveOccurred())
+			r, g, _, _ := img.At(80, 70).RGBA() // inside #box: 20,30 -> 140,110
+			Ω(g >> 8).Should(BeNumerically(">", 200))
+			Ω(r >> 8).Should(BeNumerically("<", 60))
+			Ω(capturedRed()).Should(BeFalse())
+
+			b.Run("document.getElementById('below-the-fold').scrollIntoView()")
+			Eventually(capturedRed).Should(BeTrue())
+		})
+
+		It("leaves the tab it was derived from alone", func() {
+			b.ViewportOnly().CaptureScreenshot()
+			full, _, err := image.DecodeConfig(bytes.NewBuffer(b.CaptureScreenshot()))
+			Ω(err).ShouldNot(HaveOccurred())
+			Ω(full.Height).Should(BeNumerically(">", 5000))
+		})
+
+		// An element capture is already clipped to the element's box.  Silently ignoring the flag would
+		// hand back a picture of the whole element with nothing to say the request was dropped.
+		It("refuses an element capture rather than silently ignoring the flag", func() {
+			b.ViewportOnly().CaptureScreenshotOf("#box")
+			ExpectFailures(ContainSubstring("CaptureScreenshotOf cannot be called on a ViewportOnly() view"))
+
+			b.ViewportOnly().CaptureImgcatScreenshotOf("#box")
+			ExpectFailures(ContainSubstring("CaptureImgcatScreenshotOf cannot be called on a ViewportOnly() view"))
+
+			b.ViewportOnly().CaptureScreenshotOfToFile("#box", filepath.Join(GinkgoT().TempDir(), "x.png"))
+			ExpectFailures(ContainSubstring("CaptureScreenshotOfToFile cannot be called on a ViewportOnly() view"))
+		})
+	})
+
 	Describe("CaptureScreenshotOf", func() {
 		BeforeEach(func() {
 			b.Navigate(fixtureServer + "/element_screenshots.html")

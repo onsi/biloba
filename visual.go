@@ -88,9 +88,12 @@ changes on every run (a timestamp, an avatar, an ad slot) stops failing the asse
 
 	Eventually(b).Should(b.HaveScreenshot("home", b.Mask(".timestamp", b.XPath().WithID("ad"))))
 
-The same paint is applied before a baseline is written and before every comparison, so both sides of
-the comparison are always masked identically.  A selector that matches nothing is a no-op - masking an
-element that is only sometimes on the page must not fail the assertion.
+The paint is applied to the capture - before a baseline is written, and before every comparison - so
+both sides always agree, because the baseline was itself written masked.  Which means ADDING a mask to
+an assertion that already has a baseline makes it fail until you regenerate that baseline under
+BILOBA_UPDATE_SCREENSHOTS: the stored image still has the unmasked region in it.  A selector that
+matches nothing is a no-op - masking an element that is only sometimes on the page must not fail the
+assertion.
 
 Read https://onsi.github.io/biloba/#visual-assertions to learn more about visual assertions
 */
@@ -296,6 +299,11 @@ func (m *screenshotMatcher) subject(actual any) (*Biloba, any, error) {
 }
 
 func (m *screenshotMatcher) matchScheme(tab *Biloba, selector any, scheme string) (bool, error) {
+	if selector != nil && tab.viewportOnly {
+		// StopTrying: an element capture is already clipped to the element's box, so no amount of
+		// polling makes ViewportOnly() mean anything here.  See Biloba.ViewportOnly.
+		return false, gomega.StopTrying("HaveScreenshot cannot capture an element through a ViewportOnly() view - an element capture is already clipped to the element's box.  Use ViewportOnly() with a capture of the tab itself.")
+	}
 	label := m.label(scheme)
 	baselinePath, err := m.baselinePath(scheme)
 	if err != nil {
@@ -339,6 +347,7 @@ func (m *screenshotMatcher) matchScheme(tab *Biloba, selector any, scheme string
 		return false, gomega.StopTrying(fmt.Sprintf("Failed to compare %s against its baseline:\n%s", label, err.Error()))
 	}
 	if diff.Match {
+		m.b.recordVisualComparison(m.comparison(scheme, diff, screenshotPaths{Baseline: baselinePath}))
 		return true, nil
 	}
 	m.record(scheme, diff, img)
@@ -500,6 +509,9 @@ func (m *screenshotMatcher) FailureMessage(actual any) string {
 		paths.Diff = writeVisualArtifact(m.artifactPath(scheme, "diff"), diffPNG)
 		m.b.recordArtifact(VisualDiffArtifact, paths.Diff, label)
 	}
+	// This is the attempt that decides the assertion, and the only one whose numbers are about
+	// anything - see Biloba.VisualComparisons.
+	m.b.recordVisualComparison(m.comparison(scheme, diff, paths))
 	return diff.diagnose(label, paths) + m.inlineDiffImage(diffPNG)
 }
 
@@ -602,7 +614,9 @@ func (b *Biloba) captureForComparison(selector any, cfg screenshotConfig, scheme
 	// factor from the decoded image.
 	var originX, originY, cssWidth float64
 	if selector == nil {
-		img, cssWidth, err = b.fullPageScreenshot()
+		var origin page.Viewport
+		img, origin, err = b.pageScreenshot()
+		originX, originY, cssWidth = origin.X, origin.Y, origin.Width
 	} else {
 		var clip *page.Viewport
 		var notes captureNotes
@@ -688,22 +702,19 @@ func (b *Biloba) clearLeakedColorSchemeEmulation() {
 	}
 }
 
-// fullPageScreenshot captures the whole document and also reports its width in CSS pixels.  The two
-// come from the same round trip so they describe the same layout; the width is what maskRects divides
-// by to recover the device scale factor.
+// pageScreenshot captures the page and also reports the captured area in CSS pixels.  The two come
+// from the same round trip so they describe the same layout; the origin and width are what maskRects
+// needs to place mask boxes, which are measured in document coordinates.
 //
-// It expands the viewport only when the document is actually taller or wider than it - see
-// expandsViewport for why that expansion is worth avoiding.  When the content already fits, the
-// expanded capture and the plain one are the same pixels, so skipping it changes nothing except that
-// the page stops being told its viewport resized.  That is the app-shell case: a document that never
-// scrolls because an inner pane does.
-func (b *Biloba) fullPageScreenshot() ([]byte, float64, error) {
+// Which page - the whole document, or just what is on screen - is [Biloba.ViewportOnly]'s call; see
+// capturePageAction for what each one does.
+func (b *Biloba) pageScreenshot() ([]byte, page.Viewport, error) {
 	ctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
 	var img []byte
-	var cssWidth float64
-	err := chromedp.Run(ctx, capturePageAction(&img, &cssWidth))
-	return img, cssWidth, err
+	var origin page.Viewport
+	err := chromedp.Run(ctx, capturePageAction(b.viewportOnly, &img, &origin))
+	return img, origin, err
 }
 
 // maskRects resolves the mask selectors into image-coordinate rectangles for the capture in img.

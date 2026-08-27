@@ -118,6 +118,41 @@ func inlineImagesSupported() bool {
 }
 
 /*
+ViewportOnly() returns a lightweight view of this tab whose page captures contain only what is
+currently on screen, instead of the whole document.  Like [Biloba.Realistic] it is a shallow
+clone-with-a-flag:
+
+	b.ViewportOnly().CaptureScreenshotToFile("above-the-fold.png")
+	Expect(b.ViewportOnly()).To(b.HaveScreenshot("above-the-fold.png"))
+
+Biloba's default is the whole document, which is usually what you want from a failure screenshot -
+but it is not what the user can actually see, and "does the fold still look right" is a different
+question from "does the page still look right".  A viewport capture is taken at the current scroll
+position, so scroll first if you mean somewhere other than the top.
+
+ViewportOnly applies to captures of the page.  A capture of an ELEMENT is already clipped to that
+element's box, so combining the two is a hard error rather than a silent no-op:
+[Biloba.CaptureScreenshotOf] and a [Biloba.HaveScreenshot] given a selector both refuse it.
+
+Read https://onsi.github.io/biloba/#capturing-screenshots for details.
+*/
+func (b *Biloba) ViewportOnly() *Biloba {
+	nb := *b
+	nb.viewportOnly = true
+	return &nb
+}
+
+// guardViewportOnly rejects an element capture taken through a ViewportOnly() view.  Silently
+// ignoring the flag would be the worse option: the caller asked for "the visible part" and would get
+// a picture of the whole element with nothing to say so.
+func (b *Biloba) guardViewportOnly(name string) {
+	b.gt.Helper()
+	if b.viewportOnly {
+		b.gt.Fatalf("%s cannot be called on a ViewportOnly() view - an element capture is already clipped to the element's box.  Use ViewportOnly() with the page captures (CaptureScreenshot, CaptureScreenshotToFile, CaptureImgcatScreenshot, or HaveScreenshot on the tab).", name)
+	}
+}
+
+/*
 CaptureScreenshot() returns a full screenshot of the current tab as a []byte array (you can decode it with the image package)
 
 Like all the screenshot captures it is a waiting command bounded by its own ~5s default deadline; override that with [Biloba.WithTimeout] or abort it with [Biloba.WithContext] (WithPolling and Immediate are not supported).
@@ -136,30 +171,55 @@ func (b *Biloba) captureScreenshot() []byte {
 	ctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
 	var img []byte
-	err := chromedp.Run(ctx, capturePageAction(&img, nil))
+	err := chromedp.Run(ctx, capturePageAction(b.viewportOnly, &img, nil))
 	if err != nil {
 		b.gt.Fatalf("Failed to capture screenshot:\n%s", err.Error())
 	}
 	return img
 }
 
-// capturePageAction captures the whole document as a PNG, and optionally reports the document's width
-// in CSS pixels (which is what the visual-regression path divides by to recover the device scale
-// factor).  Both come out of the same round trip, so they describe the same layout.
+// capturePageAction captures the page as a PNG and, optionally, reports the captured area in CSS
+// pixels via origin: X/Y place the capture in document coordinates (which is the space mask boxes are
+// measured in) and Width is what the visual-regression path divides by to recover the device scale
+// factor.  Both come out of the same round trip as the capture, so they describe the same layout.
 //
-// It expands the viewport only when the document is actually bigger than it - see expandsViewport for
-// why that expansion is worth avoiding.  When the content already fits, the expanded capture and the
-// plain one are the same pixels, so skipping it changes nothing except that the page stops being told
-// its viewport resized.  That is the app-shell case: a document that never scrolls because an inner
-// pane does.
-func capturePageAction(img *[]byte, cssWidth *float64) chromedp.ActionFunc {
+// The default captures the whole document, expanding the viewport only when the document is actually
+// bigger than it - see expandsViewport for why that expansion is worth avoiding.  When the content
+// already fits, the expanded capture and the plain one are the same pixels, so skipping it changes
+// nothing except that the page stops being told its viewport resized.  That is the app-shell case: a
+// document that never scrolls because an inner pane does.
+//
+// viewportOnly captures just what is on screen instead - see [Biloba.ViewportOnly].  Its origin is the
+// current scroll position rather than the document origin, which is why origin carries a point and not
+// just a width.
+func capturePageAction(viewportOnly bool, img *[]byte, origin *page.Viewport) chromedp.ActionFunc {
 	return func(ctx context.Context) error {
-		_, _, _, cssLayoutViewport, _, cssContentSize, err := page.GetLayoutMetrics().Do(ctx)
+		_, _, _, cssLayoutViewport, cssVisualViewport, cssContentSize, err := page.GetLayoutMetrics().Do(ctx)
 		if err != nil {
 			return err
 		}
-		if cssWidth != nil {
-			*cssWidth = cssContentSize.Width
+		if viewportOnly {
+			if origin != nil {
+				// The visual viewport is what Chrome actually paints when captureBeyondViewport is off;
+				// the layout viewport is the fallback for the (pinch-zoom-less) case where it is absent.
+				switch {
+				case cssVisualViewport != nil:
+					origin.X, origin.Y = cssVisualViewport.PageX, cssVisualViewport.PageY
+					origin.Width, origin.Height = cssVisualViewport.ClientWidth, cssVisualViewport.ClientHeight
+				case cssLayoutViewport != nil:
+					origin.X, origin.Y = float64(cssLayoutViewport.PageX), float64(cssLayoutViewport.PageY)
+					origin.Width, origin.Height = float64(cssLayoutViewport.ClientWidth), float64(cssLayoutViewport.ClientHeight)
+				}
+			}
+			*img, err = page.CaptureScreenshot().
+				WithFromSurface(true).
+				WithCaptureBeyondViewport(false).
+				WithFormat(page.CaptureScreenshotFormatPng).
+				Do(ctx)
+			return err
+		}
+		if origin != nil {
+			origin.Width, origin.Height = cssContentSize.Width, cssContentSize.Height
 		}
 		// Exact equality, not "fits within": anything looser and the two captures could differ in size,
 		// which would invalidate every baseline taken with the other one.  Chrome reports both in CSS
@@ -239,6 +299,7 @@ Read https://onsi.github.io/biloba/#capturing-screenshots for details.
 func (b *Biloba) CaptureScreenshotOf(selector any) []byte {
 	b.gt.Helper()
 	b.guardConfig("CaptureScreenshotOf", knobTimeout, knobContext)
+	b.guardViewportOnly("CaptureScreenshotOf")
 	return b.captureScreenshotOf(selector)
 }
 
@@ -398,6 +459,7 @@ Read https://onsi.github.io/biloba/#capturing-screenshots for details.
 func (b *Biloba) CaptureImgcatScreenshotOf(selector any) string {
 	b.gt.Helper()
 	b.guardConfig("CaptureImgcatScreenshotOf", knobTimeout, knobContext)
+	b.guardViewportOnly("CaptureImgcatScreenshotOf")
 	return b.asImgCat(b.captureScreenshotOf(selector))
 }
 
@@ -413,6 +475,7 @@ Read https://onsi.github.io/biloba/#capturing-screenshots for details.
 func (b *Biloba) CaptureScreenshotOfToFile(selector any, path string) string {
 	b.gt.Helper()
 	b.guardConfig("CaptureScreenshotOfToFile", knobTimeout, knobContext)
+	b.guardViewportOnly("CaptureScreenshotOfToFile")
 	return b.writeScreenshotToFile(b.captureScreenshotOf(selector), path)
 }
 

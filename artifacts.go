@@ -44,7 +44,7 @@ The list is cleared by [Biloba.Prepare], so it always describes the current spec
 		}
 	})
 
-Artifacts is a snapshot: it does not poll, and it rejects the poll-config knobs.
+Artifacts is a snapshot: it does not poll, and it rejects the poll-config knobs.  For what a visual comparison MEASURED, rather than the files it wrote, see [Biloba.VisualComparisons].
 
 Read https://onsi.github.io/biloba/#collecting-the-files-biloba-wrote to learn more
 */

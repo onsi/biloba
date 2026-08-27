@@ -229,6 +229,7 @@ When the contract really is "it still looks like this" (a chart, a themed rail, 
 ```go
 Eventually(".chart").WithTimeout(10*time.Second).Should(b.HaveScreenshot("revenue-chart"))
 Eventually(b).Should(b.HaveScreenshot("home", b.Mask(".relative-timestamp"), b.InColorSchemes("light", "dark")))
+Eventually(b.ViewportOnly()).Should(b.HaveScreenshot("home-fold"))   // just what's on screen, not the whole document
 ```
 
 The **first run fails** — Biloba never writes a missing baseline and passes. Look at the `.actual.png` it wrote, then create the baseline with `BILOBA_UPDATE_SCREENSHOTS=1 ginkgo -r -p`. Baselines go in `./biloba-baselines` (commit them); the `.actual.png`/`.diff.png` a failure writes are gitignored artifacts. Options: `b.Mask`, `b.Tolerance`, `b.ChannelTolerance`, `b.Animated`, `b.InColorSchemes`. Animations, transitions, and the caret are frozen for you (inside open shadow roots too), and an update run settles the page before writing; scrollbars, cross-platform font rendering, and closed shadow roots are not covered — details in `biloba:visual-assertions`.
@@ -264,7 +265,7 @@ b.Navigate("/app")
 Eventually(".user").Should(b.HaveCount(2))
 ```
 
-Stubs are per-tab and reset by `Prepare()`. Also `b.AbortRequest(url)`, `b.ModifyRequest(url).WithURL/.WithMethod/.WithHeader/.WithBody(...)`, and `b.ModifyResponse(url).WithStatus/.WithHeader/.WithBody/.Using(func(biloba.InterceptedResponse) biloba.StubResponse)`. All share one **first-match-wins** handler list. While interception is on Biloba disables the HTTP cache (a cached response raises no interception event), restoring it in `Prepare()`.
+Stubs are per-tab and reset by `Prepare()`. Also `b.AbortRequest(url)`, `b.ModifyRequest(url).WithURL/.WithMethod/.WithHeader/.WithBody(...)`, and `b.ModifyResponse(url).WithStatus/.WithHeader/.WithBody/.Using(func(biloba.InterceptedResponse) biloba.StubResponse)` — the `InterceptedResponse` carries `URL` as well as `Status`/`Headers`/`Body`, which is how a transform registered with a *matcher* tells the responses apart. All share one **first-match-wins** handler list. While interception is on Biloba disables the HTTP cache (a cached response raises no interception event), restoring it in `Prepare()`.
 
 Every registration returns a handle — `stub.Count()`/`abort.Count()`/`mod.Count()` — reporting how many dispatches *that handler* claimed. **Assert it fired:** `Eventually(stub.Count).Should(Equal(1))`. A typo'd URL otherwise matches nothing, passes through to the real network, and the spec passes for the wrong reason.
 

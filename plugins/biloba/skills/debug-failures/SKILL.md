@@ -19,6 +19,8 @@ Biloba detects the environment in `ConnectToChrome`. "Automation" = `CI` is set 
 
 So an agent or CI run needs nothing: `ginkgo -r -p`, then read the outline and the screenshot files. `BILOBA_SCREENSHOTS_DIR=./artifacts` points the directory elsewhere.
 
+**Uploading the numbers, not just the files:** `b.VisualComparisons()` returns what each `HaveScreenshot` comparison *measured* — `Fraction`, `DifferingPixels`, `MaxChannelDelta`, the region/shift/scattered verdicts, the three paths — so a reporter can record a visual regression without parsing the prose. Passing comparisons are recorded too, so an empty list means the spec asserted nothing visually. Treat the measurements as stable and the verdicts as tuned heuristics.
+
 **Uploading the files from CI:** `b.Artifacts()` returns what Biloba wrote this spec — failure screenshots, the visual `.actual`/`.diff`/baseline PNGs, and any `CaptureScreenshotToFile` — as `[]biloba.Artifact` (`Kind`, absolute `Path`, `Label`), so you don't parse the paths back out of the printed output. The failure screenshots are written by a cleanup, so read it from a `ReportAfterEach`; an `AfterEach` runs too early and misses them. `Prepare()` clears the list, so it always describes one spec.
 
 ```go
@@ -114,6 +116,15 @@ The run stays green, so this is easy to scroll past — don't. The baseline just
 ```
 
 Reported only when a handler **never fired** *and* was shadowed at least once. **Limit:** it's a failure artifact, so it cannot surface shadowing's other presentation — a leftover *stateful* handler claiming the response, passing it through untouched, spec **green**. Only your own `Eventually(hold.Count).Should(Equal(1))` catches that (`biloba:flaky-specs` §6).
+
+**"Network handler's URL matcher failed to evaluate"** — a Gomega matcher can return an *error* instead of a verdict (`BeNumerically(">", 3)` handed a URL string). Biloba can't intercept a request it can't decide about, so it treats it as a non-match and the request goes to the **real network** — which is why the spec then fails somewhere that has nothing to do with the matcher.
+
+```
+⚠ A StubRequest handler registered at network_test.go:514 has a URL matcher that failed to evaluate 1 URL:
+  expected a number.  Got: <string>: http://127.0.0.1:8080/api/echo
+```
+
+The error is also printed to the test output the first time each handler errors, so it shows up on a *passing* run too. Unlike the shadowed-handler note this fires whether or not the handler ever ran: a matcher that errors on one URL and answers on the next still let a request through.
 
 ### Two failure *messages* that self-explain
 

@@ -829,14 +829,22 @@ type Biloba struct {
 	// visual actual/diff/baseline PNGs, explicit captures).  Lives on the root tab and is reset by
 	// Prepare().  artifactLock guards it: the visual-regression writes happen inside a matcher, on
 	// whatever goroutine Gomega is polling from.
-	artifacts    []Artifact
-	artifactLock *sync.Mutex
+	artifacts []Artifact
+	// visualComparisons accumulates what each decided HaveScreenshot comparison measured - see
+	// Biloba.VisualComparisons.  Shares artifactLock with artifacts: same writers, same moments.
+	visualComparisons []VisualComparison
+	artifactLock      *sync.Mutex
 
-	requests         []*Request
+	requests []*Request
+	// viewportOnly routes page captures through ViewportOnly() - see that method.
+	viewportOnly     bool
 	inflightRequests map[network.RequestID]bool
-	requestHandlers  []*requestHandler       // ordered, first-match-wins: stub / abort / modify-request
-	responseHandlers []*ResponseModification // ordered, first-match-wins: modify-response (response stage)
-	fetchEnabled     bool
+	// pendingResponseDispatch carries a response-stage handler resolution from the request-stage pause
+	// that computed it to the response-stage pause that cashes it in - see responseDispatch.
+	pendingResponseDispatch map[fetch.RequestID]*responseDispatch
+	requestHandlers         []*requestHandler       // ordered, first-match-wins: stub / abort / modify-request
+	responseHandlers        []*ResponseModification // ordered, first-match-wins: modify-response (response stage)
+	fetchEnabled            bool
 
 	// The boolean failure-artifact knobs are stored positive-sense and default to their human
 	// (interactive) values, set in newBiloba; ConnectToChrome adjusts them for automation.
@@ -904,13 +912,14 @@ func (b *Biloba) GomegaString() string {
 
 func newBiloba(ginkgoT GinkgoTInterface) *Biloba {
 	b := &Biloba{
-		gt:               ginkgoT,
-		lock:             &sync.Mutex{},
-		artifactLock:     &sync.Mutex{},
-		downloads:        map[string]*Download{},
-		downloadHistory:  map[string]time.Time{},
-		tabs:             map[target.ID]*Biloba{},
-		inflightRequests: map[network.RequestID]bool{},
+		gt:                      ginkgoT,
+		lock:                    &sync.Mutex{},
+		artifactLock:            &sync.Mutex{},
+		downloads:               map[string]*Download{},
+		downloadHistory:         map[string]time.Time{},
+		tabs:                    map[target.ID]*Biloba{},
+		inflightRequests:        map[network.RequestID]bool{},
+		pendingResponseDispatch: map[fetch.RequestID]*responseDispatch{},
 
 		failureScreenshots:        true,
 		progressReportScreenshots: true,
@@ -973,6 +982,7 @@ func (b *Biloba) Prepare() {
 	b.consoleErrors = nil
 	b.requests = nil
 	b.inflightRequests = map[network.RequestID]bool{}
+	b.pendingResponseDispatch = map[fetch.RequestID]*responseDispatch{}
 	b.requestHandlers = nil
 	discardedResponseHandlers := b.responseHandlers
 	b.responseHandlers = nil
@@ -998,6 +1008,7 @@ func (b *Biloba) Prepare() {
 	// or an occluded click carried over from the previous spec would diagnose the wrong spec.
 	b.resetPollDiagnostics()
 	b.resetArtifacts()
+	b.resetVisualComparisons()
 
 	if b.failureScreenshots || b.failureOutlines {
 		b.gt.DeferCleanup(b.attachFailureArtifactsIfFailed)
@@ -1250,6 +1261,11 @@ func (b *Biloba) attachFailureArtifactsIfFailed() {
 			// whatever was waiting on it, and points nowhere near the registration that lost
 			if shadowed := tab.renderShadowedHandlers(); shadowed != "" {
 				b.gt.AddReportEntryVisibilityFailureOrVerbose("Network handler never ran (shadowed by an earlier handler)"+suffix, shadowed)
+			}
+			// a URL matcher that errored was treated as a non-match, so the request the spec thought it
+			// had intercepted went to the real network - and nothing else says so
+			if erroring := tab.renderErroringHandlers(); erroring != "" {
+				b.gt.AddReportEntryVisibilityFailureOrVerbose("Network handler's URL matcher failed to evaluate"+suffix, erroring)
 			}
 		}
 		if !b.failureScreenshots {

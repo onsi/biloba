@@ -14,8 +14,56 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	ginkgotypes "github.com/onsi/ginkgo/v2/types"
 	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega/gbytes"
 	"github.com/onsi/gomega/ghttp"
+	"github.com/onsi/gomega/types"
 )
+
+// countingURLMatcher wraps a URL matcher and counts, per URL, how many times Match was called.  It is
+// the probe behind "a URL matcher is consulted exactly once per request": the count is the thing under
+// assertion, so it has to be observed rather than reasoned about.
+type countingURLMatcher struct {
+	inner types.GomegaMatcher
+	lock  sync.Mutex
+	calls map[string]int
+}
+
+func (c *countingURLMatcher) Match(actual any) (bool, error) {
+	c.lock.Lock()
+	c.calls[fmt.Sprintf("%v", actual)]++
+	c.lock.Unlock()
+	return c.inner.Match(actual)
+}
+func (c *countingURLMatcher) FailureMessage(actual any) string {
+	return c.inner.FailureMessage(actual)
+}
+func (c *countingURLMatcher) NegatedFailureMessage(actual any) string {
+	return c.inner.NegatedFailureMessage(actual)
+}
+
+// countsMatching returns the call counts for every URL containing substring.  A slice, not a single
+// number, so a URL that was never asked about at all reads as an empty slice rather than as zero.
+func (c *countingURLMatcher) countsMatching(substring string) []int {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	out := []int{}
+	for url, count := range c.calls {
+		if strings.Contains(url, substring) {
+			out = append(out, count)
+		}
+	}
+	return out
+}
+
+// erroringURLMatcher is a URL matcher that cannot decide.  A handler carrying one used to be
+// indistinguishable from a handler that honestly did not match.
+type erroringURLMatcher struct{}
+
+func (erroringURLMatcher) Match(actual any) (bool, error) {
+	return false, fmt.Errorf("this matcher cannot decide about %v", actual)
+}
+func (erroringURLMatcher) FailureMessage(actual any) string        { return "" }
+func (erroringURLMatcher) NegatedFailureMessage(actual any) string { return "" }
 
 // lineAbove returns the "file:line" of the line immediately above the call - i.e. the registration
 // call it follows.  The shadowed-handler note is only worth anything if it points at the *user's*
@@ -228,6 +276,31 @@ var _ = Describe("Observing the network", func() {
 			Expect("#status").To(b.HaveInnerText("200"))
 		})
 
+		It("hands the transform the URL the response came back for", func() {
+			var seen []string
+			b.ModifyResponse(ContainSubstring("/api/")).Using(func(r biloba.InterceptedResponse) biloba.StubResponse {
+				seen = append(seen, r.URL)
+				return biloba.StubResponse{Status: r.Status, Body: r.Body, Headers: r.Headers}
+			})
+			b.Click("#fetch")
+			Eventually("#status").Should(b.HaveInnerText("200"))
+			Eventually(func() []string { return seen }).Should(ConsistOf(ContainSubstring("/api/echo")))
+		})
+
+		// A URL matcher is a Gomega matcher and nothing says it must be pure - "match only the first
+		// request to this URL" is a reasonable thing to write.  Biloba used to walk the handler list
+		// twice per request (once to decide whether to intercept the response at all, once to pick the
+		// handler), which gave such a matcher a different answer to each walk.  This pins the single
+		// evaluation.
+		It("consults each response handler's URL matcher exactly once per request", func() {
+			counter := &countingURLMatcher{inner: ContainSubstring("/api/echo"), calls: map[string]int{}}
+			mod := b.ModifyResponse(counter).WithBody("counted")
+			b.Click("#fetch")
+			Eventually("#body").Should(b.HaveInnerText("counted"))
+			Eventually(mod.Count).Should(Equal(1))
+			Consistently(func() []int { return counter.countsMatching("/api/echo") }).Should(Equal([]int{1}))
+		})
+
 		It("counts how many responses it has modified, and stays at 0 when its URL never matches", func() {
 			mod := b.ModifyResponse(ContainSubstring("/api/echo")).WithStatus(503)
 			miss := b.ModifyResponse(ContainSubstring("/api/widgets")).WithStatus(503)
@@ -421,6 +494,59 @@ var _ = Describe("Observing the network", func() {
 		})
 	})
 
+	// A URL matcher that returns an error was silently treated as a non-match, which is the worst
+	// possible reading of it: the request the spec thought it had intercepted quietly went to the real
+	// network, and the spec then failed somewhere else entirely.
+	Describe("the erroring-URL-matcher diagnostic", func() {
+		BeforeEach(func() {
+			b.Navigate(fixtureServer + "/network-interception.html")
+			Eventually("#hello").Should(b.Exist())
+		})
+
+		It("stays silent when every matcher can decide", func() {
+			b.StubRequest(ContainSubstring("/api/echo"), biloba.StubResponse{Body: "fine"})
+			b.Click("#fetch")
+			Eventually("#body").Should(b.HaveInnerText("fine"))
+			Expect(b.ErroringHandlersNoteForTest()).To(BeEmpty())
+		})
+
+		It("names the registration site, reports the error, and lets the request through", func() {
+			stub := b.StubRequest(erroringURLMatcher{}, biloba.StubResponse{Body: "never served"})
+			loc := lineAbove()
+
+			b.Click("#fetch")
+			// the request was NOT stubbed - it went to the real network
+			Eventually("#body").Should(b.HaveInnerText(ContainSubstring(`"path":"/api/echo"`)))
+			Expect(stub.Count()).To(Equal(0))
+
+			Eventually(gt.buffer).Should(gbytes.Say(regexp.QuoteMeta("⚠ A StubRequest handler registered at " + loc + " has a URL matcher that failed to evaluate")))
+			Expect(b.ErroringHandlersNoteForTest()).To(SatisfyAll(
+				ContainSubstring("⚠ A StubRequest handler registered at "+loc),
+				ContainSubstring("this matcher cannot decide about "),
+				ContainSubstring("treated as a non-match"),
+			))
+		})
+
+		It("reports a response-stage handler's matcher too", func() {
+			b.ModifyResponse(erroringURLMatcher{}).WithStatus(503)
+			loc := lineAbove()
+
+			b.Click("#fetch")
+			Eventually("#status").Should(b.HaveInnerText("200"))
+			Expect(b.ErroringHandlersNoteForTest()).To(ContainSubstring("⚠ A ModifyResponse handler registered at " + loc))
+		})
+
+		It("is cleared by Prepare", func() {
+			b.ModifyResponse(erroringURLMatcher{}).WithStatus(503)
+			b.Click("#fetch")
+			Eventually("#status").Should(b.HaveInnerText("200"))
+			Expect(b.ErroringHandlersNoteForTest()).NotTo(BeEmpty())
+
+			b.Prepare()
+			Expect(b.ErroringHandlersNoteForTest()).To(BeEmpty())
+		})
+	})
+
 	Describe("HoldResponse", func() {
 		BeforeEach(func() {
 			b.Navigate(fixtureServer + "/network-interception.html")
@@ -434,6 +560,9 @@ var _ = Describe("Observing the network", func() {
 			response := hold.Await()
 			Expect(response.Status).To(Equal(200))
 			Expect(response.Body).To(ContainSubstring("/api/echo"))
+			// a hold registered with a matcher can hold several different URLs; the URL is how a spec
+			// tells the response it awaited apart from the others
+			Expect(response.URL).To(ContainSubstring("/api/echo"))
 			// the page is still waiting on the held response
 			Consistently("#status", 100*time.Millisecond).Should(b.HaveInnerText(""))
 

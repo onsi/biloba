@@ -276,6 +276,11 @@ type handlerProvenance struct {
 	fired    int                // dispatches this handler actually claimed
 	shadowed int                // dispatches it matched but an earlier handler claimed first
 	shadower *handlerProvenance // the earlier handler that claimed the first of them
+
+	// matchErrors counts the times this handler's URL matcher could not decide, and matchError is
+	// the first such error.  See matchURL for why an undecidable matcher must not stay silent.
+	matchErrors int
+	matchError  error
 }
 
 // newHandlerProvenance captures the user's registration site.  skip is relative to the exported
@@ -533,6 +538,10 @@ carries the upstream Status, Headers, and Body so you can read them and return a
 Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
 */
 type InterceptedResponse struct {
+	// URL is the request URL this response came back for.  A handler registered with a matcher
+	// (rather than an exact string) can serve several URLs, and a transform factored out of the
+	// registration site has no other way to tell them apart.
+	URL     string
 	Status  int
 	Headers map[string]string
 	Body    string
@@ -1167,19 +1176,67 @@ func (b *Biloba) ensureFetchEnabled() {
 	}
 }
 
+// matchURL evaluates a handler's URL matcher against url.  Gomega's Match returns (false, err) for a
+// matcher that could not decide - a matcher aimed at the wrong type, or (for a consumer driving Biloba
+// from another language) a predicate callback that threw.  A handler that cannot decide is
+// indistinguishable from one that honestly did not match: the request quietly goes to the real network
+// instead of being stubbed, and the spec fails somewhere else entirely.  So the error is never dropped.
+// It is counted on the handler's provenance - which the on-failure note renders - and reported to the
+// test output the first time that handler errors.
+//
+// Callers hold b.lock, so the report is returned rather than printed here; they flush it after
+// unlocking (see reportMatchErrors).
+func matchURL(matcher types.GomegaMatcher, url string, prov *handlerProvenance) (bool, string) {
+	match, err := matcher.Match(url)
+	if err == nil {
+		return match, ""
+	}
+	prov.matchErrors++
+	if prov.matchError != nil {
+		return false, ""
+	}
+	prov.matchError = err
+	return false, fmt.Sprintf("⚠ %s %s handler registered at %s has a URL matcher that failed to evaluate %q, and was treated as a non-match:\n%s\n",
+		indefiniteArticle(prov.api), prov.api, prov.location, url, formatIndented(err.Error()))
+}
+
+// formatIndented indents every line of s by two spaces so a multi-line matcher error reads as one
+// block under the sentence that introduces it.
+func formatIndented(s string) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	for i, line := range lines {
+		lines[i] = "  " + line
+	}
+	return strings.Join(lines, "\n")
+}
+
+// reportMatchErrors prints the reports matchURL accumulated.  It runs on the CDP event goroutine -
+// like the console-log forwarding does - and must be called with b.lock released.
+func (b *Biloba) reportMatchErrors(reports []string) {
+	for _, report := range reports {
+		b.gt.Printf("%s", report)
+	}
+}
+
 // requestHandlerFor resolves the request-stage handler for url.  Dispatch stays first-match-wins;
 // the loop no longer short-circuits only so it can note which later handlers ALSO matched and were
 // therefore shadowed (see handlerProvenance).  That costs a handful of matcher calls per request on
 // a tab that has request handlers at all - we bail before evaluating anything when it has none.
 func (b *Biloba) requestHandlerFor(url string) *requestHandler {
 	b.lock.Lock()
+	var reports []string
+	defer func() { b.reportMatchErrors(reports) }() // LIFO: runs after the Unlock below
 	defer b.lock.Unlock()
 	if len(b.requestHandlers) == 0 {
 		return nil
 	}
 	var winner *requestHandler
 	for _, h := range b.requestHandlers {
-		if match, _ := h.matcher.Match(url); match {
+		match, report := matchURL(h.matcher, url, &h.prov)
+		if report != "" {
+			reports = append(reports, report)
+		}
+		if match {
 			if winner == nil {
 				winner = h
 			} else {
@@ -1193,43 +1250,85 @@ func (b *Biloba) requestHandlerFor(url string) *requestHandler {
 	return winner
 }
 
-// responseHandlerFor resolves the response-stage handler for url and records the dispatch (see
-// requestHandlerFor).  Call it only when actually dispatching - the request-stage probe that decides
-// whether to opt into response interception uses hasResponseHandlerFor so it doesn't double-count.
-func (b *Biloba) responseHandlerFor(url string) *ResponseModification {
+// responseDispatch is the response-stage resolution for one paused request: the first-match-wins
+// winner plus the later handlers it shadowed.  It is computed once, at the request stage (which is
+// where we must already decide whether to opt into response interception at all), and cashed in at
+// the response stage - so a handler's URL matcher is consulted exactly ONCE per request.
+//
+// The two halves are split because they answer to different clocks.  Resolving is a question about
+// the handler list, and asking it twice is not merely wasteful: nothing in the API says a URL matcher
+// must be pure, and a stateful one ("match only the first request to this URL") would give a
+// different answer to the probing walk than to the real one.  Recording is a question about what
+// actually happened, and the response-stage pause is the only place that knows a response really came
+// back to modify - so fired/shadowed are still counted there, and a request that never reaches the
+// response stage still counts for nothing.
+type responseDispatch struct {
+	winner   *ResponseModification
+	shadowed []*ResponseModification
+}
+
+// resolveResponseDispatch evaluates every response handler's URL matcher exactly once and returns the
+// resolution, or nil when no handler claims this URL.  It records nothing.
+func (b *Biloba) resolveResponseDispatch(url string) *responseDispatch {
 	b.lock.Lock()
+	var reports []string
+	defer func() { b.reportMatchErrors(reports) }() // LIFO: runs after the Unlock below
 	defer b.lock.Unlock()
 	if len(b.responseHandlers) == 0 {
 		return nil
 	}
-	var winner *ResponseModification
+	dispatch := &responseDispatch{}
 	for _, h := range b.responseHandlers {
-		if match, _ := h.matcher.Match(url); match {
-			if winner == nil {
-				winner = h
+		match, report := matchURL(h.matcher, url, &h.prov)
+		if report != "" {
+			reports = append(reports, report)
+		}
+		if match {
+			if dispatch.winner == nil {
+				dispatch.winner = h
 			} else {
-				h.prov.recordShadowed(&winner.prov)
+				dispatch.shadowed = append(dispatch.shadowed, h)
 			}
 		}
 	}
-	if winner != nil {
-		winner.prov.fired++
+	if dispatch.winner == nil {
+		return nil
 	}
-	return winner
+	return dispatch
 }
 
-// hasResponseHandlerFor is the non-recording probe: does any response handler claim this URL?  It
-// short-circuits on the first match and leaves the provenance bookkeeping to the response-stage
-// dispatch, which is the pause that actually resolves a handler.
-func (b *Biloba) hasResponseHandlerFor(url string) bool {
+// rememberResponseDispatch parks a resolution for the response stage to pick up.  Only requests that
+// are actually opting into response interception are parked, so a stubbed or aborted request - which
+// never reaches the response stage - leaves nothing behind.  Prepare clears the map regardless, since
+// a request can also die in flight.
+func (b *Biloba) rememberResponseDispatch(id fetch.RequestID, dispatch *responseDispatch) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	for _, h := range b.responseHandlers {
-		if match, _ := h.matcher.Match(url); match {
-			return true
-		}
+	b.pendingResponseDispatch[id] = dispatch
+}
+
+// responseHandlerFor resolves the response-stage handler for a paused request and records the
+// dispatch.  It prefers the resolution the request stage already computed; it falls back to resolving
+// now only when there is none - interception enabled mid-flight, say - so the fallback is a
+// correctness backstop rather than the common path.
+func (b *Biloba) responseHandlerFor(id fetch.RequestID, url string) *ResponseModification {
+	b.lock.Lock()
+	dispatch, ok := b.pendingResponseDispatch[id]
+	delete(b.pendingResponseDispatch, id)
+	b.lock.Unlock()
+	if !ok {
+		dispatch = b.resolveResponseDispatch(url)
 	}
-	return false
+	if dispatch == nil {
+		return nil
+	}
+	b.lock.Lock()
+	dispatch.winner.prov.fired++
+	for _, h := range dispatch.shadowed {
+		h.prov.recordShadowed(&dispatch.winner.prov)
+	}
+	b.lock.Unlock()
+	return dispatch.winner
 }
 
 // renderShadowedHandlers returns the on-failure note for this tab's silently-dead network handlers:
@@ -1275,6 +1374,52 @@ func (b *Biloba) renderShadowedHandlers() string {
 	return out.String()
 }
 
+// renderErroringHandlers returns the on-failure note for this tab's network handlers whose URL matcher
+// could not decide.  Unlike the shadowed-handler note this fires whether or not the handler ever ran:
+// a matcher that errors on one URL and answers on the next is still a handler that quietly let a
+// request through, and that is exactly the condition that sends a spec looking in the wrong place.
+func (b *Biloba) renderErroringHandlers() string {
+	type note struct {
+		api, location string
+		errors        int
+		err           string
+	}
+	notes := []note{}
+	b.lock.Lock()
+	collect := func(p *handlerProvenance) {
+		if p.matchError == nil {
+			return
+		}
+		notes = append(notes, note{api: p.api, location: p.location.String(), errors: p.matchErrors, err: p.matchError.Error()})
+	}
+	for _, h := range b.requestHandlers {
+		collect(&h.prov)
+	}
+	for _, h := range b.responseHandlers {
+		collect(&h.prov)
+	}
+	b.lock.Unlock()
+
+	out := &strings.Builder{}
+	for _, n := range notes {
+		fmt.Fprintf(out, "⚠ %s %s handler registered at %s has a URL matcher that failed to evaluate %s:\n%s\n",
+			indefiniteArticle(n.api), n.api, n.location, pluralize(n.errors, "URL", "URLs"), formatIndented(n.err))
+	}
+	if out.Len() == 0 {
+		return ""
+	}
+	out.WriteString("  A URL matcher that cannot decide is treated as a non-match, so the request went to the real\n  network instead of being intercepted.  Network handlers match against the request URL, which is\n  always a string: check that the matcher you passed can take one.\n")
+	return out.String()
+}
+
+// pluralize renders "1 URL" / "3 URLs".
+func pluralize(n int, singular, plural string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, singular)
+	}
+	return fmt.Sprintf("%d %s", n, plural)
+}
+
 // handleEventRequestPaused responds to a paused request.  With response-stage interception enabled a
 // request pauses twice: once at the request stage (ResponseStatusCode/ResponseErrorReason unset) and
 // again at the response stage (those fields populated).  We route on the stage so request-stage
@@ -1292,19 +1437,30 @@ func (b *Biloba) handleEventRequestPaused(ev *fetch.EventRequestPaused) {
 
 func (b *Biloba) handleRequestStagePause(ev *fetch.EventRequestPaused) {
 	handler := b.requestHandlerFor(ev.Request.URL)
+	// When a response handler matches this URL, the request-stage continue must opt into response
+	// interception so the request pauses again at the response stage.  (A request-stage "*" pattern
+	// matches first and would otherwise consume the request before the response-stage pattern could
+	// fire.)  A stub/abort short-circuits the real network, so it never reaches the response stage and
+	// doesn't need this.  Resolving here - rather than merely probing here and resolving again at the
+	// response stage - is what keeps every URL matcher to one evaluation per request; see
+	// responseDispatch.
+	dispatch := b.resolveResponseDispatch(ev.Request.URL)
 	go func() {
-		// When a response handler matches this URL, the request-stage continue must opt into
-		// response interception so the request pauses again at the response stage.  (A request-stage
-		// "*" pattern matches first and would otherwise consume the request before the response-stage
-		// pattern could fire.)  A stub/abort short-circuits the real network, so it never reaches the
-		// response stage and doesn't need this.
-		interceptResponse := b.hasResponseHandlerFor(ev.Request.URL)
+		interceptResponse := dispatch != nil
+		// Park the resolution only on the paths that will actually pause again, and park it before the
+		// continue that lets Chrome get there.
+		park := func() {
+			if interceptResponse {
+				b.rememberResponseDispatch(ev.RequestID, dispatch)
+			}
+		}
 		var action chromedp.Action
 		switch {
 		case handler == nil:
 			cr := fetch.ContinueRequest(ev.RequestID)
 			if interceptResponse {
 				cr = cr.WithInterceptResponse(true)
+				park()
 			}
 			action = cr
 		case handler.abort:
@@ -1313,6 +1469,7 @@ func (b *Biloba) handleRequestStagePause(ev *fetch.EventRequestPaused) {
 			cr := handler.modify.apply(ev.RequestID)
 			if interceptResponse {
 				cr = cr.WithInterceptResponse(true)
+				park()
 			}
 			action = cr
 		case handler.stub != nil:
@@ -1330,7 +1487,7 @@ func (b *Biloba) handleRequestStagePause(ev *fetch.EventRequestPaused) {
 }
 
 func (b *Biloba) handleResponseStagePause(ev *fetch.EventRequestPaused) {
-	handler := b.responseHandlerFor(ev.Request.URL)
+	handler := b.responseHandlerFor(ev.RequestID, ev.Request.URL)
 	go func() {
 		if handler == nil {
 			// Not ours to modify: hand the real response straight back to the page.
@@ -1339,6 +1496,7 @@ func (b *Biloba) handleResponseStagePause(ev *fetch.EventRequestPaused) {
 		}
 
 		original := InterceptedResponse{
+			URL:     ev.Request.URL,
 			Status:  int(ev.ResponseStatusCode),
 			Headers: map[string]string{},
 		}

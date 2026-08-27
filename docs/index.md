@@ -3333,6 +3333,14 @@ b.ModifyResponse(ContainSubstring("/api/users")).Using(func(r biloba.Intercepted
 })
 ```
 
+The `InterceptedResponse` also carries the `URL` the response came back for.  A handler registered with a *matcher* can serve several URLs, and once the transform is factored out of the registration site — a shared helper, a table of fixtures — the URL is the only thing that tells them apart:
+
+```go
+b.ModifyResponse(ContainSubstring("/api/")).Using(func(r biloba.InterceptedResponse) biloba.StubResponse {
+	return fixtureFor(r.URL)
+})
+```
+
 Response interception is a heavier mode than the request-stage handlers: the tab pauses each matching request twice (once on the way out, once when the response arrives) so Biloba can read the real body.  As with the others, it's per-tab, reset by `Prepare()`, and first-match-wins - and its builder carries the same `Count()`, which is the cheapest way to prove your transform ran at all ([as with a stub](#stubbing-requests)).
 
 > **First-match-wins has a sharp edge inside an `Ordered` container.**  Handlers are consulted in registration order and the first one whose URL matches claims the request - later handlers for that same URL are never consulted.  `Prepare()` is what clears them, and in an `Ordered` container with `BeforeEach(..., OncePerOrdered)` **`Prepare()` does not run between the `It`s**.  So handlers *accumulate*: a handler registered by the first `It` is still registered when the second `It` runs, and an identical handler registered there is silently dead code.  No error, no warning - it simply never runs, and you're left staring at a spec that behaves as though your stub isn't there.
@@ -3340,6 +3348,8 @@ Response interception is a heavier mode than the request-stage handlers: the tab
 > Two fixes.  The better one is usually to **drive both orderings from a single `It`** - if two specs need to install competing handlers for the same URL, that's often a sign they're really one scenario, and it reads better as one spec.  Failing that, give the second spec **its own `b.NewTab()`**: the handler list is per-tab, so a fresh tab starts empty.
 >
 > Biloba now names this for you: when a handler never fires *and* an earlier handler claimed its URL, the failure output reports both registration sites.  That catches the dead-handler case.
+
+> **A URL matcher that *errors* is treated as a non-match.**  A Gomega matcher can return an error rather than a verdict - `BeNumerically(">", 3)` handed a URL string, say.  Biloba has no way to intercept a request it cannot decide about, so it lets it through to the real network; the alternative, guessing, is worse.  What it will not do is stay quiet about it: the first time a handler's matcher fails to evaluate, Biloba prints the registration site and the error to the test output, and if the spec fails it attaches the same note to the failure.  Without that, a matcher that threw and a matcher that honestly didn't match look identical, and you're left debugging the wrong end of the spec.
 
 > **A shadowed handler can also fail by looking like success.**  A *stateless* shadowed handler does nothing, so the spec that registered it usually fails somewhere obvious.  A **stateful** one can be half-firing - still doing its job for the earlier spec's state while doing nothing for yours - and that looks like everything working.
 >
@@ -3380,7 +3390,7 @@ The API:
 |---|---|
 | `b.HoldResponse(url)` | register the hold; `url` is a string (exact match) or a Gomega matcher.  Returns a `*ResponseHold`. |
 | `.Limit(n)` | hold at most `n` matching responses **at a time**.  While `n` are held, further matches pass straight through untouched (they still count).  Releasing one re-opens capacity.  Set it when you build the hold: the limit is consulted as each response *arrives*, so lowering it later never releases responses already held, and raising it never retroactively holds one that already flew past. |
-| `hold.Await()` | block until a matching response is being **held**, and return it (an `InterceptedResponse` with `Status`, `Headers`, `Body`).  Returns immediately if one is already held; returns the *oldest* one still held. |
+| `hold.Await()` | block until a matching response is being **held**, and return it (an `InterceptedResponse` with `URL`, `Status`, `Headers`, `Body`).  Returns immediately if one is already held; returns the *oldest* one still held.  A hold registered with a matcher can be holding several different URLs - `URL` is how you tell which one you got. |
 | `hold.Release()` | terminal: release everything currently held **and** stop holding future matches.  Idempotent. |
 | `hold.Release(r)` | release just that response - the one `Await()` handed you - and stay **armed** for future matches. |
 | `hold.ReleaseNext()` | release the oldest response still held, and stay **armed**.  Fails the spec if nothing is currently held (`Await()` first). |
@@ -3553,6 +3563,19 @@ You can use the `ReportEntryVisibilityFailureOrVerbose` decorator to only emit t
 AddReportEntry("some description", b.CaptureImgcatScreenshot(), ReportEntryVisibilityFailureOrVerbose)
 ```
 
+#### Capturing just the fold
+
+Biloba's page captures are of the whole document — scroll and all.  That's what you want from a failure screenshot, and it is *not* what the user can actually see.  When the question is "does the fold still look right", reach for `b.ViewportOnly()`:
+
+```go
+b.ViewportOnly().CaptureScreenshotToFile("above-the-fold.png")
+Expect(b.ViewportOnly()).To(b.HaveScreenshot("above-the-fold"))
+```
+
+Like `b.Realistic()` and `b.WithTimeout(d)` it's a lightweight clone-with-a-flag view of the tab: the tab you called it on is unchanged.  The capture is taken at the *current* scroll position, so scroll first if you mean somewhere other than the top.
+
+`ViewportOnly()` applies to captures of the *page*.  A capture of an *element* is already clipped to that element's box, so combining the two is a hard error rather than a silent no-op — `b.ViewportOnly().CaptureScreenshotOf("#box")` and `b.ViewportOnly().HaveScreenshot(...)` given a selector both refuse.
+
 #### Saving screenshots to files
 
 If you want to save a screenshot to a file (for example, to open it in an image viewer or to share it), use:
@@ -3620,7 +3643,7 @@ When a spec fails, the *kind* of artifact that's useful depends on who's looking
 
 So a typical agent or CI run needs **zero configuration** — just run the suite, and failures come back as a DOM outline plus screenshot files on disk.
 
-Riding along with these, and needing no configuration at all, is a set of **diagnostic annotations** Biloba emits only when a spec fails: replayed console errors, the [poll trajectory](#outline), the [detached-node signal](#outline), the [occluded-click diagnosis](#outline), the [shadowed-network-handler note](#outline), and the [`AllowMissing` enrichment](#outline).  They're covered in [Outline](#outline) below.
+Riding along with these, and needing no configuration at all, is a set of **diagnostic annotations** Biloba emits only when a spec fails: replayed console errors, the [poll trajectory](#outline), the [detached-node signal](#outline), the [occluded-click diagnosis](#outline), the [shadowed-network-handler note](#outline), the [erroring-URL-matcher note](#outline), and the [`AllowMissing` enrichment](#outline).  They're covered in [Outline](#outline) below.
 
 **Explicit configuration always wins, per knob.**  Anything you set in the suite overrides just that piece of the environment-derived default; everything you leave alone still follows it.  Each toggle takes an optional bool (no argument means `true`):
 
@@ -3879,7 +3902,7 @@ A baseline is only as good as the page's ability to render the same pixels twice
 Eventually(b).Should(b.HaveScreenshot("dashboard", b.Mask(".relative-timestamp", b.ByTestID("avatar"))))
 ```
 
-A relative timestamp is the case that kills a naive baseline on the first day: "3 minutes ago" becomes "4 minutes ago" and a perfectly healthy dashboard starts failing for no reason at all.  Mask it and the rest of the dashboard is still under assertion.  The same paint is applied before a baseline is written and before every comparison, so both sides are always masked identically, and a selector that matches nothing is a no-op — masking an element that's only sometimes on the page must not fail the assertion.
+A relative timestamp is the case that kills a naive baseline on the first day: "3 minutes ago" becomes "4 minutes ago" and a perfectly healthy dashboard starts failing for no reason at all.  Mask it and the rest of the dashboard is still under assertion.  The paint is applied to the capture — before a baseline is written, and before every comparison — so both sides always agree, because the baseline was itself written masked.  Which means *adding* a mask to an assertion that already has a baseline makes it fail until you regenerate that baseline under `BILOBA_UPDATE_SCREENSHOTS`: the stored image still has the unmasked region in it.  A selector that matches nothing is a no-op — masking an element that's only sometimes on the page must not fail the assertion.
 
 **Animations, transitions, and the blinking text caret — handled.**  For the duration of each capture Biloba injects a stylesheet that sets `animation: none`, `transition: none`, a transparent `caret-color`, and `scroll-behavior: auto`, and removes it again afterwards.  (It's `animation: none` rather than pausing the animations: pausing freezes each one at whatever frame it happened to reach, which is the nondeterminism we're trying to remove.)  If the animation *is* the thing you're asserting on, and you've made it deterministic yourself, opt out with `b.Animated()`.
 
@@ -4031,7 +4054,16 @@ b.AllowMissing("disabled") - to get nil back instead of waiting for it.
 
 A handler is only reported when it **never fired** *and* was shadowed at least once - so a catch-all that loses one URL to a specific stub while happily claiming others stays silent.
 
-All five of these are **diagnostic only**: none of them changes whether a spec passes, and none appears unless it fails.
+**A network handler's URL matcher failed to evaluate.**  A Gomega matcher can return an *error* instead of a verdict, and a handler that cannot decide is treated as a non-match: the request goes to the real network instead of being intercepted.  Biloba prints the error to the test output as soon as it happens, and attaches the same note on failure:
+
+```
+⚠ A StubRequest handler registered at network_test.go:514 has a URL matcher that failed to evaluate 1 URL:
+  expected a number.  Got: <string>: http://127.0.0.1:8080/api/echo
+```
+
+Unlike the shadowed-handler note this fires whether or not the handler ever ran - a matcher that errors on one URL and answers on the next still let a request through, which is exactly the condition that sends you looking in the wrong place.
+
+All six of these are **diagnostic only**: none of them changes whether a spec passes, and none appears unless it fails.
 
 You can also call `b.Outline()` directly in a spec to capture a snapshot at any point:
 
@@ -4077,6 +4109,24 @@ Each `biloba.Artifact` carries a `Kind` (`biloba.ScreenshotArtifact`, `VisualAct
 The list is cleared by `b.Prepare()`, so it always describes the current spec.  One ordering detail matters: the on-failure screenshots are written by a cleanup, so you only see a complete list *after* that cleanup has run.  In Ginkgo that means a `ReportAfterEach` (as above) rather than an `AfterEach` - an `AfterEach` runs too early and will miss them.  The visual-regression artifacts are written during the spec, so they're there as soon as the assertion that produced them has failed.
 
 `Artifacts()` is a snapshot: it does not poll, and it rejects `WithTimeout`/`WithPolling`/`WithContext`/`Immediate`.
+
+#### What a visual comparison measured
+
+`Artifacts()` gives you the *files* a [visual assertion](#visual-assertions) wrote.  `b.VisualComparisons()` gives you what it *measured* — the failure message's prose diagnosis as data:
+
+```go
+ReportAfterEach(func(report SpecReport) {
+	for _, comparison := range b.VisualComparisons() {
+		recordVisualRegression(comparison.Label, comparison.Fraction, comparison.DiffPath)
+	}
+})
+```
+
+Each `biloba.VisualComparison` carries the baseline `Name` and the `Label` the diagnosis uses (name plus colour scheme, when [`InColorSchemes`](#light-and-dark-in-one-assertion) made more than one), whether it `Match`ed, the three file paths, the two image sizes, the tolerances it ran under, and the per-pixel numbers: `TotalPixels`, `DifferingPixels`, `Fraction`, `MaxChannelDelta`.  It also carries the shape verdicts — `Regions`, `RegionCount`, `Shifted`/`Shift`, `Scattered`.
+
+Those two groups age differently, and it's worth knowing which you're asserting on.  The measurements are *definitions*: given two PNGs and a tolerance there is one right answer, and Biloba won't quietly change what they mean.  The verdicts are tuned heuristics answering "what does this change *look* like" — their shape is stable, their thresholds are not, and Biloba retunes them as the diagnosis improves.  `Expect(c.RegionCount).To(Equal(1))` is a fair assertion; `Equal(7)` is a spec that will break on an improvement.
+
+Every comparison that *decided* an assertion is recorded, passing ones included — so an empty list means "this spec asserted nothing visually" rather than "everything passed".  `HaveScreenshot` polls, and the losing attempts aren't what the assertion is about, so they're not recorded.  Like `Artifacts()`, the list is cleared by `b.Prepare()` and it rejects the poll-config knobs.
 
 ### Configuration
 

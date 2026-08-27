@@ -330,6 +330,139 @@ var _ = Describe("Visual assertions", func() {
 		})
 	})
 
+	// A page baseline is of the whole document by default.  ViewportOnly() makes it a baseline of the
+	// fold, which is a different (and often more stable) assertion.
+	Describe("ViewportOnly", func() {
+		BeforeEach(func() {
+			b.SetWindowSize(600, 400)
+			b.Navigate(fixtureServer + "/visual.html")
+			Eventually("#box").Should(b.Exist())
+		})
+
+		It("compares a baseline of the fold rather than of the whole document", func() {
+			generate(b.ViewportOnly(), "fold")
+			Eventually(b.ViewportOnly()).Should(b.HaveScreenshot("fold"))
+
+			cfg, _, err := image.DecodeConfig(bytes.NewReader(readPNG(baseline("fold"))))
+			Ω(err).ShouldNot(HaveOccurred())
+			Ω(cfg.Height).Should(Equal(400))
+		})
+
+		It("refuses to capture an element, rather than silently ignoring the flag", func() {
+			generate("#box", "box")
+			g.Eventually("#box").WithTimeout(time.Second).Should(b.ViewportOnly().HaveScreenshot("box"))
+			Ω(failure).Should(ContainSubstring("HaveScreenshot cannot capture an element through a ViewportOnly() view"))
+		})
+	})
+
+	// b.VisualComparisons() is the structured twin of the prose diagnosis: the same measurements, as
+	// data, for a reporter that wants to record the numbers rather than print the sentences.
+	Describe("VisualComparisons", func() {
+		BeforeEach(func() {
+			b.SetWindowSize(600, 400)
+			b.Navigate(fixtureServer + "/visual.html")
+			Eventually("#box").Should(b.Exist())
+			generate("#box", "box")
+		})
+
+		It("records nothing for a spec that asserted nothing visually - and nothing for update mode", func() {
+			// generate() ran in the BeforeEach and wrote a baseline; writing a baseline is not comparing
+			Ω(b.VisualComparisons()).Should(BeEmpty())
+		})
+
+		It("records a passing comparison, with the tolerances it ran under", func() {
+			Eventually("#box").Should(b.HaveScreenshot("box"))
+
+			comparisons := b.VisualComparisons()
+			Ω(comparisons).Should(HaveLen(1))
+			c := comparisons[0]
+			Ω(c.Name).Should(Equal("box"))
+			Ω(c.Label).Should(Equal("box"))
+			Ω(c.ColorScheme).Should(BeEmpty())
+			Ω(c.Match).Should(BeTrue())
+			Ω(c.BaselinePath).Should(Equal(baseline("box")))
+			Ω(c.ActualPath).Should(BeEmpty())
+			Ω(c.DiffPath).Should(BeEmpty())
+			Ω(c.DifferingPixels).Should(Equal(0))
+			Ω(c.TotalPixels).Should(BeNumerically(">", 0))
+			Ω(c.BaselineSize).Should(Equal(c.ActualSize))
+			Ω(c.DimensionMismatch).Should(BeFalse())
+			// the defaults, since this assertion set neither
+			Ω(c.Tolerance).Should(BeNumerically(">=", 0))
+			Ω(c.ChannelTolerance).Should(BeNumerically(">=", 0))
+		})
+
+		It("records what a failing comparison measured, alongside the files it wrote", func() {
+			b.Run("document.getElementById('box').classList.add('spot')")
+			g.Eventually("#box").WithTimeout(2 * time.Second).WithPolling(200 * time.Millisecond).Should(b.HaveScreenshot("box"))
+			Ω(failure).ShouldNot(BeEmpty())
+
+			comparisons := b.VisualComparisons()
+			Ω(comparisons).Should(HaveLen(1))
+			c := comparisons[0]
+			Ω(c.Match).Should(BeFalse())
+			Ω(c.DifferingPixels).Should(BeNumerically(">", 0))
+			Ω(c.Fraction).Should(BeNumerically("~", float64(c.DifferingPixels)/float64(c.TotalPixels), 0.0001))
+			Ω(c.MaxChannelDelta).Should(BeNumerically(">", 0))
+			Ω(c.BaselinePath).Should(Equal(baseline("box")))
+			Ω(c.ActualPath).Should(Equal(artifact("box.actual")))
+			Ω(c.DiffPath).Should(Equal(artifact("box.diff")))
+			// the same numbers the prose reports, which is the whole point
+			Ω(failure).Should(ContainSubstring(fmt.Sprintf("of %s pixels differ", biloba.WithThousandsForTest(c.TotalPixels))))
+			// a single repainted dot is one region, not scattered, and not a whole-image shift
+			Ω(c.RegionCount).Should(Equal(1))
+			Ω(c.Regions).Should(HaveLen(1))
+			Ω(c.Regions[0].DifferingPixels).Should(BeNumerically(">", 0))
+			Ω(c.Regions[0].Bounds.Dx()).Should(BeNumerically(">", 0))
+			Ω(c.Scattered).Should(BeFalse())
+			Ω(c.Shifted).Should(BeFalse())
+		})
+
+		It("reports a dimension mismatch as one, with no per-pixel numbers to report", func() {
+			b.Run("document.getElementById('box').classList.add('taller')")
+			g.Eventually("#box").WithTimeout(2 * time.Second).WithPolling(200 * time.Millisecond).Should(b.HaveScreenshot("box"))
+
+			Ω(b.VisualComparisons()).Should(HaveLen(1))
+			c := b.VisualComparisons()[0]
+			Ω(c.DimensionMismatch).Should(BeTrue())
+			Ω(c.Match).Should(BeFalse())
+			Ω(c.ActualSize.Y).Should(BeNumerically(">", c.BaselineSize.Y))
+			Ω(c.DifferingPixels).Should(Equal(0))
+			Ω(c.DiffPath).Should(BeEmpty())
+		})
+
+		It("carries the tolerances the assertion actually set", func() {
+			Eventually("#box").Should(b.HaveScreenshot("box", b.Tolerance(0.25), b.ChannelTolerance(9)))
+			Ω(b.VisualComparisons()[0].Tolerance).Should(Equal(0.25))
+			Ω(b.VisualComparisons()[0].ChannelTolerance).Should(Equal(9))
+		})
+
+		It("is cleared by Prepare", func() {
+			Eventually("#box").Should(b.HaveScreenshot("box"))
+			Ω(b.VisualComparisons()).Should(HaveLen(1))
+			b.Prepare()
+			Ω(b.VisualComparisons()).Should(BeEmpty())
+		})
+
+		It("hands back a copy, so a consumer cannot corrupt the list", func() {
+			Eventually("#box").Should(b.HaveScreenshot("box"))
+			comparisons := b.VisualComparisons()
+			comparisons[0].Name = "clobbered"
+			Ω(b.VisualComparisons()[0].Name).Should(Equal("box"))
+		})
+
+		It("is a snapshot: it rejects the poll-config knobs", func() {
+			b.WithTimeout(time.Second).VisualComparisons()
+			ExpectFailures(ContainSubstring("VisualComparisons does not support WithTimeout"))
+
+			b.WithPolling(time.Second).VisualComparisons()
+			ExpectFailures(ContainSubstring("VisualComparisons does not support WithPolling"))
+
+			b.Immediate().VisualComparisons()
+			ExpectFailures(ContainSubstring("VisualComparisons does not support Immediate"))
+		})
+	})
+
 	// The diagnosis has two halves and they are not equals.  The words are the half everything can
 	// read - an agent, a CI log, a terminal with no image support - so they are printed unconditionally;
 	// the drawn diff rides along underneath only when a human is at a terminal that can render it.
@@ -666,6 +799,23 @@ var _ = Describe("Visual assertions", func() {
 			Ω(baseline("scheme-dark")).Should(BeAnExistingFile())
 			Ω(baseline("scheme")).ShouldNot(BeAnExistingFile())
 			Eventually("#scheme").Should(b.HaveScreenshot("scheme", b.InColorSchemes("light", "dark")))
+		})
+
+		It("records one VisualComparison per scheme, each labelled with its scheme", func() {
+			generate("#scheme", "scheme", b.InColorSchemes("light", "dark"))
+			Eventually("#scheme").Should(b.HaveScreenshot("scheme", b.InColorSchemes("light", "dark")))
+
+			comparisons := b.VisualComparisons()
+			Ω(comparisons).Should(HaveLen(2))
+			schemes, labels := []string{}, []string{}
+			for _, c := range comparisons {
+				schemes = append(schemes, c.ColorScheme)
+				labels = append(labels, c.Label)
+				Ω(c.Name).Should(Equal("scheme"))
+				Ω(c.Match).Should(BeTrue())
+			}
+			Ω(schemes).Should(ConsistOf("light", "dark"))
+			Ω(labels).Should(ConsistOf("scheme (prefers-color-scheme: light)", "scheme (prefers-color-scheme: dark)"))
 		})
 
 		It("catches a change that is only visible in dark mode", func() {
