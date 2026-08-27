@@ -463,15 +463,12 @@ func (s *Session) ClickWith(ctx context.Context, selector Selector, options Clic
 }
 
 // ClickEach acts once on every element currently matching selector; it never waits for new matches.
-func (s *Session) ClickEach(ctx context.Context, selector Selector, options ClickOptions) error {
-	if options.Count != 1 || options.Button != LeftButton || options.Offset != nil || options.Modifiers != 0 {
-		return invalidArgument("click each", "click each supports plain single left clicks")
-	}
-	if options.Mode == Fast {
+func (s *Session) ClickEach(ctx context.Context, selector Selector, mode InteractionMode) error {
+	if mode == Fast {
 		_, err := s.handler(ctx, "clickEach", selector)
 		return err
 	}
-	if options.Mode != Realistic {
+	if mode != Realistic {
 		return invalidArgument("click each", "unsupported interaction mode")
 	}
 	return s.serial(ctx, "realistic click each", func(opCtx context.Context) error {
