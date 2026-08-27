@@ -120,18 +120,30 @@ func (s *Session) Close() error {
 func (s *Session) Prepare(ctx context.Context) error {
 	return s.serial(ctx, "prepare", func(opCtx context.Context) error {
 		// Clear storage while the tab still has its current origin. about:blank has an opaque
-		// origin, so navigating first would leave localStorage behind for the next spec.
-		_ = EvaluateContext(opCtx, `try { window.localStorage.clear(); window.sessionStorage.clear(); } catch (e) {}`, false, nil)
+		// origin, so navigating first would leave localStorage behind for the next spec. A crashed
+		// renderer has already lost that storage and no longer answers evaluation requests, so skip
+		// straight to the browser-scoped cleanup and recovery navigation in that case.
+		if !s.hasCrashed() {
+			_ = EvaluateContext(opCtx, `try { window.localStorage.clear(); window.sessionStorage.clear(); } catch (e) {}`, false, nil)
+		}
 		if err := ClearCookiesContext(opCtx, s.browserContextID); err != nil {
 			return err
 		}
-		if err := chromedp.Run(opCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
-			_, _, _, _, err := page.Navigate("about:blank").Do(runCtx)
-			return err
-		})); err != nil {
+		navigateBlank := func() error {
+			return chromedp.Run(opCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
+				_, _, _, _, err := page.Navigate("about:blank").Do(runCtx)
+				return err
+			}))
+		}
+		err := navigateBlank()
+		if err != nil && s.hasCrashed() {
+			err = navigateBlank()
+		}
+		if err != nil {
 			return err
 		}
 		s.installed = false
+		s.clearCrashed()
 		return nil
 	})
 }

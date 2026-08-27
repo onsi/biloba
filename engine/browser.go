@@ -162,6 +162,19 @@ func (b *Browser) OpenSession(ctx context.Context) (*Session, error) {
 	if err != nil {
 		return nil, contextError("open session", err)
 	}
+	keepBrowserContext := false
+	defer func() {
+		if keepBrowserContext {
+			return
+		}
+		// The request context may be the reason opening failed, so cleanup must use the browser's
+		// lifetime context. Without this, a failed target creation or attachment leaves an isolated
+		// browser context behind until the daemon disconnects from Chrome.
+		cleanupCtx, cleanupCancel := context.WithTimeout(b.ctx, 5*time.Second)
+		defer cleanupCancel()
+		cleanupExecutor := cdp.WithExecutor(cleanupCtx, chromedp.FromContext(b.ctx).Browser)
+		_ = target.DisposeBrowserContext(browserContextID).Do(cleanupExecutor)
+	}()
 	targetID, err := target.CreateTarget("about:blank").
 		WithBrowserContextID(browserContextID).
 		WithNewWindow(true).
@@ -199,6 +212,7 @@ func (b *Browser) OpenSession(ctx context.Context) (*Session, error) {
 		}
 	})
 	b.sessions[session] = struct{}{}
+	keepBrowserContext = true
 	return session, nil
 }
 

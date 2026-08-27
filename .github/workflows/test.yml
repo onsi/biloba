@@ -49,6 +49,11 @@ jobs:
     # sandbox intact (rather than weakening Biloba's defaults with --no-sandbox).
     # https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md
     - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+    # The recursive run includes ./engine. That suite resolves Chrome through engine.LocateChrome
+    # and needs chrome-headless-shell even though the root Biloba suite uses full google-chrome in
+    # this lane. Install it explicitly so the engine suite does not depend on the default lane's
+    # AutoInstallHeadlessShell side effect or on job ordering.
+    - run: npx -y @puppeteer/browsers install chrome-headless-shell@stable --path "$HOME/.cache/puppeteer"
     # Runs in parallel like the default lane. Concurrent remote-allocator attaches are handled by
     # ConnectToChrome's retry/backoff; the one-time full google-chrome launch gets a roomier
     # WSURLReadTimeout (see SpinUpChrome) since a cold runner can take >20s to expose DevTools.

@@ -143,13 +143,13 @@ func Poll(ctx context.Context, policy PollPolicy, assertion Assertion) (PollResu
 		result.Attempts = append(result.Attempts, attempt)
 		result.AttemptCount = len(result.Attempts)
 		result.Duration = time.Since(started)
-		if matched {
-			return result, nil
-		}
 		if attemptErr != nil && IsFatal(attemptErr) {
 			// Report it as what it is, now, with the attempts made so far.  Burning the rest of the
 			// budget would turn "the browser exited" into "your assertion timed out".
 			return result, fatalPollError(result, attemptErr)
+		}
+		if matched && attemptErr == nil {
+			return result, nil
 		}
 
 		timer := time.NewTimer(policy.Interval)

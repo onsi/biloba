@@ -115,6 +115,18 @@ var _ = Describe("runner-neutral engine primitives", func() {
 		Expect(engineErr.AttemptCount).To(Equal(1))
 	})
 
+	It("does not discard an attempt error merely because the attempt also reports a match", func() {
+		attempts := 0
+		_, err := engine.Poll(context.Background(), engine.PollPolicy{Timeout: 20 * time.Millisecond, Interval: time.Millisecond},
+			func(context.Context) (engine.Observation, bool, error) {
+				attempts++
+				return engine.Observation{Value: "stale match"}, true, engine.Fatal(errors.New("observation failed"))
+			})
+
+		Expect(err).To(MatchError(ContainSubstring("observation failed")))
+		Expect(attempts).To(Equal(1))
+	})
+
 	It("encodes raw JavaScript arguments identically wherever a call is generated", func() {
 		encoded, err := engine.EncodeArgs(15, "literal", rawJSArg{placeholder: `"__placeholder__"`, expression: "app.numRecords + 1"})
 		Expect(err).NotTo(HaveOccurred())
@@ -267,6 +279,20 @@ var _ = Describe("browser engine", func() {
 		state, err := session.Evaluate(ctx, `({storage: localStorage.getItem("session"), cookies: document.cookie})`)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(state).To(Equal(map[string]any{"storage": nil, "cookies": ""}))
+	})
+
+	It("prepare clears a recorded page crash after its recovery navigation", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		engine.MarkSessionCrashedForTest(session)
+
+		Expect(session.Prepare(ctx)).To(Succeed())
+		value, err := session.Evaluate(ctx, "1 + 1")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(value).To(BeNumerically("==", 2))
 	})
 
 	It("returns a typed navigation failure for a non-200 document", func(ctx SpecContext) {

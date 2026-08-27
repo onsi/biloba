@@ -15,3 +15,9 @@ func SessionContextForTest(session *Session) context.Context {
 func HTTPStatusFailureForTest(err error) bool {
 	return httpStatusFailure(err)
 }
+
+// MarkSessionCrashedForTest records the crash signal without killing a renderer, allowing the
+// recovery state machine to be tested without disturbing other specs sharing the test browser.
+func MarkSessionCrashedForTest(session *Session) {
+	session.markCrashed()
+}
