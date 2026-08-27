@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/onsi/biloba/engine"
 	"image"
 	"image/png"
 	"math"
@@ -13,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
 	"github.com/onsi/gomega"
 	"github.com/onsi/gomega/format"
@@ -650,12 +650,10 @@ func (b *Biloba) captureForComparison(selector any, cfg screenshotConfig, scheme
 func (b *Biloba) emulateColorScheme(scheme string) error {
 	ctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
-	params := emulation.SetEmulatedMedia()
 	if scheme != "" {
-		params = params.WithFeatures([]*emulation.MediaFeature{{Name: "prefers-color-scheme", Value: scheme}})
 		b.setColorSchemeEmulated(true)
 	}
-	err := b.runCDPIn(ctx, b.waitingTimeout(screenshotCaptureTimeout), "emulate the color scheme", params)
+	err := engine.EmulateColorSchemeContext(ctx, scheme)
 	if scheme == "" && err == nil {
 		b.setColorSchemeEmulated(false)
 	}
@@ -697,7 +695,7 @@ func (b *Biloba) fullPageScreenshot() ([]byte, float64, error) {
 	defer cancel()
 	var img []byte
 	var cssWidth float64
-	err := b.runCDPIn(ctx, b.waitingTimeout(screenshotCaptureTimeout), "capture a screenshot of the page", capturePageAction(&img, &cssWidth))
+	img, err := engine.CapturePageContext(ctx, &cssWidth)
 	return img, cssWidth, err
 }
 

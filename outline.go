@@ -3,12 +3,11 @@ package biloba
 import (
 	"context"
 	"fmt"
+	"github.com/onsi/biloba/engine"
 	"os"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/chromedp/chromedp"
 )
 
 const outlineMaxBytes = 32768 // 32 KB hard cap (default; override with BILOBA_OUTLINE_MAX)
@@ -78,8 +77,8 @@ func (b *Biloba) safeAllTabOutlines() []tabOutline {
 		ctx, cancel := context.WithTimeout(tab.Context, time.Second)
 		defer cancel()
 
-		var title string
-		if err := chromedp.Run(ctx, chromedp.Title(&title)); err != nil {
+		title, err := engine.TitleContext(ctx)
+		if err != nil {
 			out = append(out, tabOutline{failure: fmt.Sprintf("Failed to fetch title for DOM outline: %s", err.Error())})
 			continue
 		}

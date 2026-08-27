@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"github.com/onsi/biloba/engine"
 	"image"
 	"image/color/palette"
 	"image/draw"
@@ -136,7 +137,7 @@ func (b *Biloba) captureScreenshot() []byte {
 	ctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
 	var img []byte
-	err := b.runCDPIn(ctx, b.waitingTimeout(screenshotCaptureTimeout), "capture a screenshot of the page", capturePageAction(&img, nil))
+	img, err := engine.CapturePageContext(ctx, nil)
 	if err != nil {
 		b.gt.Fatalf("Failed to capture screenshot:\n%s", err.Error())
 	}
@@ -147,36 +148,6 @@ func (b *Biloba) captureScreenshot() []byte {
 // in CSS pixels (which is what the visual-regression path divides by to recover the device scale
 // factor).  Both come out of the same round trip, so they describe the same layout.
 //
-// It expands the viewport only when the document is actually bigger than it - see expandsViewport for
-// why that expansion is worth avoiding.  When the content already fits, the expanded capture and the
-// plain one are the same pixels, so skipping it changes nothing except that the page stops being told
-// its viewport resized.  That is the app-shell case: a document that never scrolls because an inner
-// pane does.
-func capturePageAction(img *[]byte, cssWidth *float64) chromedp.ActionFunc {
-	return func(ctx context.Context) error {
-		_, _, _, cssLayoutViewport, _, cssContentSize, err := page.GetLayoutMetrics().Do(ctx)
-		if err != nil {
-			return err
-		}
-		if cssWidth != nil {
-			*cssWidth = cssContentSize.Width
-		}
-		// Exact equality, not "fits within": anything looser and the two captures could differ in size,
-		// which would invalidate every baseline taken with the other one.  Chrome reports both in CSS
-		// pixels off the same layout, so a document that measures equal really is the viewport.
-		fits := cssLayoutViewport != nil &&
-			cssContentSize.Width == float64(cssLayoutViewport.ClientWidth) &&
-			cssContentSize.Height == float64(cssLayoutViewport.ClientHeight) &&
-			cssContentSize.X == 0 && cssContentSize.Y == 0
-		*img, err = page.CaptureScreenshot().
-			WithFromSurface(true).
-			WithCaptureBeyondViewport(!fits).
-			WithFormat(page.CaptureScreenshotFormatPng).
-			Do(ctx)
-		return err
-	}
-}
-
 /*
 CaptureImgCatScreenshot() returns a full screenshot of the current tab as an iTerm2 imgcat-compatible string.  Simply print it out to see images on your terminal.
 
@@ -362,16 +333,7 @@ func (b *Biloba) elementScreenshot(selector any) ([]byte, *page.Viewport, captur
 	beyondViewport := expandsViewport(box)
 	cctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
-	var img []byte
-	err := b.runCDPIn(cctx, b.waitingTimeout(screenshotCaptureTimeout), "capture a screenshot of the element", chromedp.ActionFunc(func(ctx context.Context) error {
-		var captureErr error
-		img, captureErr = page.CaptureScreenshot().
-			WithClip(clip).
-			WithFromSurface(true).
-			WithCaptureBeyondViewport(beyondViewport).
-			Do(ctx)
-		return captureErr
-	}))
+	img, err := engine.CaptureClipContext(cctx, clip, beyondViewport)
 	if err != nil {
 		return nil, clip, notes, err
 	}
@@ -511,20 +473,15 @@ func (b *Biloba) safeAllTabScreenshots(width int, height int) []tabScreenshot {
 		var originalWidth, originalHeight int
 		if width > 0 && height > 0 {
 			originalWidth, originalHeight = b.WindowSize()
-			err := chromedp.Run(ctx, chromedp.EmulateViewport(int64(width), int64(height)))
+			err := engine.EmulateViewportContext(ctx, width, height)
 			if err != nil {
 				out = append(out, tabScreenshot{failure: fmt.Sprintf("failed to set window size: %s", err.Error())})
 				continue
 			}
 		}
-		var img []byte
-		var title string
-		err := chromedp.Run(ctx,
-			chromedp.Title(&title),
-			chromedp.FullScreenshot(&img, 100),
-		)
+		img, title, err := engine.CaptureFullScreenshotContext(ctx, 100)
 		if width > 0 && height > 0 {
-			err := chromedp.Run(ctx, chromedp.EmulateViewport(int64(originalWidth), int64(originalHeight), chromedp.EmulatePortrait))
+			err := engine.EmulateViewportContext(ctx, originalWidth, originalHeight, chromedp.EmulatePortrait)
 			if err != nil {
 				out = append(out, tabScreenshot{failure: fmt.Sprintf("failed to reset window size: %s", err.Error())})
 				continue

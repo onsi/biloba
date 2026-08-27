@@ -2,6 +2,7 @@ package biloba
 
 import (
 	"github.com/chromedp/chromedp"
+	"github.com/onsi/biloba/engine"
 )
 
 /*
@@ -19,7 +20,7 @@ func (b *Biloba) SetWindowSize(width, height int, opts ...chromedp.EmulateViewpo
 	if b.ChromeConnection.HighFidelity {
 		opts = append([]chromedp.EmulateViewportOption{emulateViewportMatchingScreen}, opts...)
 	}
-	err := b.runCDP("set the window size", chromedp.EmulateViewport(int64(width), int64(height), opts...))
+	err := engine.EmulateViewportContext(b.Context, width, height, opts...)
 	if err != nil {
 		b.gt.Fatalf("failed to set window size: %s", err.Error())
 	}
@@ -29,7 +30,7 @@ func (b *Biloba) SetWindowSize(width, height int, opts ...chromedp.EmulateViewpo
 		if b.ChromeConnection.HighFidelity {
 			resetOpts = append(resetOpts, emulateViewportMatchingScreen)
 		}
-		err := b.runCDP("reset the window size", chromedp.EmulateViewport(int64(originalWidth), int64(originalHeight), resetOpts...))
+		err := engine.EmulateViewportContext(b.Context, originalWidth, originalHeight, resetOpts...)
 		if err != nil {
 			b.gt.Fatalf("failed to reset window size: %s", err.Error())
 		}
