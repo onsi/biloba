@@ -5,6 +5,8 @@ import (
 	_ "embed"
 	"errors"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -266,7 +268,8 @@ func (s *Session) CaptureDiagnostics(ctx context.Context, prefix string) (Diagno
 		}
 		response, err := s.runHandler(opCtx, "outline", Selector{})
 		if err == nil {
-			diagnostics.DOMOutline, _ = response.Result.(string)
+			outline, _ := response.Result.(string)
+			diagnostics.DOMOutline = capOutline(outline)
 		}
 		path := artifactPath(s.artifactDir, prefix, "png")
 		if path == "" {
@@ -290,6 +293,49 @@ func (s *Session) CaptureDiagnostics(ctx context.Context, prefix string) (Diagno
 		return err
 	})
 	return diagnostics, err
+}
+
+// outlineMaxBytes and outlineTruncationMarker mirror the root package's outline.go.  The engine
+// cannot import the root package (the root imports the engine), so the cap is restated here rather
+// than shared - it has to stay character-for-character identical to the runner's, since a truncated
+// outline is a failure artifact a human compares across the two paths.
+const outlineMaxBytes = 32768 // 32 KB hard cap (default; override with BILOBA_OUTLINE_MAX)
+const outlineTruncationMarker = "\n... [truncated]"
+
+// outlineCap resolves the byte cap for a captured DOM outline.  By default it is outlineMaxBytes,
+// but BILOBA_OUTLINE_MAX lets you raise it (when a failing spec's DOM is truncated right where you
+// need it) or disable truncation entirely: set it to a byte count (e.g. "131072") to raise the cap,
+// or to "0"/"off"/"none"/"unlimited" to emit the whole outline.  An unparseable value falls back to
+// the default.  Keep in sync with the root package's outlineCap.
+func outlineCap() int {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("BILOBA_OUTLINE_MAX")))
+	if v == "" {
+		return outlineMaxBytes
+	}
+	switch v {
+	case "0", "off", "none", "unlimited":
+		return -1 // no cap
+	}
+	if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		return n
+	}
+	return outlineMaxBytes
+}
+
+func capOutline(s string) string {
+	return capOutlineWithCap(s, outlineCap())
+}
+
+func capOutlineWithCap(s string, maxBytes int) string {
+	if maxBytes < 0 || len(s) <= maxBytes {
+		return s
+	}
+	// Find a newline boundary near the cap so we don't cut mid-line.
+	cut := strings.LastIndex(s[:maxBytes], "\n")
+	if cut < 0 {
+		cut = maxBytes
+	}
+	return s[:cut] + outlineTruncationMarker
 }
 
 func (r HandlerResponse) observation(value any) Observation {
