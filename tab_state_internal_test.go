@@ -30,8 +30,13 @@ import (
 // call site saying why.  The fourth discovery came from outside - a consumer reporting that
 // b.WithTimeout(d).HoldResponse(url) intercepted nothing while Await burned exactly the tuned
 // deadline - and covered nine entry points at once: the five network registrars, the four dialog
-// ones, plus stale reads and a stale bilobaIsInstalled across a navigation.  Three local patches and
-// a nine-site bug is a rule nobody had written down, so these specs write it down.
+// ones, plus stale reads and a stale bilobaIsInstalled across a navigation.
+//
+// The reason three local patches did not add up to a rule is worth stating, because it is what makes
+// a guard the only thing that closes a class like this: each local fix REMOVES ITS OWN EVIDENCE.
+// Once colorSchemeEmulated is a *bool it no longer looks like anything, and nothing marks it as an
+// instance of a class - so the fourth person to hit the class starts from scratch, and the class
+// outlives every repair made to it.  Written-down-and-enforced is the only form that accumulates.
 //
 // HOW THEY BEHAVE.  Add a field to Biloba whose type is copied and they fail until you classify it.
 // That is the point: copying is occasionally right and always a decision.
