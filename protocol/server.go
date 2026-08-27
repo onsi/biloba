@@ -15,7 +15,7 @@ import (
 const Version = "1"
 
 var Capabilities = []string{
-	"locator.css", "locator.xpath", "locator.test_id", "locator.text", "locator.role", "locator.first",
+	"locator.css", "locator.xpath", "locator.test_id", "locator.text", "locator.role", "locator.label", "locator.placeholder", "locator.alt_text", "locator.title", "locator.refinements", "locator.first",
 	"session.prepare", "session.new_tab", "session.add_init_script", "session.activate", "navigation", "cookies", "action.click", "action.set_value", "action.realistic", "action.type", "action.send_keys", "action.drag_to",
 	"action.set_upload", "viewport.set", "evaluate", "evaluate.async", "assert.visible", "assert.text", "assert.count", "assert.attribute",
 	"assert.value", "assert.url", "assert.evaluate", "poll.server_side", "diagnostics.structured",
@@ -134,6 +134,10 @@ const (
 	LocatorTestID
 	LocatorText
 	LocatorRole
+	LocatorLabel
+	LocatorPlaceholder
+	LocatorAltText
+	LocatorTitle
 	LocatorAnd
 	LocatorOr
 )
@@ -888,7 +892,11 @@ func locatorFromWireAt(locator *WireLocator, depth int) (Locator, *ProtocolError
 	if depth > 64 {
 		return Locator{}, NewError(CodeInvalidArgument, "locator nesting exceeds 64 levels")
 	}
-	kinds := map[string]LocatorKind{"CSS": LocatorCSS, "XPATH": LocatorXPath, "TEST_ID": LocatorTestID, "TEXT": LocatorText, "ROLE": LocatorRole, "AND": LocatorAnd, "OR": LocatorOr}
+	kinds := map[string]LocatorKind{
+		"CSS": LocatorCSS, "XPATH": LocatorXPath, "TEST_ID": LocatorTestID, "TEXT": LocatorText,
+		"ROLE": LocatorRole, "LABEL": LocatorLabel, "PLACEHOLDER": LocatorPlaceholder,
+		"ALT_TEXT": LocatorAltText, "TITLE": LocatorTitle, "AND": LocatorAnd, "OR": LocatorOr,
+	}
 	kind, exists := kinds[locator.Kind]
 	if !exists {
 		return Locator{}, NewError(CodeInvalidArgument, "locator kind is required")
@@ -898,6 +906,15 @@ func locatorFromWireAt(locator *WireLocator, depth int) (Locator, *ProtocolError
 	}
 	if kind != LocatorRole && kind != LocatorAnd && kind != LocatorOr && locator.Value == "" {
 		return Locator{}, NewError(CodeInvalidArgument, "locator value is required")
+	}
+	if locator.LevelSet && locator.Level <= 0 {
+		return Locator{}, NewError(CodeInvalidArgument, "invalid locator refinement: level must be positive")
+	}
+	validStates := map[string]bool{"checked": true, "disabled": true, "expanded": true, "pressed": true, "selected": true}
+	for _, state := range locator.States {
+		if !validStates[state] {
+			return Locator{}, NewError(CodeInvalidArgument, "invalid locator refinement: unsupported state")
+		}
 	}
 	match, matchErr := matchModeFromWire(locator.Match)
 	if matchErr != nil {

@@ -82,12 +82,12 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
   it("reaches the same shared observable outcome through the TypeScript API", async () => {
     await session.prepare();
     await session.navigate(baseUrl);
-    await session.getByRole("heading", {name: "Biloba parity"}).expectVisible();
+    await session.getByRole("heading", {name: "Biloba parity"}).level(1).expectVisible();
     const delayed = await session.locator("#delayed").expectText("ready", {timeoutMs: 1_000, intervalMs: 5});
     expect(delayed.attemptCount).toBeGreaterThan(1);
 
-    await session.getByTestId("name").setValue("Ada");
-    await session.getByTestId("name").expectValue("Ada");
+    await session.getByLabel("Name", {exact: true}).setValue("Ada");
+    await session.getByLabel("Name", {exact: true}).expectValue("Ada");
     await session.getByRole("button", {name: "Increment"}).click();
     await session.xpath(xpath("button").withText("Increment")).expectVisible();
     await session.locator(".row")

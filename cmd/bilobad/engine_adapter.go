@@ -408,6 +408,14 @@ func selectorFromProtocol(locator protocol.Locator) (engine.Selector, error) {
 		selector = engine.Text(locator.Value, mode)
 	case protocol.LocatorRole:
 		selector = engine.Role(locator.Role, locator.Name, mode)
+	case protocol.LocatorLabel:
+		selector = engine.Label(locator.Value, mode)
+	case protocol.LocatorPlaceholder:
+		selector = engine.Placeholder(locator.Value, mode)
+	case protocol.LocatorAltText:
+		selector = engine.AltText(locator.Value, mode)
+	case protocol.LocatorTitle:
+		selector = engine.Title(locator.Value, mode)
 	case protocol.LocatorAnd, protocol.LocatorOr:
 		first, err := selectorFromProtocol(locator.Operands[0])
 		if err != nil {

@@ -112,7 +112,7 @@ func tsType(owner reflect.Type, field reflect.StructField) string {
 	if owner == reflect.TypeFor[protocol.WireLocator]() {
 		switch field.Name {
 		case "Kind":
-			return `"CSS" | "XPATH" | "TEST_ID" | "TEXT" | "ROLE" | "AND" | "OR"`
+			return `"CSS" | "XPATH" | "TEST_ID" | "TEXT" | "ROLE" | "LABEL" | "PLACEHOLDER" | "ALT_TEXT" | "TITLE" | "AND" | "OR"`
 		case "Match":
 			return `"EXACT" | "CONTAINS"`
 		}

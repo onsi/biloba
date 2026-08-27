@@ -286,6 +286,27 @@ describe("Biloba TypeScript client", () => {
     });
   });
 
+  it("serializes every semantic locator and role refinement", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+
+    await session.getByLabel("Email", {exact: true}).expectExists();
+    await session.getByPlaceholder("Search", {exact: false}).expectExists();
+    await session.getByAltText("Portrait", {exact: true}).expectExists();
+    await session.getByTitle("Open settings", {exact: false}).expectExists();
+    await session.getByRole("heading").level(2).expectExists();
+    await session.getByRole("checkbox").checked().disabled().expectExists();
+
+    expect(requests.filter(({method}) => method === "Assert").slice(-6)).toMatchObject([
+      {request: {assertion: {locator: {kind: "LABEL", value: "Email", match: "EXACT"}}}},
+      {request: {assertion: {locator: {kind: "PLACEHOLDER", value: "Search", match: "CONTAINS"}}}},
+      {request: {assertion: {locator: {kind: "ALT_TEXT", value: "Portrait", match: "EXACT"}}}},
+      {request: {assertion: {locator: {kind: "TITLE", value: "Open settings", match: "CONTAINS"}}}},
+      {request: {assertion: {locator: {kind: "ROLE", role: "heading", level: 2, levelSet: true}}}},
+      {request: {assertion: {locator: {kind: "ROLE", role: "checkbox", states: ["checked", "disabled"]}}}},
+    ]);
+  });
+
   it("serializes raw and composed XPath locators", async () => {
     browser = await connectClient();
     const session = await browser.openSession();

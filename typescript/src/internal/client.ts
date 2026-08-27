@@ -253,6 +253,35 @@ class ClientSession implements Session {
     });
   }
 
+  getByLabel(value: string, options: {exact?: boolean} = {}): Locator {
+    return this.#semanticLocator("LABEL", value, options);
+  }
+
+  getByPlaceholder(value: string, options: {exact?: boolean} = {}): Locator {
+    return this.#semanticLocator("PLACEHOLDER", value, options);
+  }
+
+  getByAltText(value: string, options: {exact?: boolean} = {}): Locator {
+    return this.#semanticLocator("ALT_TEXT", value, options);
+  }
+
+  getByTitle(value: string, options: {exact?: boolean} = {}): Locator {
+    return this.#semanticLocator("TITLE", value, options);
+  }
+
+  #semanticLocator(
+    kind: "LABEL" | "PLACEHOLDER" | "ALT_TEXT" | "TITLE",
+    value: string,
+    options: {exact?: boolean},
+  ): Locator {
+    return new ClientLocator(this, {
+      kind,
+      value,
+      match: options.exact === true ? "EXACT" : "CONTAINS",
+      first: false,
+    });
+  }
+
   async expectUrl(
     expected: ExpectedValue,
     options: WaitOptions & {exact?: boolean; pathname?: boolean} = {},
@@ -453,6 +482,19 @@ class ClientLocator implements Locator {
     }
     return new ClientLocator(this.#session, {...this.#locator, first: false, nth: index, nthSet: true}, this.#realistic);
   }
+
+  level(level: number): Locator {
+    if (!Number.isInteger(level) || level <= 0) {
+      throw new BilobaError({code: "INVALID_ARGUMENT", message: "locator.level requires a positive integer"});
+    }
+    return new ClientLocator(this.#session, {...this.#locator, level, levelSet: true}, this.#realistic);
+  }
+
+  checked(): Locator { return this.#withState("checked"); }
+  disabled(): Locator { return this.#withState("disabled"); }
+  expanded(): Locator { return this.#withState("expanded"); }
+  pressed(): Locator { return this.#withState("pressed"); }
+  selected(): Locator { return this.#withState("selected"); }
 
   and(other: Locator | string): Locator {
     return this.#combine("AND", other);
@@ -687,6 +729,13 @@ class ClientLocator implements Locator {
     return new ClientLocator(this.#session, {
       ...this.#locator,
       filters: [...(this.#locator.filters ?? []), filter],
+    }, this.#realistic);
+  }
+
+  #withState(state: "checked" | "disabled" | "expanded" | "pressed" | "selected"): ClientLocator {
+    return new ClientLocator(this.#session, {
+      ...this.#locator,
+      states: [...(this.#locator.states ?? []), state],
     }, this.#realistic);
   }
 

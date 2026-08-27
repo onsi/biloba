@@ -158,6 +158,39 @@ var _ = Describe("driver protocol", func() {
 		Expect(locator.Value).To(Equal(`//button[text()="Save"]`))
 	})
 
+	It("carries every extended semantic locator as a typed selector", func() {
+		recorder := &recordingSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+
+		for _, kind := range []string{"LABEL", "PLACEHOLDER", "ALT_TEXT", "TITLE"} {
+			Expect(client.call("click", protocol.LocatorRequest{
+				SessionID: opened.SessionID,
+				Locator:   &protocol.WireLocator{Kind: kind, Value: "Ada", Match: "CONTAINS"},
+			}, nil)).To(Succeed(), kind)
+			Expect(recorder.lastOperation().Locator.Value).To(Equal("Ada"))
+			Expect(recorder.lastOperation().Locator.Match).To(Equal(protocol.MatchContains))
+		}
+	})
+
+	It("rejects invalid semantic locator refinements at the protocol boundary", func() {
+		recorder := &recordingSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+
+		for _, locator := range []*protocol.WireLocator{
+			{Kind: "ROLE", Role: "heading", Level: -1, LevelSet: true},
+			{Kind: "ROLE", Role: "checkbox", States: []string{"unknown"}},
+		} {
+			err := client.call("click", protocol.LocatorRequest{SessionID: opened.SessionID, Locator: locator}, nil)
+			Expect(err).To(MatchError(ContainSubstring("invalid locator refinement")))
+		}
+	})
+
 	It("carries typed matcher trees and consistency polling", func() {
 		recorder := &recordingSession{}
 		client, cleanup := startTestServer(&fakeBackend{custom: recorder})

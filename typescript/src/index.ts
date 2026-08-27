@@ -285,6 +285,12 @@ export interface Locator {
   first(): Locator;
   last(): Locator;
   nth(index: number): Locator;
+  level(level: number): Locator;
+  checked(): Locator;
+  disabled(): Locator;
+  expanded(): Locator;
+  pressed(): Locator;
+  selected(): Locator;
   and(other: Locator | string): Locator;
   or(other: Locator | string): Locator;
   within(scope: Locator | string): Locator;
@@ -343,6 +349,10 @@ export interface Session {
   getByTestId(value: string): Locator;
   getByText(value: string, options?: {exact?: boolean | undefined}): Locator;
   getByRole(role: string, options?: {name?: string | undefined; exact?: boolean | undefined}): Locator;
+  getByLabel(value: string, options?: {exact?: boolean | undefined}): Locator;
+  getByPlaceholder(value: string, options?: {exact?: boolean | undefined}): Locator;
+  getByAltText(value: string, options?: {exact?: boolean | undefined}): Locator;
+  getByTitle(value: string, options?: {exact?: boolean | undefined}): Locator;
   expectUrl(expected: ExpectedValue, options?: WaitOptions & {exact?: boolean | undefined; pathname?: boolean | undefined}): Promise<AssertionResult>;
   url(): Promise<string>;
   expectEvaluation(expression: string, expected: ExpectedValue, options?: WaitOptions): Promise<AssertionResult>;

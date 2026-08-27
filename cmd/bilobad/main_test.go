@@ -90,6 +90,12 @@ var _ = Describe("bilobad", func() {
 			ContainSubstring(`"within":"a{\"attr\":\"data-testid\"`),
 			ContainSubstring(`"nth":1`),
 		))
+
+		semantic, err := selectorFromProtocol(protocol.Locator{
+			Kind: protocol.LocatorLabel, Value: "Email", Match: protocol.MatchExact,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(semantic.Encoded()).To(Equal(`a{"by":"label","value":"Email","valueMode":"exact"}`))
 	})
 
 	It("adapts XPath locators to the engine encoding", func() {
