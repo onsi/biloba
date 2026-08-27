@@ -262,6 +262,53 @@ var _ = Describe("browser engine", func() {
 		Expect(values[1]).To(Equal(map[string]any{"storage": nil, "cookies": ""}))
 	})
 
+	It("reads back the cookies it set, session and persistent alike", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		expires := time.Now().Add(time.Hour).Truncate(time.Second)
+		Expect(session.SetCookies(ctx, []engine.Cookie{
+			{Name: "sessionish", Value: "no-expiry", Domain: "127.0.0.1", Path: "/"},
+			{Name: "persistent", Value: "expires", Domain: "127.0.0.1", Path: "/", Expires: expires},
+		})).To(Succeed())
+
+		cookies, err := session.GetCookies(ctx)
+		Expect(err).NotTo(HaveOccurred())
+
+		byName := map[string]engine.Cookie{}
+		for _, cookie := range cookies {
+			byName[cookie.Name] = cookie
+		}
+		Expect(byName).To(HaveKey("sessionish"))
+		Expect(byName["sessionish"].Value).To(Equal("no-expiry"))
+		Expect(byName["sessionish"].Session).To(BeTrue(), "a cookie set without an expiry is a session cookie")
+		Expect(byName["sessionish"].Expires).To(BeZero())
+		Expect(byName).To(HaveKey("persistent"))
+		Expect(byName["persistent"].Session).To(BeFalse())
+		Expect(byName["persistent"].Expires).To(BeTemporally("~", expires, time.Second))
+	})
+
+	It("reads cookies only from its own browser context", func(ctx SpecContext) {
+		first, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(first.Close)
+		second, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(second.Close)
+		Expect(first.Navigate(ctx, server.URL)).To(Succeed())
+		Expect(second.Navigate(ctx, server.URL)).To(Succeed())
+		Expect(first.SetCookies(ctx, []engine.Cookie{{Name: "mine", Value: "only", Domain: "127.0.0.1", Path: "/"}})).To(Succeed())
+
+		mine, err := first.GetCookies(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		theirs, err := second.GetCookies(ctx)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(namesOf(mine)).To(ContainElement("mine"))
+		Expect(namesOf(theirs)).NotTo(ContainElement("mine"), "a read must be scoped to its own browser context, like the write is")
+	})
+
 	It("prepare clears cookies and web storage before returning to about:blank", func(ctx SpecContext) {
 		session, err := browser.OpenSession(ctx)
 		Expect(err).NotTo(HaveOccurred())
@@ -462,3 +509,11 @@ type rawJSArg struct {
 func (r rawJSArg) MarshalJSON() ([]byte, error) { return []byte(r.placeholder), nil }
 func (r rawJSArg) RawJSPlaceholder() string     { return r.placeholder }
 func (r rawJSArg) RawJSExpression() string      { return r.expression }
+
+func namesOf(cookies []engine.Cookie) []string {
+	names := make([]string, len(cookies))
+	for index, cookie := range cookies {
+		names[index] = cookie.Name
+	}
+	return names
+}
