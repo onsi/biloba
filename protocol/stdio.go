@@ -17,6 +17,30 @@ func ServeStdio(ctx context.Context, server *Server, input io.Reader, output io.
 	writer := NewFramedWriter(output)
 	ctx, cancelAll := context.WithCancel(ctx)
 	defer cancelAll()
+	type readResult struct {
+		request Request
+		err     error
+	}
+	reads := make(chan readResult, 1)
+	go func() {
+		for {
+			var request Request
+			err := reader.Read(&request)
+			select {
+			case reads <- readResult{request: request, err: err}:
+			case <-ctx.Done():
+				return
+			}
+			if err != nil {
+				var malformed *MalformedFrameError
+				if errors.As(err, &malformed) {
+					continue
+				}
+				return
+			}
+		}
+	}()
+	writeErrors := make(chan error, 1)
 
 	var activeMu sync.Mutex
 	active := map[uint64]context.CancelFunc{}
@@ -32,7 +56,17 @@ func ServeStdio(ctx context.Context, server *Server, input io.Reader, output io.
 
 	for {
 		var request Request
-		if err := reader.Read(&request); err != nil {
+		select {
+		case <-ctx.Done():
+			return nil
+		case err := <-writeErrors:
+			return fmt.Errorf("write protocol response: %w", err)
+		case read := <-reads:
+			request = read.request
+			if read.err == nil {
+				break
+			}
+			err := read.err
 			if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) || ctx.Err() != nil {
 				return nil
 			}
@@ -98,7 +132,12 @@ func ServeStdio(ctx context.Context, server *Server, input io.Reader, output io.
 			activeMu.Lock()
 			delete(active, request.ID)
 			activeMu.Unlock()
-			_ = writer.Write(Response{ID: request.ID, Result: result, Error: protocolErr})
+			if err := writer.Write(Response{ID: request.ID, Result: result, Error: protocolErr}); err != nil {
+				select {
+				case writeErrors <- err:
+				default:
+				}
+			}
 		}(request)
 	}
 }

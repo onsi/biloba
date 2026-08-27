@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"time"
@@ -155,7 +156,29 @@ var _ = Describe("serving requests over framed stdio", func() {
 		Expect(blocking.cancelled).To(BeClosed(), "ServeStdio must cancel in-flight work before returning, not orphan it")
 		Expect(serverConnection.Close()).To(Succeed())
 	})
+
+	It("returns an asynchronous response write failure even while input remains open", func() {
+		clientConnection, serverConnection := net.Pipe()
+		server := protocol.NewServer(&fakeBackend{})
+		DeferCleanup(func() { Expect(server.Close()).To(Succeed()) })
+		served := make(chan error, 1)
+		go func() {
+			served <- protocol.ServeStdio(context.Background(), server, serverConnection, failingWriter{})
+		}()
+
+		Expect(protocol.NewFramedWriter(clientConnection).Write(protocol.Request{
+			ID: 1, Method: "handshake", Params: json.RawMessage(`{"protocolVersion":"1"}`),
+		})).To(Succeed())
+
+		Eventually(served, time.Second).Should(Receive(MatchError(ContainSubstring("write protocol response"))))
+		Expect(clientConnection.Close()).To(Succeed())
+		Expect(serverConnection.Close()).To(Succeed())
+	})
 })
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("output is closed") }
 
 // beginRaw is begin for a payload that is deliberately not the shape the method expects.
 func (c *testClient) beginRaw(method string, params json.RawMessage, timeoutMS int64) (uint64, <-chan protocol.Response) {
