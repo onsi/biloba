@@ -52,6 +52,22 @@ func (r *FramedReader) Read(value any) error {
 	return nil
 }
 
+// UnwritableFrameError reports a value the writer rejected before it put a single byte on the
+// stream: it did not encode, or it encoded to more than MaxFrameSize.  It is the write side's
+// mirror of MalformedFrameError - the stream is still sitting on a frame boundary, so a server can
+// answer with a substitute and keep serving instead of tearing down every session sharing the pipe.
+// Every other error from Write means bytes reached the stream and the frame is half-written, which
+// nothing downstream can resynchronize.
+type UnwritableFrameError struct {
+	// Size is the encoded length in bytes, or 0 when the value did not encode at all.  It lets a
+	// caller report the overrun without re-marshalling the value it just failed to send.
+	Size int
+	Err  error
+}
+
+func (e *UnwritableFrameError) Error() string { return e.Err.Error() }
+func (e *UnwritableFrameError) Unwrap() error { return e.Err }
+
 // FramedWriter writes complete frames atomically with respect to other callers.
 type FramedWriter struct {
 	writer io.Writer
@@ -65,10 +81,10 @@ func NewFramedWriter(writer io.Writer) *FramedWriter {
 func (w *FramedWriter) Write(value any) error {
 	payload, err := json.Marshal(value)
 	if err != nil {
-		return fmt.Errorf("encode protocol frame: %w", err)
+		return &UnwritableFrameError{Err: fmt.Errorf("encode protocol frame: %w", err)}
 	}
 	if len(payload) > MaxFrameSize {
-		return fmt.Errorf("protocol frame is %d bytes; maximum is %d", len(payload), MaxFrameSize)
+		return &UnwritableFrameError{Size: len(payload), Err: fmt.Errorf("protocol frame is %d bytes; maximum is %d", len(payload), MaxFrameSize)}
 	}
 	var header [4]byte
 	binary.LittleEndian.PutUint32(header[:], uint32(len(payload)))

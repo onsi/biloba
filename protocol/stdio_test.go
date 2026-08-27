@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/onsi/biloba/protocol"
@@ -77,6 +78,31 @@ var _ = Describe("serving requests over framed stdio", func() {
 		Eventually(responses).Should(Receive(&response))
 		Expect(response.Error.Code).To(Equal(protocol.CodeInvalidArgument))
 		Expect(response.Error.Message).To(ContainSubstring("malformed request frame"))
+		stillServing()
+	})
+
+	It("answers a response too large to frame instead of tearing the daemon down", func() {
+		// The writer rejects an over-large frame before it writes a byte, so the stream is still
+		// aligned: this costs the one request, not the daemon that carries every other session on
+		// this worker.  Nothing caps a poll trajectory, so a response can genuinely grow past the
+		// frame limit - and the caller has to hear about it rather than wait out its timeout.
+		backend.session = &fakeSession{result: protocol.Result{
+			Matched: true, Attempts: 1, ObservedJSON: strings.Repeat("x", protocol.MaxFrameSize+1),
+		}}
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+
+		// Eventually rather than a bare receive: a regression here does not answer at all, and that
+		// has to fail this spec rather than hang the suite waiting on a daemon that has gone away.
+		_, responses := client.begin("assert", protocol.AssertRequest{
+			SessionID: opened.SessionID,
+			Assertion: &protocol.WireAssertion{Kind: "TEXT", Locator: &protocol.WireLocator{Kind: "CSS", Value: "#status"}, ExpectedString: "ready"},
+		}, 0)
+
+		var response protocol.Response
+		Eventually(responses, time.Second).Should(Receive(&response))
+		Expect(response.Error.Code).To(Equal(protocol.CodeDriver))
+		Expect(response.Error.Message).To(ContainSubstring("the protocol caps a single response"))
 		stillServing()
 	})
 

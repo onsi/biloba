@@ -78,7 +78,7 @@ func ServeStdio(ctx context.Context, server *Server, input io.Reader, output io.
 				// not parse has no id to correlate against, so answer with id 0 exactly as the
 				// zero-id case below does - it cannot be routed to a caller, but it puts the bug on
 				// the wire instead of leaving the client to time out against a silent daemon.
-				if writeErr := writer.Write(Response{ID: 0, Error: NewError(CodeInvalidArgument, "malformed request frame: "+malformed.Err.Error())}); writeErr != nil {
+				if writeErr := writeResponse(writer, Response{ID: 0, Error: NewError(CodeInvalidArgument, "malformed request frame: "+malformed.Err.Error())}); writeErr != nil {
 					return fmt.Errorf("write protocol response: %w", writeErr)
 				}
 				continue
@@ -102,21 +102,29 @@ func ServeStdio(ctx context.Context, server *Server, input io.Reader, output io.
 			// serving.  Tearing the daemon down here would take every other session on this worker
 			// with it.  The response is uncorrelatable by definition; it exists so the bug shows up
 			// on the wire instead of as a bare "bilobad closed stdout".
-			if err := writer.Write(Response{ID: 0, Error: NewError(CodeInvalidArgument, "request id must be non-zero")}); err != nil {
+			if err := writeResponse(writer, Response{ID: 0, Error: NewError(CodeInvalidArgument, "request id must be non-zero")}); err != nil {
 				return fmt.Errorf("write protocol response: %w", err)
 			}
 			continue
 		}
 
-		requestCtx, cancel := context.WithCancel(ctx)
+		// Exactly one derived context per request: assigning over a WithCancel context to add a
+		// deadline drops its cancel func on the floor, and the discarded child stays attached to the
+		// daemon-lifetime parent for as long as the daemon lives.  Clients send timeoutMs on nearly
+		// every request, so that leak accumulates for the life of the process.  Every path out of
+		// here calls the one cancel: the duplicate-id branch below, and the handler's defer.
+		var requestCtx context.Context
+		var cancel context.CancelFunc
 		if request.TimeoutMS > 0 {
 			requestCtx, cancel = context.WithTimeout(ctx, time.Duration(request.TimeoutMS)*time.Millisecond)
+		} else {
+			requestCtx, cancel = context.WithCancel(ctx)
 		}
 		activeMu.Lock()
 		if _, duplicate := active[request.ID]; duplicate {
 			activeMu.Unlock()
 			cancel()
-			if err := writer.Write(Response{ID: request.ID, Error: NewError(CodeInvalidArgument, "duplicate request id")}); err != nil {
+			if err := writeResponse(writer, Response{ID: request.ID, Error: NewError(CodeInvalidArgument, "duplicate request id")}); err != nil {
 				return fmt.Errorf("write protocol response: %w", err)
 			}
 			continue
@@ -132,7 +140,7 @@ func ServeStdio(ctx context.Context, server *Server, input io.Reader, output io.
 			activeMu.Lock()
 			delete(active, request.ID)
 			activeMu.Unlock()
-			if err := writer.Write(Response{ID: request.ID, Result: result, Error: protocolErr}); err != nil {
+			if err := writeResponse(writer, Response{ID: request.ID, Result: result, Error: protocolErr}); err != nil {
 				select {
 				case writeErrors <- err:
 				default:
@@ -140,4 +148,50 @@ func ServeStdio(ctx context.Context, server *Server, input io.Reader, output io.
 			}
 		}(request)
 	}
+}
+
+// writeResponse puts response on the wire, degrading a response the writer will not encode into an
+// error response rather than into a dead daemon.  An UnwritableFrameError is the writer saying it
+// rejected the value before writing a single byte, so the stream is still aligned on a frame
+// boundary: the session is intact and only that one request is lost.  The runner's poll trajectory
+// is uncapped, which makes an over-large response genuinely reachable - and one daemon carries every
+// session on the worker, so dying here would take all of them.
+//
+// A non-nil error from here is the other kind of failure: bytes did reach the stream, the frame is
+// half-written, and nothing downstream can resynchronize.  That one stays fatal and must surface to
+// the caller rather than being swallowed.
+func writeResponse(writer *FramedWriter, response Response) error {
+	err := writer.Write(response)
+	if err == nil {
+		return nil
+	}
+	var unwritable *UnwritableFrameError
+	if !errors.As(err, &unwritable) {
+		return err
+	}
+	return writer.Write(substituteForUnwritableResponse(response.ID, unwritable))
+}
+
+// substituteForUnwritableResponse builds the answer to send in place of a response that will not fit
+// in one frame.  DRIVER_ERROR is the code for the daemon failing to deliver on a request whose
+// arguments were fine - the same code normalizeError gives an unclassifiable daemon failure - rather
+// than INVALID_ARGUMENT, which would blame the caller for the daemon's own output.  The substitute
+// carries two integers and a bounded message, so it cannot fail the way the response it replaces
+// did.
+func substituteForUnwritableResponse(id uint64, unwritable *UnwritableFrameError) Response {
+	if unwritable.Size == 0 {
+		return Response{ID: id, Error: NewError(CodeDriver, "response could not be encoded: "+boundedDetail(unwritable.Err.Error()))}
+	}
+	return Response{ID: id, Error: NewError(CodeDriver, fmt.Sprintf("response is %d bytes; the protocol caps a single response at %d bytes", unwritable.Size, MaxFrameSize))}
+}
+
+// boundedDetail keeps detail borrowed from another error from reintroducing the size problem the
+// substitute exists to report.  A cut that lands mid-rune is fine: encoding/json replaces the
+// fragment rather than failing.
+func boundedDetail(message string) string {
+	const limit = 1024
+	if len(message) <= limit {
+		return message
+	}
+	return message[:limit] + "…(truncated)"
 }
