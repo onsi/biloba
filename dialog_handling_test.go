@@ -13,6 +13,36 @@ var _ = Describe("DialogHandling", func() {
 		Eventually("#status").Should(b.HaveInnerText("Green Alert!"))
 	})
 
+	// A view of a tab (Realistic(), ViewportOnly(), ...) is a shallow copy of the Biloba struct, and
+	// dialogHandlers used to be a plain slice field on it - so a handler registered through a view
+	// appended to the copy and never ran.  See the note on tabState.
+	Context("registering a dialog handler through a view of the tab", func() {
+		It("runs a handler registered through a held Realistic() view", func() {
+			rb := b.Realistic()
+			rb.HandleAlertDialogs()
+			b.Click(b.XPath("button").WithText("Red Alert"))
+			Eventually("#status").Should(b.HaveInnerText("Red Alert!"))
+			// the handler ran, so Biloba never had to autohandle it
+			Ω(gt.buffer).ShouldNot(gbytes.Say("unhandled dialog"))
+			// and the dialog is visible from the bare tab as well as the view - one tab, one list
+			Eventually(func() int { return len(b.Dialogs()) }).Should(Equal(1))
+			Ω(rb.Dialogs()).Should(HaveLen(1))
+		})
+
+		It("removes a handler through a view too", func() {
+			rb := b.Realistic()
+			handler := rb.HandleConfirmDialogs().WithResponse(true)
+			b.Click(b.XPath("button").WithText("Enter Warp?"))
+			Eventually("#status").Should(b.HaveInnerText("Green Alert! - Warp Speed: 0"))
+
+			b.RemoveDialogHandler(handler)
+			b.Navigate(fixtureServer + "/dialogs.html")
+			Eventually("#status").Should(b.HaveInnerText("Green Alert!"))
+			b.Click(b.XPath("button").WithText("Enter Warp?"))
+			Eventually(gt.buffer).Should(gbytes.Say("unhandled dialog"))
+		})
+	})
+
 	Context("when no handler is registered and a dialog appears", func() {
 		It("handles the dialog and tells the user", func() {
 			b.Click(b.XPath("button").WithText("Red Alert"))

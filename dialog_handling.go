@@ -139,9 +139,9 @@ func (b *Biloba) handleEventJavascriptDialogOpening(ev *page.EventJavascriptDial
 	text := ""
 	var handler *DialogHandler
 	b.lock.Lock()
-	for i := len(b.dialogHandlers) - 1; i >= 0; i-- {
-		if b.dialogHandlers[i].match(d) {
-			handler = b.dialogHandlers[i]
+	for i := len(b.state.dialogHandlers) - 1; i >= 0; i-- {
+		if b.state.dialogHandlers[i].match(d) {
+			handler = b.state.dialogHandlers[i]
 			break
 		}
 	}
@@ -161,7 +161,7 @@ func (b *Biloba) handleEventJavascriptDialogOpening(ev *page.EventJavascriptDial
 		d.HandleText = text
 		d.Autohandled = true
 	}
-	b.dialogs = append(b.dialogs, d)
+	b.state.dialogs = append(b.state.dialogs, d)
 	b.lock.Unlock()
 	if handler == nil {
 		b.gt.Printf(b.gt.F("Biloba automatically handled an {{red}}unhandled dialog{{/}} - you should add an explicit dialog handler: %s - %s", d.Type, d.Message))
@@ -219,7 +219,7 @@ func (b *Biloba) addDialogHandler(handler *DialogHandler) *DialogHandler {
 	b.lock.Lock()
 	handlerCounter += 1
 	handler.id = handlerCounter
-	b.dialogHandlers = append(b.dialogHandlers, handler)
+	b.state.dialogHandlers = append(b.state.dialogHandlers, handler)
 	b.lock.Unlock()
 	return handler
 }
@@ -233,12 +233,12 @@ func (b *Biloba) RemoveDialogHandler(handler *DialogHandler) {
 	b.guardConfig("RemoveDialogHandler")
 	handlers := []*DialogHandler{}
 	b.lock.Lock()
-	for _, h := range b.dialogHandlers {
+	for _, h := range b.state.dialogHandlers {
 		if h.id != handler.id {
 			handlers = append(handlers, h)
 		}
 	}
-	b.dialogHandlers = handlers
+	b.state.dialogHandlers = handlers
 	b.lock.Unlock()
 }
 
@@ -251,5 +251,5 @@ func (b *Biloba) Dialogs() Dialogs {
 	b.guardConfig("Dialogs")
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	return append(Dialogs{}, b.dialogs...)
+	return append(Dialogs{}, b.state.dialogs...)
 }

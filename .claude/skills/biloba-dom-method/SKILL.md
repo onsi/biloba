@@ -171,6 +171,19 @@ Keep the not-found/ready/error distinction inside one round-trip so polling stay
 - `(false, err)` = **genuine JS error** → Gomega does NOT abort the poll; it retries and surfaces the error inside the "Timed out after…" message at the deadline. True fail-fast on a real error happens only under `Immediate()` (which uses `Expect` = single evaluation). Do **not** special-case errors to abort the poll — that re-introduces the flake.
 - `(false, gomega.StopTrying(msg))` = **a condition that can never come true** → stop the poll now and report `msg`. Reserve it for exactly that: a state no amount of waiting can change. The reference cases are `HaveScreenshot`'s **missing baseline file** (the file will not appear because the spec kept asking) and an undecodable PNG, alongside `decodeCapture`'s wrong-target-type. Waiting out a full timeout to say "there is no baseline" would bury the one instruction the user needs. A page that hasn't settled yet is *never* one of these — keep it `(false, nil)`.
 
+### State a method mutates must live in `tabState`
+
+`b.Realistic()`, `b.WithTimeout(d)`, `b.Immediate()`, `b.ViewportOnly()` and friends are **shallow copies** of the `Biloba` struct (`nb := *b; nb.flag = true`). So anything a method reads or writes on the tab has to be reachable through a copy:
+
+- **Maps and pointers are fine** — the copy shares them.
+- **Slices and bools declared on `Biloba` are NOT.** An `append` through a copy updates the copy's slice header and nothing else, and a read through a copy sees the list frozen at the moment the copy was made. Both directions fail silently.
+
+So a method that registers or accumulates per-tab state puts that state in **`tabState`** (`biloba.go`), which every view shares by pointer. Its membership rule is "what `Prepare()` resets" — `newTabState()` is both the fresh-tab state and the reset, so a field added there can't be forgotten by `Prepare`. `Prepare` resets *through* the pointer (`*b.state = ...`), never by swapping in a new one, or the views would keep the old.
+
+Fields that stay on `Biloba` itself: identity (`Context`, `targetID`, `root`), suite config (the failure-artifact knobs, `downloadDir`), and the view flags themselves — which is the whole point, since those are *supposed* to differ per view.
+
+`go vet` will not catch a mistake here: its copylocks check is what would otherwise flag `nb := *b`, and `lock` is a `*sync.Mutex` so it stays quiet. The test is a spec that registers through a held view (`rb := b.Realistic()`) and asserts the bare tab sees it — see "registering through a view of the tab" in `network_test.go` and `dialog_handling_test.go`.
+
 ### The four-bucket model and `guardConfig`
 
 Not every method polls. `guardConfig(name, allowed...)` enforces which config knobs (`knobTimeout`/`knobPolling`/`knobContext`/`knobImmediate`) a method accepts:

@@ -98,7 +98,7 @@ func minDt(a, b time.Duration) time.Duration {
 
 func (b *Biloba) blockIfNecessaryToEnsureSuccessfulDownloads() {
 	b.lock.Lock()
-	if len(b.downloadHistory) < _CHROME_DOWNLOAD_LIMIT {
+	if len(b.state.downloadHistory) < _CHROME_DOWNLOAD_LIMIT {
 		b.lock.Unlock()
 		return
 	}
@@ -108,7 +108,7 @@ func (b *Biloba) blockIfNecessaryToEnsureSuccessfulDownloads() {
 		guidsToDelete := []string{}
 		waitingTime := time.Second
 		b.lock.Lock()
-		for guid, t := range b.downloadHistory {
+		for guid, t := range b.state.downloadHistory {
 			if t.IsZero() {
 				active += 1
 			} else if dt := time.Since(t); dt < time.Second {
@@ -119,7 +119,7 @@ func (b *Biloba) blockIfNecessaryToEnsureSuccessfulDownloads() {
 			}
 		}
 		for _, guid := range guidsToDelete {
-			delete(b.downloadHistory, guid)
+			delete(b.state.downloadHistory, guid)
 		}
 		b.lock.Unlock()
 		if active < _CHROME_DOWNLOAD_LIMIT {
@@ -175,7 +175,7 @@ func (b *Biloba) AllDownloads() Downloads {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	out := Downloads{}
-	for _, dl := range b.downloads {
+	for _, dl := range b.state.downloads {
 		out = append(out, dl)
 	}
 	return out
@@ -191,7 +191,7 @@ func (b *Biloba) AllCompleteDownloads() Downloads {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	out := Downloads{}
-	for _, dl := range b.downloads {
+	for _, dl := range b.state.downloads {
 		if dl.IsComplete() {
 			out = append(out, dl)
 		}
@@ -202,7 +202,7 @@ func (b *Biloba) AllCompleteDownloads() Downloads {
 func (b *Biloba) hasActiveDownloads() bool {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	for _, dl := range b.downloads {
+	for _, dl := range b.state.downloads {
 		if dl.IsActive() {
 			return true
 		}
@@ -359,19 +359,19 @@ func (q *DownloadQuery) NegatedFailureMessage(actual any) string {
 func (b *Biloba) handleEventDownloadWillBegin(ev *browser.EventDownloadWillBegin) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	b.downloads[ev.GUID] = &Download{
+	b.state.downloads[ev.GUID] = &Download{
 		GUID:        ev.GUID,
 		URL:         ev.URL,
 		Filename:    ev.SuggestedFilename,
 		downloadDir: b.root.downloadDir,
 		lock:        &sync.Mutex{},
 	}
-	b.downloadHistory[ev.GUID] = time.Time{}
+	b.state.downloadHistory[ev.GUID] = time.Time{}
 }
 
 func (b *Biloba) handleEventDownloadProgress(ev *browser.EventDownloadProgress) {
 	b.lock.Lock()
-	dl := b.downloads[ev.GUID]
+	dl := b.state.downloads[ev.GUID]
 	defer b.lock.Unlock()
 
 	switch ev.State {
@@ -379,11 +379,11 @@ func (b *Biloba) handleEventDownloadProgress(ev *browser.EventDownloadProgress) 
 		dl.lock.Lock()
 		dl.cancelled = true
 		dl.lock.Unlock()
-		b.downloadHistory[ev.GUID] = time.Now()
+		b.state.downloadHistory[ev.GUID] = time.Now()
 	case browser.DownloadProgressStateCompleted:
 		dl.lock.Lock()
 		dl.complete = true
 		dl.lock.Unlock()
-		b.downloadHistory[ev.GUID] = time.Now()
+		b.state.downloadHistory[ev.GUID] = time.Now()
 	}
 }

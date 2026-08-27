@@ -497,6 +497,77 @@ var _ = Describe("Observing the network", func() {
 	// A URL matcher that returns an error was silently treated as a non-match, which is the worst
 	// possible reading of it: the request the spec thought it had intercepted quietly went to the real
 	// network, and the spec then failed somewhere else entirely.
+	// A view of a tab - Realistic(), WithTimeout(), ViewportOnly(), ... - is a shallow COPY of the
+	// Biloba struct, and every view's doc promises it is "the same tab".  Handler lists used to be
+	// plain slice fields, so registering through a view appended to the copy and the handler was
+	// registered nowhere: b.WithTimeout(d).HoldResponse(url) intercepted nothing and Await burned
+	// exactly the tuned deadline.  These pin both the write side and the read side.
+	Describe("registering through a view of the tab", func() {
+		BeforeEach(func() {
+			b.Navigate(fixtureServer + "/network-interception.html")
+			Eventually("#hello").Should(b.Exist())
+		})
+
+		// The shape that was reported: WithTimeout is the one poll-config knob HoldResponse accepts,
+		// so it is the only view a guardConfig-protected registrar lets through.
+		It("holds a response registered through WithTimeout", func() {
+			hold := b.WithTimeout(5 * time.Second).HoldResponse(ContainSubstring("/api/echo"))
+			b.Click("#fetch")
+
+			response := hold.Await()
+			Expect(response.Status).To(Equal(200))
+			Expect(hold.Count()).To(Equal(1))
+			hold.Release()
+			Eventually("#body").Should(b.HaveInnerText(ContainSubstring("/api/echo")))
+		})
+
+		It("stubs a request registered through an inline Realistic() view", func() {
+			b.Realistic().StubRequest(ContainSubstring("/api/echo"), biloba.StubResponse{Body: "from a view"})
+			b.Click("#fetch")
+			Eventually("#body").Should(b.HaveInnerText("from a view"))
+		})
+
+		// The usage that actually occurs in the wild: a view made once and held across several
+		// statements, with a registration among them.  Views made for a single interaction and thrown
+		// away never reach a registrar, which is why this survived so long unnoticed.
+		It("stubs a request registered through a held Realistic() view, and the tab sees it", func() {
+			rb := b.Realistic()
+			stub := rb.StubRequest(ContainSubstring("/api/echo"), biloba.StubResponse{Body: "held view"})
+			rb.Click("#fetch")
+
+			Eventually("#body").Should(b.HaveInnerText("held view"))
+			Eventually(stub.Count).Should(Equal(1))
+			// and the count is visible from the bare tab as well as the view - one tab, one list
+			Expect(b.AllRequests().Find(b.RequestMatching(ContainSubstring("/api/echo")))).NotTo(BeNil())
+		})
+
+		It("aborts and modifies through a view too", func() {
+			b.Realistic().AbortRequest(ContainSubstring("/api/echo"))
+			b.Click("#fetch")
+			Eventually("#error").Should(b.HaveInnerText(ContainSubstring("fetch failed")))
+		})
+
+		It("modifies a response registered through a view", func() {
+			// no WithTimeout here: ModifyResponse rejects every poll knob by design, so Realistic() is
+			// the view that reaches it
+			b.Realistic().ModifyResponse(ContainSubstring("/api/echo")).WithStatus(503)
+			b.Click("#fetch")
+			Eventually("#status").Should(b.HaveInnerText("503"))
+		})
+
+		// The read side: a view copies the slice header, so a list read through a view used to be
+		// frozen at the instant the view was made.
+		It("reads the tab's request list through a view made before the requests happened", func() {
+			// the page load itself has already made requests, so the assertion is that the view sees
+			// the list GROW - a copied slice header would stay frozen at whatever it held here
+			rb := b.Realistic()
+			before := len(rb.AllRequests())
+			b.Click("#fetch")
+			Eventually("#status").Should(b.HaveInnerText("200"))
+			Eventually(func() int { return len(rb.AllRequests()) }).Should(BeNumerically(">", before))
+		})
+	})
+
 	Describe("the erroring-URL-matcher diagnostic", func() {
 		BeforeEach(func() {
 			b.Navigate(fixtureServer + "/network-interception.html")

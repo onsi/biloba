@@ -785,6 +785,66 @@ To send commands to a particular tab you use the Biloba instance associated with
 
 Read https://onsi.github.io/biloba/#parallelization-how-biloba-manages-browsers-and-tabs to build a mental model of how Biloba manages tabs
 */
+/*
+tabState is the mutable state a TAB owns, as distinct from the handle you hold onto that tab with.
+
+It lives behind a pointer because every lightweight view - [Biloba.Realistic], [Biloba.WithTimeout],
+[Biloba.Immediate], and the rest - is a shallow COPY of the Biloba struct (`nb := *b`).  A slice or a
+bool declared on Biloba itself is copied by that clone, and both directions then break silently:
+
+  - a handler registered through a view appends to the COPY's slice header, so it is registered
+    nowhere and never fires (b.WithTimeout(d).HoldResponse(url) intercepting nothing);
+  - a read through a view sees the list frozen at the instant the view was made, so a view held
+    across a navigation returns a stale answer (rb.Dialogs(), or bilobaIsInstalled still reporting
+    true after the page reloaded and took window._biloba with it).
+
+Behind a pointer, a view and the tab it came from reach the same state - which is what every view's
+documentation already promises ("it is the same tab").  `lock` is a *sync.Mutex for exactly this
+reason; these fields simply hadn't followed it.  Note that go vet cannot catch a recurrence: its
+copylocks check is what would otherwise flag `nb := *b`, and the pointer-valued mutex keeps it quiet.
+
+Membership rule: this is what [Biloba.Prepare] resets - the per-spec state of one tab - plus
+bilobaIsInstalled, which tracks page loads rather than specs and so survives Prepare.
+*/
+type tabState struct {
+	// bilobaIsInstalled tracks whether window._biloba survives in the current page.  Not reset by
+	// Prepare: it is invalidated by navigation, not by the spec boundary.
+	bilobaIsInstalled bool
+
+	downloads       map[string]*Download
+	downloadHistory map[string]time.Time
+
+	dialogHandlers []*DialogHandler
+	dialogs        []*Dialog
+
+	// consoleErrors accumulates rendered console.error / console.assert messages seen on this tab so
+	// attachFailureArtifactsIfFailed can replay them at the top of the failure block - the originating
+	// error is usually the root cause and is otherwise buried in the streamed timeline.
+	consoleErrors []string
+
+	requests         []*Request
+	inflightRequests map[network.RequestID]bool
+	// pendingResponseDispatch carries a response-stage handler resolution from the request-stage pause
+	// that computed it to the response-stage pause that cashes it in - see responseDispatch.
+	pendingResponseDispatch map[fetch.RequestID]*responseDispatch
+	requestHandlers         []*requestHandler       // ordered, first-match-wins: stub / abort / modify-request
+	responseHandlers        []*ResponseModification // ordered, first-match-wins: modify-response (response stage)
+	fetchEnabled            bool
+}
+
+// newTabState is the zero-state of a fresh tab, and is also exactly what Prepare resets a tab to.
+// Keeping the two in one place means a field added here cannot be forgotten by Prepare.
+func newTabState() *tabState {
+	return &tabState{
+		downloads:               map[string]*Download{},
+		downloadHistory:         map[string]time.Time{},
+		dialogHandlers:          []*DialogHandler{},
+		dialogs:                 Dialogs{},
+		inflightRequests:        map[network.RequestID]bool{},
+		pendingResponseDispatch: map[fetch.RequestID]*responseDispatch{},
+	}
+}
+
 type Biloba struct {
 	//Context is the underlying chromedp context.  Pass this in to chromedp to be take actions on this tab
 	Context          context.Context
@@ -799,7 +859,9 @@ type Biloba struct {
 	tabs  map[target.ID]*Biloba
 	close context.CancelFunc
 
-	bilobaIsInstalled bool
+	// state is everything this TAB owns, as opposed to the handle you hold onto it with.  It lives
+	// behind a pointer on purpose - see the note on tabState.
+	state *tabState
 
 	// realistic routes DOM interactions (Click/Hover) through real CDP input instead of the
 	// fast atomic JS simulations.  Set on the lightweight view returned by Realistic().
@@ -813,38 +875,22 @@ type Biloba struct {
 	pollingInterval *time.Duration
 	pollingCtx      context.Context
 
-	downloadDir     string
-	downloads       map[string]*Download
-	downloadHistory map[string]time.Time
-
-	dialogHandlers []*DialogHandler
-	dialogs        []*Dialog
-
-	// consoleErrors accumulates rendered console.error / console.assert messages seen on this tab so
-	// attachFailureArtifactsIfFailed can replay them at the top of the failure block - the originating
-	// error is usually the root cause and is otherwise buried in the streamed timeline.  Reset by Prepare().
-	consoleErrors []string
+	downloadDir string
 
 	// artifacts accumulates the files Biloba wrote during the current spec (failure screenshots,
 	// visual actual/diff/baseline PNGs, explicit captures).  Lives on the root tab and is reset by
 	// Prepare().  artifactLock guards it: the visual-regression writes happen inside a matcher, on
-	// whatever goroutine Gomega is polling from.
+	// whatever goroutine Gomega is polling from.  These stay on Biloba rather than in tabState
+	// because every access goes through b.root - a pointer - so a view already reaches the one list.
 	artifacts []Artifact
 	// visualComparisons accumulates what each decided HaveScreenshot comparison measured - see
 	// Biloba.VisualComparisons.  Shares artifactLock with artifacts: same writers, same moments.
 	visualComparisons []VisualComparison
 	artifactLock      *sync.Mutex
 
-	requests []*Request
-	// viewportOnly routes page captures through ViewportOnly() - see that method.
-	viewportOnly     bool
-	inflightRequests map[network.RequestID]bool
-	// pendingResponseDispatch carries a response-stage handler resolution from the request-stage pause
-	// that computed it to the response-stage pause that cashes it in - see responseDispatch.
-	pendingResponseDispatch map[fetch.RequestID]*responseDispatch
-	requestHandlers         []*requestHandler       // ordered, first-match-wins: stub / abort / modify-request
-	responseHandlers        []*ResponseModification // ordered, first-match-wins: modify-response (response stage)
-	fetchEnabled            bool
+	// viewportOnly routes page captures through ViewportOnly() - see that method.  A view flag, so it
+	// belongs on Biloba: differing per view is the whole point.
+	viewportOnly bool
 
 	// The boolean failure-artifact knobs are stored positive-sense and default to their human
 	// (interactive) values, set in newBiloba; ConnectToChrome adjusts them for automation.
@@ -912,14 +958,11 @@ func (b *Biloba) GomegaString() string {
 
 func newBiloba(ginkgoT GinkgoTInterface) *Biloba {
 	b := &Biloba{
-		gt:                      ginkgoT,
-		lock:                    &sync.Mutex{},
-		artifactLock:            &sync.Mutex{},
-		downloads:               map[string]*Download{},
-		downloadHistory:         map[string]time.Time{},
-		tabs:                    map[target.ID]*Biloba{},
-		inflightRequests:        map[network.RequestID]bool{},
-		pendingResponseDispatch: map[fetch.RequestID]*responseDispatch{},
+		gt:           ginkgoT,
+		lock:         &sync.Mutex{},
+		artifactLock: &sync.Mutex{},
+		state:        newTabState(),
+		tabs:         map[target.ID]*Biloba{},
 
 		failureScreenshots:        true,
 		progressReportScreenshots: true,
@@ -975,19 +1018,14 @@ func (b *Biloba) Prepare() {
 	}
 
 	b.lock.Lock()
-	b.downloads = map[string]*Download{}
-	b.downloadHistory = map[string]time.Time{}
-	b.dialogHandlers = []*DialogHandler{}
-	b.dialogs = Dialogs{}
-	b.consoleErrors = nil
-	b.requests = nil
-	b.inflightRequests = map[network.RequestID]bool{}
-	b.pendingResponseDispatch = map[fetch.RequestID]*responseDispatch{}
-	b.requestHandlers = nil
-	discardedResponseHandlers := b.responseHandlers
-	b.responseHandlers = nil
-	wasFetchEnabled := b.fetchEnabled
-	b.fetchEnabled = false
+	discardedResponseHandlers := b.state.responseHandlers
+	wasFetchEnabled := b.state.fetchEnabled
+	// Reset through the shared pointer, not by replacing it: every view of this tab holds the same
+	// *tabState, and swapping in a new one would leave the views pointing at the old.  bilobaIsInstalled
+	// is carried over deliberately - it tracks the page, and Prepare does not navigate.
+	installed := b.state.bilobaIsInstalled
+	*b.state = *newTabState()
+	b.state.bilobaIsInstalled = installed
 	b.lock.Unlock()
 
 	// belt and braces with the DeferCleanup HoldResponse registers: a response held hostage by a
@@ -1216,7 +1254,7 @@ func (b *Biloba) safeAllTabConsoleErrors() []string {
 	out := []string{}
 	for _, tab := range b.AllTabs() {
 		tab.lock.Lock()
-		out = append(out, tab.consoleErrors...)
+		out = append(out, tab.state.consoleErrors...)
 		tab.lock.Unlock()
 	}
 	return out
@@ -1426,12 +1464,12 @@ var bilobaJS string
 func (b *Biloba) handleEventFrameNavigated(_ *page.EventFrameNavigated) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	b.bilobaIsInstalled = false
+	b.state.bilobaIsInstalled = false
 }
 
 func (b *Biloba) ensureBiloba() {
 	b.lock.Lock()
-	installed := b.bilobaIsInstalled
+	installed := b.state.bilobaIsInstalled
 	b.lock.Unlock()
 	if installed {
 		return
@@ -1442,6 +1480,6 @@ func (b *Biloba) ensureBiloba() {
 func (b *Biloba) reloadBiloba() {
 	b.run(bilobaJS)
 	b.lock.Lock()
-	b.bilobaIsInstalled = true
+	b.state.bilobaIsInstalled = true
 	b.lock.Unlock()
 }
