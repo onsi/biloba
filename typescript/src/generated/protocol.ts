@@ -62,15 +62,32 @@ export interface NavigateRequest {
 export interface PollOptions {
   timeoutMs?: number;
   intervalMs?: number;
+  mode?: "EVENTUALLY" | "IMMEDIATE" | "CONSISTENTLY";
 }
 
 export interface Locator {
-  kind: "CSS" | "TEST_ID" | "TEXT" | "ROLE";
+  kind: "CSS" | "TEST_ID" | "TEXT" | "ROLE" | "AND" | "OR";
   value?: string;
   role?: string;
   name?: string;
   match?: "EXACT" | "CONTAINS";
+  operands?: Locator[];
+  within?: Locator;
+  filters?: LocatorFilter[];
+  level?: number;
+  levelSet?: boolean;
+  states?: string[];
+  nth?: number;
+  nthSet?: boolean;
   first: boolean;
+}
+
+export interface LocatorFilter {
+  kind: "CONTAINS_TEXT" | "CONTAINS" | "WITHIN";
+  value?: string;
+  match?: "EXACT" | "CONTAINS";
+  selector?: Locator;
+  negate?: boolean;
 }
 
 export interface Cookie {
@@ -93,6 +110,7 @@ export interface LocatorRequest {
   sessionId: string;
   locator?: Locator;
   poll?: PollOptions;
+  realistic?: boolean;
 }
 
 export interface SetValueRequest {
@@ -100,6 +118,55 @@ export interface SetValueRequest {
   locator?: Locator;
   valueJson: string;
   poll?: PollOptions;
+  realistic?: boolean;
+}
+
+export interface TypeRequest {
+  sessionId: string;
+  locator?: Locator;
+  keys: string;
+  poll?: PollOptions;
+  realistic?: boolean;
+}
+
+export interface SendKeysRequest {
+  sessionId: string;
+  keys: string;
+}
+
+export interface SetWindowSizeRequest {
+  sessionId: string;
+  width: number;
+  height: number;
+}
+
+export interface SetUploadRequest {
+  sessionId: string;
+  locator?: Locator;
+  paths: string[];
+  poll?: PollOptions;
+}
+
+export interface DragToRequest {
+  sessionId: string;
+  source?: Locator;
+  target?: Locator;
+  poll?: PollOptions;
+}
+
+export interface AddInitScriptRequest {
+  sessionId: string;
+  script: string;
+}
+
+export interface HoldResponseRequest {
+  sessionId: string;
+  expectation?: Expectation;
+}
+
+export interface ResponseHoldRequest {
+  sessionId: string;
+  holdId: string;
 }
 
 export interface EvaluateRequest {
@@ -107,17 +174,28 @@ export interface EvaluateRequest {
   expression: string;
   argumentsJson?: string;
   invoke?: boolean;
+  awaitPromise?: boolean;
+}
+
+export interface Expectation {
+  kind: "EQUAL" | "CONTAINS" | "REGEXP" | "PREFIX" | "SUFFIX" | "NUMBER" | "EMPTY" | "ALL" | "ANY" | "NOT" | "ANYTHING";
+  expectedJson?: string;
+  operator?: "=" | "==" | "!=" | ">" | ">=" | "<" | "<=";
+  children?: Expectation[];
 }
 
 export interface Assertion {
-  kind: "VISIBLE" | "TEXT" | "COUNT" | "ATTRIBUTE" | "VALUE" | "URL" | "EVALUATE";
+  kind: "VISIBLE" | "TEXT" | "COUNT" | "ATTRIBUTE" | "VALUE" | "URL" | "EVALUATE" | "EXISTS" | "ENABLED" | "CLICKABLE" | "PROPERTY" | "ALL_TEXT" | "REQUEST";
   locator?: Locator;
   attribute?: string;
+  property?: string;
+  method?: string;
   expression?: string;
   expectedString?: string;
   expectedCount?: number;
   expectedJson?: string;
   match?: "EXACT" | "CONTAINS";
+  expectation?: Expectation;
 }
 
 export interface AssertRequest {

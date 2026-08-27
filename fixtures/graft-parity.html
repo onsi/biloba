@@ -3,10 +3,20 @@
   <body>
     <h1>Biloba parity</h1>
     <label>Name <input data-testid="name"></label>
+    <input data-testid="upload" type="file">
     <output id="echo"></output>
     <button aria-label="Increment">Increment</button>
+    <button data-testid="held-request">Held request</button>
     <div id="count">0</div>
     <div id="delayed">loading</div>
+    <section id="results">
+      <div class="row">Ada first</div>
+      <div class="row">Ada second</div>
+      <div class="row">Grace</div>
+    </section>
+    <div data-testid="sent">Sent</div>
+    <div data-testid="delivered">Delivered</div>
+    <div id="last-key"></div>
     <script>
       const input = document.querySelector('[data-testid="name"]')
       input.addEventListener('input', () => document.querySelector('#echo').textContent = input.value)
@@ -14,7 +24,9 @@
         const count = document.querySelector('#count')
         count.textContent = String(Number(count.textContent) + 1)
       })
+      document.querySelector('[data-testid="held-request"]').addEventListener('click', () => fetch('/held'))
       setTimeout(() => document.querySelector('#delayed').textContent = 'ready', 80)
+      document.addEventListener('keydown', event => document.querySelector('#last-key').textContent = event.key)
     </script>
   </body>
 </html>

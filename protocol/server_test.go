@@ -115,6 +115,194 @@ var _ = Describe("driver protocol", func() {
 		Expect(result.RPCResponseCount).To(Equal(uint32(1)))
 	})
 
+	It("carries composed locators without flattening their structure", func() {
+		recorder := &recordingSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+
+		Expect(client.call("click", protocol.LocatorRequest{
+			SessionID: opened.SessionID,
+			Locator: &protocol.WireLocator{
+				Kind: "CSS", Value: ".row", Nth: 1, NthSet: true,
+				Within:  &protocol.WireLocator{Kind: "TEST_ID", Value: "results"},
+				Filters: []protocol.WireLocatorFilter{{Kind: "CONTAINS_TEXT", Value: "Ada", Match: "CONTAINS"}},
+			},
+		}, nil)).To(Succeed())
+
+		locator := recorder.lastOperation().Locator
+		Expect(locator.NthSet).To(BeTrue())
+		Expect(locator.Nth).To(Equal(1))
+		Expect(locator.Within).NotTo(BeNil())
+		Expect(locator.Within.Kind).To(Equal(protocol.LocatorTestID))
+		Expect(locator.Filters).To(HaveLen(1))
+		Expect(locator.Filters[0].Kind).To(Equal(protocol.LocatorFilterContainsText))
+		Expect(locator.Filters[0].Value).To(Equal("Ada"))
+	})
+
+	It("carries typed matcher trees and consistency polling", func() {
+		recorder := &recordingSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+
+		Expect(client.call("assert", protocol.AssertRequest{
+			SessionID: opened.SessionID,
+			Assertion: &protocol.WireAssertion{
+				Kind:     "PROPERTY",
+				Locator:  &protocol.WireLocator{Kind: "TEST_ID", Value: "status"},
+				Property: "textContent",
+				Expectation: &protocol.WireExpectation{Kind: "ALL", Children: []*protocol.WireExpectation{
+					{Kind: "CONTAINS", ExpectedJSON: `"ready"`},
+					{Kind: "NOT", Children: []*protocol.WireExpectation{{Kind: "EMPTY"}}},
+				}},
+			},
+			Poll: protocol.PollOptions{Mode: "CONSISTENTLY", TimeoutMS: 50},
+		}, nil)).To(Succeed())
+
+		operation := recorder.lastOperation()
+		Expect(operation.Poll.Mode).To(Equal(protocol.PollConsistently))
+		Expect(operation.Assertion.Kind).To(Equal(protocol.AssertionProperty))
+		Expect(operation.Assertion.Property).To(Equal("textContent"))
+		Expect(operation.Assertion.Expectation.Kind).To(Equal(protocol.ExpectAll))
+		Expect(operation.Assertion.Expectation.Children).To(HaveLen(2))
+		Expect(operation.Assertion.Expectation.Children[1].Kind).To(Equal(protocol.ExpectNot))
+	})
+
+	It("carries a typed request observation assertion", func() {
+		recorder := &recordingSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+
+		Expect(client.call("assert", protocol.AssertRequest{
+			SessionID: opened.SessionID,
+			Assertion: &protocol.WireAssertion{
+				Kind: "REQUEST", Method: "POST",
+				Expectation: &protocol.WireExpectation{Kind: "SUFFIX", ExpectedJSON: `"/saved"`},
+			},
+		}, nil)).To(Succeed())
+
+		operation := recorder.lastOperation()
+		Expect(operation.Assertion.Kind).To(Equal(protocol.AssertionRequest))
+		Expect(operation.Assertion.Method).To(Equal("POST"))
+		Expect(operation.Assertion.Expectation.Kind).To(Equal(protocol.ExpectSuffix))
+	})
+
+	It("carries response hold lifecycle operations", func() {
+		recorder := &recordingSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+
+		Expect(client.call("holdResponse", protocol.HoldResponseRequest{
+			SessionID:   opened.SessionID,
+			Expectation: &protocol.WireExpectation{Kind: "SUFFIX", ExpectedJSON: `"/save"`},
+		}, nil)).To(Succeed())
+		Expect(recorder.lastOperation().Kind).To(Equal(protocol.OperationHoldResponse))
+
+		Expect(client.call("awaitResponseHold", protocol.ResponseHoldRequest{SessionID: opened.SessionID, HoldID: "hold-1"}, nil)).To(Succeed())
+		Expect(recorder.lastOperation().Kind).To(Equal(protocol.OperationAwaitResponseHold))
+		Expect(client.call("releaseResponseHold", protocol.ResponseHoldRequest{SessionID: opened.SessionID, HoldID: "hold-1"}, nil)).To(Succeed())
+		Expect(recorder.lastOperation().Kind).To(Equal(protocol.OperationReleaseResponseHold))
+	})
+
+	It("carries realistic pointer and keyboard actions", func() {
+		recorder := &recordingSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+
+		Expect(client.call("click", protocol.LocatorRequest{
+			SessionID: opened.SessionID,
+			Locator:   &protocol.WireLocator{Kind: "TEST_ID", Value: "save"},
+			Realistic: true,
+		}, nil)).To(Succeed())
+		Expect(recorder.lastOperation().Realistic).To(BeTrue())
+
+		Expect(client.call("type", protocol.TypeRequest{
+			SessionID: opened.SessionID,
+			Locator:   &protocol.WireLocator{Kind: "TEST_ID", Value: "name"},
+			Keys:      "Ada",
+			Realistic: true,
+		}, nil)).To(Succeed())
+		operation := recorder.lastOperation()
+		Expect(operation.Kind).To(Equal(protocol.OperationType))
+		Expect(operation.Keys).To(Equal("Ada"))
+		Expect(operation.Realistic).To(BeTrue())
+
+		Expect(client.call("sendKeys", protocol.SendKeysRequest{SessionID: opened.SessionID, Keys: "\x1b"}, nil)).To(Succeed())
+		Expect(recorder.lastOperation().Kind).To(Equal(protocol.OperationSendKeys))
+
+		Expect(client.call("dragTo", protocol.DragToRequest{
+			SessionID: opened.SessionID,
+			Source:    &protocol.WireLocator{Kind: "TEST_ID", Value: "card"},
+			Target:    &protocol.WireLocator{Kind: "TEST_ID", Value: "column"},
+		}, nil)).To(Succeed())
+		operation = recorder.lastOperation()
+		Expect(operation.Kind).To(Equal(protocol.OperationDragTo))
+		Expect(operation.Locator.Value).To(Equal("card"))
+		Expect(operation.Target.Value).To(Equal("column"))
+	})
+
+	It("carries async evaluation, viewport, and upload operations", func() {
+		recorder := &recordingSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+
+		Expect(client.call("evaluate", protocol.EvaluateRequest{
+			SessionID: opened.SessionID, Expression: "Promise.resolve(1)", AwaitPromise: true,
+		}, nil)).To(Succeed())
+		Expect(recorder.lastOperation().AwaitPromise).To(BeTrue())
+
+		Expect(client.call("setWindowSize", protocol.SetWindowSizeRequest{
+			SessionID: opened.SessionID, Width: 375, Height: 812,
+		}, nil)).To(Succeed())
+		operation := recorder.lastOperation()
+		Expect(operation.Kind).To(Equal(protocol.OperationSetWindowSize))
+		Expect(operation.Width).To(Equal(375))
+		Expect(operation.Height).To(Equal(812))
+
+		Expect(client.call("setUpload", protocol.SetUploadRequest{
+			SessionID: opened.SessionID,
+			Locator:   &protocol.WireLocator{Kind: "TEST_ID", Value: "upload"},
+			Paths:     []string{"/tmp/avatar.txt"},
+		}, nil)).To(Succeed())
+		operation = recorder.lastOperation()
+		Expect(operation.Kind).To(Equal(protocol.OperationSetUpload))
+		Expect(operation.Paths).To(Equal([]string{"/tmp/avatar.txt"}))
+	})
+
+	It("opens sibling tabs and carries target lifecycle operations", func() {
+		recorder := &recordingSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+
+		var sibling protocol.OpenSessionResponse
+		Expect(client.call("newTab", protocol.SessionRequest{SessionID: opened.SessionID}, &sibling)).To(Succeed())
+		Expect(sibling.SessionID).NotTo(BeEmpty())
+		Expect(recorder.newTabCalls).To(Equal(1))
+
+		Expect(client.call("addInitScript", protocol.AddInitScriptRequest{
+			SessionID: sibling.SessionID, Script: "window.ready = true",
+		}, nil)).To(Succeed())
+		operation := recorder.lastOperation()
+		Expect(operation.Kind).To(Equal(protocol.OperationAddInitScript))
+		Expect(operation.Expression).To(Equal("window.ready = true"))
+
+		Expect(client.call("activate", protocol.SessionRequest{SessionID: sibling.SessionID}, nil)).To(Succeed())
+		Expect(recorder.lastOperation().Kind).To(Equal(protocol.OperationActivate))
+	})
+
 	It("preserves a structured backend error", func() {
 		backend := &fakeBackend{session: &fakeSession{executeErr: protocol.NewError(protocol.CodeInvalidArgument, "bad value")}}
 		client, cleanup := startTestServer(backend)
@@ -276,12 +464,19 @@ func (s *blockingSession) Execute(_ context.Context, operation protocol.Operatio
 // recordingSession keeps the last operation the server handed down, so a spec can pin what a wire
 // request actually decodes into.
 type recordingSession struct {
-	mu        sync.Mutex
-	operation protocol.Operation
+	mu          sync.Mutex
+	operation   protocol.Operation
+	newTabCalls int
 }
 
 func (*recordingSession) Prepare(context.Context) error { return nil }
 func (*recordingSession) Close() error                  { return nil }
+func (s *recordingSession) NewTab(context.Context) (protocol.Session, error) {
+	s.mu.Lock()
+	s.newTabCalls++
+	s.mu.Unlock()
+	return s, nil
+}
 func (s *recordingSession) Execute(_ context.Context, operation protocol.Operation) (protocol.Result, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

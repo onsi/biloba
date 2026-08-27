@@ -77,6 +77,73 @@ var _ = Describe("bilobad", func() {
 		})
 	})
 
+	It("adapts the complete protocol locator tree to the engine", func() {
+		selector, err := selectorFromProtocol(protocol.Locator{
+			Kind: protocol.LocatorCSS, Value: ".row", Nth: 1, NthSet: true,
+			Within:  &protocol.Locator{Kind: protocol.LocatorTestID, Value: "results"},
+			Filters: []protocol.LocatorFilter{{Kind: protocol.LocatorFilterContainsText, Value: "Ada", Match: protocol.MatchContains}},
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(selector.Encoded()).To(And(
+			ContainSubstring(`"kind":"containsText"`),
+			ContainSubstring(`"within":"a{\"attr\":\"data-testid\"`),
+			ContainSubstring(`"nth":1`),
+		))
+	})
+
+	It("adapts typed matcher trees and polling modes to the engine", func() {
+		expectation, err := expectationFromProtocol(protocol.Expectation{
+			Kind: protocol.ExpectAll,
+			Children: []protocol.Expectation{
+				{Kind: protocol.ExpectContains, ExpectedJSON: `"ready"`},
+				{Kind: protocol.ExpectNot, Children: []protocol.Expectation{{Kind: protocol.ExpectEmpty}}},
+			},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(expectation.Kind).To(Equal(engine.ExpectAll))
+		Expect(expectation.Children).To(HaveLen(2))
+		Expect(expectation.Children[0].Expected).To(Equal("ready"))
+
+		policy := pollPolicyFromProtocol(protocol.PollPolicy{
+			Mode: protocol.PollConsistently, Timeout: time.Second, Interval: time.Millisecond,
+		})
+		Expect(policy.Mode).To(Equal(engine.PollConsistently))
+		Expect(policy.Timeout).To(Equal(time.Second))
+	})
+
+	It("uses the Go runner's ten-second default for polling actions", func() {
+		policy := withDefaultPollTimeout(pollPolicyFromProtocol(protocol.PollPolicy{}))
+
+		Expect(policy.Timeout).To(Equal(10 * time.Second))
+	})
+
+	It("describes typed expectations in failure diagnostics", func() {
+		operation := protocol.Operation{Kind: protocol.OperationAssert, Assertion: protocol.Assertion{
+			Kind: protocol.AssertionText,
+			Expectation: protocol.Expectation{Kind: protocol.ExpectAll, Children: []protocol.Expectation{
+				{Kind: protocol.ExpectContains, ExpectedJSON: `"ready"`},
+				{Kind: protocol.ExpectNot, Children: []protocol.Expectation{{Kind: protocol.ExpectEmpty}}},
+			}},
+		}}
+
+		Expect(expectedDescription(operation)).To(Equal(`contain "ready" and not empty`))
+	})
+
+	It("describes boolean DOM assertions in user-facing terms", func() {
+		visible := protocol.Operation{Kind: protocol.OperationAssert, Assertion: protocol.Assertion{
+			Kind:        protocol.AssertionVisible,
+			Expectation: protocol.Expectation{Kind: protocol.ExpectEqual, ExpectedJSON: "true"},
+		}}
+		notExists := protocol.Operation{Kind: protocol.OperationAssert, Assertion: protocol.Assertion{
+			Kind:        protocol.AssertionExists,
+			Expectation: protocol.Expectation{Kind: protocol.ExpectEqual, ExpectedJSON: "false"},
+		}}
+
+		Expect(expectedDescription(visible)).To(Equal("visible"))
+		Expect(expectedDescription(notExists)).To(Equal("not exist"))
+	})
+
 	// The client arms its timer at the same deadline it puts on the request, so a fixed diagnostics
 	// budget can outlive it - and a late response is dropped, taking the outline, the screenshot,
 	// and the trajectory with it.

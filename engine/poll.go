@@ -103,9 +103,19 @@ type Attempt struct {
 }
 
 type PollPolicy struct {
-	Timeout  time.Duration
-	Interval time.Duration
+	Timeout        time.Duration
+	Interval       time.Duration
+	AttemptTimeout time.Duration
+	Mode           PollMode
 }
+
+type PollMode uint8
+
+const (
+	PollEventually PollMode = iota
+	PollImmediate
+	PollConsistently
+)
 
 type PollResult struct {
 	Final        Observation
@@ -133,7 +143,13 @@ func Poll(ctx context.Context, policy PollPolicy, assertion Assertion) (PollResu
 	result := PollResult{StartedAt: started}
 	for {
 		attemptStarted := time.Now()
-		observation, matched, attemptErr := assertion(pollCtx)
+		attemptCtx := pollCtx
+		cancelAttempt := func() {}
+		if policy.AttemptTimeout > 0 {
+			attemptCtx, cancelAttempt = context.WithTimeout(pollCtx, policy.AttemptTimeout)
+		}
+		observation, matched, attemptErr := assertion(attemptCtx)
+		cancelAttempt()
 		attempt := Attempt{
 			Number:      len(result.Attempts) + 1,
 			StartedAt:   attemptStarted,
@@ -153,7 +169,26 @@ func Poll(ctx context.Context, policy PollPolicy, assertion Assertion) (PollResu
 			return result, fatalPollError(result, attemptErr)
 		}
 		if matched && attemptErr == nil {
-			return result, nil
+			if policy.Mode != PollConsistently {
+				return result, nil
+			}
+		} else if policy.Mode == PollImmediate || policy.Mode == PollConsistently {
+			message := "condition did not match"
+			if policy.Mode == PollConsistently {
+				message = "condition did not remain satisfied"
+			}
+			if attemptErr != nil {
+				message = attemptErr.Error()
+			}
+			return result, &Error{
+				Code:         CodeActionFailed,
+				Operation:    "poll",
+				Message:      message,
+				Cause:        attemptErr,
+				Observed:     result.Final.Value,
+				AttemptCount: result.AttemptCount,
+				Attempts:     result.Attempts,
+			}
 		}
 
 		timer := time.NewTimer(policy.Interval)
@@ -161,6 +196,9 @@ func Poll(ctx context.Context, policy PollPolicy, assertion Assertion) (PollResu
 		case <-pollCtx.Done():
 			if !timer.Stop() {
 				<-timer.C
+			}
+			if policy.Mode == PollConsistently && ctx.Err() == nil && errors.Is(pollCtx.Err(), context.DeadlineExceeded) {
+				return result, nil
 			}
 			code := CodeCanceled
 			if ctx.Err() != nil {

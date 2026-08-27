@@ -4316,11 +4316,22 @@ afterAll(async () => { await browser.close(); });
 
 `connect` reads the daemon's path from `BILOBA_DAEMON_EXECUTABLE` when you don't pass `daemonExecutable`, which is usually how you'll wire it up; pass it explicitly when you'd rather not depend on the environment.  Omit `chromeWsUrl` and the daemon will launch a Chrome of its own - fine for a single file, wasteful for a suite.
 
-A `Session` is the TypeScript analogue of the root tab `b`: it owns its own browser context, so its cookies and storage are isolated from every other session.  `session.prepare()` is `b.Prepare()` - it resets the session between tests and is what makes reuse cheap:
+A `Session` is the TypeScript analogue of a Biloba tab.  A session returned by `browser.openSession()` owns its own browser context, so its cookies and storage are isolated from every other root session.  `session.prepare()` is `b.Prepare()` - it resets the session between tests and is what makes reuse cheap:
 
 ```ts
 beforeEach(async () => { await session.prepare(); });
 ```
+
+Open a sibling tab with `newTab()`.  It shares the parent's browser context - including cookies and storage - but has its own document lifecycle:
+
+```ts
+const popup = await session.newTab();
+await popup.navigate("http://example.com/checkout");
+await popup.activate();
+await popup.close();
+```
+
+This is the basic tab lifecycle.  The Go API still has richer helpers for enumerating and switching among spawned tabs.
 
 ### Navigating and selecting
 
@@ -4347,7 +4358,7 @@ These are the same ideas as Biloba's [Go selectors](#selecting-dom-elements), in
 
 ### Acting and asserting
 
-Actions and assertions hang off a locator, and every one of them polls:
+Actions and assertions hang off a locator and poll by default:
 
 ```ts
 await session.getByTestId("name").setValue("Ada");
@@ -4367,7 +4378,16 @@ await session.expectUrl("/dashboard", {pathname: true});
 await session.expectEvaluation("window.app.ready", true);
 ```
 
-Every one of these takes `{timeoutMs, intervalMs, signal}`.  There's no `Immediate()` equivalent and no bare-matcher form - the [dual API](#interacting-with-elements) is a Gomega idiom, and TypeScript has no `Eventually` to hand a matcher to.  Polling isn't opt-in here; it's the only mode.
+Every one of these takes `{timeoutMs, intervalMs, signal, mode}`.  The default mode is `"eventually"`; `"immediate"` makes one attempt, and `"consistently"` requires the condition to remain true for the timeout.  TypeScript still has no bare-matcher form - the [dual API](#interacting-with-elements) is a Gomega idiom, and TypeScript has no `Eventually` to hand a matcher to.
+
+For interactions where browser-faithful input matters, call `realistic()` on the locator:
+
+```ts
+await session.getByRole("button", {name: "Pay"}).realistic().click();
+await session.getByTestId("card-number").realistic().setValue("4242 4242 4242 4242");
+```
+
+The TypeScript realistic track currently covers `click`, `setValue`, and `type`: Biloba scrolls the target into view, checks actionability, and uses real CDP input.  Go remains the complete realistic-interaction API for hover, click variants, tap, wheel, and realistic drag.
 
 An assertion resolves to an `AssertionResult` describing how it got there, which is occasionally useful and always available:
 
@@ -4393,6 +4413,23 @@ Cookies work the way [they do in Go](#cookies), with `Date` accepted for expiry:
 ```ts
 await session.setCookies([{name: "session", value: "abc123", path: "/"}]);
 ```
+
+TypeScript also supports request observation and response holding:
+
+```ts
+await session.expectRequest(endsWith("/orders"), {method: "POST"});
+
+const hold = await session.holdResponse(endsWith("/inventory"));
+try {
+  await session.getByRole("button", {name: "Refresh"}).click();
+  const response = await hold.await();
+  expect(response.status).toBe(200);
+} finally {
+  await hold.release();
+}
+```
+
+Import `endsWith` (or another Biloba expectation) from the package.  Always release a hold.  Arbitrary response stubbing, aborting, modifying, and the Go API's richer request inspection remain Go-only.
 
 ### When something fails
 
@@ -4432,6 +4469,6 @@ The last three exist so that a crash reports itself as a crash.  Chrome doesn't 
 
 ### What isn't here yet
 
-The TypeScript client covers navigation, locators, actions, assertions, cookies, and evaluation.  It does **not** yet cover dialogs, downloads, network stubbing, screenshots-as-assertions, the XPath DSL, tab management, or realistic mode.  For those, the Go API remains the complete one.
+The TypeScript client does not yet cover dialog handling, download capture and assertions, `HaveScreenshot` visual assertions, or the XPath DSL.  It supports the basic tab lifecycle, realistic `click`/`setValue`/`type`, request observation, and response holding, but the broader Go APIs in those areas remain Go-only.
 
 {% endraw  %}

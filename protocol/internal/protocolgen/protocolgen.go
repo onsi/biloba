@@ -52,11 +52,21 @@ var declarations = []reflect.Type{
 	reflect.TypeFor[protocol.NavigateRequest](),
 	reflect.TypeFor[protocol.PollOptions](),
 	reflect.TypeFor[protocol.WireLocator](),
+	reflect.TypeFor[protocol.WireLocatorFilter](),
 	reflect.TypeFor[protocol.WireCookie](),
 	reflect.TypeFor[protocol.SetCookiesRequest](),
 	reflect.TypeFor[protocol.LocatorRequest](),
 	reflect.TypeFor[protocol.SetValueRequest](),
+	reflect.TypeFor[protocol.TypeRequest](),
+	reflect.TypeFor[protocol.SendKeysRequest](),
+	reflect.TypeFor[protocol.SetWindowSizeRequest](),
+	reflect.TypeFor[protocol.SetUploadRequest](),
+	reflect.TypeFor[protocol.DragToRequest](),
+	reflect.TypeFor[protocol.AddInitScriptRequest](),
+	reflect.TypeFor[protocol.HoldResponseRequest](),
+	reflect.TypeFor[protocol.ResponseHoldRequest](),
 	reflect.TypeFor[protocol.EvaluateRequest](),
+	reflect.TypeFor[protocol.WireExpectation](),
 	reflect.TypeFor[protocol.WireAssertion](),
 	reflect.TypeFor[protocol.AssertRequest](),
 	reflect.TypeFor[protocol.PollObservation](),
@@ -102,7 +112,15 @@ func tsType(owner reflect.Type, field reflect.StructField) string {
 	if owner == reflect.TypeFor[protocol.WireLocator]() {
 		switch field.Name {
 		case "Kind":
-			return `"CSS" | "TEST_ID" | "TEXT" | "ROLE"`
+			return `"CSS" | "TEST_ID" | "TEXT" | "ROLE" | "AND" | "OR"`
+		case "Match":
+			return `"EXACT" | "CONTAINS"`
+		}
+	}
+	if owner == reflect.TypeFor[protocol.WireLocatorFilter]() {
+		switch field.Name {
+		case "Kind":
+			return `"CONTAINS_TEXT" | "CONTAINS" | "WITHIN"`
 		case "Match":
 			return `"EXACT" | "CONTAINS"`
 		}
@@ -110,9 +128,20 @@ func tsType(owner reflect.Type, field reflect.StructField) string {
 	if owner == reflect.TypeFor[protocol.WireAssertion]() {
 		switch field.Name {
 		case "Kind":
-			return `"VISIBLE" | "TEXT" | "COUNT" | "ATTRIBUTE" | "VALUE" | "URL" | "EVALUATE"`
+			return `"VISIBLE" | "TEXT" | "COUNT" | "ATTRIBUTE" | "VALUE" | "URL" | "EVALUATE" | "EXISTS" | "ENABLED" | "CLICKABLE" | "PROPERTY" | "ALL_TEXT" | "REQUEST"`
 		case "Match":
 			return `"EXACT" | "CONTAINS"`
+		}
+	}
+	if owner == reflect.TypeFor[protocol.PollOptions]() && field.Name == "Mode" {
+		return `"EVENTUALLY" | "IMMEDIATE" | "CONSISTENTLY"`
+	}
+	if owner == reflect.TypeFor[protocol.WireExpectation]() {
+		switch field.Name {
+		case "Kind":
+			return `"EQUAL" | "CONTAINS" | "REGEXP" | "PREFIX" | "SUFFIX" | "NUMBER" | "EMPTY" | "ALL" | "ANY" | "NOT" | "ANYTHING"`
+		case "Operator":
+			return `"=" | "==" | "!=" | ">" | ">=" | "<" | "<="`
 		}
 	}
 	return typeName(field.Type)

@@ -2,7 +2,14 @@ import {PassThrough} from "node:stream";
 import {afterEach, beforeEach, describe, expect, it} from "vitest";
 
 import {
+	allOf,
+	contains,
+	empty,
+	endsWith,
   BilobaError,
+  Keys,
+	not,
+	numeric,
   type AssertionResult,
   type Browser,
   type Cookie,
@@ -82,7 +89,10 @@ describe("Biloba TypeScript client", () => {
     switch (envelope.method) {
       case "handshake": reply({protocolVersion: "1", capabilities: ["assertions", "evaluate"]} satisfies HandshakeResponse); break;
       case "openSession": reply({sessionId: `session-${++openedSessions}`} satisfies OpenSessionResponse); break;
+      case "newTab": reply({sessionId: `session-${++openedSessions}`} satisfies OpenSessionResponse); break;
       case "evaluate": respond(operationResult({observedJson: JSON.stringify({ready: true})})); break;
+      case "holdResponse": respond(operationResult({observedJson: JSON.stringify({holdId: "hold-1"})})); break;
+      case "awaitResponseHold": respond(operationResult({observedJson: JSON.stringify({url: "/saved", status: 200})})); break;
       case "assert": assertImplementation(request, respond); break;
       case "click": clickImplementation(request, respond); break;
       case "cancel": observeCancel?.(); break;
@@ -109,6 +119,14 @@ describe("Biloba TypeScript client", () => {
     await session.getByRole("button", {name: "Save", exact: true}).first().click();
     await session.getByTestId("name").setValue("Ada");
     expect(await session.evaluate<{ready: boolean}>("window.appState")).toEqual({ready: true});
+    expect(await session.evaluateAsync<{ready: boolean}>("Promise.resolve(window.appState)")).toEqual({ready: true});
+    await session.setWindowSize(375, 812);
+    await session.getByTestId("upload").setUploadFiles(["/tmp/avatar.txt"]);
+    await session.getByTestId("card").dragTo(session.getByTestId("column"));
+    await session.expectRequest(contains("/saved"), {method: "POST"});
+    const hold = await session.holdResponse(endsWith("/saved"));
+    await hold.await();
+    await hold.release();
     await session.close();
 
     expect(requests).toMatchObject([
@@ -142,6 +160,53 @@ describe("Biloba TypeScript client", () => {
         method: "Evaluate",
         request: {sessionId: "session-1", expression: "window.appState", argumentsJson: "[]", invoke: false},
       },
+      {
+        method: "Evaluate",
+        request: {
+          sessionId: "session-1",
+          expression: "Promise.resolve(window.appState)",
+          argumentsJson: "[]",
+          invoke: false,
+          awaitPromise: true,
+        },
+      },
+      {method: "SetWindowSize", request: {sessionId: "session-1", width: 375, height: 812}},
+      {
+        method: "SetUpload",
+        request: {
+          sessionId: "session-1",
+          locator: {kind: "TEST_ID", value: "upload", match: "EXACT", first: false},
+          paths: ["/tmp/avatar.txt"],
+        },
+      },
+      {
+        method: "DragTo",
+        request: {
+          sessionId: "session-1",
+          source: {kind: "TEST_ID", value: "card", match: "EXACT", first: false},
+          target: {kind: "TEST_ID", value: "column", match: "EXACT", first: false},
+        },
+      },
+      {
+        method: "Assert",
+        request: {
+          sessionId: "session-1",
+          assertion: {
+            kind: "REQUEST",
+            method: "POST",
+            expectation: {kind: "CONTAINS", expectedJson: `"/saved"`},
+          },
+        },
+      },
+      {
+        method: "HoldResponse",
+        request: {
+          sessionId: "session-1",
+          expectation: {kind: "SUFFIX", expectedJson: `"/saved"`},
+        },
+      },
+      {method: "AwaitResponseHold", request: {sessionId: "session-1", holdId: "hold-1"}},
+      {method: "ReleaseResponseHold", request: {sessionId: "session-1", holdId: "hold-1"}},
       {method: "CloseSession", request: {sessionId: "session-1"}},
     ]);
   });
@@ -170,10 +235,123 @@ describe("Biloba TypeScript client", () => {
         assertion: {
           kind: "EVALUATE",
           expression: "window.ready",
-          expectedJson: "true",
+          expectation: {kind: "EQUAL", expectedJson: "true"},
         },
       },
     });
+  });
+
+  it("serializes composed locators as a typed tree", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+
+    await session.locator(".row")
+      .filter({hasText: "Ada"})
+      .within(session.getByTestId("results"))
+      .nth(1)
+      .click();
+    await session.getByTestId("sent").or(session.getByTestId("delivered")).last().expectVisible();
+
+    expect(requests.at(-2)).toMatchObject({
+      method: "Click",
+      request: {
+        locator: {
+          kind: "CSS",
+          value: ".row",
+          filters: [{kind: "CONTAINS_TEXT", value: "Ada", match: "CONTAINS"}],
+          within: {kind: "TEST_ID", value: "results"},
+          nth: 1,
+          nthSet: true,
+        },
+      },
+    });
+    expect(requests.at(-1)).toMatchObject({
+      method: "Assert",
+      request: {
+        assertion: {
+          locator: {
+            kind: "OR",
+            operands: [
+              {kind: "TEST_ID", value: "sent"},
+              {kind: "TEST_ID", value: "delivered"},
+            ],
+            nth: -1,
+            nthSet: true,
+          },
+        },
+      },
+    });
+  });
+
+  it("serializes typed matchers, negation, polling modes, and immediate getters", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    const status = session.getByTestId("status");
+
+    await status.expectProperty(
+      "textContent",
+      allOf(contains("ready"), not(empty())),
+      {mode: "consistently", timeoutMs: 50},
+    );
+    await session.locator(".row").expectCount(numeric(">=", 3), {mode: "immediate"});
+    await session.getByTestId("missing").expectNotExists();
+    expect(await status.text()).toBe("Saved");
+
+    expect(requests.at(-4)).toMatchObject({
+      method: "Assert",
+      request: {
+        assertion: {
+          kind: "PROPERTY",
+          property: "textContent",
+          expectation: {
+            kind: "ALL",
+            children: [
+              {kind: "CONTAINS", expectedJson: `"ready"`},
+              {kind: "NOT", children: [{kind: "EMPTY"}]},
+            ],
+          },
+        },
+        poll: {mode: "CONSISTENTLY", timeoutMs: 50},
+      },
+    });
+    expect(requests.at(-3)).toMatchObject({
+      request: {
+        assertion: {kind: "COUNT", expectation: {kind: "NUMBER", operator: ">=", expectedJson: "3"}},
+        poll: {mode: "IMMEDIATE"},
+      },
+    });
+    expect(requests.at(-2)).toMatchObject({
+      request: {
+        assertion: {
+          kind: "EXISTS",
+          expectation: {kind: "NOT", children: [{kind: "EQUAL", expectedJson: "true"}]},
+        },
+      },
+    });
+    expect(requests.at(-1)).toMatchObject({
+      request: {
+        assertion: {kind: "TEXT", expectation: {kind: "ANYTHING"}},
+        poll: {mode: "IMMEDIATE"},
+      },
+    });
+  });
+
+  it("serializes realistic pointer and keyboard actions", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    const input = session.getByTestId("name").realistic();
+
+    await input.click();
+    await input.setValue("Ada");
+    await input.type(` Lovelace${Keys.Enter}`);
+    await session.sendKeys(Keys.Escape);
+
+    expect(requests.slice(-4)).toMatchObject([
+      {method: "Click", request: {realistic: true}},
+      {method: "SetValue", request: {realistic: true, valueJson: `"Ada"`}},
+      {method: "Type", request: {realistic: true, keys: " Lovelace\r"}},
+      {method: "SendKeys", request: {keys: "\x1b"}},
+    ]);
   });
 
   it("hands out an independent session per openSession call", async () => {
@@ -197,6 +375,22 @@ describe("Biloba TypeScript client", () => {
     await browser.close();
     browser = undefined;
     expect(requests.filter(({method}) => method === "CloseSession")).toHaveLength(2);
+  });
+
+  it("opens a sibling tab and controls its document lifecycle", async () => {
+    browser = await connectClient();
+    const parent = await browser.openSession();
+    const sibling = await parent.newTab();
+    await sibling.addInitScript("window.__ready = true");
+    await sibling.activate();
+    await sibling.close();
+
+    expect(requests).toContainEqual({method: "NewTab", request: {sessionId: "session-1"}});
+    expect(requests).toContainEqual({
+      method: "AddInitScript",
+      request: {sessionId: "session-2", script: "window.__ready = true"},
+    });
+    expect(requests).toContainEqual({method: "Activate", request: {sessionId: "session-2"}});
   });
 
   it("says whether an evaluation is a function call rather than leaving the daemon to guess", async () => {
@@ -347,6 +541,23 @@ describe("published entry point", () => {
     // the emitted JS, so anything exported here ships as an untyped escape hatch.  Internal modules
     // are unreachable through the package's "exports" map, which is where seams belong.
     const api: Record<string, unknown> = await import("../src/index.js");
-    expect(Object.keys(api).sort()).toEqual(["BilobaError", "connect", "startDaemon", "startSharedBrowser"]);
+    expect(Object.keys(api).sort()).toEqual([
+      "BilobaError",
+      "Keys",
+      "allOf",
+      "anyOf",
+      "anything",
+      "connect",
+      "contains",
+      "empty",
+      "endsWith",
+      "equalTo",
+      "matches",
+      "not",
+      "numeric",
+      "startDaemon",
+      "startSharedBrowser",
+      "startsWith",
+    ]);
   });
 });

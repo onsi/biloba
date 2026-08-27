@@ -1,6 +1,6 @@
 ---
 name: typescript
-description: Drive Biloba from a TypeScript/vitest suite instead of Go — the bilobad daemon topology (one daemon per vitest worker, one shared Chrome), connect/openSession/prepare, locators (locator/getByTestId/getByText/getByRole/first), actions and assertions (click, setValue, expectVisible/Text/Count/Attribute/Value, expectUrl, expectEvaluation), navigate vs navigateWithStatus, evaluate's args-array rule, server-side polling via timeoutMs/intervalMs, and reading a BilobaError (code, trajectory, domOutline, screenshotPath). Use when writing or debugging browser tests in TypeScript/vitest against Biloba, or when deciding between the Go and TypeScript clients. For the Go API use biloba:write-tests.
+description: Drive Biloba from a TypeScript/vitest suite instead of Go — daemon topology, sessions and sibling tabs, locators, actions and assertions, realistic click/setValue/type, poll modes, request observation and response holding, navigation, evaluation, and structured failures. Use when writing or debugging browser tests in TypeScript/vitest against Biloba, or when deciding between the Go and TypeScript clients. For the Go API use biloba:write-tests.
 ---
 
 # Biloba from TypeScript
@@ -22,8 +22,9 @@ vitest worker 3  ──▶  bilobad  ──┘
 **Polling runs on the daemon, not in your test.** `expectText("ready", {timeoutMs: 1000, intervalMs: 5})` is **one** request — the retry loop runs next to Chrome and answers once with the outcome plus the trajectory it took.
 
 - Never write a client-side retry loop (`await expect.poll(...)` around a Biloba assertion, `waitFor`, a `for` loop with sleeps). You are re-polling a poll; the failure you get is the inner one, and you pay a round trip per attempt.
-- There is **no** `Immediate()` and no matcher form. The Go [dual API](https://onsi.github.io/biloba/#interacting-with-elements) is a Gomega idiom with no TypeScript equivalent. Polling is the only mode.
-- Tune with `{timeoutMs, intervalMs, signal}` on any action or assertion.
+- The default mode is `"eventually"`. Use `{mode: "immediate"}` for one attempt or `{mode: "consistently"}` to require the condition to remain true for the timeout.
+- There is no bare matcher form. The Go [dual API](https://onsi.github.io/biloba/#interacting-with-elements) is a Gomega idiom with no TypeScript equivalent.
+- Tune with `{timeoutMs, intervalMs, signal, mode}` on actions and assertions.
 
 ## 2. Setup
 
@@ -75,7 +76,8 @@ afterAll(async () => { await browser.close(); });
 - `connect` falls back to `BILOBA_DAEMON_EXECUTABLE` when `daemonExecutable` is omitted.
 - Omit `chromeWsUrl` and the daemon launches its own Chrome — fine for one file, wasteful for a suite.
 - Pass `artifactDir` to `connect` to get failure screenshots written to disk.
-- A `Session` is the analogue of the Go root tab `b`: its own browser context, so cookies and storage are isolated. `session.prepare()` is `b.Prepare()` — reset between tests rather than opening a new session.
+- A root `Session` has its own browser context, so cookies and storage are isolated. `session.prepare()` is `b.Prepare()` — reset between tests rather than opening a new session.
+- `await session.newTab()` opens a sibling tab in the same context. It shares cookies and storage and has its own `navigate`, `activate`, and `close` lifecycle. Go still has richer spawned-tab enumeration and switching helpers.
 
 ## 3. Locators
 
@@ -113,6 +115,16 @@ await session.expectEvaluation("window.app.ready", true);
 
 Assertions resolve to an `AssertionResult`: `observed`, `attemptCount`, `trajectory`, `rpcRequestCount`, `rpcResponseCount`, `elapsedMs`.
 
+Opt into browser-faithful CDP input for the interactions TypeScript currently supports:
+
+```ts
+await session.getByRole("button", {name: "Pay"}).realistic().click();
+await session.getByTestId("card-number").realistic().setValue("4242");
+await session.getByTestId("card-number").realistic().type(" 4242");
+```
+
+The Go realistic track additionally covers hover, click variants, tap, wheel, and realistic drag.
+
 ## 5. Navigation
 
 ```ts
@@ -138,7 +150,23 @@ Cookies accept a `Date` for expiry:
 await session.setCookies([{name: "session", value: "abc123", path: "/"}]);
 ```
 
-## 7. Failures
+## 7. Network observation and holding
+
+```ts
+await session.expectRequest(endsWith("/orders"), {method: "POST"});
+
+const hold = await session.holdResponse(endsWith("/inventory"));
+try {
+  await session.getByRole("button", {name: "Refresh"}).click();
+  await hold.await();
+} finally {
+  await hold.release();
+}
+```
+
+Always release a hold. Arbitrary response stubbing, aborting, modifying, and richer request inspection remain Go-only.
+
+## 8. Failures
 
 Everything rejects with a `BilobaError` carrying `code`, `locator`, `expected`, `observed`, `trajectory`, `domOutline`, `screenshotPath`, `daemonDetail`.
 
@@ -160,6 +188,6 @@ Narrow on `code` — several are specific and actionable:
 
 The last three exist so a crash reports itself as a crash: Chrome does not fail calls to a dead renderer, it stops answering them, so without a dedicated code a crashed page is indistinguishable from an assertion that never came true.
 
-## 8. Not implemented in TypeScript
+## 9. Not implemented in TypeScript
 
-Dialogs, downloads, network stubbing/observation, `HaveScreenshot` visual assertions, the XPath DSL, tab management, and realistic mode are **Go-only**. If a task needs one, use the Go client — do not attempt a workaround through `evaluate`.
+Dialog handling, download capture and assertions, `HaveScreenshot` visual assertions, and the XPath DSL are **Go-only**. TypeScript supports the basic tab lifecycle, realistic `click`/`setValue`/`type`, request observation, and response holding; use Go when the broader APIs in those areas are required. Do not attempt a workaround through `evaluate`.

@@ -1,5 +1,5 @@
 import {createReadStream} from "node:fs";
-import {mkdtemp, readFile, rm} from "node:fs/promises";
+import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import {createServer, type Server} from "node:http";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
@@ -7,8 +7,15 @@ import {fileURLToPath} from "node:url";
 import {afterAll, beforeAll, describe, expect, it} from "vitest";
 
 import {
+  allOf,
   BilobaError,
   connect,
+  contains,
+  empty,
+  not,
+  numeric,
+  Keys,
+  endsWith,
   startSharedBrowser,
   type Browser,
   type Session,
@@ -81,6 +88,26 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     await session.getByTestId("name").setValue("Ada");
     await session.getByTestId("name").expectValue("Ada");
     await session.getByRole("button", {name: "Increment"}).click();
+    await session.locator(".row")
+      .filter({hasText: "Ada"})
+      .within("#results")
+      .nth(1)
+      .expectText("Ada second");
+    await session.getByTestId("sent").or(session.getByTestId("delivered")).last().expectText("Delivered");
+    await session.getByRole("button", {name: "Increment"}).expectEnabled();
+    await session.getByRole("button", {name: "Increment"}).expectClickable();
+    await session.getByTestId("missing").expectNotExists();
+    await session.locator(".row").expectCount(numeric(">=", 3));
+    const stable = await session.locator("#delayed").expectProperty(
+      "textContent",
+      allOf(contains("ready"), not(empty())),
+      {mode: "consistently", timeoutMs: 30, intervalMs: 5},
+    );
+    expect(stable.attemptCount).toBeGreaterThan(1);
+    expect(await session.locator(".row").count()).toBe(3);
+    expect(await session.locator("#delayed").text()).toBe("ready");
+    expect(await session.getByTestId("name").value()).toBe("Ada");
+    expect(await session.url()).toBe(baseUrl + "/");
 
     const actual = await session.evaluate(`({
       count: document.querySelector('#count').innerText,
@@ -92,10 +119,35 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     const expected = JSON.parse(await readFile(expectedPath, "utf8")) as unknown;
     expect(actual).toEqual(expected);
 
+    const realisticName = session.getByTestId("name").realistic();
+    await realisticName.setValue("Grace");
+    await realisticName.type(" Hopper");
+    await session.getByRole("button", {name: "Increment"}).realistic().click();
+    await session.sendKeys(Keys.Escape);
+    await session.expectEvaluation(
+      `document.querySelector('[data-testid="name"]').value + '|' + document.querySelector('#count').textContent + '|' + document.querySelector('#last-key').textContent`,
+      "Grace Hopper|2|Escape",
+    );
+
     // An args array - empty or not - means "call this function"; no args array means "read this
     // expression".  The daemon is told which, so neither reading depends on the argument count.
     expect(await session.evaluate<number>("() => 41 + 1", [])).toBe(42);
     expect(await session.evaluate<number>("(a, b) => a + b", [40, 2])).toBe(42);
+
+    expect(await session.evaluateAsync<string>(`Promise.resolve("settled")`)).toBe("settled");
+    await session.setWindowSize(375, 812);
+    expect(await session.evaluate(`[window.innerWidth, window.innerHeight]`)).toEqual([375, 812]);
+    const uploadPath = join(artifactDir, "avatar.txt");
+    await writeFile(uploadPath, "avatar");
+    await session.getByTestId("upload").setUploadFiles([uploadPath]);
+    expect(await session.evaluate(`document.querySelector('[data-testid="upload"]').files[0].name`)).toBe("avatar.txt");
+    await session.evaluateAsync(`fetch("/observed", {method:"POST"}).then(response => response.text())`);
+    await session.expectRequest(endsWith("/observed"), {method: "POST"});
+    const hold = await session.holdResponse(endsWith("/held"));
+    await session.getByTestId("held-request").click();
+    expect((await hold.await()).status).toBe(200);
+    await hold.release();
+    await session.setWindowSize(1920, 1080);
   });
 
   it("treats a non-200 page as navigable when the caller asks for that status", async () => {

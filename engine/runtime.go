@@ -78,6 +78,15 @@ func EncodeArgs(args ...any) (string, error) {
 
 // RunHandlerContext invokes one existing biloba.js handler atomically with an encoded selector.
 func RunHandlerContext(ctx context.Context, name string, encodedSelector string, args ...any) (HandlerResponse, error) {
+	return runHandlerContext(ctx, name, encodedSelector, false, args...)
+}
+
+// RunHandlerAsyncContext invokes a biloba.js handler that returns a Promise.
+func RunHandlerAsyncContext(ctx context.Context, name string, encodedSelector string, args ...any) (HandlerResponse, error) {
+	return runHandlerContext(ctx, name, encodedSelector, true, args...)
+}
+
+func runHandlerContext(ctx context.Context, name string, encodedSelector string, awaitPromise bool, args ...any) (HandlerResponse, error) {
 	parameters := append([]any{encodedSelector}, args...)
 	if encodedSelector == "" {
 		parameters = append([]any{}, args...)
@@ -87,6 +96,6 @@ func RunHandlerContext(ctx context.Context, name string, encodedSelector string,
 		return HandlerResponse{}, err
 	}
 	var response HandlerResponse
-	err = EvaluateContext(ctx, fmt.Sprintf("_biloba.%s(...%s)", name, encoded), false, &response)
+	err = EvaluateContext(ctx, fmt.Sprintf("_biloba.%s(...%s)", name, encoded), awaitPromise, &response)
 	return response, err
 }
