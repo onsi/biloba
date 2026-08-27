@@ -182,7 +182,7 @@ So a method that registers or accumulates per-tab state puts that state in **`ta
 
 Fields that stay on `Biloba` itself: identity (`Context`, `targetID`, `root`), suite config (the failure-artifact knobs, `downloadDir`), and the view flags themselves — which is the whole point, since those are *supposed* to differ per view.
 
-`go vet` will not catch a mistake here: its copylocks check is what would otherwise flag `nb := *b`, and `lock` is a `*sync.Mutex` so it stays quiet. The test is a spec that registers through a held view (`rb := b.Realistic()`) and asserts the bare tab sees it — see "registering through a view of the tab" in `network_test.go` and `dialog_handling_test.go`.
+`go vet` will not catch a mistake here: its copylocks check is what would otherwise flag `nb := *b`, and `lock` is a `*sync.Mutex` so it stays quiet. **`tab_state_internal_test.go` is the guard** — it reflects over `Biloba` and fails on any field a view copies that isn't classified as `reasonIdentity`, `reasonViewFlag`, or `reasonRootOwned`, so adding one forces the decision. The behavioural test is a spec that registers through a *held* view (`rb := b.Realistic()`) and asserts the bare tab sees it — see "registering through a view of the tab" in `network_test.go` and `dialog_handling_test.go`.
 
 ### The four-bucket model and `guardConfig`
 

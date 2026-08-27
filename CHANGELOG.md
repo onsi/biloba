@@ -1,3 +1,9 @@
+## 0.15.2
+
+### Fixes
+
+- A handler registered through a *view* of a tab now actually registers on that tab.  Every lightweight view - `b.Realistic()`, `b.WithTimeout(d)`, `b.Immediate()`, and the rest - is a shallow copy of the Biloba struct, and the handler lists were plain slice fields on it, so an append through a view updated the copy's slice header and nothing else.  `b.WithTimeout(15*time.Second).HoldResponse(url)` intercepted nothing and `Await` burned exactly the deadline you tuned; `b.Realistic().StubRequest(...)`, `.AbortRequest`, `.ModifyRequest`, `.ModifyResponse` and `.HandleAlertDialogs(...)` were all silently registered nowhere.  Reads were affected too - a list read through a view was frozen at the instant the view was made, so `rb.Dialogs()` and `rb.AllRequests()` went stale, and a view held across a navigation could report `window._biloba` still installed after the page had taken it away.  The state a tab owns now lives behind a pointer, the way `lock` already did, so a view and its tab reach the same state - which is what every view's documentation already promised.
+
 ## 0.15.1
 
 ## Features
