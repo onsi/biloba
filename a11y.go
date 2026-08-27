@@ -1,6 +1,7 @@
 package biloba
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/onsi/biloba/engine"
@@ -33,7 +34,12 @@ func (b *Biloba) A11yOutline() string {
 }
 
 func (b *Biloba) a11yOutline() (string, error) {
-	nodes, err := engine.AccessibilityTreeContext(b.Context)
+	var nodes []*accessibility.Node
+	err := b.runEngine("capture the accessibility tree", func(ctx context.Context) error {
+		var err error
+		nodes, err = engine.AccessibilityTreeContext(ctx)
+		return err
+	})
 	if err != nil {
 		return "", err
 	}

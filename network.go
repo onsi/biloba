@@ -1,6 +1,7 @@
 package biloba
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"github.com/onsi/biloba/engine"
@@ -1154,7 +1155,9 @@ func (b *Biloba) ensureFetchEnabled() {
 		return
 	}
 
-	if err := engine.EnableInterceptionContext(b.Context); err != nil {
+	if err := b.runEngine("enable network interception", func(ctx context.Context) error {
+		return engine.EnableInterceptionContext(ctx)
+	}); err != nil {
 		b.gt.Fatalf("Failed to enable network interception:\n%s", err.Error())
 	}
 }
@@ -1317,7 +1320,9 @@ func (b *Biloba) handleRequestStagePause(ev *fetch.EventRequestPaused) {
 		default:
 			action = fetch.ContinueRequest(ev.RequestID)
 		}
-		engine.RunActionContext(b.Context, action)
+		_ = b.runEngine("answer a paused network request", func(ctx context.Context) error {
+			return engine.RunActionContext(ctx, action)
+		})
 	}()
 }
 
@@ -1326,7 +1331,9 @@ func (b *Biloba) handleResponseStagePause(ev *fetch.EventRequestPaused) {
 	go func() {
 		if handler == nil {
 			// Not ours to modify: hand the real response straight back to the page.
-			engine.RunActionContext(b.Context, fetch.ContinueResponse(ev.RequestID))
+			_ = b.runEngine("continue an unmodified network response", func(ctx context.Context) error {
+				return engine.RunActionContext(ctx, fetch.ContinueResponse(ev.RequestID))
+			})
 			return
 		}
 
@@ -1337,7 +1344,12 @@ func (b *Biloba) handleResponseStagePause(ev *fetch.EventRequestPaused) {
 		for _, h := range ev.ResponseHeaders {
 			original.Headers[h.Name] = h.Value
 		}
-		body, _ := engine.ResponseBodyContext(b.Context, ev.RequestID)
+		var body []byte
+		_ = b.runEngine("read a paused network response", func(ctx context.Context) error {
+			var err error
+			body, err = engine.ResponseBodyContext(ctx, ev.RequestID)
+			return err
+		})
 		original.Body = string(body)
 
 		response := handler.resolve(original)
@@ -1349,7 +1361,9 @@ func (b *Biloba) handleResponseStagePause(ev *fetch.EventRequestPaused) {
 		if headers := response.headerEntries(); len(headers) > 0 {
 			params = params.WithResponseHeaders(headers)
 		}
-		engine.RunActionContext(b.Context, params)
+		_ = b.runEngine("fulfill a modified network response", func(ctx context.Context) error {
+			return engine.RunActionContext(ctx, params)
+		})
 	}()
 }
 

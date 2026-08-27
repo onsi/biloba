@@ -134,20 +134,21 @@ func (b *Biloba) CaptureScreenshot() []byte {
 // WithTimeout/WithContext knobs a waiting command is allowed.
 func (b *Biloba) captureScreenshot() []byte {
 	b.gt.Helper()
+	timeout := b.waitingTimeout(screenshotCaptureTimeout)
 	ctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
 	var img []byte
-	img, err := engine.CapturePageContext(ctx, nil)
+	err := b.runEngineIn(ctx, timeout, "capture a screenshot", func(runCtx context.Context) error {
+		var err error
+		img, err = engine.CapturePageContext(runCtx, nil)
+		return err
+	})
 	if err != nil {
 		b.gt.Fatalf("Failed to capture screenshot:\n%s", err.Error())
 	}
 	return img
 }
 
-// capturePageAction captures the whole document as a PNG, and optionally reports the document's width
-// in CSS pixels (which is what the visual-regression path divides by to recover the device scale
-// factor).  Both come out of the same round trip, so they describe the same layout.
-//
 /*
 CaptureImgCatScreenshot() returns a full screenshot of the current tab as an iTerm2 imgcat-compatible string.  Simply print it out to see images on your terminal.
 
@@ -331,9 +332,15 @@ func (b *Biloba) elementScreenshot(selector any) ([]byte, *page.Viewport, captur
 		Scale:  1,
 	}
 	beyondViewport := expandsViewport(box)
+	timeout := b.waitingTimeout(screenshotCaptureTimeout)
 	cctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
-	img, err := engine.CaptureClipContext(cctx, clip, beyondViewport)
+	var img []byte
+	err := b.runEngineIn(cctx, timeout, "capture an element screenshot", func(runCtx context.Context) error {
+		var err error
+		img, err = engine.CaptureClipContext(runCtx, clip, beyondViewport)
+		return err
+	})
 	if err != nil {
 		return nil, clip, notes, err
 	}
@@ -473,15 +480,25 @@ func (b *Biloba) safeAllTabScreenshots(width int, height int) []tabScreenshot {
 		var originalWidth, originalHeight int
 		if width > 0 && height > 0 {
 			originalWidth, originalHeight = b.WindowSize()
-			err := engine.EmulateViewportContext(ctx, width, height)
+			err := tab.runEngineIn(ctx, screenshotCaptureTimeout, "set the failure-screenshot window size", func(runCtx context.Context) error {
+				return engine.EmulateViewportContext(runCtx, width, height)
+			})
 			if err != nil {
 				out = append(out, tabScreenshot{failure: fmt.Sprintf("failed to set window size: %s", err.Error())})
 				continue
 			}
 		}
-		img, title, err := engine.CaptureFullScreenshotContext(ctx, 100)
+		var img []byte
+		var title string
+		err := tab.runEngineIn(ctx, screenshotCaptureTimeout, "capture a failure screenshot", func(runCtx context.Context) error {
+			var err error
+			img, title, err = engine.CaptureFullScreenshotContext(runCtx, 100)
+			return err
+		})
 		if width > 0 && height > 0 {
-			err := engine.EmulateViewportContext(ctx, originalWidth, originalHeight, chromedp.EmulatePortrait)
+			err := tab.runEngineIn(ctx, screenshotCaptureTimeout, "reset the failure-screenshot window size", func(runCtx context.Context) error {
+				return engine.EmulateViewportContext(runCtx, originalWidth, originalHeight, chromedp.EmulatePortrait)
+			})
 			if err != nil {
 				out = append(out, tabScreenshot{failure: fmt.Sprintf("failed to reset window size: %s", err.Error())})
 				continue

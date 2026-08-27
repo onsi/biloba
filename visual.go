@@ -2,6 +2,7 @@ package biloba
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"github.com/onsi/biloba/engine"
@@ -648,12 +649,15 @@ func (b *Biloba) captureForComparison(selector any, cfg screenshotConfig, scheme
 // clean up: the flag goes up BEFORE the command that sets the override (a command that reports an
 // error may still have landed) and only comes down when a clear actually succeeds.
 func (b *Biloba) emulateColorScheme(scheme string) error {
+	timeout := b.waitingTimeout(screenshotCaptureTimeout)
 	ctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
 	if scheme != "" {
 		b.setColorSchemeEmulated(true)
 	}
-	err := engine.EmulateColorSchemeContext(ctx, scheme)
+	err := b.runEngineIn(ctx, timeout, "emulate the page color scheme", func(runCtx context.Context) error {
+		return engine.EmulateColorSchemeContext(runCtx, scheme)
+	})
 	if scheme == "" && err == nil {
 		b.setColorSchemeEmulated(false)
 	}
@@ -691,11 +695,16 @@ func (b *Biloba) clearLeakedColorSchemeEmulation() {
 // the page stops being told its viewport resized.  That is the app-shell case: a document that never
 // scrolls because an inner pane does.
 func (b *Biloba) fullPageScreenshot() ([]byte, float64, error) {
+	timeout := b.waitingTimeout(screenshotCaptureTimeout)
 	ctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
 	var img []byte
 	var cssWidth float64
-	img, err := engine.CapturePageContext(ctx, &cssWidth)
+	err := b.runEngineIn(ctx, timeout, "capture a full-page screenshot", func(runCtx context.Context) error {
+		var err error
+		img, err = engine.CapturePageContext(runCtx, &cssWidth)
+		return err
+	})
 	return img, cssWidth, err
 }
 

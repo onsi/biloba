@@ -1,6 +1,8 @@
 package biloba
 
 import (
+	"context"
+
 	"github.com/onsi/biloba/engine"
 	"github.com/onsi/gomega/gcustom"
 	"github.com/onsi/gomega/types"
@@ -87,5 +89,11 @@ func (b *Biloba) performSetUpload(selector any, paths []string) (bool, error) {
 		return false, err
 	}
 
-	return engine.SetFileInputFilesContext(b.Context, b.JSFunc("_biloba.node").Invoke(encoded), paths)
+	var found bool
+	err = b.runEngine("set files on an upload input", func(ctx context.Context) error {
+		var runErr error
+		found, runErr = engine.SetFileInputFilesContext(ctx, b.JSFunc("_biloba.node").Invoke(encoded), paths)
+		return runErr
+	})
+	return found, err
 }
