@@ -226,3 +226,9 @@ type TabScreenshotForTest struct {
 	Failure          string
 	ImgcatScreenshot string
 }
+
+// ChromeDownloadLimitForTest exposes the number of concurrent downloads Chrome accepts before it
+// starts dropping them, so downloads_test.go can saturate the limit without hardcoding it.
+func ChromeDownloadLimitForTest() int {
+	return _CHROME_DOWNLOAD_LIMIT
+}

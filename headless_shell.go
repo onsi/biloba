@@ -7,17 +7,18 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"time"
+
+	"github.com/onsi/biloba/engine"
 )
 
 // BILOBA_CHROME_HEADLESS_SHELL lets you point Biloba at a chrome-headless-shell binary
-// without code changes.
-const headlessShellEnvVar = "BILOBA_CHROME_HEADLESS_SHELL"
+// without code changes.  The search itself is runner-neutral and lives in the engine, so the
+// bilobad daemon and this suite resolve the same binary.
+const headlessShellEnvVar = engine.ChromeEnvVar
 
 const chromeForTestingVersionsURL = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
 
@@ -42,49 +43,11 @@ func resolveHeadlessShellPath(ginkgoT GinkgoTInterface, cfg *spinUpConfig) (stri
 // locateHeadlessShell returns the path to a chrome-headless-shell binary, searching (in order):
 // an explicit path, the BILOBA_CHROME_HEADLESS_SHELL env var, $PATH, and the puppeteer / Biloba
 // download caches.  It returns "" if none is found.
-func locateHeadlessShell(explicit string) string {
-	for _, c := range []string{explicit, os.Getenv(headlessShellEnvVar)} {
-		if c != "" && isExecutableFile(c) {
-			return c
-		}
-	}
-	if p, err := exec.LookPath("chrome-headless-shell"); err == nil {
-		return p
-	}
-	bin := headlessShellBinaryName()
-	for _, cacheRoot := range headlessShellCacheRoots() {
-		// download caches lay binaries out as <root>/chrome-headless-shell/<version>/chrome-headless-shell-<platform>/<bin>
-		matches, _ := filepath.Glob(filepath.Join(cacheRoot, "chrome-headless-shell", "*", "chrome-headless-shell-*", bin))
-		if len(matches) > 0 {
-			sort.Strings(matches) // prefer the lexically-last (typically newest) version
-			return matches[len(matches)-1]
-		}
-	}
-	return ""
-}
+func locateHeadlessShell(explicit string) string { return engine.LocateChrome(explicit) }
 
-func headlessShellBinaryName() string {
-	if runtime.GOOS == "windows" {
-		return "chrome-headless-shell.exe"
-	}
-	return "chrome-headless-shell"
-}
+func headlessShellBinaryName() string { return engine.ChromeBinaryName() }
 
-func headlessShellCacheRoots() []string {
-	roots := []string{}
-	if home, err := os.UserHomeDir(); err == nil {
-		roots = append(roots, filepath.Join(home, ".cache", "puppeteer")) // @puppeteer/browsers default
-	}
-	if cache, err := os.UserCacheDir(); err == nil {
-		roots = append(roots, filepath.Join(cache, "puppeteer"), filepath.Join(cache, "biloba"))
-	}
-	return roots
-}
-
-func isExecutableFile(p string) bool {
-	info, err := os.Stat(p)
-	return err == nil && !info.IsDir()
-}
+func isExecutableFile(p string) bool { return engine.IsExecutableFile(p) }
 
 func headlessShellInstructions() string {
 	return fmt.Sprintf(`Biloba defaults to the lightweight chrome-headless-shell for speed, but could not find it.

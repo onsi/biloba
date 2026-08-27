@@ -2468,6 +2468,33 @@ var _ = Describe("DOM manipulators and matchers", func() {
 	})
 })
 
+// The DOM handlers reach the browser through the engine rather than through RunErr, so they have
+// to restate RunErr's guarantees themselves (see runBilobaHandler in dom.go).  These specs pin the
+// two that are invisible until they are gone: the bridge reinstall, and - over in downloads_test.go
+// - the download throttle.
+var _ = Describe("the biloba.js bridge", func() {
+	BeforeEach(func() {
+		b.Navigate(fixtureServer + "/dom.html")
+		Eventually("#hello").Should(b.Exist())
+	})
+
+	It("reinstalls itself when the page drops it out from under a DOM handler", func() {
+		// A real page turns the JavaScript world over on navigation; bilobaIsInstalled is cleared
+		// by the frameNavigated event, which can land after the next handler has already run.
+		// Dropping the global directly reproduces that window without racing a navigation.
+		b.Run(`delete window._biloba`)
+
+		Ω(b.HasElement("#hello")).Should(BeTrue(), "a DOM handler should reinstall biloba.js and retry rather than surface the ReferenceError")
+		Ω(b.GetInnerText("#hello")).Should(Equal("Hello Biloba!"))
+	})
+
+	It("reinstalls itself for the matcher form too", func() {
+		b.Run(`delete window._biloba`)
+
+		Eventually("#hello").Should(b.Exist())
+	})
+})
+
 var _ = Describe("Failure diagnostics", func() {
 	BeforeEach(func() {
 		b.Navigate(fixtureServer + "/diagnostics.html")
