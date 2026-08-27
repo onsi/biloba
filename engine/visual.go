@@ -18,6 +18,7 @@ import (
 )
 
 const DefaultMaxScreenshotBytes = 32 << 20
+const DefaultMaxScreenshotPixels = 64 << 20
 
 var visualFilenameRE = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
@@ -32,6 +33,8 @@ type Screenshot struct {
 	PNG           []byte
 	Width, Height int
 	Warning       string
+	FullyClipped  bool
+	Vanished      bool
 }
 
 type ScreenshotTarget struct{ selector *Selector }
@@ -135,14 +138,23 @@ func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, opt
 		if clipper, clipped := box["clipper"].(string); clipped && clipper != "" {
 			visibleFraction := floatValue(box["visibleFraction"])
 			if visibleFraction <= 0 {
-				return shot, fmt.Errorf("element %s was not painted because it is clipped by %s", selector.Description(), clipper)
+				shot.Warning = fmt.Sprintf("element %s was not painted because it is clipped by %s", selector.Description(), clipper)
+				shot.FullyClipped = true
+			} else {
+				shot.Warning = fmt.Sprintf("element %s is partially clipped by %s (%.0f%% visible)", selector.Description(), clipper, visibleFraction*100)
 			}
-			shot.Warning = fmt.Sprintf("element %s is partially clipped by %s (%.0f%% visible)", selector.Description(), clipper, visibleFraction*100)
 		}
 		clip := &page.Viewport{X: floatValue(box["x"]), Y: floatValue(box["y"]), Width: floatValue(box["width"]), Height: floatValue(box["height"]), Scale: 1}
 		originX, originY, cssWidth = clip.X, clip.Y, clip.Width
 		inViewport, _ := box["inViewport"].(bool)
 		pngBytes, err = CaptureClipContext(ctx, clip, !inViewport)
+		if err == nil && !inViewport {
+			stillThere, existsErr := RunHandlerContext(ctx, "exists", selector.Encoded())
+			if existsErr == nil && stillThere.Err == "" && !stillThere.Success {
+				shot.Vanished = true
+				shot.Warning = fmt.Sprintf("element %s was present before this capture and gone after it; viewport expansion caused the page to remove its own subject", selector.Description())
+			}
+		}
 	}
 	if err != nil {
 		return shot, err
@@ -211,6 +223,7 @@ func (s *Session) compareScreenshot(ctx context.Context, name string, target Scr
 		schemes = []string{""}
 	}
 	result := VisualResult{Match: true}
+	captures := map[string][]byte{}
 	for _, scheme := range schemes {
 		relative, err := ScreenshotBaselinePath(name, scheme)
 		if err != nil {
@@ -219,14 +232,39 @@ func (s *Session) compareScreenshot(ctx context.Context, name string, target Scr
 		baselinePath := filepath.Join(options.BaselineDir, relative)
 		captureOptions := ScreenshotCaptureOptions{Masks: options.Masks, Animated: options.Animated, ColorScheme: scheme, MaxBytes: options.MaxBytes}
 		var shot Screenshot
+		settled := true
 		if options.Update {
-			shot, err = s.captureSettled(ctx, target.selector, captureOptions, options)
+			shot, settled, err = s.captureSettled(ctx, target.selector, captureOptions, options)
 		} else {
 			shot, err = s.captureScreenshot(ctx, target.selector, captureOptions)
 		}
 		if err != nil {
 			return result, err
 		}
+		if shot.FullyClipped {
+			message := shot.Warning
+			if options.Update {
+				message = "refusing to write a screenshot baseline: " + message
+				return result, Fatal(fmt.Errorf("%s", message))
+			}
+			return result, fmt.Errorf("%s", message)
+		}
+		if shot.Vanished {
+			return result, fmt.Errorf("%s", shot.Warning)
+		}
+		if shot.Warning != "" {
+			result.Warnings = append(result.Warnings, shot.Warning)
+		}
+		if options.Update && !settled {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("the screenshot for %s never settled: no %d captures in a row matched across %d captures; writing the last frame", visualLabel(name, scheme), resolvedSettleStreak(options), resolvedSettleAttempts(options)))
+		}
+		for previousScheme, previous := range captures {
+			if bytes.Equal(previous, shot.PNG) {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("%q captured byte-identical images under prefers-color-scheme %q and %q; only one rendering may have been exercised", name, previousScheme, scheme))
+				break
+			}
+		}
+		captures[scheme] = append([]byte(nil), shot.PNG...)
 		entry := VisualSchemeResult{Scheme: scheme, BaselinePath: absolutePath(baselinePath)}
 		baseline, readErr := os.ReadFile(baselinePath)
 		if options.Update {
@@ -266,14 +304,8 @@ func (s *Session) compareScreenshot(ctx context.Context, name string, target Scr
 	return result, nil
 }
 
-func (s *Session) captureSettled(ctx context.Context, selector *Selector, captureOptions ScreenshotCaptureOptions, options VisualOptions) (Screenshot, error) {
-	attempts, streakTarget, interval := options.SettleAttempts, options.SettleStreak, options.SettleInterval
-	if attempts <= 0 {
-		attempts = 8
-	}
-	if streakTarget <= 0 {
-		streakTarget = 3
-	}
+func (s *Session) captureSettled(ctx context.Context, selector *Selector, captureOptions ScreenshotCaptureOptions, options VisualOptions) (Screenshot, bool, error) {
+	attempts, streakTarget, interval := resolvedSettleAttempts(options), resolvedSettleStreak(options), options.SettleInterval
 	if interval <= 0 {
 		interval = 100 * time.Millisecond
 	}
@@ -281,18 +313,18 @@ func (s *Session) captureSettled(ctx context.Context, selector *Selector, captur
 	streak := 1
 	for attempt := 0; attempt < attempts; attempt++ {
 		if attempt > 0 {
-			timer := time.NewTimer(interval * time.Duration(attempt))
+			timer := time.NewTimer(screenshotSettleGap(interval, attempt-1))
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				return Screenshot{}, ctx.Err()
+				return Screenshot{}, false, ctx.Err()
 			case <-timer.C:
 			}
 		}
 		var err error
 		current, err = s.captureScreenshot(ctx, selector, captureOptions)
 		if err != nil {
-			return Screenshot{}, err
+			return Screenshot{}, false, err
 		}
 		if previous.PNG != nil {
 			diff, _, compareErr := CompareScreenshotPNGs(previous.PNG, current.PNG, options.Tolerance)
@@ -302,12 +334,29 @@ func (s *Session) captureSettled(ctx context.Context, selector *Selector, captur
 				streak = 1
 			}
 			if streak >= streakTarget {
-				return current, nil
+				return current, true, nil
 			}
 		}
 		previous = current
 	}
-	return current, nil
+	return current, false, nil
+}
+
+func screenshotSettleGap(base time.Duration, followup int) time.Duration {
+	return base * time.Duration(followup*followup+3*followup+10) / 10
+}
+
+func resolvedSettleAttempts(options VisualOptions) int {
+	if options.SettleAttempts > 0 {
+		return options.SettleAttempts
+	}
+	return 8
+}
+func resolvedSettleStreak(options VisualOptions) int {
+	if options.SettleStreak > 0 {
+		return options.SettleStreak
+	}
+	return 3
 }
 
 func ScreenshotBaselinePath(name, scheme string) (string, error) {
@@ -373,8 +422,12 @@ func validateScreenshotPNG(data []byte, maxBytes int) error {
 	if len(data) > limit {
 		return fmt.Errorf("screenshot is %d bytes and exceeds the %d-byte limit", len(data), limit)
 	}
-	if _, err := png.DecodeConfig(bytes.NewReader(data)); err != nil {
+	config, err := png.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
 		return fmt.Errorf("decode PNG: %w", err)
+	}
+	if uint64(config.Width)*uint64(config.Height) > DefaultMaxScreenshotPixels {
+		return fmt.Errorf("screenshot declares %dx%d pixels and exceeds the %d-pixel limit", config.Width, config.Height, DefaultMaxScreenshotPixels)
 	}
 	return nil
 }

@@ -2,10 +2,15 @@ package engine_test
 
 import (
 	"bytes"
+	"context"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/png"
+	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -74,15 +79,36 @@ var _ = Describe("runner-neutral screenshots", func() {
 		Expect(pixelAt(animated.PNG, 10, 10)).NotTo(Equal(pixelAt(frozen.PNG, 10, 10)))
 	})
 
-	It("refuses an element capture that an overflow ancestor did not paint", func(ctx SpecContext) {
+	It("warns for a raw fully clipped element capture but refuses it as a visual baseline", func(ctx SpecContext) {
 		session, err := browser.OpenSession(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(session.Close)
 		Expect(session.Navigate(ctx, "data:text/html,<div style='width:50px;height:50px;overflow:hidden'><div class=box style='margin-top:100px;width:20px;height:20px;background:red'></div></div>")).To(Succeed())
 
-		_, err = session.CaptureElementScreenshot(ctx, engine.CSS(".box"), engine.ScreenshotCaptureOptions{})
+		shot, err := session.CaptureElementScreenshot(ctx, engine.CSS(".box"), engine.ScreenshotCaptureOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(shot.PNG).NotTo(BeEmpty())
+		Expect(shot.Warning).To(ContainSubstring("not painted because it is clipped"))
 
-		Expect(err).To(MatchError(ContainSubstring("not painted because it is clipped")))
+		_, err = session.CompareScreenshot(ctx, "clipped", engine.ElementScreenshotTarget(engine.CSS(".box")), engine.VisualOptions{
+			BaselineDir: GinkgoT().TempDir(), ArtifactDir: GinkgoT().TempDir(), Update: true,
+			SettleAttempts: 2, SettleStreak: 2, SettleInterval: time.Millisecond,
+		})
+		Expect(err).To(MatchError(ContainSubstring("refusing to write")))
+	})
+
+	It("reports when viewport expansion removes the element being captured", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.SetWindowSize(ctx, 600, 400)).To(Succeed())
+		html := `<body style="margin:0;height:1500px"><div id="doomed" style="position:absolute;top:1200px;width:150px;height:80px;background:red"></div><script>let q=matchMedia('(max-width:100px)');let remove=()=>document.getElementById('doomed')?.remove();q.addEventListener('change',remove)</script>`
+		Expect(session.Navigate(ctx, "data:text/html,"+url.PathEscape(html))).To(Succeed())
+
+		shot, err := session.CaptureElementScreenshot(ctx, engine.CSS("#doomed"), engine.ScreenshotCaptureOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(shot.PNG).NotTo(BeEmpty())
+		Expect(shot.Warning).To(ContainSubstring("present before this capture and gone after it"))
 	})
 })
 
@@ -183,6 +209,86 @@ var _ = Describe("runner-neutral visual comparison", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(after).To(Equal(before))
 	})
+
+	It("warns when a color-scheme matrix captures the same rendering twice", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, "data:text/html,<style>body{margin:0}.box{width:10px;height:10px;background:red}</style><div class=box></div>")).To(Succeed())
+
+		result, err := session.CompareScreenshot(ctx, "pinned-theme", engine.ElementScreenshotTarget(engine.CSS(".box")), engine.VisualOptions{
+			BaselineDir: GinkgoT().TempDir(), ArtifactDir: GinkgoT().TempDir(), Update: true,
+			ColorSchemes: []string{"light", "dark"}, SettleAttempts: 2, SettleStreak: 2, SettleInterval: time.Millisecond,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Warnings).To(ContainElement(ContainSubstring("byte-identical")))
+	})
+
+	It("reports when update mode writes the last frame of a screenshot that never settled", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, "data:text/html,<style>body{margin:0}.box{width:10px;height:10px}</style><div class=box></div>")).To(Succeed())
+		_, err = session.Exists(ctx, engine.CSS(".box"))
+		Expect(err).NotTo(HaveOccurred())
+		_, err = session.Evaluate(ctx, `window.captureCount=0;_biloba.freezeRendering=()=>{document.querySelector('.box').style.background=['red','blue','green'][window.captureCount++%3];return {success:true,result:true}}`)
+		Expect(err).NotTo(HaveOccurred())
+
+		result, err := session.CompareScreenshot(ctx, "moving", engine.ElementScreenshotTarget(engine.CSS(".box")), engine.VisualOptions{
+			BaselineDir: GinkgoT().TempDir(), ArtifactDir: GinkgoT().TempDir(), Update: true,
+			SettleAttempts: 4, SettleStreak: 3, SettleInterval: time.Millisecond,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Match).To(BeTrue())
+		Expect(result.Warnings).To(ContainElement(ContainSubstring("never settled")))
+		Expect(result.Schemes[0].BaselinePath).To(BeAnExistingFile())
+	})
+
+	It("uses unequal growing settle gaps that do not lock onto a periodic renderer", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, "data:text/html,<style>body{margin:0}.box{width:10px;height:10px;background:black}</style><div class=box></div>")).To(Succeed())
+		_, err = session.Exists(ctx, engine.CSS(".box"))
+		Expect(err).NotTo(HaveOccurred())
+		_, err = session.Evaluate(ctx, `window.captureTimes=[];_biloba.freezeRendering=()=>{window.captureTimes.push(performance.now());return {success:true,result:true}}`)
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = session.CompareScreenshot(ctx, "cadence", engine.ElementScreenshotTarget(engine.CSS(".box")), engine.VisualOptions{
+			BaselineDir: GinkgoT().TempDir(), ArtifactDir: GinkgoT().TempDir(), Update: true,
+			SettleAttempts: 3, SettleStreak: 3, SettleInterval: 100 * time.Millisecond,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		value, err := session.Evaluate(ctx, `window.captureTimes`)
+		Expect(err).NotTo(HaveOccurred())
+		times := value.([]any)
+		Expect(times).To(HaveLen(3))
+		firstGap := times[1].(float64) - times[0].(float64)
+		secondGap := times[2].(float64) - times[1].(float64)
+		Expect(secondGap-firstGap).To(BeNumerically("<", 80), "canonical gaps grow by about 40ms, not another full base interval")
+	})
+
+	It("restores color and animation state when update settling is canceled", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, "data:text/html,<style>body{margin:0}.box{width:10px;height:10px;background:red;animation:pulse 1s infinite}@keyframes pulse{to{background:blue}}</style><div class=box></div>")).To(Succeed())
+		before, err := session.Evaluate(ctx, `matchMedia('(prefers-color-scheme: dark)').matches`)
+		Expect(err).NotTo(HaveOccurred())
+		captureCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		_, err = session.CompareScreenshot(captureCtx, "cancelled", engine.ElementScreenshotTarget(engine.CSS(".box")), engine.VisualOptions{
+			BaselineDir: GinkgoT().TempDir(), ArtifactDir: GinkgoT().TempDir(), Update: true,
+			ColorSchemes: []string{"dark"}, SettleAttempts: 3, SettleStreak: 3, SettleInterval: time.Second,
+		})
+		Expect(err).To(HaveOccurred())
+		after, err := session.Evaluate(ctx, `[matchMedia('(prefers-color-scheme: dark)').matches, document.querySelectorAll('#_biloba-freeze').length]`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(after).To(Equal([]any{before, float64(0)}))
+	})
 })
 
 var _ = Describe("screenshot diff", func() {
@@ -204,7 +310,94 @@ var _ = Describe("screenshot diff", func() {
 		Expect(diff.MaxChannelDelta).To(Equal(255))
 		Expect(diff.Regions).To(ContainElement(engine.ScreenshotRegion{Rect: image.Rect(6, 2, 7, 3), Count: 1}))
 		Expect(bytes.HasPrefix(diffPNG, []byte("\x89PNG\r\n\x1a\n"))).To(BeTrue())
-		Expect(pixelAt(diffPNG, 6, 2)).NotTo(Equal(pixelAt(actual, 6, 2)))
+		Expect(pixelAt(diffPNG, 6, 2)).To(Equal(color.NRGBA{R: 255, B: 255, A: 255}))
+		Expect(pixelAt(diffPNG, 0, 0)).To(Equal(color.NRGBA{R: 255, G: 255, B: 255, A: 255}))
+	})
+
+	It("clusters nearby diagonal changes and bounds the reported region list", func() {
+		baseline := solidPNG(160, 160, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+		actual, err := png.Decode(bytes.NewReader(baseline))
+		Expect(err).NotTo(HaveOccurred())
+		changed := image.NewNRGBA(actual.Bounds())
+		for y := 0; y < 160; y++ {
+			for x := 0; x < 160; x++ {
+				changed.Set(x, y, actual.At(x, y))
+			}
+		}
+		changed.SetNRGBA(8, 8, color.NRGBA{A: 255})
+		changed.SetNRGBA(9, 9, color.NRGBA{A: 255})
+		for i := 0; i < 8; i++ {
+			changed.SetNRGBA(20+i*16, 120, color.NRGBA{A: 255})
+		}
+
+		diff, _, err := engine.CompareScreenshotPNGs(baseline, encodePNG(changed), engine.ScreenshotTolerance{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(diff.RegionCount).To(Equal(9))
+		Expect(diff.Regions).To(HaveLen(5))
+		Expect(diff.Regions).To(ContainElement(engine.ScreenshotRegion{Rect: image.Rect(8, 8, 10, 10), Count: 2}))
+	})
+
+	It("classifies whole-image shifts and scattered font-like changes structurally", func() {
+		base := patternedImage(200, 200)
+		shifted := image.NewNRGBA(base.Bounds())
+		for y := 0; y < 200; y++ {
+			sourceY := y - 1
+			if sourceY < 0 {
+				sourceY = 0
+			}
+			for x := 0; x < 200; x++ {
+				shifted.SetNRGBA(x, y, base.NRGBAAt(x, sourceY))
+			}
+		}
+		diff, _, err := engine.CompareScreenshotPNGs(encodePNG(base), encodePNG(shifted), engine.ScreenshotTolerance{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(diff.Shifted).To(BeTrue())
+		Expect(diff.Shift).To(Equal(image.Pt(0, 1)))
+
+		scattered := image.NewNRGBA(image.Rect(0, 0, 400, 400))
+		for y := 0; y < 400; y++ {
+			for x := 0; x < 400; x++ {
+				scattered.SetNRGBA(x, y, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+			}
+		}
+		for row := 0; row < 5; row++ {
+			for column := 0; column < 5; column++ {
+				for y := 10 + row*90; y < 16+row*90; y++ {
+					for x := 10 + column*90; x < 16+column*90; x++ {
+						scattered.SetNRGBA(x, y, color.NRGBA{A: 255})
+					}
+				}
+			}
+		}
+		diff, _, err = engine.CompareScreenshotPNGs(solidPNG(400, 400, color.NRGBA{R: 255, G: 255, B: 255, A: 255}), encodePNG(scattered), engine.ScreenshotTolerance{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(diff.Scattered).To(BeTrue())
+		Expect(diff.RegionCount).To(Equal(25))
+	})
+
+	It("classifies low-amplitude rasterization and a provably untouched side", func() {
+		base := image.NewNRGBA(image.Rect(0, 0, 100, 100))
+		actual := image.NewNRGBA(base.Bounds())
+		for y := 0; y < 100; y++ {
+			for x := 0; x < 100; x++ {
+				pixel := color.NRGBA{R: 100, G: 100, B: 100, A: 255}
+				base.SetNRGBA(x, y, pixel)
+				actual.SetNRGBA(x, y, pixel)
+			}
+		}
+		for y := 4; y < 14; y++ {
+			for x := 20; x < 50; x++ {
+				actual.SetNRGBA(x, y, color.NRGBA{R: 105, G: 100, B: 100, A: 255})
+			}
+		}
+
+		diff, _, err := engine.CompareScreenshotPNGs(encodePNG(base), encodePNG(actual), engine.ScreenshotTolerance{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(diff.RasterizationLikely).To(BeTrue())
+		Expect(diff.Unchanged).To(Equal("everything below y=14"))
+		diagnosis := diff.Diagnose("text", engine.ScreenshotPaths{})
+		Expect(diagnosis).To(ContainSubstring("rasterisation or compositing difference"))
+		Expect(diagnosis).To(ContainSubstring("unchanged: everything below y=14"))
 	})
 
 	It("rejects malformed and oversized PNG artifacts", func() {
@@ -213,6 +406,33 @@ var _ = Describe("screenshot diff", func() {
 		Expect(engine.WriteScreenshotPNG(path, solidPNG(2, 2, color.NRGBA{A: 255}), 4)).To(MatchError(ContainSubstring("exceeds the 4-byte limit")))
 		_, err := os.Stat(path)
 		Expect(errors.Is(err, os.ErrNotExist)).To(BeTrue())
+
+		huge := pngWithDeclaredDimensions(100_000, 100_000)
+		Expect(engine.WriteScreenshotPNG(path, huge, len(huge)+1)).To(MatchError(ContainSubstring("pixel limit")))
+	})
+
+	It("reports dimension changes in words without manufacturing a diff image", func() {
+		diff, diffPNG, err := engine.CompareScreenshotPNGs(
+			solidPNG(80, 60, color.NRGBA{A: 255}),
+			solidPNG(80, 64, color.NRGBA{A: 255}),
+			engine.ScreenshotTolerance{},
+		)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(diff.DimensionMismatch).To(BeTrue())
+		Expect(diffPNG).To(BeNil())
+		Expect(diff.Diagnose("rail", engine.ScreenshotPaths{})).To(ContainSubstring("baseline is 80x60, actual is 80x64 (4px taller)"))
+	})
+
+	It("applies channel tolerance to alpha and rejects non-finite pixel tolerance", func() {
+		base := solidPNG(2, 2, color.NRGBA{R: 10, G: 20, B: 30, A: 250})
+		actual := solidPNG(2, 2, color.NRGBA{R: 10, G: 20, B: 30, A: 245})
+		diff, _, err := engine.CompareScreenshotPNGs(base, actual, engine.ScreenshotTolerance{ChannelDelta: 5})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(diff.Match).To(BeTrue())
+		Expect(diff.MaxChannelDelta).To(Equal(5))
+
+		_, _, err = engine.CompareScreenshotPNGs(base, actual, engine.ScreenshotTolerance{PixelFraction: math.NaN()})
+		Expect(err).To(MatchError(ContainSubstring("pixel tolerance")))
 	})
 })
 
@@ -239,4 +459,23 @@ func pixelAt(data []byte, x, y int) color.NRGBA {
 	img, err := png.Decode(bytes.NewReader(data))
 	Expect(err).NotTo(HaveOccurred())
 	return color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+}
+
+func patternedImage(width, height int) *image.NRGBA {
+	img := image.NewNRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			value := uint8((7*x + 13*y) % 251)
+			img.SetNRGBA(x, y, color.NRGBA{R: value, G: value, B: value, A: 255})
+		}
+	}
+	return img
+}
+
+func pngWithDeclaredDimensions(width, height uint32) []byte {
+	data := append([]byte(nil), solidPNG(1, 1, color.NRGBA{A: 255})...)
+	binary.BigEndian.PutUint32(data[16:20], width)
+	binary.BigEndian.PutUint32(data[20:24], height)
+	binary.BigEndian.PutUint32(data[29:33], crc32.ChecksumIEEE(data[12:29]))
+	return data
 }
