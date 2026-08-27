@@ -80,7 +80,7 @@ var _ = Describe("Navigation", func() {
 			defer biloba.SetNavigationTimeoutForTest(500 * time.Millisecond)()
 
 			b.Navigate(hang.URL)
-			ExpectFailures(ContainSubstring(fmt.Sprintf("timed out after 500ms navigating to %s: the navigation never completed", hang.URL)))
+			ExpectFailures(ContainSubstring(fmt.Sprintf("Timed out after 500ms navigating to %s: the navigation never completed", hang.URL)))
 		})
 	})
 

@@ -119,7 +119,7 @@ var _ = Describe("Bucket-guard config enforcement", func() {
 			start := time.Now()
 			b.WithTimeout(300 * time.Millisecond).Navigate(hang.URL)
 			Expect(time.Since(start)).To(BeNumerically("<", 5*time.Second))
-			ExpectFailures(ContainSubstring("timed out after 300ms navigating to " + hang.URL))
+			ExpectFailures(ContainSubstring("Timed out after 300ms navigating to " + hang.URL))
 		})
 
 		It("actually honors WithContext, aborting a navigation when the context is cancelled", func() {
