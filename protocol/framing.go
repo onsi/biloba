@@ -9,7 +9,7 @@ import (
 )
 
 // MaxFrameSize bounds one protocol message before allocating its payload.
-const MaxFrameSize = 16 << 20
+const MaxFrameSize = 32 << 20
 
 // MalformedFrameError reports a frame whose header and payload were read in full but whose body
 // did not decode.  It is the one framing failure that does not desync the stream - the reader is

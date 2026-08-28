@@ -255,6 +255,27 @@ export interface CookieListResponse {
   cookies: Cookie[];
 }
 
+export interface NetworkOverride {
+  url?: string;
+  method?: string;
+  status?: number;
+  headers?: HeaderEntry[];
+  bodyBase64?: string;
+}
+
+export interface HeaderEntry {
+  name: string;
+  value: string;
+}
+
+export interface NetworkState {
+  offline?: boolean;
+  latencyMs?: number;
+  downloadThroughput?: number;
+  uploadThroughput?: number;
+  connectionType?: string;
+}
+
 export interface EventfulOperation {
   kind: string;
   id?: string;
@@ -266,6 +287,8 @@ export interface EventfulOperation {
   resourceType?: Expectation;
   filename?: Expectation;
   state?: Expectation;
+  contentText?: Expectation;
+  contentBase64?: string;
   accept?: boolean;
   promptText?: string;
   limit?: number;
@@ -275,7 +298,6 @@ export interface EventfulOperation {
   override?: NetworkOverride;
   callbackId?: string;
   transformTimeoutMs?: number;
-  idleMs?: number;
   network?: NetworkState;
   cacheEnabled?: boolean;
 }

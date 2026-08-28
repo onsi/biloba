@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -78,10 +79,8 @@ func (s *engineSession) ExecuteEventful(ctx context.Context, operation protocol.
 		}
 		return responsesToWire(s.session.Responses(query)), nil
 	case protocol.EventfulWaitForNetworkIdle:
-		policy := operation.Poll
-		policy.Timeout = time.Duration(operation.IdleMS) * time.Millisecond
-		_, err := s.session.WaitForNetworkIdle(ctx, pollPolicyFromProtocol(policy))
-		return nil, engineRPCError(err)
+		result, err := s.session.WaitForNetworkIdle(ctx, pollPolicyFromProtocol(operation.Poll))
+		return map[string]any{"observed": result.Final.Value, "attemptCount": result.AttemptCount, "trajectory": []any{}, "rpcRequestCount": 1, "rpcResponseCount": 1, "elapsedMs": result.Duration.Milliseconds()}, engineRPCError(err)
 	case protocol.EventfulRegisterNetworkHandler:
 		options, err := networkHandlerOptionsFromProtocol(operation)
 		if err != nil {
@@ -154,6 +153,18 @@ func downloadQueryFromProtocol(o protocol.EventfulOperation) (engine.DownloadQue
 		return engine.DownloadQuery{}, err
 	}
 	query := engine.DownloadQuery{Filename: filename, URL: url}
+	content, err := protocolExpectation(o.ContentText)
+	if err != nil {
+		return engine.DownloadQuery{}, err
+	}
+	query.Content = content
+	if o.ContentBase64 != nil {
+		body, decodeErr := decodeBoundedBody(*o.ContentBase64)
+		if decodeErr != nil {
+			return engine.DownloadQuery{}, decodeErr
+		}
+		query.ContentBytes = body
+	}
 	if state != nil && state.Kind == engine.ExpectEqual {
 		if text, ok := state.Expected.(string); ok {
 			query.State = engine.DownloadState(text)
@@ -183,17 +194,39 @@ func responseQueryFromProtocol(o protocol.EventfulOperation) (engine.ResponseQue
 }
 
 func decodeOverride(w protocol.WireNetworkOverride) (engine.RequestOverride, engine.ResponseOverride, error) {
-	request := engine.RequestOverride{URL: w.URL, Method: w.Method, Headers: w.Headers}
-	response := engine.ResponseOverride{Status: w.Status, Headers: w.Headers}
+	headers := map[string]string{}
+	for _, header := range w.Headers {
+		headers[header.Name] = header.Value
+	}
+	request := engine.RequestOverride{URL: w.URL, Method: w.Method, Headers: headers}
+	entries := make([]engine.HeaderEntry, len(w.Headers))
+	for index, header := range w.Headers {
+		entries[index] = engine.HeaderEntry{Name: header.Name, Value: header.Value}
+	}
+	response := engine.ResponseOverride{Status: w.Status, HeaderEntries: entries}
 	if w.BodyBase64 != nil {
-		body, err := base64.StdEncoding.DecodeString(*w.BodyBase64)
+		body, err := decodeBoundedBody(*w.BodyBase64)
 		if err != nil {
-			return request, response, protocol.NewError(protocol.CodeInvalidArgument, "bodyBase64 must be valid base64")
+			return request, response, err
 		}
 		request.Body = &body
 		response.Body = &body
 	}
 	return request, response, nil
+}
+
+func decodeBoundedBody(value string) ([]byte, error) {
+	if len(value) > base64.StdEncoding.EncodedLen(int(protocol.MaxDecodedBodySize)) {
+		return nil, protocol.NewError(protocol.CodeInvalidArgument, fmt.Sprintf("decoded body exceeds limit %d", protocol.MaxDecodedBodySize))
+	}
+	body, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, protocol.NewError(protocol.CodeInvalidArgument, "bodyBase64 must be valid base64")
+	}
+	if int64(len(body)) > protocol.MaxDecodedBodySize {
+		return nil, protocol.NewError(protocol.CodeInvalidArgument, fmt.Sprintf("decoded body size %d exceeds limit %d", len(body), protocol.MaxDecodedBodySize))
+	}
+	return body, nil
 }
 func networkHandlerOptionsFromProtocol(o protocol.EventfulOperation) (engine.NetworkHandlerOptions, error) {
 	if o.URL == nil {
@@ -219,7 +252,7 @@ func networkHandlerOptionsFromProtocol(o protocol.EventfulOperation) (engine.Net
 		options.Response = &response
 	case "callback":
 		options.Transform = func(ctx context.Context, intercepted engine.InterceptedResponse) (engine.ResponseOverride, error) {
-			payload := map[string]any{"url": intercepted.URL, "status": intercepted.Status, "headers": intercepted.Headers, "bodyBase64": base64.StdEncoding.EncodeToString(intercepted.Body)}
+			payload := map[string]any{"url": intercepted.URL, "status": intercepted.Status, "headers": engineHeaderEntriesToWire(intercepted.HeaderEntries, intercepted.Headers), "bodyBase64": base64.StdEncoding.EncodeToString(intercepted.Body)}
 			wire, invokeErr := o.InvokeCallback(ctx, protocol.CallbackInvocation{CallbackID: o.CallbackID, Payload: payload})
 			if invokeErr != nil {
 				return engine.ResponseOverride{}, invokeErr
@@ -265,7 +298,7 @@ func downloadsToWire(values []engine.Download) []map[string]any {
 	return result
 }
 func requestToWire(v engine.Request) map[string]any {
-	return map[string]any{"url": v.URL, "method": v.Method, "headers": v.Headers, "resourceType": v.ResourceType}
+	return map[string]any{"url": v.URL, "method": v.Method, "headers": headerEntriesToWire(v.Headers), "resourceType": v.ResourceType}
 }
 func requestsToWire(values []engine.Request) []map[string]any {
 	result := make([]map[string]any, len(values))
@@ -277,12 +310,34 @@ func requestsToWire(values []engine.Request) []map[string]any {
 func responsesToWire(values []engine.Response) []map[string]any {
 	result := make([]map[string]any, len(values))
 	for i, v := range values {
-		result[i] = map[string]any{"url": v.URL, "status": v.Status, "headers": v.Headers, "resourceType": v.ResourceType}
+		result[i] = map[string]any{"url": v.URL, "status": v.Status, "headers": headerEntriesToWire(v.Headers), "resourceType": v.ResourceType}
 	}
 	return result
 }
 func heldResponseToWire(v engine.HeldResponse) map[string]any {
-	return map[string]any{"id": v.ID, "url": v.URL, "status": v.Status, "headers": v.Headers, "bodyBase64": base64.StdEncoding.EncodeToString(v.Body)}
+	return map[string]any{"id": v.ID, "url": v.URL, "status": v.Status, "headers": engineHeaderEntriesToWire(v.HeaderEntries, v.Headers), "bodyBase64": base64.StdEncoding.EncodeToString(v.Body)}
+}
+func engineHeaderEntriesToWire(entries []engine.HeaderEntry, fallback map[string]string) []protocol.WireHeaderEntry {
+	if len(entries) == 0 {
+		return headerEntriesToWire(fallback)
+	}
+	result := make([]protocol.WireHeaderEntry, len(entries))
+	for index, entry := range entries {
+		result[index] = protocol.WireHeaderEntry{Name: entry.Name, Value: entry.Value}
+	}
+	return result
+}
+func headerEntriesToWire(headers map[string]string) []protocol.WireHeaderEntry {
+	names := make([]string, 0, len(headers))
+	for name := range headers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	result := make([]protocol.WireHeaderEntry, 0, len(headers))
+	for _, name := range names {
+		result = append(result, protocol.WireHeaderEntry{Name: name, Value: headers[name]})
+	}
+	return result
 }
 func networkStateFromWire(v protocol.WireNetworkState) engine.NetworkState {
 	return engine.NetworkState{Offline: v.Offline, Latency: time.Duration(v.LatencyMS) * time.Millisecond, DownloadThroughput: v.DownloadThroughput, UploadThroughput: v.UploadThroughput, ConnectionType: engine.NetworkConnectionType(v.ConnectionType)}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +27,21 @@ func TestBilobad(t *testing.T) {
 }
 
 var _ = Describe("bilobad", func() {
+	Describe("eventful binary wire bounds", func() {
+		It("accepts the decoded boundary and rejects one byte beyond it", func() {
+			atLimit := base64.StdEncoding.EncodeToString(make([]byte, protocol.MaxDecodedBodySize))
+			body, err := decodeBoundedBody(atLimit)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(body).To(HaveLen(int(protocol.MaxDecodedBodySize)))
+			overLimit := base64.StdEncoding.EncodeToString(make([]byte, protocol.MaxDecodedBodySize+1))
+			_, err = decodeBoundedBody(overLimit)
+			Expect(err).To(MatchError(ContainSubstring("exceeds limit")))
+		})
+		It("rejects malformed base64", func() {
+			_, err := decodeBoundedBody("%%%")
+			Expect(err).To(MatchError(ContainSubstring("valid base64")))
+		})
+	})
 	It("parses daemon flags", func() {
 		parsed, err := parseConfig([]string{
 			"-chrome-path", "/opt/chrome",

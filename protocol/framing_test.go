@@ -2,6 +2,7 @@ package protocol_test
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/binary"
 	"io"
 	"strings"
@@ -50,6 +51,19 @@ var _ = Describe("length-prefixed JSON framing", func() {
 		var decoded message
 		err := protocol.NewFramedReader(bytes.NewReader(header[:])).Read(&decoded)
 		Expect(err).To(MatchError(ContainSubstring("maximum")))
+	})
+
+	It("carries the documented sixteen MiB binary boundary after base64 encoding", func() {
+		body := base64.StdEncoding.EncodeToString(make([]byte, 16<<20))
+		var wire bytes.Buffer
+		Expect(protocol.NewFramedWriter(&wire).Write(protocol.EventFrame{Event: "responseIntercepted", Payload: map[string]any{"bodyBase64": body}})).To(Succeed())
+	})
+
+	It("still rejects base64 payloads beyond the expanded wire boundary", func() {
+		body := base64.StdEncoding.EncodeToString(make([]byte, 25<<20))
+		var wire bytes.Buffer
+		Expect(protocol.NewFramedWriter(&wire).Write(protocol.EventFrame{Event: "responseIntercepted", Payload: map[string]any{"bodyBase64": body}})).To(MatchError(ContainSubstring("maximum")))
+		Expect(wire.Len()).To(BeZero())
 	})
 
 	It("reports a truncated payload", func() {

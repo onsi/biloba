@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 )
 
+const MaxDecodedBodySize int64 = 16 << 20
+
 type EventfulOperationKind string
 
 const (
@@ -36,23 +38,23 @@ const (
 )
 
 type EventfulOperation struct {
-	Kind                                                EventfulOperationKind
-	ID, ResponseID, DialogType                          string
-	Message, URL, Method, ResourceType, Filename, State *Expectation
-	Accept                                              bool
-	PromptText                                          *string
-	Limit                                               int
-	MaxBodyBytes                                        int64
-	Callsite                                            string
-	Action                                              string
-	Override                                            WireNetworkOverride
-	CallbackID                                          string
-	TransformTimeoutMS                                  int64
-	IdleMS                                              int64
-	Network                                             WireNetworkState
-	CacheEnabled                                        bool
-	Poll                                                PollPolicy
-	InvokeCallback                                      func(context.Context, CallbackInvocation) (WireNetworkOverride, error)
+	Kind                                                             EventfulOperationKind
+	ID, ResponseID, DialogType                                       string
+	Message, URL, Method, ResourceType, Filename, State, ContentText *Expectation
+	ContentBase64                                                    *string
+	Accept                                                           bool
+	PromptText                                                       *string
+	Limit                                                            int
+	MaxBodyBytes                                                     int64
+	Callsite                                                         string
+	Action                                                           string
+	Override                                                         WireNetworkOverride
+	CallbackID                                                       string
+	TransformTimeoutMS                                               int64
+	Network                                                          WireNetworkState
+	CacheEnabled                                                     bool
+	Poll                                                             PollPolicy
+	InvokeCallback                                                   func(context.Context, CallbackInvocation) (WireNetworkOverride, error)
 }
 
 type EventfulSession interface {
@@ -71,6 +73,8 @@ type WireEventfulOperation struct {
 	ResourceType       *WireExpectation     `json:"resourceType,omitempty"`
 	Filename           *WireExpectation     `json:"filename,omitempty"`
 	State              *WireExpectation     `json:"state,omitempty"`
+	ContentText        *WireExpectation     `json:"contentText,omitempty"`
+	ContentBase64      *string              `json:"contentBase64,omitempty"`
 	Accept             bool                 `json:"accept,omitempty"`
 	PromptText         *string              `json:"promptText,omitempty"`
 	Limit              int                  `json:"limit,omitempty"`
@@ -80,7 +84,6 @@ type WireEventfulOperation struct {
 	Override           *WireNetworkOverride `json:"override,omitempty"`
 	CallbackID         string               `json:"callbackId,omitempty"`
 	TransformTimeoutMS int64                `json:"transformTimeoutMs,omitempty"`
-	IdleMS             int64                `json:"idleMs,omitempty"`
 	Network            *WireNetworkState    `json:"network,omitempty"`
 	CacheEnabled       *bool                `json:"cacheEnabled,omitempty"`
 }
@@ -89,8 +92,13 @@ type WireNetworkOverride struct {
 	URL        *string           `json:"url,omitempty"`
 	Method     *string           `json:"method,omitempty"`
 	Status     *int              `json:"status,omitempty"`
-	Headers    map[string]string `json:"headers,omitempty"`
+	Headers    []WireHeaderEntry `json:"headers,omitempty"`
 	BodyBase64 *string           `json:"bodyBase64,omitempty"`
+}
+
+type WireHeaderEntry struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 type WireNetworkState struct {

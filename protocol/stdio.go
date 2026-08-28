@@ -21,7 +21,6 @@ func ServeStdio(ctx context.Context, server *Server, input io.Reader, output io.
 	server.SetCallbackInvoker(callbacks)
 	ctx, cancelAll := context.WithCancel(ctx)
 	defer cancelAll()
-	defer callbacks.close()
 	type readResult struct {
 		request Request
 		err     error
@@ -51,6 +50,7 @@ func ServeStdio(ctx context.Context, server *Server, input io.Reader, output io.
 	active := map[uint64]context.CancelFunc{}
 	var requests sync.WaitGroup
 	defer func() {
+		callbacks.close()
 		activeMu.Lock()
 		for _, cancel := range active {
 			cancel()

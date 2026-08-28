@@ -5,8 +5,10 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"sort"
 	"strings"
 	"time"
 
@@ -43,6 +45,62 @@ var _ = Describe("serving requests over framed stdio", func() {
 		Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
 		Expect(err.Message).To(ContainSubstring(`unsupported method "teleport"`))
 		stillServing()
+	})
+
+	It("correlates concurrent callback results out of order and ignores late results", func() {
+		clientConnection, serverConnection := net.Pipe()
+		server := protocol.NewServer(&fakeBackend{custom: &callbackSession{}})
+		served := make(chan error, 1)
+		go func() {
+			served <- protocol.ServeStdio(context.Background(), server, serverConnection, serverConnection)
+		}()
+		writer := protocol.NewFramedWriter(clientConnection)
+		reader := protocol.NewFramedReader(clientConnection)
+		Expect(writer.Write(protocol.Request{ID: 1, Method: "openSession"})).To(Succeed())
+		var opened protocol.Response
+		Expect(reader.Read(&opened)).To(Succeed())
+		params, err := json.Marshal(protocol.EventfulRequest{SessionID: opened.Result.(map[string]any)["sessionId"].(string), Operation: &protocol.WireEventfulOperation{Kind: "REGISTER_NETWORK_HANDLER", Action: "callback", CallbackID: "route-1", URL: &protocol.WireExpectation{Kind: "ANYTHING"}}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(writer.Write(protocol.Request{ID: 2, Method: "eventful", Params: params})).To(Succeed())
+		var first, second protocol.EventFrame
+		Expect(reader.Read(&first)).To(Succeed())
+		Expect(reader.Read(&second)).To(Succeed())
+		result, err := json.Marshal(protocol.WireNetworkOverride{Status: ptr(202)})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(writer.Write(protocol.Request{ID: 0, Method: "callbackResult", Params: mustJSON(protocol.CallbackResultRequest{InvocationID: second.InvocationID, Result: result})})).To(Succeed())
+		Expect(writer.Write(protocol.Request{ID: 0, Method: "callbackResult", Params: mustJSON(protocol.CallbackResultRequest{InvocationID: first.InvocationID, Error: "callback exploded"})})).To(Succeed())
+		var response protocol.Response
+		Expect(reader.Read(&response)).To(Succeed())
+		Expect(response.Error).To(BeNil())
+		Expect(response.Result).To(ConsistOf("callback exploded", "202"))
+		Expect(writer.Write(protocol.Request{ID: 0, Method: "callbackResult", Params: mustJSON(protocol.CallbackResultRequest{InvocationID: first.InvocationID, Result: result})})).To(Succeed())
+		Expect(writer.Write(protocol.Request{ID: 3, Method: "handshake", Params: mustJSON(protocol.HandshakeRequest{ProtocolVersion: protocol.Version})})).To(Succeed())
+		Expect(reader.Read(&response)).To(Succeed())
+		Expect(response.ID).To(Equal(uint64(3)))
+		Expect(clientConnection.Close()).To(Succeed())
+		Eventually(served).Should(Receive())
+	})
+
+	It("releases a pending callback when the stdio peer disconnects", func() {
+		clientConnection, serverConnection := net.Pipe()
+		callbackError := make(chan error, 1)
+		server := protocol.NewServer(&fakeBackend{custom: &disconnectCallbackSession{callbackError: callbackError}})
+		served := make(chan error, 1)
+		go func() {
+			served <- protocol.ServeStdio(context.Background(), server, serverConnection, serverConnection)
+		}()
+		writer := protocol.NewFramedWriter(clientConnection)
+		reader := protocol.NewFramedReader(clientConnection)
+		Expect(writer.Write(protocol.Request{ID: 1, Method: "openSession"})).To(Succeed())
+		var opened protocol.Response
+		Expect(reader.Read(&opened)).To(Succeed())
+		params := mustJSON(protocol.EventfulRequest{SessionID: opened.Result.(map[string]any)["sessionId"].(string), Operation: &protocol.WireEventfulOperation{Kind: "REGISTER_NETWORK_HANDLER", Action: "callback", CallbackID: "route-disconnect", URL: &protocol.WireExpectation{Kind: "ANYTHING"}}})
+		Expect(writer.Write(protocol.Request{ID: 2, Method: "eventful", Params: params})).To(Succeed())
+		var invocation protocol.EventFrame
+		Expect(reader.Read(&invocation)).To(Succeed())
+		Expect(clientConnection.Close()).To(Succeed())
+		Eventually(callbackError).Should(Receive(MatchError(ContainSubstring("disconnected"))))
+		Eventually(served).Should(Receive())
 	})
 
 	It("rejects params that are not the shape the method expects", func() {
@@ -205,6 +263,43 @@ var _ = Describe("serving requests over framed stdio", func() {
 type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("output is closed") }
+
+type callbackSession struct{ fakeSession }
+
+func (s *callbackSession) ExecuteEventful(ctx context.Context, operation protocol.EventfulOperation) (any, error) {
+	results := make(chan string, 2)
+	for index := range 2 {
+		go func() {
+			value, err := operation.InvokeCallback(ctx, protocol.CallbackInvocation{CallbackID: operation.CallbackID, Payload: map[string]any{"index": index}})
+			if err != nil {
+				results <- err.Error()
+				return
+			}
+			results <- fmt.Sprint(*value.Status)
+		}()
+	}
+	values := []string{<-results, <-results}
+	sort.Strings(values)
+	return values, nil
+}
+
+type disconnectCallbackSession struct {
+	fakeSession
+	callbackError chan error
+}
+
+func (s *disconnectCallbackSession) ExecuteEventful(ctx context.Context, operation protocol.EventfulOperation) (any, error) {
+	_, err := operation.InvokeCallback(ctx, protocol.CallbackInvocation{CallbackID: operation.CallbackID})
+	s.callbackError <- err
+	return nil, err
+}
+
+func ptr[T any](value T) *T { return &value }
+func mustJSON(value any) json.RawMessage {
+	encoded, err := json.Marshal(value)
+	Expect(err).NotTo(HaveOccurred())
+	return encoded
+}
 
 // beginRaw is begin for a payload that is deliberately not the shape the method expects.
 func (c *testClient) beginRaw(method string, params json.RawMessage, timeoutMS int64) (uint64, <-chan protocol.Response) {

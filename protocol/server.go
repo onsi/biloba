@@ -1094,6 +1094,9 @@ func (s *Server) Dispatch(ctx context.Context, method string, params json.RawMes
 		if executeErr != nil {
 			return nil, normalizeError(executeErr)
 		}
+		if result == nil {
+			result = struct{}{}
+		}
 		return result, nil
 	case "lifecycle":
 		var request LifecycleRequest
@@ -1611,9 +1614,12 @@ func eventfulOperationFromWire(wire *WireEventfulOperation, pollWire PollOptions
 	operation := EventfulOperation{Kind: kind, ID: wire.ID, ResponseID: wire.ResponseID, DialogType: wire.DialogType,
 		Accept: wire.Accept, PromptText: wire.PromptText, Limit: wire.Limit, MaxBodyBytes: wire.MaxBodyBytes,
 		Callsite: wire.Callsite, Action: wire.Action, CallbackID: wire.CallbackID, TransformTimeoutMS: wire.TransformTimeoutMS,
-		IdleMS: wire.IdleMS, CacheEnabled: wire.CacheEnabled != nil && *wire.CacheEnabled, Poll: poll}
+		CacheEnabled: wire.CacheEnabled != nil && *wire.CacheEnabled, Poll: poll, ContentBase64: wire.ContentBase64}
+	if operation.MaxBodyBytes < 0 || operation.MaxBodyBytes > MaxDecodedBodySize {
+		return EventfulOperation{}, NewError(CodeInvalidArgument, fmt.Sprintf("maxBodyBytes must be between 0 and %d", MaxDecodedBodySize))
+	}
 	for source, destination := range map[*WireExpectation]**Expectation{wire.Message: &operation.Message, wire.URL: &operation.URL,
-		wire.Method: &operation.Method, wire.ResourceType: &operation.ResourceType, wire.Filename: &operation.Filename, wire.State: &operation.State} {
+		wire.Method: &operation.Method, wire.ResourceType: &operation.ResourceType, wire.Filename: &operation.Filename, wire.State: &operation.State, wire.ContentText: &operation.ContentText} {
 		if source == nil {
 			continue
 		}
