@@ -53,6 +53,19 @@ var _ = Describe("driver protocol", func() {
 		Expect(backend.session.closed).To(Equal(1))
 	})
 
+	It("keeps a session registered when close is rejected", func() {
+		backend := &fakeBackend{session: &fakeSession{closeErr: errors.New("active downloads")}}
+		client, cleanup := startTestServer(backend)
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+
+		Expect(client.call("closeSession", protocol.SessionRequest{SessionID: opened.SessionID}, nil)).To(MatchError(ContainSubstring("active downloads")))
+		Expect(client.call("prepareSession", protocol.SessionRequest{SessionID: opened.SessionID}, nil)).To(Succeed())
+		backend.session.closeErr = nil
+		Expect(client.call("closeSession", protocol.SessionRequest{SessionID: opened.SessionID}, nil)).To(Succeed())
+	})
+
 	It("serves typed lifecycle state operations", func() {
 		client, cleanup := startTestServer(&fakeBackend{session: &fakeSession{result: protocol.Result{Matched: true, Attempts: 1, ObservedJSON: `[]`}}})
 		DeferCleanup(cleanup)
@@ -708,6 +721,7 @@ type fakeSession struct {
 	startOnce, cancelOnce sync.Once
 	result                protocol.Result
 	executeErr            error
+	closeErr              error
 }
 
 func (s *fakeSession) Prepare(context.Context) error { s.prepared++; return nil }
@@ -726,4 +740,4 @@ func (s *fakeSession) Execute(ctx context.Context, operation protocol.Operation)
 	}
 	return protocol.Result{Matched: true, Attempts: 1}, nil
 }
-func (s *fakeSession) Close() error { s.closed++; return nil }
+func (s *fakeSession) Close() error { s.closed++; return s.closeErr }

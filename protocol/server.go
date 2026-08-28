@@ -1487,18 +1487,26 @@ func (s *Server) closeSession(id string) (any, *ProtocolError) {
 	}
 	s.mu.Lock()
 	entry, exists := s.sessions[id]
-	if exists {
-		delete(s.sessions, id)
-	}
 	s.mu.Unlock()
 	if !exists {
 		return nil, NewError(CodeTargetNotFound, "session not found")
 	}
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
+	s.mu.Lock()
+	current, stillRegistered := s.sessions[id]
+	s.mu.Unlock()
+	if !stillRegistered || current != entry {
+		return nil, NewError(CodeTargetNotFound, "session not found")
+	}
 	if err := entry.session.Close(); err != nil {
 		return nil, normalizeError(err)
 	}
+	s.mu.Lock()
+	if s.sessions[id] == entry {
+		delete(s.sessions, id)
+	}
+	s.mu.Unlock()
 	invalidated := []string{}
 	if discoverable, ok := entry.session.(DiscoverableSession); ok && discoverable.Metadata().OwnsContext {
 		invalidated = s.invalidateContext(entry.session, id, false)
