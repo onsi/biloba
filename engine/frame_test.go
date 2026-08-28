@@ -71,5 +71,8 @@ var _ = Describe("cross-origin frame targets", func() {
 		})
 		Expect(rootFrames).To(HaveLen(1), "a sibling tab's frame must not leak into this session")
 		Expect(rootFrames[0].URL()).To(HaveSuffix("/destination"))
+		Expect(root.Prepare(ctx)).To(Succeed())
+		_, err = rootFrames[0].Text(ctx, engine.TestID("destination"))
+		Expect(err).To(MatchError(ContainSubstring("session is closed")))
 	})
 })

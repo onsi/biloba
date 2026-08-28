@@ -30,9 +30,15 @@ func (f *Frame) URL() string { return f.url }
 func (f *Frame) Close() error {
 	f.closeOnce.Do(func() {
 		f.Session.mu.Lock()
-		f.Session.closed = true
-		f.Session.cancel()
+		if !f.Session.closed {
+			f.Session.closed = true
+			f.Session.cancel()
+		}
+		browser := f.Session.browser
 		f.Session.mu.Unlock()
+		if browser != nil {
+			browser.removeSession(f.Session)
+		}
 	})
 	return nil
 }
@@ -156,6 +162,9 @@ func (s *Session) attachFrame(ctx context.Context, info *target.Info) (*Frame, e
 	if err := ctx.Err(); err != nil {
 		return nil, contextError("attach frame", err)
 	}
+	if existing := s.browser.frameSession(info.TargetID); existing != nil {
+		return &Frame{Session: existing, url: info.URL}, nil
+	}
 	frameCtx, cancelFrame := chromedp.NewContext(s.browser.ctx, chromedp.WithTargetID(info.TargetID))
 	var ready any
 	if err := chromedp.Run(frameCtx, chromedp.Evaluate("1", &ready)); err != nil {
@@ -167,10 +176,47 @@ func (s *Session) attachFrame(ctx context.Context, info *target.Info) (*Frame, e
 	frameSession := &Session{
 		browser: s.browser, ctx: frameCtx, cancel: cancelFrame,
 		browserContextID: s.browserContextID, targetID: info.TargetID,
-		root: s.contextRoot(), artifactDir: s.artifactDir,
+		root: s.contextRoot(), artifactDir: s.artifactDir, frameTarget: true,
+	}
+	registered, err := s.browser.registerFrameSession(frameSession)
+	if err != nil {
+		frameSession.closed = true
+		cancelFrame()
+		return nil, err
+	}
+	if registered != frameSession {
+		frameSession.closed = true
+		cancelFrame()
+		return &Frame{Session: registered, url: info.URL}, nil
 	}
 	s.browser.listenToSession(frameSession)
 	return &Frame{Session: frameSession, url: info.URL}, nil
+}
+
+func (b *Browser) frameSession(targetID target.ID) *Session {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for session := range b.sessions {
+		if session.targetID == targetID {
+			return session
+		}
+	}
+	return nil
+}
+
+func (b *Browser) registerFrameSession(frame *Session) (*Session, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return nil, &Error{Code: CodeSessionClosed, Operation: "attach frame", Message: "browser is closed"}
+	}
+	for session := range b.sessions {
+		if session.targetID == frame.targetID {
+			return session, nil
+		}
+	}
+	b.sessions[frame] = struct{}{}
+	return frame, nil
 }
 
 func protectFrameTarget(frameCtx context.Context) {

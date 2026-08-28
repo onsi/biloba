@@ -51,6 +51,7 @@ type Session struct {
 	targetID         target.ID
 	openerID         target.ID
 	ownsContext      bool
+	frameTarget      bool
 	artifactDir      string
 	mu               sync.Mutex
 	requestMu        sync.Mutex
@@ -145,7 +146,7 @@ func (s *Session) Close() error {
 			return target.DisposeBrowserContext(s.browserContextID).Do(browserCtx)
 		})
 		cancel()
-	} else if s.browser != nil {
+	} else if s.browser != nil && !s.frameTarget {
 		ctx, cancel := context.WithTimeout(s.browser.ctx, 5*time.Second)
 		disposeErr = s.withBrowserExecutor(ctx, func(browserCtx context.Context) error {
 			return target.CloseTarget(s.targetID).Do(browserCtx)
