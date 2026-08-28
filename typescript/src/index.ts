@@ -260,50 +260,76 @@ export interface Cookie {
   secure?: boolean | undefined;
   httpOnly?: boolean | undefined;
   sameSite?: string | undefined;
-	readonly session?: boolean | undefined;
+  readonly session?: boolean | undefined;
 }
 
 export interface CookieQuery {
-	name?: ExpectedValue | undefined;
-	value?: ExpectedValue | undefined;
-	domain?: ExpectedValue | undefined;
-	path?: ExpectedValue | undefined;
-	sameSite?: ExpectedValue | undefined;
-	secure?: boolean | undefined;
-	httpOnly?: boolean | undefined;
+  name?: ExpectedValue | undefined;
+  value?: ExpectedValue | undefined;
+  domain?: ExpectedValue | undefined;
+  path?: ExpectedValue | undefined;
+  sameSite?: ExpectedValue | undefined;
+  secure?: boolean | undefined;
+  httpOnly?: boolean | undefined;
 }
 
 export type StorageArea = "localStorage" | "sessionStorage";
 export type StorageItem<T = unknown> = {readonly found: true; readonly value: T} | {readonly found: false};
 export interface BrowserStorage {
-	set(key: string, value: SerializableValue, options?: CommandOptions): Promise<void>;
-	get<T = unknown>(key: string, options?: CommandOptions): Promise<StorageItem<T>>;
-	getAll(options?: CommandOptions): Promise<Readonly<Record<string, unknown>>>;
-	remove(key: string, options?: CommandOptions): Promise<void>;
-	clear(options?: CommandOptions): Promise<void>;
-	length(options?: CommandOptions): Promise<number>;
-	expectItem<T = unknown>(key: string, expected?: ExpectedValue, options?: PollOptions): Promise<T>;
-	expectLength(expected: number | Expectation, options?: PollOptions): Promise<AssertionResult>;
+  set(key: string, value: SerializableValue, options?: CommandOptions): Promise<void>;
+  get<T = unknown>(key: string, options?: CommandOptions): Promise<StorageItem<T>>;
+  getAll(options?: CommandOptions): Promise<Readonly<Record<string, unknown>>>;
+  remove(key: string, options?: CommandOptions): Promise<void>;
+  clear(options?: CommandOptions): Promise<void>;
+  length(options?: CommandOptions): Promise<number>;
+  expectItem<T = unknown>(key: string, expected?: ExpectedValue, options?: PollOptions): Promise<T>;
+  expectLength(expected: number | Expectation, options?: PollOptions): Promise<AssertionResult>;
 }
 
 export interface TabQuery {
-	title?: ExpectedValue | undefined;
-	url?: ExpectedValue | undefined;
-	has?: Locator | string | undefined;
+  title?: ExpectedValue | undefined;
+  url?: ExpectedValue | undefined;
+  has?: Locator | string | undefined;
 }
 export interface WindowSize {readonly width: number; readonly height: number}
 export interface ConsoleMessage {readonly type: string; readonly text: string; readonly args: readonly unknown[]; readonly timestamp: string}
+export type DialogType = "alert" | "beforeunload" | "confirm" | "prompt";
+export interface Dialog {readonly type: DialogType; readonly message: string; readonly defaultPrompt: string; readonly accepted: boolean; readonly promptText: string; readonly autoHandled: boolean}
+export interface DialogQuery {readonly type?: DialogType | undefined; readonly message?: ExpectedValue | undefined}
+export interface DialogHandlerOptions {readonly message?: ExpectedValue | undefined; readonly accept?: boolean | undefined; readonly promptText?: string | undefined}
+export interface DialogHandler {readonly id: string; remove(options?: CommandOptions): Promise<void>}
+export interface Warning {readonly code: "dialog_auto_handled"; readonly message: string; readonly dialog: Dialog}
+export type WarningSink = (warning: Warning) => void;
+export type DownloadState = "active" | "complete" | "cancelled";
+export interface Download {readonly id: string; readonly url: string; readonly filename: string; readonly state: DownloadState; readonly receivedBytes: number; readonly totalBytes: number; readonly startedAt: number; readonly completedAt?: number; content(options?: CommandOptions & {maxBytes?: number | undefined}): Promise<Uint8Array>; cancel(options?: CommandOptions): Promise<void>}
+export interface DownloadQuery {readonly state?: DownloadState | undefined; readonly filename?: ExpectedValue | undefined; readonly url?: ExpectedValue | undefined; readonly content?: Uint8Array | undefined; readonly contentText?: ExpectedValue | undefined}
+export interface RequestQuery {readonly url?: ExpectedValue | undefined; readonly method?: ExpectedValue | undefined; readonly resourceType?: ExpectedValue | undefined}
+export interface HeaderEntry {readonly name: string; readonly value: string}
+export interface NetworkRequest {readonly url: string; readonly method: string; readonly headers: readonly HeaderEntry[]; readonly headerMap: Readonly<Record<string, string>>; readonly resourceType: string}
+export interface ResponseQuery {readonly url?: ExpectedValue | undefined; readonly status?: ExpectedValue | undefined}
+export interface NetworkResponse {readonly url: string; readonly status: number; readonly headers: readonly HeaderEntry[]; readonly headerMap: Readonly<Record<string, string>>; readonly resourceType: string}
+export interface RequestOverride {readonly url?: string | undefined; readonly method?: string | undefined; readonly headers?: readonly HeaderEntry[] | undefined; readonly body?: Uint8Array | undefined}
+export interface ResponseOverride {readonly status?: number | undefined; readonly headers?: readonly HeaderEntry[] | undefined; readonly body?: Uint8Array | undefined}
+export type FulfillResponse = ResponseOverride;
+export interface InterceptedResponse {readonly url: string; readonly status: number; readonly headers: readonly HeaderEntry[]; readonly headerMap: Readonly<Record<string, string>>; readonly body: Uint8Array}
+export interface NetworkHandlerOptions {readonly maxBodyBytes?: number | undefined; readonly timeoutMs?: number | undefined}
+export interface NetworkHandlerStats {readonly id: string; readonly callsite: string; readonly count: number; readonly shadowed: number; readonly lastError: string}
+export interface NetworkOwnerProvenance {readonly kind: "handler" | "hold"; readonly id: string; readonly callsite: string; readonly count: number; readonly shadowed: number}
+export interface NetworkShadowDiagnostic {readonly url: string; readonly stage: "request" | "response"; readonly winner: NetworkOwnerProvenance; readonly shadowed: readonly NetworkOwnerProvenance[]}
+export interface NetworkHandler {readonly id: string; count(options?: CommandOptions): Promise<number>; stats(options?: CommandOptions): Promise<NetworkHandlerStats>; remove(options?: CommandOptions): Promise<void>}
+export type ConnectionType = "none" | "cellular2g" | "cellular3g" | "cellular4g" | "bluetooth" | "ethernet" | "wifi" | "wimax" | "other";
+export interface NetworkState {readonly offline?: boolean | undefined; readonly latencyMs?: number | undefined; readonly downloadThroughput?: number | undefined; readonly uploadThroughput?: number | undefined; readonly connectionType?: ConnectionType | undefined}
 export interface DeviceMetrics {readonly width: number; readonly height: number; readonly deviceScaleFactor?: number | undefined; readonly mobile?: boolean | undefined}
 export interface Geolocation {readonly latitude: number; readonly longitude: number; readonly accuracy?: number | undefined}
 export type Permission =
-	| "ar" | "audioCapture" | "automaticFullscreen" | "backgroundFetch" | "backgroundSync"
-	| "cameraPanTiltZoom" | "capturedSurfaceControl" | "clipboardReadWrite" | "clipboardSanitizedWrite"
-	| "displayCapture" | "durableStorage" | "geolocation" | "handTracking" | "idleDetection"
-	| "keyboardLock" | "localFonts" | "localNetwork" | "localNetworkAccess" | "loopbackNetwork"
-	| "midi" | "midiSysex" | "nfc" | "notifications" | "paymentHandler" | "periodicBackgroundSync"
-	| "pointerLock" | "protectedMediaIdentifier" | "sensors" | "smartCard" | "speakerSelection"
-	| "storageAccess" | "topLevelStorageAccess" | "videoCapture" | "vr" | "wakeLockScreen"
-	| "wakeLockSystem" | "webAppInstallation" | "webPrinting" | "windowManagement";
+  | "ar" | "audioCapture" | "automaticFullscreen" | "backgroundFetch" | "backgroundSync"
+  | "cameraPanTiltZoom" | "capturedSurfaceControl" | "clipboardReadWrite" | "clipboardSanitizedWrite"
+  | "displayCapture" | "durableStorage" | "geolocation" | "handTracking" | "idleDetection"
+  | "keyboardLock" | "localFonts" | "localNetwork" | "localNetworkAccess" | "loopbackNetwork"
+  | "midi" | "midiSysex" | "nfc" | "notifications" | "paymentHandler" | "periodicBackgroundSync"
+  | "pointerLock" | "protectedMediaIdentifier" | "sensors" | "smartCard" | "speakerSelection"
+  | "storageAccess" | "topLevelStorageAccess" | "videoCapture" | "vr" | "wakeLockScreen"
+  | "wakeLockSystem" | "webAppInstallation" | "webPrinting" | "windowManagement";
 export type PermissionState = "granted" | "denied" | "prompt";
 export interface MediaEmulation {readonly type?: "screen" | "print" | "" | undefined; readonly colorScheme?: "light" | "dark" | "no-preference" | undefined; readonly reducedMotion?: "reduce" | "no-preference" | undefined}
 
@@ -522,55 +548,55 @@ export interface Locator {
 
 export interface Session {
   readonly id: string;
-	readonly contextId: string;
-	readonly targetId: string;
-	readonly openerId?: string;
-	readonly ownsContext: boolean;
-	readonly isFrame: boolean;
-	readonly frameUrl?: string;
-	newTab(options?: WaitingCommandOptions): Promise<Session>;
-	tabs(options?: CommandOptions): Promise<readonly Session[]>;
-	spawnedTabs(options?: CommandOptions): Promise<readonly Session[]>;
-	findTab(query: TabQuery, options?: CommandOptions): Promise<Session | undefined>;
-	waitForTab(query: TabQuery, options?: PollOptions): Promise<Session>;
-	frames(options?: CommandOptions): Promise<readonly Session[]>;
-	waitForFrame(query: TabQuery, options?: PollOptions): Promise<Session>;
+  readonly contextId: string;
+  readonly targetId: string;
+  readonly openerId?: string;
+  readonly ownsContext: boolean;
+  readonly isFrame: boolean;
+  readonly frameUrl?: string;
+  newTab(options?: WaitingCommandOptions): Promise<Session>;
+  tabs(options?: CommandOptions): Promise<readonly Session[]>;
+  spawnedTabs(options?: CommandOptions): Promise<readonly Session[]>;
+  findTab(query: TabQuery, options?: CommandOptions): Promise<Session | undefined>;
+  waitForTab(query: TabQuery, options?: PollOptions): Promise<Session>;
+  frames(options?: CommandOptions): Promise<readonly Session[]>;
+  waitForFrame(query: TabQuery, options?: PollOptions): Promise<Session>;
   addInitScript(script: string, options?: CommandOptions): Promise<void>;
   activate(options?: CommandOptions): Promise<void>;
   prepare(options?: WaitingCommandOptions): Promise<{readonly invalidatedSessionIds: readonly string[]}>;
   navigate(url: string, options?: WaitingCommandOptions): Promise<void>;
   navigateWithStatus(url: string, expectedStatus: number, options?: WaitingCommandOptions): Promise<void>;
   setCookies(cookies: readonly Cookie[], options?: CommandOptions): Promise<void>;
-	getCookies(options?: CommandOptions): Promise<readonly Cookie[]>;
-	clearCookies(options?: CommandOptions): Promise<void>;
-	findCookie(query: CookieQuery, options?: CommandOptions): Promise<Cookie | undefined>;
-	expectCookie(query: CookieQuery, options?: PollOptions): Promise<Cookie>;
-	expectCookieCount(expected: number | Expectation, query?: CookieQuery, options?: PollOptions): Promise<AssertionResult>;
-	localStorage(): BrowserStorage;
-	sessionStorage(): BrowserStorage;
+  getCookies(options?: CommandOptions): Promise<readonly Cookie[]>;
+  clearCookies(options?: CommandOptions): Promise<void>;
+  findCookie(query: CookieQuery, options?: CommandOptions): Promise<Cookie | undefined>;
+  expectCookie(query: CookieQuery, options?: PollOptions): Promise<Cookie>;
+  expectCookieCount(expected: number | Expectation, query?: CookieQuery, options?: PollOptions): Promise<AssertionResult>;
+  localStorage(): BrowserStorage;
+  sessionStorage(): BrowserStorage;
   evaluate<T = unknown>(expression: string, args?: readonly SerializableValue[], options?: CommandOptions): Promise<T>;
   evaluateAsync<T = unknown>(expression: string, args?: readonly SerializableValue[], options?: WaitingCommandOptions): Promise<T>;
-	waitForDefined<T = unknown>(expression: string, options?: PollOptions): Promise<T>;
+  waitForDefined<T = unknown>(expression: string, options?: PollOptions): Promise<T>;
   setWindowSize(width: number, height: number, options?: CommandOptions): Promise<void>;
-	windowSize(options?: CommandOptions): Promise<WindowSize>;
-	title(options?: CommandOptions): Promise<string>;
-	expectTitle(expected: ExpectedValue, options?: PollOptions): Promise<AssertionResult>;
-	outline(options?: CommandOptions): Promise<string>;
-	accessibilityOutline(options?: CommandOptions): Promise<string>;
-	consoleMessages(options?: CommandOptions): Promise<readonly ConsoleMessage[]>;
-	expectConsoleMessage(expected: ExpectedValue, options?: PollOptions & {type?: string | undefined}): Promise<ConsoleMessage>;
-	setDeviceMetrics(metrics: DeviceMetrics, options?: CommandOptions): Promise<void>;
-	clearDeviceMetrics(options?: CommandOptions): Promise<void>;
-	setGeolocation(location: Geolocation, options?: CommandOptions): Promise<void>;
-	clearGeolocation(options?: CommandOptions): Promise<void>;
-	setPermissions(origin: string, permissions: Readonly<Partial<Record<Permission, PermissionState>>>, options?: CommandOptions): Promise<void>;
-	resetPermissions(options?: CommandOptions): Promise<void>;
-	setLocale(locale: string, options?: CommandOptions): Promise<void>;
-	clearLocale(options?: CommandOptions): Promise<void>;
-	setTimezone(timezone: string, options?: CommandOptions): Promise<void>;
-	clearTimezone(options?: CommandOptions): Promise<void>;
-	setMedia(media: MediaEmulation, options?: CommandOptions): Promise<void>;
-	clearMedia(options?: CommandOptions): Promise<void>;
+  windowSize(options?: CommandOptions): Promise<WindowSize>;
+  title(options?: CommandOptions): Promise<string>;
+  expectTitle(expected: ExpectedValue, options?: PollOptions): Promise<AssertionResult>;
+  outline(options?: CommandOptions): Promise<string>;
+  accessibilityOutline(options?: CommandOptions): Promise<string>;
+  consoleMessages(options?: CommandOptions): Promise<readonly ConsoleMessage[]>;
+  expectConsoleMessage(expected: ExpectedValue, options?: PollOptions & {type?: string | undefined}): Promise<ConsoleMessage>;
+  setDeviceMetrics(metrics: DeviceMetrics, options?: CommandOptions): Promise<void>;
+  clearDeviceMetrics(options?: CommandOptions): Promise<void>;
+  setGeolocation(location: Geolocation, options?: CommandOptions): Promise<void>;
+  clearGeolocation(options?: CommandOptions): Promise<void>;
+  setPermissions(origin: string, permissions: Readonly<Partial<Record<Permission, PermissionState>>>, options?: CommandOptions): Promise<void>;
+  resetPermissions(options?: CommandOptions): Promise<void>;
+  setLocale(locale: string, options?: CommandOptions): Promise<void>;
+  clearLocale(options?: CommandOptions): Promise<void>;
+  setTimezone(timezone: string, options?: CommandOptions): Promise<void>;
+  clearTimezone(options?: CommandOptions): Promise<void>;
+  setMedia(media: MediaEmulation, options?: CommandOptions): Promise<void>;
+  clearMedia(options?: CommandOptions): Promise<void>;
   sendKeys(keys: string, options?: WindowKeyboardOptions): Promise<void>;
   clearSelection(options?: CancellationOptions): Promise<void>;
   normalizeColor(color: string, options?: CancellationOptions): Promise<string>;
@@ -590,17 +616,48 @@ export interface Session {
   url(options?: CommandOptions): Promise<string>;
   expectEvaluation(expression: string, expected: ExpectedValue, options?: WaitOptions): Promise<AssertionResult>;
   expectRequest(expectedUrl: ExpectedValue, options?: WaitOptions & {method?: string | undefined}): Promise<AssertionResult>;
-  holdResponse(expectedUrl: ExpectedValue, options?: CommandOptions): Promise<ResponseHold>;
+  handleDialogs(type: DialogType, options?: DialogHandlerOptions): Promise<DialogHandler>;
+  dialogs(query?: DialogQuery, options?: CommandOptions): Promise<readonly Dialog[]>;
+  warnings(options?: CommandOptions): Promise<readonly Warning[]>;
+  downloads(query?: DownloadQuery, options?: CommandOptions): Promise<readonly Download[]>;
+  expectDownload(query?: DownloadQuery, options?: PollOptions): Promise<Download>;
+  requests(query?: RequestQuery, options?: CommandOptions): Promise<readonly NetworkRequest[]>;
+  waitForRequest(query: RequestQuery, options?: PollOptions): Promise<NetworkRequest>;
+  responses(query?: ResponseQuery, options?: CommandOptions): Promise<readonly NetworkResponse[]>;
+  expectNetworkIdle(options?: PollOptions): Promise<AssertionResult>;
+  stubRequest(query: ExpectedValue, response: FulfillResponse, options?: NetworkHandlerOptions): Promise<NetworkHandler>;
+  abortRequest(query: ExpectedValue, options?: NetworkHandlerOptions): Promise<NetworkHandler>;
+  modifyRequest(query: ExpectedValue, override: RequestOverride, options?: NetworkHandlerOptions): Promise<NetworkHandler>;
+  modifyResponse(query: ExpectedValue, override: ResponseOverride, options?: NetworkHandlerOptions): Promise<NetworkHandler>;
+  routeResponse(query: ExpectedValue, callback: (response: InterceptedResponse) => ResponseOverride | Promise<ResponseOverride>, options?: NetworkHandlerOptions): Promise<NetworkHandler>;
+  networkShadowDiagnostics(options?: CommandOptions): Promise<readonly NetworkShadowDiagnostic[]>;
+  holdResponse(expectedUrl: ExpectedValue, options?: CommandOptions & {limit?: number | undefined; maxBodyBytes?: number | undefined}): Promise<ResponseHold>;
+  setNetworkState(state: NetworkState, options?: CommandOptions): Promise<void>;
+  setOffline(offline?: boolean, options?: CommandOptions): Promise<void>;
+  resetNetworkState(options?: CommandOptions): Promise<void>;
+  networkState(options?: CommandOptions): Promise<NetworkState>;
+  setCacheEnabled(enabled: boolean, options?: CommandOptions): Promise<void>;
 }
 
 export interface HeldResponse {
+  readonly id: string;
   readonly url: string;
   readonly status: number;
+  readonly headers: readonly HeaderEntry[];
+  readonly headerMap: Readonly<Record<string, string>>;
+  readonly body: Uint8Array;
 }
+
+export interface ResponseHoldStats {readonly count: number; readonly held: number; readonly passedThrough: number; readonly holding: number; readonly lastError: string}
 
 export interface ResponseHold {
   await(options?: WaitingCommandOptions): Promise<HeldResponse>;
   release(options?: CommandOptions): Promise<void>;
+  release(response: HeldResponse | string, options?: CommandOptions): Promise<void>;
+  releaseResponse(responseId: string, options?: CommandOptions): Promise<void>;
+  releaseNext(options?: CommandOptions): Promise<void>;
+  stats(options?: CommandOptions): Promise<ResponseHoldStats>;
+  releaseAll(options?: CommandOptions): Promise<void>;
 }
 
 export interface Browser {
@@ -616,6 +673,7 @@ export interface ConnectOptions {
   chromeWsUrl?: string | undefined;
   artifactDir?: string | undefined;
   signal?: AbortSignal | undefined;
+  warningSink?: WarningSink | undefined;
 }
 
 export async function connect(options: ConnectOptions = {}): Promise<Browser> {

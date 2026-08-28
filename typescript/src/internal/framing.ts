@@ -1,6 +1,6 @@
 import {Transform, type TransformCallback} from "node:stream";
 
-export const MAX_FRAME_SIZE = 16 * 1024 * 1024;
+export const MAX_FRAME_SIZE = 32 * 1024 * 1024;
 
 export function encodeFrame(value: unknown): Buffer {
   const payload = Buffer.from(JSON.stringify(value), "utf8");

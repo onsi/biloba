@@ -2,14 +2,14 @@ import {PassThrough} from "node:stream";
 import {afterEach, beforeEach, describe, expect, it} from "vitest";
 
 import {
-	allOf,
-	contains,
-	empty,
-	endsWith,
+  allOf,
+  contains,
+  empty,
+  endsWith,
   BilobaError,
   Keys,
-	not,
-	numeric,
+  not,
+  numeric,
   type AssertionResult,
   type Browser,
   xpath,
@@ -17,7 +17,7 @@ import {
   xPredicate,
   type Cookie,
 } from "../src/index.js";
-import {connectWithTransport} from "../src/internal/client.js";
+import {connectWithTransport, decodeBinaryBody, encodeBinaryBody} from "../src/internal/client.js";
 import type {HandshakeResponse, OpenSessionResponse, OperationResult, Request} from "../src/generated/protocol.js";
 import {encodeFrame, FrameDecoder} from "../src/internal/framing.js";
 import {expectTimedOutAction, expectTimedOutAssertion} from "./support/assertions.js";
@@ -46,12 +46,25 @@ function operationResult(overrides: Partial<OperationResult> = {}): OperationRes
 }
 
 describe("Biloba TypeScript client", () => {
+  it("strictly decodes daemon binary bodies at the inclusive sixteen MiB boundary", () => {
+    const rawAtLimit = Buffer.alloc(16 * 1024 * 1024);
+    const atLimit = rawAtLimit.toString("base64");
+    expect(encodeBinaryBody(rawAtLimit)).toBe(atLimit);
+    expect(decodeBinaryBody(atLimit)).toHaveLength(16 * 1024 * 1024);
+    expect(() => decodeBinaryBody("%%%=")).toThrow(/malformed base64/);
+    const rawOverLimit = Buffer.alloc(16 * 1024 * 1024 + 1);
+    expect(() => encodeBinaryBody(rawOverLimit)).toThrow(/decoded limit/);
+    const overLimit = rawOverLimit.toString("base64");
+    expect(() => decodeBinaryBody(overLimit)).toThrow(/decoded limit/);
+  });
   let transport: StdioTransport;
   let toClient: PassThrough;
   let browser: Browser | undefined;
   let assertImplementation: Implementation;
   let clickImplementation: Implementation;
   let observeCancel: (() => void) | undefined;
+  let warningHistory: unknown[];
+  let closeSessionError: string | undefined;
   const requests: Array<{method: string; request: Record<string, unknown>}> = [];
   let openedSessions = 0;
 
@@ -70,6 +83,8 @@ describe("Biloba TypeScript client", () => {
     };
     clickImplementation = (_request, respond) => respond(operationResult());
     observeCancel = undefined;
+    warningHistory = [];
+    closeSessionError = undefined;
     const fromClient = new PassThrough();
     toClient = new PassThrough();
     transport = new StdioTransport(toClient, fromClient);
@@ -93,32 +108,45 @@ describe("Biloba TypeScript client", () => {
       case "handshake": reply({protocolVersion: "1", capabilities: ["assertions", "evaluate"]} satisfies HandshakeResponse); break;
       case "openSession": reply({sessionId: `session-${++openedSessions}`, contextId: `context-${openedSessions}`, targetId: `target-${openedSessions}`, ownsContext: true} satisfies OpenSessionResponse); break;
       case "newTab": reply({sessionId: `session-${++openedSessions}`, contextId: "context-1", targetId: `target-${openedSessions}`, openerId: "target-1"} satisfies OpenSessionResponse); break;
-			case "listTabs": reply({handles: [{sessionId: "session-2", contextId: "context-1", targetId: "target-2", openerId: "target-1"}]}); break;
-			case "listFrames": reply({handles: [{sessionId: "frame-1", contextId: "context-1", targetId: "frame-target", frame: true, url: "https://frame.test/"}]}); break;
-			case "waitForTab": reply({sessionId: "session-2", contextId: "context-1", targetId: "target-2", openerId: "target-1"}); break;
-			case "waitForFrame": reply({sessionId: "frame-1", contextId: "context-1", targetId: "frame-target", frame: true, url: "https://frame.test/"}); break;
+      case "listTabs": reply({handles: [{sessionId: "session-2", contextId: "context-1", targetId: "target-2", openerId: "target-1"}]}); break;
+      case "listFrames": reply({handles: [{sessionId: "frame-1", contextId: "context-1", targetId: "frame-target", frame: true, url: "https://frame.test/"}]}); break;
+      case "waitForTab": reply({sessionId: "session-2", contextId: "context-1", targetId: "target-2", openerId: "target-1"}); break;
+      case "waitForFrame": reply({sessionId: "frame-1", contextId: "context-1", targetId: "frame-target", frame: true, url: "https://frame.test/"}); break;
       case "evaluate": respond(operationResult({observedJson: JSON.stringify({ready: true})})); break;
-			case "getCookies": reply({cookies: [{name: "auth", value: "abc", path: "/", session: true}]}); break;
-			case "lifecycle": {
-				const operation = request.operation as {kind?: string};
-				const values: Record<string, unknown> = {
-					STORAGE_GET: {found: true, value: 3}, STORAGE_GET_ALL: {count: 3}, STORAGE_LENGTH: 1,
-					WAIT_FOR_DEFINED: 42, URL: "https://app.test/ready", TITLE: "Ready", WINDOW_SIZE: {width: 800, height: 600},
-					OUTLINE: "<body>Ready</body>", ACCESSIBILITY_OUTLINE: "document\n  button \"Save\"",
-					CONSOLE_MESSAGES: [{type: "log", text: "ready", args: ["ready"], timestamp: "2026-01-01T00:00:00Z"}],
-					COOKIE_QUERY: {name: "auth", value: "abc", path: "/", session: true},
-				};
-				respond(operationResult({observedJson: JSON.stringify(values[operation.kind ?? ""])}));
-				break;
-			}
+      case "getCookies": reply({cookies: [{name: "auth", value: "abc", path: "/", session: true}]}); break;
+      case "lifecycle": {
+        const operation = request.operation as {kind?: string};
+        const values: Record<string, unknown> = {
+          STORAGE_GET: {found: true, value: 3}, STORAGE_GET_ALL: {count: 3}, STORAGE_LENGTH: 1,
+          WAIT_FOR_DEFINED: 42, URL: "https://app.test/ready", TITLE: "Ready", WINDOW_SIZE: {width: 800, height: 600},
+          OUTLINE: "<body>Ready</body>", ACCESSIBILITY_OUTLINE: "document\n  button \"Save\"",
+          CONSOLE_MESSAGES: [{type: "log", text: "ready", args: ["ready"], timestamp: "2026-01-01T00:00:00Z"}],
+          COOKIE_QUERY: {name: "auth", value: "abc", path: "/", session: true},
+        };
+        respond(operationResult({observedJson: JSON.stringify(values[operation.kind ?? ""])}));
+        break;
+      }
+      case "eventful": {
+        const operation = request.operation as {kind?: string; action?: string};
+        const values: Record<string, unknown> = {
+          REGISTER_DIALOG_HANDLER: {id: "dialog-1"}, DIALOGS: [{type: "alert", message: "hi", defaultPrompt: "", accepted: false, promptText: "", autoHandled: true}], WARNINGS: warningHistory,
+          DOWNLOADS: [{id: "download-1", url: "/file", filename: "file.txt", state: "complete", receivedBytes: 3, totalBytes: 3, startedAt: 1}], WAIT_FOR_DOWNLOAD: {id: "download-1", url: "/file", filename: "file.txt", state: "complete", receivedBytes: 3, totalBytes: 3, startedAt: 1}, DOWNLOAD_CONTENT: {bodyBase64: Buffer.from("abc").toString("base64")},
+          REQUESTS: [{url: "/api", method: "POST", headers: [], resourceType: "Fetch"}], WAIT_FOR_REQUEST: {url: "/api", method: "POST", headers: [], resourceType: "Fetch"}, RESPONSES: [{url: "/api", status: 201, headers: [], resourceType: "Fetch"}],
+          REGISTER_NETWORK_HANDLER: {id: "network-1"}, NETWORK_HANDLER_STATS: {id: "network-1", callsite: "test", count: 1, shadowed: 0, lastError: ""}, NETWORK_SHADOWS: [],
+          HOLD_RESPONSE: {id: "hold-2"}, AWAIT_RESPONSE_HOLD: {id: "response-1", url: "/api", status: 200, headers: [], bodyBase64: Buffer.from("held").toString("base64")}, RESPONSE_HOLD_STATS: {count: 1, held: 1, passedThrough: 0, holding: 1, lastError: ""}, NETWORK_STATE: {offline: false, latencyMs: 0, downloadThroughput: 0, uploadThroughput: 0, connectionType: "wifi"},
+        };
+        reply(values[operation.kind ?? ""] ?? {});
+        break;
+      }
+      case "callbackResult": break;
       case "holdResponse": respond(operationResult({observedJson: JSON.stringify({holdId: "hold-1"})})); break;
       case "awaitResponseHold": respond(operationResult({observedJson: JSON.stringify({url: "/saved", status: 200})})); break;
       case "assert": assertImplementation(request, respond); break;
       case "dom": assertImplementation(request, respond); break;
       case "click": clickImplementation(request, respond); break;
       case "cancel": observeCancel?.(); break;
-      case "closeSession":
-      case "prepareSession": reply({}); break;
+      case "closeSession": closeSessionError === undefined ? reply({}) : toClient.write(encodeFrame({id: envelope.id, error: {code: "INVALID_ARGUMENT", message: closeSessionError}})); break;
+      case "prepareSession": warningHistory = []; reply({}); break;
       default: respond(operationResult());
     }
   }
@@ -126,6 +154,18 @@ describe("Biloba TypeScript client", () => {
   async function connectClient(): Promise<Browser> {
     return await connectWithTransport(transport);
   }
+
+  it("keeps a session usable when close is rejected by active eventful work", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    closeSessionError = "active download must be cancelled first";
+
+    await expect(session.close()).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    expect(await session.evaluate<{ready: boolean}>("window.appState")).toEqual({ready: true});
+
+    closeSessionError = undefined;
+    await session.close();
+  });
 
   it("negotiates the protocol and sends idiomatic session operations over gRPC", async () => {
     browser = await connectClient();
@@ -219,52 +259,115 @@ describe("Biloba TypeScript client", () => {
           },
         },
       },
-      {
-        method: "HoldResponse",
-        request: {
-          sessionId: "session-1",
-          expectation: {kind: "SUFFIX", expectedJson: `"/saved"`},
-        },
-      },
-      {method: "AwaitResponseHold", request: {sessionId: "session-1", holdId: "hold-1"}},
-      {method: "ReleaseResponseHold", request: {sessionId: "session-1", holdId: "hold-1"}},
+      {method: "Eventful", request: {sessionId: "session-1", operation: {kind: "HOLD_RESPONSE", url: {kind: "SUFFIX", expectedJson: `"/saved"`}}}},
+      {method: "Eventful", request: {sessionId: "session-1", operation: {kind: "AWAIT_RESPONSE_HOLD", id: "hold-2"}}},
+      {method: "Eventful", request: {sessionId: "session-1", operation: {kind: "RELEASE_RESPONSE_HOLD", id: "hold-2"}}},
       {method: "CloseSession", request: {sessionId: "session-1"}},
     ]);
   });
 
-	it("returns typed lifecycle snapshots with context identity", async () => {
-		browser = await connectClient();
-		const session = await browser.openSession();
-		expect(session).toMatchObject({contextId: "context-1", targetId: "target-1", ownsContext: true, isFrame: false});
-		expect(await session.getCookies()).toEqual([{name: "auth", value: "abc", path: "/", session: true}]);
-	});
+  it("exposes typed eventful session controls", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    expect(typeof (session as unknown as {dialogs?: unknown}).dialogs).toBe("function");
+    expect((await session.dialogs())[0]?.message).toBe("hi");
+    const handler = await session.handleDialogs("confirm", {message: contains("leave"), accept: true});
+    await handler.remove();
+    const download = await session.expectDownload({content: new Uint8Array([0xff, 0x00])}, {timeoutMs: 50});
+    expect(new TextDecoder().decode(await download.content({maxBytes: 20}))).toBe("abc");
+    await download.cancel();
+    expect((await session.waitForRequest({url: contains("/api")}, {timeoutMs: 50})).method).toBe("POST");
+    const route = await session.modifyResponse(contains("/api"), {status: 202, body: new TextEncoder().encode("changed")});
+    expect((await route.stats()).count).toBe(1);
+    await route.remove();
+    const hold = await session.holdResponse(contains("/api"), {limit: 2, maxBodyBytes: 1024});
+    const held = await hold.await();
+    expect(new TextDecoder().decode(held.body)).toBe("held");
+    await hold.releaseResponse(held.id);
+    await hold.releaseNext();
+    expect((await hold.stats()).holding).toBe(1);
+    await hold.release();
+    await session.setNetworkState({offline: false, connectionType: "wifi"});
+    expect((await session.networkState()).connectionType).toBe("wifi");
+    await session.setCacheEnabled(false);
 
-	it("serializes live handles, storage, page state, and emulation through typed lifecycle operations", async () => {
-		browser = await connectClient();
-		const session = await browser.openSession();
-		const tabs = await session.spawnedTabs();
-		expect(tabs[0]).toMatchObject({contextId: session.contextId, openerId: session.targetId});
-		expect((await session.frames())[0]).toMatchObject({isFrame: true, frameUrl: "https://frame.test/"});
-		expect((await session.localStorage().get<number>("count"))).toEqual({found: true, value: 3});
-		expect(await session.waitForDefined<number>("window.ready", {timeoutMs: 50})).toBe(42);
-		expect(await session.url()).toBe("https://app.test/ready");
-		expect(await session.title()).toBe("Ready");
-		expect(await session.windowSize()).toEqual({width: 800, height: 600});
-		expect(await session.outline()).toContain("Ready");
-		expect(await session.accessibilityOutline()).toContain("button");
-		expect(await session.consoleMessages()).toHaveLength(1);
-		await session.setGeolocation({latitude: 0, longitude: 0});
-		await session.setPermissions("https://app.test", {clipboardReadWrite: "granted", geolocation: "denied"});
-		await session.setMedia({colorScheme: "dark", reducedMotion: "reduce"});
+    expect(requests.filter(({method}) => method === "Eventful").map(({request}) => (request.operation as {kind: string}).kind)).toContain("REGISTER_NETWORK_HANDLER");
+  });
 
-		expect(requests).toEqual(expect.arrayContaining([
-			expect.objectContaining({method: "ListTabs", request: expect.objectContaining({spawnedOnly: true})}),
-			expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "STORAGE_GET", area: "localStorage", key: "count"}})}),
-			expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "WAIT_FOR_DEFINED", expression: "window.ready"}, poll: {timeoutMs: 50}})}),
-			expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "SET_GEOLOCATION", geolocation: {latitude: 0, longitude: 0}}})}),
-			expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "SET_PERMISSIONS", origin: "https://app.test", permissions: {clipboardReadWrite: "granted", geolocation: "denied"}}})}),
-		]));
-	});
+  it("round trips response callbacks over typed event frames", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    const handler = await session.routeResponse(contains("/api"), async (response) => ({status: response.status + 1, body: response.body}));
+    const registration = requests.find(({method, request}) => method === "Eventful" && (request.operation as {action?: string}).action === "callback");
+    const callbackId = (registration?.request.operation as {callbackId?: string}).callbackId;
+    expect(callbackId).toBeTruthy();
+    toClient.write(encodeFrame({event: "responseIntercepted", invocationId: "invocation-1", callbackId, payload: {url: "/api", status: 200, headers: [], bodyBase64: Buffer.from("ok").toString("base64")}}));
+    await expect.poll(() => requests.find(({method}) => method === "CallbackResult")?.request).toMatchObject({invocationId: "invocation-1", result: {status: 201, bodyBase64: Buffer.from("ok").toString("base64")}});
+    await handler.remove();
+    expect(transport.registeredCallbackCount()).toBe(0);
+  });
+
+  it("unregisters response callbacks on prepare before a late invocation can run", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    let invoked = 0;
+    await session.routeResponse(contains("/late"), () => { invoked++; return {status: 204}; });
+    const registration = requests.find(({method, request}) => method === "Eventful" && (request.operation as {action?: string}).action === "callback");
+    const callbackId = (registration?.request.operation as {callbackId?: string}).callbackId;
+    expect(transport.registeredCallbackCount()).toBe(1);
+    await session.prepare();
+    expect(transport.registeredCallbackCount()).toBe(0);
+    toClient.write(encodeFrame({event: "responseIntercepted", invocationId: "late-1", callbackId, payload: {url: "/late", status: 200, headers: [], bodyBase64: ""}}));
+    await expect.poll(() => requests.find(({method, request}) => method === "CallbackResult" && request.invocationId === "late-1")?.request.error).toContain("no longer registered");
+    expect(invoked).toBe(0);
+  });
+
+  it("drains autonomous warnings at the next client boundary and resets the cursor on prepare", async () => {
+    const observed: unknown[] = [];
+    browser = await connectWithTransport(transport, {warningSink: (warning) => observed.push(warning)});
+    const session = await browser.openSession();
+    warningHistory = [{code: "dialog_auto_handled", message: "first", dialog: {type: "alert", message: "first", defaultPrompt: "", accepted: false, promptText: "", autoHandled: true}}];
+    await session.url();
+    expect(observed).toHaveLength(1);
+    await session.prepare();
+    warningHistory = [{code: "dialog_auto_handled", message: "after prepare", dialog: {type: "alert", message: "after prepare", defaultPrompt: "", accepted: false, promptText: "", autoHandled: true}}];
+    await session.url();
+    expect(observed).toHaveLength(2);
+  });
+
+  it("returns typed lifecycle snapshots with context identity", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    expect(session).toMatchObject({contextId: "context-1", targetId: "target-1", ownsContext: true, isFrame: false});
+    expect(await session.getCookies()).toEqual([{name: "auth", value: "abc", path: "/", session: true}]);
+  });
+
+  it("serializes live handles, storage, page state, and emulation through typed lifecycle operations", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    const tabs = await session.spawnedTabs();
+    expect(tabs[0]).toMatchObject({contextId: session.contextId, openerId: session.targetId});
+    expect((await session.frames())[0]).toMatchObject({isFrame: true, frameUrl: "https://frame.test/"});
+    expect((await session.localStorage().get<number>("count"))).toEqual({found: true, value: 3});
+    expect(await session.waitForDefined<number>("window.ready", {timeoutMs: 50})).toBe(42);
+    expect(await session.url()).toBe("https://app.test/ready");
+    expect(await session.title()).toBe("Ready");
+    expect(await session.windowSize()).toEqual({width: 800, height: 600});
+    expect(await session.outline()).toContain("Ready");
+    expect(await session.accessibilityOutline()).toContain("button");
+    expect(await session.consoleMessages()).toHaveLength(1);
+    await session.setGeolocation({latitude: 0, longitude: 0});
+    await session.setPermissions("https://app.test", {clipboardReadWrite: "granted", geolocation: "denied"});
+    await session.setMedia({colorScheme: "dark", reducedMotion: "reduce"});
+
+    expect(requests).toEqual(expect.arrayContaining([
+      expect.objectContaining({method: "ListTabs", request: expect.objectContaining({spawnedOnly: true})}),
+      expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "STORAGE_GET", area: "localStorage", key: "count"}})}),
+      expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "WAIT_FOR_DEFINED", expression: "window.ready"}, poll: {timeoutMs: 50}})}),
+      expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "SET_GEOLOCATION", geolocation: {latitude: 0, longitude: 0}}})}),
+      expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "SET_PERMISSIONS", origin: "https://app.test", permissions: {clipboardReadWrite: "granted", geolocation: "denied"}}})}),
+    ]));
+  });
 
   it("expresses every pilot locator and assertion as one RPC", async () => {
     browser = await connectClient();
@@ -329,9 +432,9 @@ describe("Biloba TypeScript client", () => {
     await expect(rows.clickAll({timeoutMs: 10} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
     await expect(rows.setProperty("dataset.ready", true, {all: true} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
     await expect(session.sendKeys("x", {timeoutMs: 10} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
-		await expect(session.getCookies({intervalMs: 10} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
-		await expect(session.navigate("http://localhost", {intervalMs: 10} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
-		await expect(session.holdResponse("/held", {timeoutMs: 10} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(session.getCookies({intervalMs: 10} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(session.navigate("http://localhost", {intervalMs: 10} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(session.holdResponse("/held", {timeoutMs: 10} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
   });
 
   it("serializes composed locators as a typed tree", async () => {
@@ -719,7 +822,7 @@ describe("published entry point", () => {
       "matches",
       "not",
       "numeric",
-			"optionLabel",
+      "optionLabel",
       "relativeXPath",
       "startDaemon",
       "startSharedBrowser",
