@@ -190,6 +190,7 @@ export interface Cookie {
   secure?: boolean;
   httpOnly?: boolean;
   sameSite?: string;
+  session?: boolean;
 }
 
 export interface SetCookiesRequest {

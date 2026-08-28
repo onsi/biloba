@@ -651,6 +651,7 @@ type WireCookie struct {
 	Secure      bool    `json:"secure,omitempty"`
 	HTTPOnly    bool    `json:"httpOnly,omitempty"`
 	SameSite    string  `json:"sameSite,omitempty"`
+	Session     bool    `json:"session,omitempty"`
 }
 
 type SetCookiesRequest struct {
@@ -987,6 +988,9 @@ func (s *Server) Dispatch(ctx context.Context, method string, params json.RawMes
 		entry, err := s.session(request.SessionID)
 		if err != nil {
 			return nil, err
+		}
+		if discoverable, ok := entry.session.(DiscoverableSession); ok && !discoverable.Metadata().OwnsContext {
+			return nil, NewError(CodeInvalidArgument, "prepare requires an owning root session")
 		}
 		entry.mu.Lock()
 		defer entry.mu.Unlock()
@@ -1456,7 +1460,10 @@ func (s *Server) closeSession(id string) (any, *ProtocolError) {
 	if err := entry.session.Close(); err != nil {
 		return nil, normalizeError(err)
 	}
-	invalidated := s.invalidateContext(entry.session, id, false)
+	invalidated := []string{}
+	if discoverable, ok := entry.session.(DiscoverableSession); ok && discoverable.Metadata().OwnsContext {
+		invalidated = s.invalidateContext(entry.session, id, false)
+	}
 	invalidated = append([]string{id}, invalidated...)
 	return InvalidationResponse{InvalidatedSessionIDs: invalidated}, nil
 }
@@ -1626,6 +1633,17 @@ func lifecycleOperationFromWire(operation *WireLifecycleOperation, expected *Wir
 	}
 	if operation.Kind == "STORAGE_SET" && operation.ValueJSON == "" {
 		return LifecycleOperation{}, NewError(CodeInvalidArgument, "storage set requires valueJson")
+	}
+	if operation.Kind == "SET_PERMISSIONS" {
+		validPermissions := map[string]bool{"ar": true, "audioCapture": true, "automaticFullscreen": true, "backgroundFetch": true, "backgroundSync": true, "cameraPanTiltZoom": true, "capturedSurfaceControl": true, "clipboardReadWrite": true, "clipboardSanitizedWrite": true, "displayCapture": true, "durableStorage": true, "geolocation": true, "handTracking": true, "idleDetection": true, "keyboardLock": true, "localFonts": true, "localNetwork": true, "localNetworkAccess": true, "loopbackNetwork": true, "midi": true, "midiSysex": true, "nfc": true, "notifications": true, "paymentHandler": true, "periodicBackgroundSync": true, "pointerLock": true, "protectedMediaIdentifier": true, "sensors": true, "smartCard": true, "speakerSelection": true, "storageAccess": true, "topLevelStorageAccess": true, "videoCapture": true, "vr": true, "wakeLockScreen": true, "wakeLockSystem": true, "webAppInstallation": true, "webPrinting": true, "windowManagement": true}
+		for permission, state := range operation.Permissions {
+			if !validPermissions[permission] {
+				return LifecycleOperation{}, NewError(CodeInvalidArgument, "unsupported permission "+permission)
+			}
+			if state != "granted" && state != "denied" && state != "prompt" {
+				return LifecycleOperation{}, NewError(CodeInvalidArgument, "permission state must be granted, denied, or prompt")
+			}
+		}
 	}
 	if operation.ValueJSON != "" {
 		var value any

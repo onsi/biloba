@@ -87,6 +87,10 @@ var _ = Describe("driver protocol", func() {
 		Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
 		err = client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "RAW_CDP"}}, nil)
 		Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
+		err = client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "SET_PERMISSIONS", Permissions: map[string]string{"not-a-cdp-permission": "granted"}}}, nil)
+		Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
+		err = client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "SET_PERMISSIONS", Permissions: map[string]string{"clipboardReadWrite": "sometimes"}}}, nil)
+		Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
 	})
 
 	It("registers discovered handles once and invalidates context siblings on prepare", func() {
@@ -109,6 +113,25 @@ var _ = Describe("driver protocol", func() {
 		Expect(prepared.InvalidatedSessionIDs).To(ConsistOf(first.Handles[0].SessionID))
 		err := client.call("prepareSession", protocol.SessionRequest{SessionID: first.Handles[0].SessionID}, nil)
 		Expect(err.Code).To(Equal(protocol.CodeTargetNotFound))
+	})
+
+	It("keeps an owning session live when a discovered child closes and rejects prepare on the child", func() {
+		child := &discoverableSession{metadata: protocol.SessionMetadata{ContextID: "context-a", TargetID: "child", OpenerID: "root"}}
+		root := &discoverableSession{metadata: protocol.SessionMetadata{ContextID: "context-a", TargetID: "root", OwnsContext: true}, tabs: []protocol.Session{child}}
+		client, cleanup := startTestServer(&fakeBackend{custom: root})
+		DeferCleanup(cleanup)
+
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+		var handles protocol.HandleListResponse
+		Expect(client.call("listTabs", protocol.ListHandlesRequest{SessionID: opened.SessionID}, &handles)).To(Succeed())
+		Expect(handles.Handles).To(HaveLen(1))
+
+		err := client.call("prepareSession", protocol.SessionRequest{SessionID: handles.Handles[0].SessionID}, nil)
+		Expect(err).NotTo(BeNil())
+		Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
+		Expect(client.call("closeSession", protocol.SessionRequest{SessionID: handles.Handles[0].SessionID}, nil)).To(Succeed())
+		Expect(client.call("prepareSession", protocol.SessionRequest{SessionID: opened.SessionID}, nil)).To(Succeed())
 	})
 
 	// `invoke` is what makes an expression's meaning explicit on the wire: without it the daemon has

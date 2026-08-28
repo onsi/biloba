@@ -285,18 +285,33 @@ func (s *engineSession) lifecycle(ctx context.Context, operation protocol.Operat
 		}
 		return pollResult(result, true), nil
 	case protocol.LifecycleURL:
+		if lifecycle.Expectation.Kind != 0 {
+			return s.poll(ctx, operation, s.lifecycleValueAssertion(lifecycle, func(readCtx context.Context) (any, error) {
+				value, err := s.session.URL(readCtx)
+				return value.Value, err
+			}))
+		}
 		value, err := s.session.URL(ctx)
 		if err != nil {
 			return protocol.Result{}, engineRPCError(err)
 		}
 		return observedResult(started, value.Value), nil
 	case protocol.LifecycleTitle:
+		if lifecycle.Expectation.Kind != 0 {
+			return s.poll(ctx, operation, s.lifecycleValueAssertion(lifecycle, func(readCtx context.Context) (any, error) { return s.session.Title(readCtx) }))
+		}
 		value, err := s.session.Title(ctx)
 		if err != nil {
 			return protocol.Result{}, engineRPCError(err)
 		}
 		return observedResult(started, value), nil
 	case protocol.LifecycleWindowSize:
+		if lifecycle.Expectation.Kind != 0 {
+			return s.poll(ctx, operation, s.lifecycleValueAssertion(lifecycle, func(readCtx context.Context) (any, error) {
+				width, height, err := s.session.WindowSize(readCtx)
+				return map[string]int{"width": width, "height": height}, err
+			}))
+		}
 		width, height, err := s.session.WindowSize(ctx)
 		if err != nil {
 			return protocol.Result{}, engineRPCError(err)
@@ -315,7 +330,28 @@ func (s *engineSession) lifecycle(ctx context.Context, operation protocol.Operat
 		}
 		return observedResult(started, value), nil
 	case protocol.LifecycleConsoleMessages:
-		return observedResult(started, s.session.ConsoleMessages()), nil
+		if lifecycle.Expectation.Kind != 0 {
+			return s.poll(ctx, operation, func(context.Context) (engine.Observation, bool, error) {
+				expected, convertErr := expectationFromProtocol(lifecycle.Expectation)
+				if convertErr != nil {
+					return engine.Observation{}, false, engine.Fatal(convertErr)
+				}
+				for _, message := range s.session.ConsoleMessages() {
+					if lifecycle.Key != "" && lifecycle.Key != message.Type {
+						continue
+					}
+					matched, matchErr := engine.MatchExpectation(message.Text, expected)
+					if matchErr != nil {
+						return engine.Observation{}, false, engine.Fatal(matchErr)
+					}
+					if matched {
+						return engine.Observation{Value: consoleMessageToWire(message)}, true, nil
+					}
+				}
+				return engine.Observation{Value: nil}, false, nil
+			})
+		}
+		return observedResult(started, consoleMessagesToWire(s.session.ConsoleMessages())), nil
 	case protocol.LifecycleSetDeviceMetrics:
 		return oneAttempt(started, s.session.SetDeviceMetrics(ctx, engine.DeviceMetrics{Width: lifecycle.Width, Height: lifecycle.Height, DeviceScaleFactor: lifecycle.DeviceScaleFactor, Mobile: lifecycle.Mobile}))
 	case protocol.LifecycleClearDeviceMetrics:
@@ -349,10 +385,37 @@ func (s *engineSession) lifecycle(ctx context.Context, operation protocol.Operat
 	}
 }
 
+func consoleMessageToWire(message engine.ConsoleMessage) map[string]any {
+	return map[string]any{"type": message.Type, "text": message.Text, "args": message.Args, "timestamp": message.Timestamp}
+}
+
+func consoleMessagesToWire(messages []engine.ConsoleMessage) []map[string]any {
+	result := make([]map[string]any, len(messages))
+	for index, message := range messages {
+		result[index] = consoleMessageToWire(message)
+	}
+	return result
+}
+
+func (s *engineSession) lifecycleValueAssertion(operation protocol.LifecycleOperation, read func(context.Context) (any, error)) engine.Assertion {
+	return func(ctx context.Context) (engine.Observation, bool, error) {
+		value, err := read(ctx)
+		if err != nil {
+			return engine.Observation{}, false, err
+		}
+		expected, convertErr := expectationFromProtocol(operation.Expectation)
+		if convertErr != nil {
+			return engine.Observation{}, false, engine.Fatal(convertErr)
+		}
+		matched, matchErr := engine.MatchExpectation(value, expected)
+		return engine.Observation{Value: value}, matched, matchErr
+	}
+}
+
 func cookiesToWire(cookies []engine.Cookie) []protocol.WireCookie {
 	result := make([]protocol.WireCookie, len(cookies))
 	for index, cookie := range cookies {
-		result[index] = protocol.WireCookie{Name: cookie.Name, Value: cookie.Value, Domain: cookie.Domain, Path: cookie.Path, Secure: cookie.Secure, HTTPOnly: cookie.HTTPOnly, SameSite: cookie.SameSite}
+		result[index] = protocol.WireCookie{Name: cookie.Name, Value: cookie.Value, Domain: cookie.Domain, Path: cookie.Path, Secure: cookie.Secure, HTTPOnly: cookie.HTTPOnly, SameSite: cookie.SameSite, Session: cookie.Session}
 		if !cookie.Session && !cookie.Expires.IsZero() {
 			result[index].ExpiresUnix = float64(cookie.Expires.UnixMilli()) / 1000
 		}
