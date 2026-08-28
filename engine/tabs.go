@@ -26,6 +26,11 @@ func (s *Session) Tabs(ctx context.Context) ([]*Session, error) {
 	if s.browser == nil {
 		return nil, &Error{Code: CodeSessionClosed, Operation: "list tabs", Message: "browser is closed"}
 	}
+	return s.tabs(ctx)
+}
+
+// tabs is used by root Prepare while the root's serial lock is held.
+func (s *Session) tabs(ctx context.Context) ([]*Session, error) {
 	opCtx, cancel := executorContext(s.browser.ctx, ctx)
 	defer cancel()
 	chrome := chromedp.FromContext(opCtx)

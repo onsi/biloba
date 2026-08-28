@@ -18,7 +18,7 @@ import (
 	"github.com/chromedp/cdproto/page"
 )
 
-const DefaultMaxScreenshotBytes = 32 << 20
+const DefaultMaxScreenshotBytes = 16 << 20
 const DefaultMaxScreenshotPixels = 64 << 20
 
 var visualFilenameRE = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
@@ -220,6 +220,9 @@ func (s *Session) CompareScreenshot(ctx context.Context, name string, target Scr
 }
 
 func (s *Session) compareScreenshot(ctx context.Context, name string, target ScreenshotTarget, options VisualOptions) (VisualResult, error) {
+	if err := validateScreenshotTolerance(options.Tolerance); err != nil {
+		return VisualResult{}, Fatal(err)
+	}
 	schemes := options.ColorSchemes
 	if len(schemes) == 0 {
 		schemes = []string{""}

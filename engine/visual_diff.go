@@ -53,11 +53,8 @@ const (
 )
 
 func CompareScreenshotPNGs(baseline, actual []byte, tolerance ScreenshotTolerance) (ScreenshotDiff, []byte, error) {
-	if tolerance.ChannelDelta < 0 || tolerance.ChannelDelta > 255 {
-		return ScreenshotDiff{}, nil, fmt.Errorf("channel tolerance must be between 0 and 255")
-	}
-	if math.IsNaN(tolerance.PixelFraction) || math.IsInf(tolerance.PixelFraction, 0) || tolerance.PixelFraction < 0 || tolerance.PixelFraction > 1 {
-		return ScreenshotDiff{}, nil, fmt.Errorf("pixel tolerance must be between 0 and 1")
+	if err := validateScreenshotTolerance(tolerance); err != nil {
+		return ScreenshotDiff{}, nil, err
 	}
 	if err := validateScreenshotPNG(baseline, 0); err != nil {
 		return ScreenshotDiff{}, nil, fmt.Errorf("validate baseline PNG: %w", err)
@@ -130,6 +127,16 @@ func CompareScreenshotPNGs(baseline, actual []byte, tolerance ScreenshotToleranc
 		return ScreenshotDiff{}, nil, err
 	}
 	return diff, out.Bytes(), nil
+}
+
+func validateScreenshotTolerance(tolerance ScreenshotTolerance) error {
+	if tolerance.ChannelDelta < 0 || tolerance.ChannelDelta > 255 {
+		return fmt.Errorf("channel tolerance must be between 0 and 255")
+	}
+	if math.IsNaN(tolerance.PixelFraction) || math.IsInf(tolerance.PixelFraction, 0) || tolerance.PixelFraction < 0 || tolerance.PixelFraction > 1 {
+		return fmt.Errorf("pixel tolerance must be between 0 and 1")
+	}
+	return nil
 }
 
 func (d ScreenshotDiff) Diagnose(name string, paths ScreenshotPaths) string {

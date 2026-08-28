@@ -63,6 +63,69 @@ var _ = Describe("lifecycle engine foundations", func() {
 		Expect(tab.ContextID()).To(Equal(root.ContextID()))
 	})
 
+	It("reconciles a popup that closes itself and keeps prepare idempotent", func(ctx SpecContext) {
+		root, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(root.Close)
+		Expect(root.Navigate(ctx, server.URL)).To(Succeed())
+
+		_, err = root.Evaluate(ctx, `void window.open("/destination", "_blank")`)
+		Expect(err).NotTo(HaveOccurred())
+		popup, err := root.WaitForTab(ctx, engine.TabQuery{
+			SpawnedOnly: true,
+			URL:         &engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/destination"},
+		}, engine.PollPolicy{Timeout: time.Second, Interval: 5 * time.Millisecond})
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = popup.Evaluate(ctx, `window.close()`)
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(func() []string { return sessionTargetIDs(browser.Sessions()) }).ShouldNot(ContainElement(string(popup.TargetID())))
+		Expect(popup.Close()).To(Succeed())
+		Expect(root.Prepare(ctx)).To(Succeed())
+		Expect(sessionTargetIDs(browser.Sessions())).To(ConsistOf(string(root.TargetID())))
+	})
+
+	It("reports descendant discovery failure instead of continuing prepare", func(ctx SpecContext) {
+		root, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(root.Close)
+
+		canceled, cancel := context.WithCancel(ctx)
+		cancel()
+		err = root.Prepare(canceled)
+		Expect(err).To(MatchError(ContainSubstring("list tabs")))
+	})
+
+	It("closes a popup spawned by a descendant while prepare is closing it", func(ctx SpecContext) {
+		root, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(root.Close)
+		sibling, err := root.NewTab(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sibling.Navigate(ctx, server.URL)).To(Succeed())
+
+		started := make(chan struct{})
+		spawned := make(chan error, 1)
+		go func() {
+			close(started)
+			_, evaluateErr := sibling.Evaluate(ctx, `(() => {
+				const until = performance.now() + 150
+				while (performance.now() < until) {}
+				window.open("/destination", "_blank")
+			})()`)
+			spawned <- evaluateErr
+		}()
+		<-started
+		time.Sleep(25 * time.Millisecond)
+
+		Expect(root.Prepare(ctx)).To(Succeed())
+		Expect(<-spawned).NotTo(HaveOccurred())
+		tabs, err := root.Tabs(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sessionTargetIDs(tabs)).To(ConsistOf(string(root.TargetID())))
+		Expect(sessionTargetIDs(browser.Sessions())).To(ConsistOf(string(root.TargetID())))
+	})
+
 	It("provides typed cookie, storage, page, and defined-JavaScript operations", func(ctx SpecContext) {
 		session, err := browser.OpenSession(ctx)
 		Expect(err).NotTo(HaveOccurred())

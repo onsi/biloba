@@ -44,7 +44,7 @@ type Diagnostics struct {
 	ScreenshotPath string
 }
 
-// Session is an isolated root tab. Operations on one session are serialized.
+// Session is a browser target scoped to one isolated context. Operations on one session are serialized.
 type Session struct {
 	browser          *Browser
 	ctx              context.Context
@@ -94,6 +94,7 @@ type Session struct {
 	initialHeight    int
 	restoreViewport  *ViewportSize
 	visual           visualLifecycle
+	media            Media
 	highFidelity     bool
 	initScriptIDs    []page.ScriptIdentifier
 	// crashed is closed by Chrome's Inspector.targetCrashed listener, which runs on chromedp's event
@@ -169,7 +170,7 @@ func (s *Session) Close() error {
 	if alreadyClosed {
 		return nil
 	}
-	if s.browser != nil {
+	if s.browser != nil && !s.frameTarget {
 		s.browser.mu.Lock()
 		browserClosing := s.browser.closed
 		s.browser.mu.Unlock()
@@ -199,7 +200,7 @@ func (s *Session) Close() error {
 			return target.DisposeBrowserContext(s.browserContextID).Do(browserCtx)
 		})
 		cancel()
-	} else if s.browser != nil && !s.frameTarget {
+	} else if s.browser != nil && !s.frameTarget && !s.browser.targetWasDestroyed(s.targetID) {
 		ctx, cancel := context.WithTimeout(s.browser.ctx, 5*time.Second)
 		disposeErr = s.withBrowserExecutor(ctx, func(browserCtx context.Context) error {
 			return target.CloseTarget(s.targetID).Do(browserCtx)
@@ -225,6 +226,21 @@ func (s *Session) Close() error {
 		return contextError("close session", disposeErr)
 	}
 	return nil
+}
+
+func (s *Session) markTargetDestroyed() {
+	s.eventsEnabled.Store(false)
+	s.releaseAllResponseHolds()
+	s.cancelActiveDownloads()
+	s.mu.Lock()
+	if !s.closed {
+		s.closed = true
+		s.clearDialogs()
+		s.clearResponseHoldBookkeeping()
+		s.clearNetworkBookkeeping()
+		s.cancel()
+	}
+	s.mu.Unlock()
 }
 
 // NewTab opens another target in this session's browser context, sharing cookies and storage.
@@ -273,12 +289,12 @@ func (s *Session) Activate(ctx context.Context) error {
 }
 
 func (s *Session) Prepare(ctx context.Context) error {
-	if s.ownsContext && s.browser != nil {
-		if err := s.browser.closeContextDescendants(ctx, s); err != nil {
-			return err
-		}
-	}
 	return s.serial(ctx, "prepare", func(opCtx context.Context) error {
+		if s.ownsContext && s.browser != nil {
+			if err := s.browser.closeContextDescendants(opCtx, s); err != nil {
+				return err
+			}
+		}
 		s.eventsEnabled.Store(false)
 		defer s.eventsEnabled.Store(true)
 		wasCrashed := s.hasCrashed()
@@ -329,6 +345,13 @@ func (s *Session) Prepare(ctx context.Context) error {
 		}
 		if err != nil {
 			return err
+		}
+		// Navigating the root first stops its old document from opening another popup while descendant
+		// handles are being closed. Re-discover afterward to catch anything spawned during cleanup.
+		if s.ownsContext && s.browser != nil {
+			if err := s.browser.closeContextDescendants(opCtx, s); err != nil {
+				return err
+			}
 		}
 		s.visual.frozen = false
 		if err := s.clearVisualColor(opCtx); err != nil {

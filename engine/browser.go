@@ -154,12 +154,17 @@ func StartBrowser(ctx context.Context, config BrowserConfig) (*Browser, error) {
 		cancel()
 		return nil, typedError(CodeBrowserStart, "read browser websocket URL", err)
 	}
-	return &Browser{
+	browser := &Browser{
 		ctx: browserCtx, cancel: cancel, artifactDir: config.ArtifactDir,
 		sessions: map[*Session]struct{}{}, webSocketURL: wsURL,
 		mode: mode, windowWidth: width, windowHeight: height,
 		launch: LaunchMetadata{Mode: mode, ExecutablePath: executablePath, Arguments: append([]string(nil), config.Arguments...), WindowWidth: width, WindowHeight: height, AutoInstalled: autoInstalled},
-	}, nil
+	}
+	if err := browser.listenForDestroyedTargets(); err != nil {
+		_ = browser.Close()
+		return nil, typedError(CodeBrowserStart, "watch browser targets", err)
+	}
+	return browser, nil
 }
 
 func parseChromeArgument(argument string) (string, any, error) {
@@ -189,12 +194,50 @@ func connectBrowser(ctx context.Context, config BrowserConfig) (*Browser, error)
 		cancel()
 		return nil, typedError(CodeBrowserStart, "connect browser", err)
 	}
-	return &Browser{
+	browser := &Browser{
 		ctx: browserCtx, cancel: cancel, artifactDir: config.ArtifactDir,
 		sessions: map[*Session]struct{}{}, webSocketURL: config.WebSocketURL,
 		mode: config.Mode, windowWidth: config.WindowWidth, windowHeight: config.WindowHeight,
 		launch: LaunchMetadata{Attached: true},
-	}, nil
+	}
+	if err := browser.listenForDestroyedTargets(); err != nil {
+		_ = browser.Close()
+		return nil, typedError(CodeBrowserStart, "watch browser targets", err)
+	}
+	return browser, nil
+}
+
+func (b *Browser) listenForDestroyedTargets() error {
+	chromedp.ListenBrowser(b.ctx, func(event any) {
+		destroyed, ok := event.(*target.EventTargetDestroyed)
+		if !ok {
+			return
+		}
+		// Browser listeners run synchronously on chromedp's event loop. Target attachment holds b.mu,
+		// so reconciliation must not wait for that lock here or it can block the attach response itself.
+		go b.removeDestroyedTarget(destroyed.TargetID)
+	})
+	chrome := chromedp.FromContext(b.ctx)
+	return target.SetDiscoverTargets(true).Do(cdp.WithExecutor(b.ctx, chrome.Browser))
+}
+
+func (b *Browser) removeDestroyedTarget(targetID target.ID) {
+	b.mu.Lock()
+	var destroyed []*Session
+	for session := range b.sessions {
+		if session.targetID == targetID {
+			delete(b.sessions, session)
+			destroyed = append(destroyed, session)
+		}
+	}
+	if b.closedIDs == nil {
+		b.closedIDs = map[target.ID]struct{}{}
+	}
+	b.closedIDs[targetID] = struct{}{}
+	b.mu.Unlock()
+	for _, session := range destroyed {
+		go session.markTargetDestroyed()
+	}
 }
 
 // WebSocketURL is the browser-level DevTools endpoint. It can be passed to
@@ -421,25 +464,30 @@ func (b *Browser) Sessions() []*Session {
 }
 
 func (b *Browser) closeContextDescendants(ctx context.Context, root *Session) error {
-	// Discover browser-opened descendants before taking the snapshot, so Prepare invalidates handles
-	// for explicit siblings and popups alike.
-	b.mu.Lock()
-	closed := b.closed
-	b.mu.Unlock()
-	if !closed {
-		_, _ = root.Tabs(ctx)
-	}
-	var firstErr error
-	for _, session := range b.Sessions() {
-		if session != root && session.browserContextID == root.browserContextID {
+	for {
+		b.mu.Lock()
+		browserClosed := b.closed
+		b.mu.Unlock()
+		if !browserClosed {
+			if _, err := root.tabs(ctx); err != nil {
+				return err
+			}
+		}
+		descendants := make([]*Session, 0)
+		for _, session := range b.Sessions() {
+			if session != root && session.browserContextID == root.browserContextID {
+				descendants = append(descendants, session)
+			}
+		}
+		if len(descendants) == 0 {
+			return nil
+		}
+		for _, session := range descendants {
 			if err := session.Close(); err != nil {
-				if firstErr == nil {
-					firstErr = err
-				}
+				return err
 			}
 		}
 	}
-	return firstErr
 }
 
 func (b *Browser) Close() error {
@@ -471,6 +519,13 @@ func (b *Browser) removeSession(session *Session) {
 		b.closedIDs[session.targetID] = struct{}{}
 	}
 	b.mu.Unlock()
+}
+
+func (b *Browser) targetWasDestroyed(targetID target.ID) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, destroyed := b.closedIDs[targetID]
+	return destroyed
 }
 
 func (b *Browser) contextHasActiveDownloads(browserContextID cdp.BrowserContextID) bool {

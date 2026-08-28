@@ -210,6 +210,63 @@ var _ = Describe("runner-neutral visual comparison", func() {
 		Expect(after).To(Equal(before))
 	})
 
+	It("restores the exact media state that preceded a color capture", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, "data:text/html,<style>.box{width:10px;height:10px}</style><div class=box></div>")).To(Succeed())
+		Expect(session.SetMedia(ctx, engine.Media{Type: "screen", ColorScheme: "dark", ReducedMotion: "reduce"})).To(Succeed())
+
+		_, err = session.CaptureElementScreenshot(ctx, engine.CSS(".box"), engine.ScreenshotCaptureOptions{
+			Animated: true, ColorScheme: "light",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		state, err := session.Evaluate(ctx, `[
+			matchMedia("screen").matches,
+			matchMedia("(prefers-color-scheme: dark)").matches,
+			matchMedia("(prefers-reduced-motion: reduce)").matches
+		]`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state).To(Equal([]any{true, true, true}))
+	})
+
+	It("rejects invalid update tolerance before settling or overwriting a baseline", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, "data:text/html,<style>.box{width:10px;height:10px;background:red}</style><div class=box></div>")).To(Succeed())
+		baselineDir := GinkgoT().TempDir()
+		baselinePath := filepath.Join(baselineDir, "invalid-tolerance.png")
+		original := solidPNG(1, 1, color.NRGBA{R: 1, A: 255})
+		Expect(os.WriteFile(baselinePath, original, 0o644)).To(Succeed())
+		start := time.Now()
+
+		_, err = session.CompareScreenshot(ctx, "invalid-tolerance", engine.ElementScreenshotTarget(engine.CSS(".box")), engine.VisualOptions{
+			BaselineDir:    baselineDir,
+			Update:         true,
+			Tolerance:      engine.ScreenshotTolerance{PixelFraction: math.NaN()},
+			SettleAttempts: 3,
+			SettleStreak:   3,
+			SettleInterval: time.Second,
+		})
+
+		Expect(engine.IsFatal(err)).To(BeTrue())
+		Expect(err).To(MatchError(ContainSubstring("pixel tolerance")))
+		Expect(time.Since(start)).To(BeNumerically("<", 500*time.Millisecond))
+		contents, readErr := os.ReadFile(baselinePath)
+		Expect(readErr).NotTo(HaveOccurred())
+		Expect(contents).To(Equal(original))
+	})
+
+	It("uses a 16 MiB inclusive default screenshot boundary", func() {
+		Expect(engine.DefaultMaxScreenshotBytes).To(Equal(16 << 20))
+		pngData := solidPNG(1, 1, color.NRGBA{A: 255})
+		exact := append(pngData, make([]byte, engine.DefaultMaxScreenshotBytes-len(pngData))...)
+		Expect(engine.WriteScreenshotPNG(filepath.Join(GinkgoT().TempDir(), "exact.png"), exact, 0)).To(Succeed())
+		tooLarge := append(exact, 0)
+		Expect(engine.WriteScreenshotPNG(filepath.Join(GinkgoT().TempDir(), "too-large.png"), tooLarge, 0)).To(MatchError(ContainSubstring("exceeds the 16777216-byte limit")))
+	})
+
 	It("warns when a color-scheme matrix captures the same rendering twice", func(ctx SpecContext) {
 		session, err := browser.OpenSession(ctx)
 		Expect(err).NotTo(HaveOccurred())

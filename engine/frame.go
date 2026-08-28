@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"sync"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/target"
@@ -16,11 +15,11 @@ type FrameQuery struct {
 	HasElement *Selector
 }
 
-// Frame is a DOM-capable handle attached to a cross-origin iframe target.
+// Frame is a DOM-capable target-scoped Session attached to a cross-origin iframe. Its inherited
+// session lifecycle is initialized and cleaned up normally, while Close only detaches the handle.
 type Frame struct {
 	*Session
-	url       string
-	closeOnce sync.Once
+	url string
 }
 
 // URL returns the target URL observed when the frame was discovered.
@@ -28,19 +27,7 @@ func (f *Frame) URL() string { return f.url }
 
 // Close detaches this handle without removing the iframe from its parent document.
 func (f *Frame) Close() error {
-	f.closeOnce.Do(func() {
-		f.Session.mu.Lock()
-		if !f.Session.closed {
-			f.Session.closed = true
-			f.Session.cancel()
-		}
-		browser := f.Session.browser
-		f.Session.mu.Unlock()
-		if browser != nil {
-			browser.removeSession(f.Session)
-		}
-	})
-	return nil
+	return f.Session.Close()
 }
 
 // Frames returns handles for every out-of-process iframe in this session's browser context.
@@ -177,6 +164,8 @@ func (s *Session) attachFrame(ctx context.Context, info *target.Info) (*Frame, e
 		browser: s.browser, ctx: frameCtx, cancel: cancelFrame,
 		browserContextID: s.browserContextID, targetID: info.TargetID,
 		root: s.contextRoot(), artifactDir: s.artifactDir, frameTarget: true,
+		initialWidth: s.initialWidth, initialHeight: s.initialHeight,
+		highFidelity: s.highFidelity, cacheEnabled: true,
 	}
 	registered, err := s.browser.registerFrameSession(frameSession)
 	if err != nil {
@@ -189,6 +178,7 @@ func (s *Session) attachFrame(ctx context.Context, info *target.Info) (*Frame, e
 		cancelFrame()
 		return &Frame{Session: registered, url: info.URL}, nil
 	}
+	frameSession.eventsEnabled.Store(true)
 	s.browser.listenToSession(frameSession)
 	return &Frame{Session: frameSession, url: info.URL}, nil
 }

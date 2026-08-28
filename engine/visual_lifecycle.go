@@ -6,10 +6,11 @@ import (
 )
 
 type visualLifecycle struct {
-	color   bool
-	frozen  bool
-	emulate func(context.Context, string) error
-	handler func(context.Context, string, string) (HandlerResponse, error)
+	color         bool
+	frozen        bool
+	previousMedia Media
+	emulate       func(context.Context, string) error
+	handler       func(context.Context, string, string) (HandlerResponse, error)
 }
 
 func (s *Session) emulateVisualColor(ctx context.Context, scheme string) error {
@@ -27,7 +28,15 @@ func (s *Session) runVisualHandler(ctx context.Context, name, arg string) (Handl
 }
 
 func (s *Session) applyVisualColor(ctx context.Context, scheme string) error {
+	if !s.visual.color {
+		s.visual.previousMedia = s.media
+	}
 	s.visual.color = true
+	if s.visual.emulate == nil {
+		media := s.media
+		media.ColorScheme = scheme
+		return setMedia(ctx, media)
+	}
 	return s.emulateVisualColor(ctx, scheme)
 }
 
@@ -35,10 +44,17 @@ func (s *Session) clearVisualColor(ctx context.Context) error {
 	if !s.visual.color {
 		return nil
 	}
-	if err := s.emulateVisualColor(ctx, ""); err != nil {
+	var err error
+	if s.visual.emulate == nil {
+		err = setMedia(ctx, s.visual.previousMedia)
+	} else {
+		err = s.emulateVisualColor(ctx, s.visual.previousMedia.ColorScheme)
+	}
+	if err != nil {
 		return err
 	}
 	s.visual.color = false
+	s.visual.previousMedia = Media{}
 	return nil
 }
 
