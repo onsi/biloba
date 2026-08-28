@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -20,6 +21,7 @@ var Capabilities = []string{
 	"action.set_upload", "viewport.set", "evaluate", "evaluate.async", "assert.visible", "assert.text", "assert.count", "assert.attribute",
 	"assert.value", "assert.url", "assert.evaluate", "poll.server_side", "diagnostics.structured",
 	"dom.typed", "dom.collections", "dom.geometry", "dom.style", "dom.selection", "action.pointer_options", "action.scroll", "action.element_javascript", "keyboard.modifiers",
+	"lifecycle.tabs", "lifecycle.context_identity", "lifecycle.cookies", "lifecycle.storage", "lifecycle.javascript", "lifecycle.page_state", "lifecycle.console", "lifecycle.emulation", "lifecycle.frames",
 }
 
 type ErrorCode string
@@ -81,6 +83,39 @@ type TabSession interface {
 	NewTab(context.Context) (Session, error)
 }
 
+// DiscoverableSession exposes live page and frame handles without leaking the underlying CDP
+// representation across the runner-neutral protocol boundary.
+type DiscoverableSession interface {
+	Session
+	Metadata() SessionMetadata
+	Tabs(context.Context) ([]Session, error)
+	WaitForTab(context.Context, TabQuery, PollPolicy) (Session, error)
+	Frames(context.Context) ([]Session, error)
+	WaitForFrame(context.Context, FrameQuery, PollPolicy) (Session, error)
+}
+
+type SessionMetadata struct {
+	ContextID   string
+	TargetID    string
+	OpenerID    string
+	OwnsContext bool
+	Frame       bool
+	URL         string
+}
+
+type TabQuery struct {
+	SpawnedOnly bool
+	Title       *Expectation
+	URL         *Expectation
+	HasElement  *Locator
+}
+
+type FrameQuery struct {
+	Title      *Expectation
+	URL        *Expectation
+	HasElement *Locator
+}
+
 type OperationKind uint8
 
 const (
@@ -101,6 +136,40 @@ const (
 	OperationAddInitScript
 	OperationActivate
 	OperationDOM
+	OperationLifecycle
+)
+
+type LifecycleOperationKind uint8
+
+const (
+	LifecycleGetCookies LifecycleOperationKind = iota + 1
+	LifecycleClearCookies
+	LifecycleCookieQuery
+	LifecycleStorageSet
+	LifecycleStorageGet
+	LifecycleStorageGetAll
+	LifecycleStorageRemove
+	LifecycleStorageClear
+	LifecycleStorageLength
+	LifecycleWaitForDefined
+	LifecycleURL
+	LifecycleTitle
+	LifecycleWindowSize
+	LifecycleOutline
+	LifecycleAccessibilityOutline
+	LifecycleConsoleMessages
+	LifecycleSetDeviceMetrics
+	LifecycleClearDeviceMetrics
+	LifecycleSetGeolocation
+	LifecycleClearGeolocation
+	LifecycleSetPermissions
+	LifecycleResetPermissions
+	LifecycleSetLocale
+	LifecycleClearLocale
+	LifecycleSetTimezone
+	LifecycleClearTimezone
+	LifecycleSetMedia
+	LifecycleClearMedia
 )
 
 type Operation struct {
@@ -127,6 +196,42 @@ type Operation struct {
 	Expectation    Expectation
 	HoldID         string
 	DOM            DOMOperation
+	Lifecycle      LifecycleOperation
+}
+
+type LifecycleOperation struct {
+	Kind              LifecycleOperationKind
+	Area              string
+	Key               string
+	ValueJSON         string
+	Expression        string
+	Expectation       Expectation
+	Cookie            CookieQuery
+	Count             bool
+	Width             int
+	Height            int
+	DeviceScaleFactor float64
+	Mobile            bool
+	Latitude          float64
+	Longitude         float64
+	Accuracy          float64
+	Origin            string
+	Permissions       map[string]string
+	Locale            string
+	Timezone          string
+	MediaType         string
+	ColorScheme       string
+	ReducedMotion     string
+}
+
+type CookieQuery struct {
+	Name     *Expectation
+	Value    *Expectation
+	Domain   *Expectation
+	Path     *Expectation
+	SameSite *Expectation
+	Secure   *bool
+	HTTPOnly *bool
 }
 
 type LocatorKind uint8
@@ -401,11 +506,48 @@ type HandshakeResponse struct {
 }
 
 type OpenSessionResponse struct {
-	SessionID string `json:"sessionId"`
+	SessionID   string `json:"sessionId"`
+	ContextID   string `json:"contextId,omitempty"`
+	TargetID    string `json:"targetId,omitempty"`
+	OpenerID    string `json:"openerId,omitempty"`
+	OwnsContext bool   `json:"ownsContext,omitempty"`
+	Frame       bool   `json:"frame,omitempty"`
+	URL         string `json:"url,omitempty"`
 }
 
 type SessionRequest struct {
 	SessionID string `json:"sessionId"`
+}
+
+type TabQueryRequest struct {
+	SpawnedOnly bool             `json:"spawnedOnly,omitempty"`
+	Title       *WireExpectation `json:"title,omitempty"`
+	URL         *WireExpectation `json:"url,omitempty"`
+	Has         *WireLocator     `json:"has,omitempty"`
+}
+
+type ListHandlesRequest struct {
+	SessionID   string `json:"sessionId"`
+	SpawnedOnly bool   `json:"spawnedOnly,omitempty"`
+}
+
+type WaitForTabRequest struct {
+	SessionID string          `json:"sessionId"`
+	Query     TabQueryRequest `json:"query"`
+	Poll      PollOptions     `json:"poll,omitempty"`
+}
+
+type WaitForFrameRequest struct {
+	SessionID string          `json:"sessionId"`
+	Query     TabQueryRequest `json:"query"`
+	Poll      PollOptions     `json:"poll,omitempty"`
+}
+
+type HandleListResponse struct {
+	Handles []OpenSessionResponse `json:"handles"`
+}
+type InvalidationResponse struct {
+	InvalidatedSessionIDs []string `json:"invalidatedSessionIds,omitempty"`
 }
 
 type NavigateRequest struct {
@@ -514,6 +656,63 @@ type WireCookie struct {
 type SetCookiesRequest struct {
 	SessionID string       `json:"sessionId"`
 	Cookies   []WireCookie `json:"cookies"`
+}
+
+type WireCookieQuery struct {
+	Name     *WireExpectation `json:"name,omitempty"`
+	Value    *WireExpectation `json:"value,omitempty"`
+	Domain   *WireExpectation `json:"domain,omitempty"`
+	Path     *WireExpectation `json:"path,omitempty"`
+	SameSite *WireExpectation `json:"sameSite,omitempty"`
+	Secure   *bool            `json:"secure,omitempty"`
+	HTTPOnly *bool            `json:"httpOnly,omitempty"`
+}
+
+type WireDeviceMetrics struct {
+	Width             int     `json:"width"`
+	Height            int     `json:"height"`
+	DeviceScaleFactor float64 `json:"deviceScaleFactor"`
+	Mobile            bool    `json:"mobile,omitempty"`
+}
+
+type WireGeolocation struct {
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
+	Accuracy  float64 `json:"accuracy,omitempty"`
+}
+
+type WireMedia struct {
+	Type          string `json:"type,omitempty"`
+	ColorScheme   string `json:"colorScheme,omitempty"`
+	ReducedMotion string `json:"reducedMotion,omitempty"`
+}
+
+type WireLifecycleOperation struct {
+	Kind        string             `json:"kind"`
+	Area        string             `json:"area,omitempty"`
+	Key         string             `json:"key,omitempty"`
+	ValueJSON   string             `json:"valueJson,omitempty"`
+	Expression  string             `json:"expression,omitempty"`
+	Cookie      *WireCookieQuery   `json:"cookie,omitempty"`
+	Count       bool               `json:"count,omitempty"`
+	Device      *WireDeviceMetrics `json:"device,omitempty"`
+	Geolocation *WireGeolocation   `json:"geolocation,omitempty"`
+	Origin      string             `json:"origin,omitempty"`
+	Permissions map[string]string  `json:"permissions,omitempty"`
+	Locale      string             `json:"locale,omitempty"`
+	Timezone    string             `json:"timezone,omitempty"`
+	Media       *WireMedia         `json:"media,omitempty"`
+}
+
+type LifecycleRequest struct {
+	SessionID   string                  `json:"sessionId"`
+	Operation   *WireLifecycleOperation `json:"operation"`
+	Expectation *WireExpectation        `json:"expectation,omitempty"`
+	Poll        PollOptions             `json:"poll,omitempty"`
+}
+
+type CookieListResponse struct {
+	Cookies []WireCookie `json:"cookies"`
 }
 
 type LocatorRequest struct {
@@ -681,15 +880,12 @@ func (s *Server) Dispatch(ctx context.Context, method string, params json.RawMes
 		if err != nil {
 			return nil, normalizeError(err)
 		}
-		id, idErr := randomID()
-		if idErr != nil {
+		opened, openErr := s.registerSession(session)
+		if openErr != nil {
 			_ = session.Close()
-			return nil, NewError(CodeDriver, "generate session id")
+			return nil, openErr
 		}
-		s.mu.Lock()
-		s.sessions[id] = &sessionEntry{session: session}
-		s.mu.Unlock()
-		return OpenSessionResponse{SessionID: id}, nil
+		return opened, nil
 	case "newTab":
 		var request SessionRequest
 		if err := decodeParams(params, &request); err != nil {
@@ -709,15 +905,80 @@ func (s *Server) Dispatch(ctx context.Context, method string, params json.RawMes
 		if openErr != nil {
 			return nil, normalizeError(openErr)
 		}
-		id, idErr := randomID()
-		if idErr != nil {
+		opened, registerErr := s.registerSession(sibling)
+		if registerErr != nil {
 			_ = sibling.Close()
-			return nil, NewError(CodeDriver, "generate session id")
+			return nil, registerErr
 		}
-		s.mu.Lock()
-		s.sessions[id] = &sessionEntry{session: sibling}
-		s.mu.Unlock()
-		return OpenSessionResponse{SessionID: id}, nil
+		return opened, nil
+	case "listTabs", "listFrames":
+		var request ListHandlesRequest
+		if err := decodeParams(params, &request); err != nil {
+			return nil, err
+		}
+		entry, err := s.session(request.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		discoverable, ok := entry.session.(DiscoverableSession)
+		if !ok {
+			return nil, NewError(CodeDriver, "session backend does not support handle discovery")
+		}
+		var handles []Session
+		var discoverErr error
+		if method == "listFrames" {
+			handles, discoverErr = discoverable.Frames(ctx)
+		} else {
+			handles, discoverErr = discoverable.Tabs(ctx)
+		}
+		if discoverErr != nil {
+			return nil, normalizeError(discoverErr)
+		}
+		response := HandleListResponse{Handles: []OpenSessionResponse{}}
+		for _, handle := range handles {
+			meta, hasMeta := handle.(DiscoverableSession)
+			if method == "listTabs" && request.SpawnedOnly && (!hasMeta || meta.Metadata().OpenerID == "") {
+				continue
+			}
+			opened, registerErr := s.registerSession(handle)
+			if registerErr != nil {
+				return nil, registerErr
+			}
+			response.Handles = append(response.Handles, opened)
+		}
+		return response, nil
+	case "waitForTab", "waitForFrame":
+		var request WaitForTabRequest
+		if err := decodeParams(params, &request); err != nil {
+			return nil, err
+		}
+		entry, err := s.session(request.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		discoverable, ok := entry.session.(DiscoverableSession)
+		if !ok {
+			return nil, NewError(CodeDriver, "session backend does not support handle discovery")
+		}
+		query, queryErr := tabQueryFromWire(request.Query)
+		if queryErr != nil {
+			return nil, queryErr
+		}
+		policy, policyErr := pollFromWire(request.Poll)
+		if policyErr != nil {
+			return nil, policyErr
+		}
+		var handle Session
+		var waitErr error
+		if method == "waitForFrame" {
+			handle, waitErr = discoverable.WaitForFrame(ctx, FrameQuery{Title: query.Title, URL: query.URL, HasElement: query.HasElement}, policy)
+		} else {
+			handle, waitErr = discoverable.WaitForTab(ctx, query, policy)
+		}
+		if waitErr != nil {
+			return nil, normalizeError(waitErr)
+		}
+		return s.registerSession(handle)
 	case "prepareSession":
 		var request SessionRequest
 		if err := decodeParams(params, &request); err != nil {
@@ -732,7 +993,7 @@ func (s *Server) Dispatch(ctx context.Context, method string, params json.RawMes
 		if prepareErr := entry.session.Prepare(ctx); prepareErr != nil {
 			return nil, normalizeError(prepareErr)
 		}
-		return struct{}{}, nil
+		return InvalidationResponse{InvalidatedSessionIDs: s.invalidateContext(entry.session, request.SessionID, true)}, nil
 	case "closeSession":
 		var request SessionRequest
 		if err := decodeParams(params, &request); err != nil {
@@ -768,6 +1029,46 @@ func (s *Server) Dispatch(ctx context.Context, method string, params json.RawMes
 			cookies[i] = Cookie{Name: cookie.Name, Value: cookie.Value, Domain: cookie.Domain, Path: cookie.Path, Secure: cookie.Secure, HTTPOnly: cookie.HTTPOnly, ExpiresUnix: cookie.ExpiresUnix, SameSite: cookie.SameSite}
 		}
 		return s.execute(ctx, request.SessionID, Operation{Kind: OperationSetCookies, Cookies: cookies})
+	case "getCookies":
+		var request SessionRequest
+		if err := decodeParams(params, &request); err != nil {
+			return nil, err
+		}
+		result, executeErr := s.execute(ctx, request.SessionID, Operation{Kind: OperationLifecycle, Lifecycle: LifecycleOperation{Kind: LifecycleGetCookies}})
+		if executeErr != nil {
+			return nil, executeErr
+		}
+		operationResult := result.(OperationResult)
+		var cookies []WireCookie
+		if operationResult.ObservedJSON != "" {
+			if err := json.Unmarshal([]byte(operationResult.ObservedJSON), &cookies); err != nil {
+				return nil, NewError(CodeDriver, "decode cookie snapshot: "+err.Error())
+			}
+		}
+		if cookies == nil {
+			cookies = []WireCookie{}
+		}
+		return CookieListResponse{Cookies: cookies}, nil
+	case "clearCookies":
+		var request SessionRequest
+		if err := decodeParams(params, &request); err != nil {
+			return nil, err
+		}
+		return s.execute(ctx, request.SessionID, Operation{Kind: OperationLifecycle, Lifecycle: LifecycleOperation{Kind: LifecycleClearCookies}})
+	case "lifecycle":
+		var request LifecycleRequest
+		if err := decodeParams(params, &request); err != nil {
+			return nil, err
+		}
+		operation, operationErr := lifecycleOperationFromWire(request.Operation, request.Expectation)
+		if operationErr != nil {
+			return nil, operationErr
+		}
+		policy, policyErr := pollFromWire(request.Poll)
+		if policyErr != nil {
+			return nil, policyErr
+		}
+		return s.execute(ctx, request.SessionID, Operation{Kind: OperationLifecycle, Lifecycle: operation, Poll: policy})
 	case "click":
 		var request LocatorRequest
 		if err := decodeParams(params, &request); err != nil {
@@ -1155,7 +1456,55 @@ func (s *Server) closeSession(id string) (any, *ProtocolError) {
 	if err := entry.session.Close(); err != nil {
 		return nil, normalizeError(err)
 	}
-	return struct{}{}, nil
+	invalidated := s.invalidateContext(entry.session, id, false)
+	invalidated = append([]string{id}, invalidated...)
+	return InvalidationResponse{InvalidatedSessionIDs: invalidated}, nil
+}
+
+func (s *Server) registerSession(session Session) (OpenSessionResponse, *ProtocolError) {
+	metadata := SessionMetadata{}
+	if discoverable, ok := session.(DiscoverableSession); ok {
+		metadata = discoverable.Metadata()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if metadata.TargetID != "" {
+		for id, entry := range s.sessions {
+			if existing, ok := entry.session.(DiscoverableSession); ok && existing.Metadata().TargetID == metadata.TargetID {
+				return openSessionResponse(id, metadata), nil
+			}
+		}
+	}
+	id, err := randomID()
+	if err != nil {
+		return OpenSessionResponse{}, NewError(CodeDriver, "generate session id")
+	}
+	s.sessions[id] = &sessionEntry{session: session}
+	return openSessionResponse(id, metadata), nil
+}
+
+func openSessionResponse(id string, metadata SessionMetadata) OpenSessionResponse {
+	return OpenSessionResponse{SessionID: id, ContextID: metadata.ContextID, TargetID: metadata.TargetID, OpenerID: metadata.OpenerID, OwnsContext: metadata.OwnsContext, Frame: metadata.Frame, URL: metadata.URL}
+}
+
+func (s *Server) invalidateContext(session Session, keepID string, keepSelf bool) []string {
+	discoverable, ok := session.(DiscoverableSession)
+	if !ok || discoverable.Metadata().ContextID == "" {
+		return nil
+	}
+	metadata := discoverable.Metadata()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	invalidated := []string{}
+	for id, entry := range s.sessions {
+		candidate, ok := entry.session.(DiscoverableSession)
+		if !ok || candidate.Metadata().ContextID != metadata.ContextID || (keepSelf && id == keepID) {
+			continue
+		}
+		delete(s.sessions, id)
+		invalidated = append(invalidated, id)
+	}
+	return invalidated
 }
 
 func (s *Server) Close() error {
@@ -1191,6 +1540,100 @@ func pollFromWire(poll PollOptions) (PollPolicy, *ProtocolError) {
 		return PollPolicy{}, NewError(CodeInvalidArgument, "unsupported poll mode")
 	}
 	return PollPolicy{Timeout: time.Duration(poll.TimeoutMS) * time.Millisecond, Interval: time.Duration(poll.IntervalMS) * time.Millisecond, Mode: mode}, nil
+}
+
+func tabQueryFromWire(query TabQueryRequest) (TabQuery, *ProtocolError) {
+	result := TabQuery{SpawnedOnly: query.SpawnedOnly}
+	var err *ProtocolError
+	if query.Title != nil {
+		value, decodeErr := expectationFromWire(query.Title, 0)
+		if decodeErr != nil {
+			return TabQuery{}, decodeErr
+		}
+		result.Title = &value
+	}
+	if query.URL != nil {
+		value, decodeErr := expectationFromWire(query.URL, 0)
+		if decodeErr != nil {
+			return TabQuery{}, decodeErr
+		}
+		result.URL = &value
+	}
+	if query.Has != nil {
+		value, decodeErr := locatorFromWire(query.Has)
+		if decodeErr != nil {
+			return TabQuery{}, decodeErr
+		}
+		result.HasElement = &value
+	}
+	return result, err
+}
+
+func lifecycleOperationFromWire(operation *WireLifecycleOperation, expected *WireExpectation) (LifecycleOperation, *ProtocolError) {
+	if operation == nil {
+		return LifecycleOperation{}, NewError(CodeInvalidArgument, "lifecycle operation is required")
+	}
+	kinds := map[string]LifecycleOperationKind{
+		"GET_COOKIES": LifecycleGetCookies, "CLEAR_COOKIES": LifecycleClearCookies, "COOKIE_QUERY": LifecycleCookieQuery,
+		"STORAGE_SET": LifecycleStorageSet, "STORAGE_GET": LifecycleStorageGet, "STORAGE_GET_ALL": LifecycleStorageGetAll, "STORAGE_REMOVE": LifecycleStorageRemove, "STORAGE_CLEAR": LifecycleStorageClear, "STORAGE_LENGTH": LifecycleStorageLength,
+		"WAIT_FOR_DEFINED": LifecycleWaitForDefined, "URL": LifecycleURL, "TITLE": LifecycleTitle, "WINDOW_SIZE": LifecycleWindowSize, "OUTLINE": LifecycleOutline, "ACCESSIBILITY_OUTLINE": LifecycleAccessibilityOutline, "CONSOLE_MESSAGES": LifecycleConsoleMessages,
+		"SET_DEVICE_METRICS": LifecycleSetDeviceMetrics, "CLEAR_DEVICE_METRICS": LifecycleClearDeviceMetrics, "SET_GEOLOCATION": LifecycleSetGeolocation, "CLEAR_GEOLOCATION": LifecycleClearGeolocation,
+		"SET_PERMISSIONS": LifecycleSetPermissions, "RESET_PERMISSIONS": LifecycleResetPermissions, "SET_LOCALE": LifecycleSetLocale, "CLEAR_LOCALE": LifecycleClearLocale, "SET_TIMEZONE": LifecycleSetTimezone, "CLEAR_TIMEZONE": LifecycleClearTimezone, "SET_MEDIA": LifecycleSetMedia, "CLEAR_MEDIA": LifecycleClearMedia,
+	}
+	kind, ok := kinds[operation.Kind]
+	if !ok {
+		return LifecycleOperation{}, NewError(CodeInvalidArgument, "unsupported lifecycle operation")
+	}
+	result := LifecycleOperation{Kind: kind, Area: operation.Area, Key: operation.Key, ValueJSON: operation.ValueJSON, Expression: operation.Expression, Count: operation.Count, Origin: operation.Origin, Permissions: operation.Permissions, Locale: operation.Locale, Timezone: operation.Timezone}
+	if operation.Device != nil {
+		result.Width = operation.Device.Width
+		result.Height = operation.Device.Height
+		result.DeviceScaleFactor = operation.Device.DeviceScaleFactor
+		result.Mobile = operation.Device.Mobile
+	}
+	if operation.Geolocation != nil {
+		result.Latitude = operation.Geolocation.Latitude
+		result.Longitude = operation.Geolocation.Longitude
+		result.Accuracy = operation.Geolocation.Accuracy
+	}
+	if operation.Media != nil {
+		result.MediaType = operation.Media.Type
+		result.ColorScheme = operation.Media.ColorScheme
+		result.ReducedMotion = operation.Media.ReducedMotion
+	}
+	if expected != nil {
+		expectation, err := expectationFromWire(expected, 0)
+		if err != nil {
+			return LifecycleOperation{}, err
+		}
+		result.Expectation = expectation
+	}
+	if operation.Cookie != nil {
+		result.Cookie.Secure, result.Cookie.HTTPOnly = operation.Cookie.Secure, operation.Cookie.HTTPOnly
+		for source, destination := range map[*WireExpectation]**Expectation{operation.Cookie.Name: &result.Cookie.Name, operation.Cookie.Value: &result.Cookie.Value, operation.Cookie.Domain: &result.Cookie.Domain, operation.Cookie.Path: &result.Cookie.Path, operation.Cookie.SameSite: &result.Cookie.SameSite} {
+			if source == nil {
+				continue
+			}
+			value, err := expectationFromWire(source, 0)
+			if err != nil {
+				return LifecycleOperation{}, err
+			}
+			*destination = &value
+		}
+	}
+	if strings.HasPrefix(operation.Kind, "STORAGE_") && operation.Area != "localStorage" && operation.Area != "sessionStorage" {
+		return LifecycleOperation{}, NewError(CodeInvalidArgument, "storage area must be localStorage or sessionStorage")
+	}
+	if operation.Kind == "STORAGE_SET" && operation.ValueJSON == "" {
+		return LifecycleOperation{}, NewError(CodeInvalidArgument, "storage set requires valueJson")
+	}
+	if operation.ValueJSON != "" {
+		var value any
+		if err := json.Unmarshal([]byte(operation.ValueJSON), &value); err != nil {
+			return LifecycleOperation{}, NewError(CodeInvalidArgument, "invalid lifecycle valueJson: "+err.Error())
+		}
+	}
+	return result, nil
 }
 
 func locatorFromWire(locator *WireLocator) (Locator, *ProtocolError) {

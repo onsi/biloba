@@ -3,6 +3,7 @@ package protocol_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,7 @@ var _ = Describe("driver protocol", func() {
 		Expect(client.call("handshake", protocol.HandshakeRequest{ProtocolVersion: protocol.Version}, &response)).To(Succeed())
 		Expect(response.ProtocolVersion).To(Equal(protocol.Version))
 		Expect(response.Capabilities).NotTo(BeEmpty())
+		Expect(response.Capabilities).To(ContainElements("lifecycle.tabs", "lifecycle.cookies", "lifecycle.storage", "lifecycle.emulation", "lifecycle.frames"))
 
 		err := client.call("handshake", protocol.HandshakeRequest{ProtocolVersion: "999"}, nil)
 		Expect(err).To(MatchError(ContainSubstring("protocol version mismatch")))
@@ -49,6 +51,64 @@ var _ = Describe("driver protocol", func() {
 		Expect(backend.opened).To(Equal(1))
 		Expect(backend.session.prepared).To(Equal(1))
 		Expect(backend.session.closed).To(Equal(1))
+	})
+
+	It("serves typed lifecycle state operations", func() {
+		client, cleanup := startTestServer(&fakeBackend{session: &fakeSession{result: protocol.Result{Matched: true, Attempts: 1, ObservedJSON: `[]`}}})
+		DeferCleanup(cleanup)
+
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+		var cookies struct {
+			Cookies []protocol.WireCookie `json:"cookies"`
+		}
+		Expect(client.call("getCookies", protocol.SessionRequest{SessionID: opened.SessionID}, &cookies)).To(Succeed())
+		Expect(cookies.Cookies).To(BeEmpty())
+	})
+
+	It("validates and carries lifecycle operation categories", func() {
+		recorder := &recordingSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+
+		Expect(client.call("lifecycle", protocol.LifecycleRequest{
+			SessionID:   opened.SessionID,
+			Operation:   &protocol.WireLifecycleOperation{Kind: "STORAGE_GET", Area: "localStorage", Key: "ready"},
+			Expectation: &protocol.WireExpectation{Kind: "EQUAL", ExpectedJSON: `true`},
+			Poll:        protocol.PollOptions{Mode: "EVENTUALLY", TimeoutMS: 250},
+		}, nil)).To(Succeed())
+		Expect(recorder.lastOperation().Lifecycle.Kind).To(Equal(protocol.LifecycleStorageGet))
+		Expect(recorder.lastOperation().Lifecycle.Key).To(Equal("ready"))
+		Expect(recorder.lastOperation().Poll.Timeout).To(Equal(250 * time.Millisecond))
+
+		err := client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "STORAGE_GET", Area: "indexedDB"}}, nil)
+		Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
+		err = client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "RAW_CDP"}}, nil)
+		Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
+	})
+
+	It("registers discovered handles once and invalidates context siblings on prepare", func() {
+		child := &discoverableSession{metadata: protocol.SessionMetadata{ContextID: "context-a", TargetID: "child", OpenerID: "root"}}
+		root := &discoverableSession{metadata: protocol.SessionMetadata{ContextID: "context-a", TargetID: "root", OwnsContext: true}, tabs: []protocol.Session{child}}
+		client, cleanup := startTestServer(&fakeBackend{custom: root})
+		DeferCleanup(cleanup)
+
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+		Expect(opened.ContextID).To(Equal("context-a"))
+		var first, second protocol.HandleListResponse
+		Expect(client.call("listTabs", protocol.ListHandlesRequest{SessionID: opened.SessionID}, &first)).To(Succeed())
+		Expect(client.call("listTabs", protocol.ListHandlesRequest{SessionID: opened.SessionID}, &second)).To(Succeed())
+		Expect(first.Handles).To(HaveLen(1))
+		Expect(second.Handles[0].SessionID).To(Equal(first.Handles[0].SessionID))
+
+		var prepared protocol.InvalidationResponse
+		Expect(client.call("prepareSession", protocol.SessionRequest{SessionID: opened.SessionID}, &prepared)).To(Succeed())
+		Expect(prepared.InvalidatedSessionIDs).To(ConsistOf(first.Handles[0].SessionID))
+		err := client.call("prepareSession", protocol.SessionRequest{SessionID: first.Handles[0].SessionID}, nil)
+		Expect(err.Code).To(Equal(protocol.CodeTargetNotFound))
 	})
 
 	// `invoke` is what makes an expression's meaning explicit on the wire: without it the daemon has
@@ -515,6 +575,37 @@ type blockingSession struct {
 	active, maxActive int
 	entered           chan string
 	release           chan struct{}
+}
+
+type discoverableSession struct {
+	metadata protocol.SessionMetadata
+	tabs     []protocol.Session
+	frames   []protocol.Session
+}
+
+func (s *discoverableSession) Metadata() protocol.SessionMetadata { return s.metadata }
+func (s *discoverableSession) Prepare(context.Context) error      { return nil }
+func (s *discoverableSession) Close() error                       { return nil }
+func (s *discoverableSession) Execute(context.Context, protocol.Operation) (protocol.Result, error) {
+	return protocol.Result{Matched: true, Attempts: 1}, nil
+}
+func (s *discoverableSession) Tabs(context.Context) ([]protocol.Session, error) {
+	return s.tabs, nil
+}
+func (s *discoverableSession) Frames(context.Context) ([]protocol.Session, error) {
+	return s.frames, nil
+}
+func (s *discoverableSession) WaitForTab(context.Context, protocol.TabQuery, protocol.PollPolicy) (protocol.Session, error) {
+	if len(s.tabs) == 0 {
+		return nil, errors.New("no tab")
+	}
+	return s.tabs[0], nil
+}
+func (s *discoverableSession) WaitForFrame(context.Context, protocol.FrameQuery, protocol.PollPolicy) (protocol.Session, error) {
+	if len(s.frames) == 0 {
+		return nil, errors.New("no frame")
+	}
+	return s.frames[0], nil
 }
 
 func (*blockingSession) Prepare(context.Context) error { return nil }

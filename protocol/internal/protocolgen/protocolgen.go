@@ -49,6 +49,12 @@ var declarations = []reflect.Type{
 	reflect.TypeFor[protocol.HandshakeResponse](),
 	reflect.TypeFor[protocol.OpenSessionResponse](),
 	reflect.TypeFor[protocol.SessionRequest](),
+	reflect.TypeFor[protocol.TabQueryRequest](),
+	reflect.TypeFor[protocol.ListHandlesRequest](),
+	reflect.TypeFor[protocol.WaitForTabRequest](),
+	reflect.TypeFor[protocol.WaitForFrameRequest](),
+	reflect.TypeFor[protocol.HandleListResponse](),
+	reflect.TypeFor[protocol.InvalidationResponse](),
 	reflect.TypeFor[protocol.NavigateRequest](),
 	reflect.TypeFor[protocol.PollOptions](),
 	reflect.TypeFor[protocol.WireLocator](),
@@ -59,6 +65,13 @@ var declarations = []reflect.Type{
 	reflect.TypeFor[protocol.DOMRequest](),
 	reflect.TypeFor[protocol.WireCookie](),
 	reflect.TypeFor[protocol.SetCookiesRequest](),
+	reflect.TypeFor[protocol.WireCookieQuery](),
+	reflect.TypeFor[protocol.WireDeviceMetrics](),
+	reflect.TypeFor[protocol.WireGeolocation](),
+	reflect.TypeFor[protocol.WireMedia](),
+	reflect.TypeFor[protocol.WireLifecycleOperation](),
+	reflect.TypeFor[protocol.LifecycleRequest](),
+	reflect.TypeFor[protocol.CookieListResponse](),
 	reflect.TypeFor[protocol.LocatorRequest](),
 	reflect.TypeFor[protocol.SetValueRequest](),
 	reflect.TypeFor[protocol.TypeRequest](),
@@ -153,6 +166,9 @@ func tsType(owner reflect.Type, field reflect.StructField) string {
 			return `"EXACT" | "CONTAINS"`
 		}
 	}
+	if owner == reflect.TypeFor[protocol.WireLifecycleOperation]() && field.Name == "Kind" {
+		return `"GET_COOKIES" | "CLEAR_COOKIES" | "COOKIE_QUERY" | "STORAGE_SET" | "STORAGE_GET" | "STORAGE_GET_ALL" | "STORAGE_REMOVE" | "STORAGE_CLEAR" | "STORAGE_LENGTH" | "WAIT_FOR_DEFINED" | "URL" | "TITLE" | "WINDOW_SIZE" | "OUTLINE" | "ACCESSIBILITY_OUTLINE" | "CONSOLE_MESSAGES" | "SET_DEVICE_METRICS" | "CLEAR_DEVICE_METRICS" | "SET_GEOLOCATION" | "CLEAR_GEOLOCATION" | "SET_PERMISSIONS" | "RESET_PERMISSIONS" | "SET_LOCALE" | "CLEAR_LOCALE" | "SET_TIMEZONE" | "CLEAR_TIMEZONE" | "SET_MEDIA" | "CLEAR_MEDIA"`
+	}
 	if owner == reflect.TypeFor[protocol.PollOptions]() && field.Name == "Mode" {
 		return `"EVENTUALLY" | "IMMEDIATE" | "CONSISTENTLY"`
 	}
@@ -186,6 +202,8 @@ func typeName(value reflect.Type) string {
 		return "number"
 	case reflect.Slice:
 		return typeName(value.Elem()) + "[]"
+	case reflect.Map:
+		return "Record<" + typeName(value.Key()) + ", " + typeName(value.Elem()) + ">"
 	case reflect.Struct:
 		return tsName(value)
 	default:
