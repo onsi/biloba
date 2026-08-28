@@ -380,16 +380,14 @@ func (s *engineSession) domAssertion(operation protocol.DOMOperation) (engine.As
 		matched := operationErr == nil
 		if operation.Expectation.Kind != 0 {
 			if operation.Every {
-				matched, err = everyMatches(observation.Value, operation.ProjectName, expectation)
+				matched, err = everyMatches(jsonShape(observation.Value), operation.ProjectName, expectation)
 			} else {
-				matched, err = engine.MatchExpectation(observation.Value, expectation)
+				matched, err = engine.MatchExpectation(jsonShape(observation.Value), expectation)
 			}
 			if err != nil {
 				return observation, false, engine.Fatal(protocol.NewError(protocol.CodeInvalidArgument, err.Error()))
 			}
-			if matched && operationErr != nil && !engine.IsFatal(operationErr) {
-				operationErr = nil
-			}
+			operationErr = clearedReadError(matched, operationErr)
 		}
 		return observation, matched, operationErr
 	}, nil
@@ -620,13 +618,11 @@ func (s *engineSession) assertion(assertion protocol.Assertion) (engine.Assertio
 			// ever were reached, retrying would turn a rejected request into an assertion timeout.
 			return observation, false, engine.Fatal(protocol.NewError(protocol.CodeInvalidArgument, "unsupported assertion"))
 		}
-		matched, compareErr := engine.MatchExpectation(observation.Value, expectation)
+		matched, compareErr := engine.MatchExpectation(jsonShape(observation.Value), expectation)
 		if compareErr != nil {
 			return observation, false, engine.Fatal(protocol.NewError(protocol.CodeInvalidArgument, compareErr.Error()))
 		}
-		if matched && readErr != nil && !engine.IsFatal(readErr) {
-			readErr = nil
-		}
+		readErr = clearedReadError(matched, readErr)
 		return observation, matched, readErr
 	}, nil
 }
@@ -968,6 +964,9 @@ var engineProtocolCodes = map[engine.ErrorCode]protocol.ErrorCode{
 	// The target was found and refused the operation - a click on a hidden element.  That is a page
 	// state, not a driver fault, and it is the one bucket where a retry might succeed.
 	engine.CodeActionFailed: protocol.CodeTargetNotReady,
+	// The handler ran and answered no.  Same bucket as a refused action: the page could still change
+	// its mind, so a retry is meaningful.
+	engine.CodeConditionNotMet: protocol.CodeTargetNotReady,
 	// A navigation that landed on a status the caller did not ask for.  Deliberately not
 	// TARGET_NOT_READY: the page loaded fine, so waiting will never change the answer.
 	engine.CodeNavigation:    protocol.CodeNavigation,
@@ -1001,4 +1000,44 @@ func engineRPCError(err error) error {
 		code = protocol.CodeDriver
 	}
 	return protocol.NewError(code, engineErr.Error())
+}
+
+// jsonShape renders an observation the way the client sees it, so an expectation decoded from the
+// wire can be compared against it.  The engine answers in Go types - engine.DocumentOrder is a named
+// string, engine.Box and its geometry siblings are structs - while the expectation arrives as
+// decoded JSON.  reflect.DeepEqual is type-sensitive, so without this an EQUAL fed the exact value
+// the matching read just returned is false forever: the assertion cannot fail loudly, it can only
+// time out.
+func jsonShape(value any) any {
+	switch value.(type) {
+	case nil, bool, string, float64, int, int64, []any, map[string]any:
+		return value
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return value
+	}
+	var decoded any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		return value
+	}
+	return decoded
+}
+
+// clearedReadError decides whether a satisfied expectation may swallow the error the read reported.
+// Only CodeConditionNotMet may be swallowed - the handler ran against a real element and answered
+// "no", which for a negated matcher is the answer rather than a failure.  Everything else survives,
+// above all CodeNotFound: biloba.js raises a selector that matched nothing as an error precisely so
+// that ShouldNot(<matcher>) cannot pass vacuously against an element that was never there (see the
+// poll() comment in biloba.js).  Swallowing it makes expectNotVisible("#missing") pass instantly and
+// makes a poll for a not-yet-rendered value answer null on its first attempt instead of waiting.
+func clearedReadError(matched bool, err error) error {
+	if !matched || err == nil || engine.IsFatal(err) {
+		return err
+	}
+	var engineErr *engine.Error
+	if errors.As(err, &engineErr) && engineErr.Code == engine.CodeConditionNotMet {
+		return nil
+	}
+	return err
 }

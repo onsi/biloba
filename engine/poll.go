@@ -21,6 +21,13 @@ const (
 	CodeJavaScript      ErrorCode = "javascript"
 	CodeNotFound        ErrorCode = "not_found"
 	CodeActionFailed    ErrorCode = "action_failed"
+	// CodeConditionNotMet is a handler that ran to completion against a real element and answered
+	// "no" - an element that exists but is not visible.  It is an error so that a poll keeps going
+	// and Immediate() still fails fast, but it is the one failure a satisfied expectation may
+	// swallow: for a negated matcher, "no" is the answer.  Every other failure - above all
+	// CodeNotFound, which is how biloba.js reports a selector that matched nothing - must survive,
+	// or ShouldNot(...) passes vacuously against an element that was never there.
+	CodeConditionNotMet ErrorCode = "condition_not_met"
 	CodeBrowserGone     ErrorCode = "browser_gone"
 	CodeInvalidScript   ErrorCode = "invalid_script"
 	CodePageCrashed     ErrorCode = "page_crashed"

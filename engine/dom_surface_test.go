@@ -10,6 +10,29 @@ import (
 )
 
 var _ = Describe("typed DOM engine surface", func() {
+	It("normalizes the rendered text, not the raw DOM tree", func(ctx SpecContext) {
+		// Go's HaveText is normalizeWhitespace(innerText) - the rendered, visible text.  Normalizing
+		// textContent instead silently changes the answer: hidden children and <script> bodies come
+		// back, and CSS text-transform is ignored, which is exactly what docs/index.md warns about.
+		session := openDOMSurfaceSession(ctx)
+
+		normalized, err := session.TextByMode(ctx, engine.CSS("#texts"), engine.NormalizedText)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(normalized.Value).To(Equal("visible SHOUT"), "hidden text must stay hidden and text-transform must be honored")
+
+		raw, err := session.TextByMode(ctx, engine.CSS("#texts"), engine.InnerText)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(raw.Value).To(ContainSubstring("SHOUT"))
+
+		content, err := session.TextByMode(ctx, engine.CSS("#texts"), engine.TextContent)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(content.Value).To(ContainSubstring("SECRET"), "textContent keeps its own layout-independent meaning")
+
+		each, err := session.Texts(ctx, engine.CSS("#texts"), engine.NormalizedText)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(each.Value).To(Equal([]any{"visible SHOUT"}))
+	})
+
 	It("encodes extended semantic locators and custom test-id attributes", func() {
 		Expect(engine.Label("Email", engine.Contains).Encoded()).To(ContainSubstring(`"by":"label"`))
 		Expect(engine.Placeholder("you@", engine.Contains).Description()).To(Equal(`getByPlaceholder("you@", contains)`))

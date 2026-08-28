@@ -194,6 +194,71 @@ var _ = Describe("bilobad", func() {
 		})
 	})
 
+	Describe("matching an observation against a wire expectation", func() {
+		// The engine hands back Go types (engine.DocumentOrder, engine.Box, ...) while the expectation
+		// arrives as decoded JSON.  reflect.DeepEqual is type-sensitive, so without rendering the
+		// observation the way the client sees it, EQUAL against the exact value the matching read just
+		// returned is false forever - the assertion can never pass, only time out.
+		It("renders a named string type as the string the client sees", func() {
+			matched, err := engine.MatchExpectation(jsonShape(engine.DocumentOrder("before")), engine.Expectation{Kind: engine.ExpectEqual, Expected: "before"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(matched).To(BeTrue())
+		})
+
+		It("renders a geometry struct as the object the client sees", func() {
+			box := engine.Box{Top: 1, Left: 2, Width: 3, Height: 4}
+			encoded, err := json.Marshal(box)
+			Expect(err).NotTo(HaveOccurred())
+			var expected any
+			Expect(json.Unmarshal(encoded, &expected)).To(Succeed())
+
+			matched, err := engine.MatchExpectation(jsonShape(box), engine.Expectation{Kind: engine.ExpectEqual, Expected: expected})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(matched).To(BeTrue(), "expectBoundingBox fed the value its own read returned must pass")
+		})
+
+		It("leaves values that are already in their JSON shape alone", func() {
+			Expect(jsonShape(nil)).To(BeNil())
+			for _, value := range []any{true, "text", 3.5, 7, []any{"a"}, map[string]any{"k": "v"}} {
+				Expect(jsonShape(value)).To(Equal(value))
+			}
+		})
+	})
+
+	Describe("an assertion whose selector matched nothing", func() {
+		// biloba.js's one() reports a missing element as an error precisely so a negated matcher cannot
+		// pass against a selector that never matched.  Clearing that error whenever the expectation
+		// happens to match the zero value throws the distinction away: ShouldNot(BeVisible()) against
+		// #missing would pass instantly, and a poll for a not-yet-rendered value would return null.
+		notFound := &engine.Error{Code: engine.CodeNotFound, Operation: "isVisible", Message: "could not find DOM element matching selector"}
+		answeredNo := &engine.Error{Code: engine.CodeConditionNotMet, Operation: "isVisible", Message: "operation did not succeed"}
+
+		It("keeps the error when the selector matched nothing", func() {
+			Expect(clearedReadError(true, notFound)).To(MatchError(notFound))
+		})
+
+		It("clears the error when the handler ran and answered no", func() {
+			// expectNotVisible against an element that exists but is hidden: "no" is the answer.
+			Expect(clearedReadError(true, answeredNo)).NotTo(HaveOccurred())
+		})
+
+		It("keeps an error the element itself could not answer", func() {
+			// isChecked on a <label> raises rather than answering false, so that expectNotChecked
+			// cannot pass forever against an element that could never be checked.
+			cannotAnswer := &engine.Error{Code: engine.CodeNotFound, Operation: "isChecked", Message: "DOM element does not have a checked property"}
+			Expect(clearedReadError(true, cannotAnswer)).To(MatchError(cannotAnswer))
+		})
+
+		It("keeps a fatal error regardless", func() {
+			fatal := engine.Fatal(answeredNo)
+			Expect(clearedReadError(true, fatal)).To(MatchError(fatal))
+		})
+
+		It("keeps the error when the expectation did not match either", func() {
+			Expect(clearedReadError(false, answeredNo)).To(MatchError(answeredNo))
+		})
+	})
+
 	Describe("comparing a value assertion against its expected JSON", func() {
 		It("matches an equal value and rejects a different one", func() {
 			Expect(jsonEqual("selected", `"selected"`)).To(BeTrue())

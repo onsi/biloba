@@ -211,9 +211,13 @@ func (s *Session) Texts(ctx context.Context, selector Selector, mode TextMode) (
 
 func textProperty(mode TextMode) (string, error) {
 	switch mode {
-	case InnerText:
+	// NormalizedText is Go's HaveText: whitespace-normalized innerText, i.e. the rendered, visible
+	// text.  Normalizing textContent instead would quietly hand back the text of display:none
+	// children and of <script>/<style> bodies, and would ignore CSS text-transform - the differences
+	// docs/index.md tells callers to reach for HaveText to avoid.
+	case InnerText, NormalizedText:
 		return "innerText", nil
-	case TextContent, NormalizedText:
+	case TextContent:
 		return "textContent", nil
 	default:
 		return "", invalidArgument("read text", fmt.Sprintf("unsupported text mode %q", mode))

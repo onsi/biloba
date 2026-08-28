@@ -604,7 +604,7 @@ func (s *Session) runHandlerWithAwait(ctx context.Context, name string, selector
 		return response, &Error{Code: code, Operation: name, Message: response.Err, Observed: response.Result}
 	}
 	if !response.Success {
-		return response, &Error{Code: CodeActionFailed, Operation: name, Message: "operation did not succeed", Observed: response.Result}
+		return response, &Error{Code: CodeConditionNotMet, Operation: name, Message: "operation did not succeed", Observed: response.Result}
 	}
 	return response, nil
 }

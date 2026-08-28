@@ -97,6 +97,7 @@ describe("Biloba TypeScript client", () => {
       case "holdResponse": respond(operationResult({observedJson: JSON.stringify({holdId: "hold-1"})})); break;
       case "awaitResponseHold": respond(operationResult({observedJson: JSON.stringify({url: "/saved", status: 200})})); break;
       case "assert": assertImplementation(request, respond); break;
+      case "dom": assertImplementation(request, respond); break;
       case "click": clickImplementation(request, respond); break;
       case "cancel": observeCancel?.(); break;
       case "closeSession":
@@ -242,6 +243,41 @@ describe("Biloba TypeScript client", () => {
         },
       },
     });
+  });
+
+  it("serializes a typed DOM read as one server-owned operation", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+
+    const observed = await session.locator("#status").textContent({timeoutMs: 50});
+    expect(observed).toBe("Saved");
+    expect(requests.at(-1)).toMatchObject({
+      method: "Dom",
+      request: {
+        sessionId: "session-1",
+        operation: {kind: "TEXT", textMode: "TEXT_CONTENT", locator: {kind: "CSS", value: "#status"}},
+        poll: {timeoutMs: 50},
+      },
+    });
+  });
+
+  it("keeps polling and all-current DOM operation categories distinct", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    const rows = session.locator(".row");
+
+    await rows.expectEachClass("ready", {timeoutMs: 50});
+    await rows.setPropertyAll("dataset.ready", true);
+    await rows.invokeMethodAll("getAttribute", ["data-ready"]);
+
+    expect(requests.filter(({method}) => method === "Dom").map(({request}) => request)).toMatchObject([
+      {operation: {kind: "CLASSES_FOR_EACH", every: true}, poll: {timeoutMs: 50}},
+      {operation: {kind: "SET_PROPERTY", all: true}, poll: {mode: "IMMEDIATE"}},
+      {operation: {kind: "INVOKE_METHOD_FOR_EACH"}, poll: {mode: "IMMEDIATE"}},
+    ]);
+    await expect(rows.clickAll({timeoutMs: 10} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(rows.setProperty("dataset.ready", true, {all: true} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(session.sendKeys("x", {timeoutMs: 10} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
   });
 
   it("serializes composed locators as a typed tree", async () => {
@@ -402,12 +438,12 @@ describe("Biloba TypeScript client", () => {
         },
       },
     });
+    // text() polls, like Go's GetInnerText - an element that has not rendered yet is something to
+    // wait for, not an answer of null.  count() above is the snapshot bucket and stays IMMEDIATE.
     expect(requests.at(-1)).toMatchObject({
-      request: {
-        assertion: {kind: "TEXT", expectation: {kind: "ANYTHING"}},
-        poll: {mode: "IMMEDIATE"},
-      },
+      request: {assertion: {kind: "TEXT", expectation: {kind: "ANYTHING"}}},
     });
+    expect((requests.at(-1) as {request: {poll?: {mode?: string}}}).request.poll?.mode).toBeUndefined();
   });
 
   it("serializes realistic pointer and keyboard actions", async () => {
@@ -629,6 +665,7 @@ describe("published entry point", () => {
       "matches",
       "not",
       "numeric",
+			"optionLabel",
       "relativeXPath",
       "startDaemon",
       "startSharedBrowser",

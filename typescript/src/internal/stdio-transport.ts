@@ -5,6 +5,7 @@ import type {
   AssertRequest,
   AddInitScriptRequest,
   DragToRequest,
+  DOMRequest,
   EvaluateRequest,
   HandshakeRequest,
   HandshakeResponse,
@@ -153,6 +154,9 @@ export class StdioTransport {
   }
   assert(request: AssertRequest, options: TransportOptions = {}): Promise<OperationResult> {
     return this.#request("assert", request, options);
+  }
+  dom(request: DOMRequest, options: TransportOptions = {}): Promise<OperationResult> {
+    return this.#request("dom", request, options);
   }
 
   async #request<Result>(method: string, params: object, options: TransportOptions): Promise<Result> {
