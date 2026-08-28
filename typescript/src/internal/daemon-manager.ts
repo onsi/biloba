@@ -9,7 +9,14 @@ export interface StartDaemonOptions {
   executable: string;
   chromePath?: string | undefined;
   chromeWsUrl?: string | undefined;
+  mode?: "headless-shell" | "headless" | "headful" | undefined;
+  chromeArgs?: readonly string[] | undefined;
+  autoInstall?: boolean | undefined;
+  windowSize?: {readonly width: number; readonly height: number} | undefined;
+  attachedLaunchMetadata?: string | undefined;
+  debugLog?: boolean | undefined;
   artifactDir?: string | undefined;
+  visualArtifactDir?: string | undefined;
   screenshotBaselinesDir?: string | undefined;
   updateScreenshots?: boolean | undefined;
   screenshotPixelTolerance?: number | undefined;
@@ -33,7 +40,14 @@ export async function startDaemon(options: StartDaemonOptions): Promise<ManagedD
   const args = [
     ...(options.chromePath ? [`--chrome-path=${options.chromePath}`] : []),
     ...(options.chromeWsUrl ? [`--chrome-ws-url=${options.chromeWsUrl}`] : []),
+    ...(options.mode ? [`--chrome-mode=${options.mode}`] : []),
+    ...(options.chromeArgs ?? []).map((argument) => `--chrome-arg=${argument}`),
+    ...(options.autoInstall !== undefined ? [`--auto-install=${String(options.autoInstall)}`] : []),
+    ...(options.windowSize ? [`--window-width=${options.windowSize.width}`, `--window-height=${options.windowSize.height}`] : []),
+    ...(options.attachedLaunchMetadata ? [`--attached-launch-metadata=${options.attachedLaunchMetadata}`] : []),
+    ...(options.debugLog ? ["--debug-log"] : []),
     ...(options.artifactDir ? [`--artifact-dir=${options.artifactDir}`] : []),
+    ...(options.visualArtifactDir ? [`--visual-artifact-dir=${options.visualArtifactDir}`] : []),
     ...(options.screenshotBaselinesDir ? [`--screenshot-baselines-dir=${options.screenshotBaselinesDir}`] : []),
     ...(options.updateScreenshots !== undefined ? [`--update-screenshots=${String(options.updateScreenshots)}`] : []),
     ...(options.screenshotPixelTolerance !== undefined ? [`--screenshot-pixel-tolerance=${String(options.screenshotPixelTolerance)}`] : []),

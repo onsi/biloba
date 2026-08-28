@@ -13,10 +13,11 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-const Version = "1"
+const Version = "2"
 const MaxScreenshotBytes = 16 << 20
 
 var Capabilities = []string{
@@ -29,6 +30,7 @@ var Capabilities = []string{
 	"dialogs.handlers", "dialogs.history", "dialogs.warnings", "downloads.history", "downloads.content", "downloads.cancel",
 	"network.history", "network.idle.http", "network.handlers", "network.response_callbacks", "network.holds", "network.emulation", "network.cache",
 	"screenshot.capture", "visual.compare",
+	"browser.launch_metadata", "session.context_diagnostics", "session.console_events", "session.warning_events", "browser.debug_events",
 }
 
 type ErrorCode string
@@ -80,6 +82,10 @@ type Backend interface {
 	Close() error
 }
 
+type LaunchMetadataProvider interface {
+	LaunchMetadata() WireLaunchMetadata
+}
+
 type Session interface {
 	Prepare(context.Context) error
 	Execute(context.Context, Operation) (Result, error)
@@ -89,6 +95,11 @@ type Session interface {
 type TabSession interface {
 	Session
 	NewTab(context.Context) (Session, error)
+}
+
+type ContextDiagnosticsSession interface {
+	Session
+	CaptureContextDiagnostics(context.Context, ContextDiagnosticsOptions) (ContextDiagnosticsResponse, error)
 }
 
 // DiscoverableSession exposes live page and frame handles without leaking the underlying CDP
@@ -528,12 +539,13 @@ type Observation struct {
 }
 
 type Diagnostics struct {
-	Locator        string            `json:"locator,omitempty"`
-	Expected       string            `json:"expected,omitempty"`
-	DOMOutline     string            `json:"domOutline,omitempty"`
-	ScreenshotPath string            `json:"screenshotPath,omitempty"`
-	DaemonDetail   string            `json:"daemonDetail,omitempty"`
-	Visual         *WireVisualResult `json:"visual,omitempty"`
+	Locator        string                      `json:"locator,omitempty"`
+	Expected       string                      `json:"expected,omitempty"`
+	DOMOutline     string                      `json:"domOutline,omitempty"`
+	ScreenshotPath string                      `json:"screenshotPath,omitempty"`
+	DaemonDetail   string                      `json:"daemonDetail,omitempty"`
+	Visual         *WireVisualResult           `json:"visual,omitempty"`
+	Context        *ContextDiagnosticsResponse `json:"context,omitempty"`
 }
 
 // The wire structs below are the authoritative JSON protocol definition.  The
@@ -556,8 +568,19 @@ type HandshakeRequest struct {
 }
 
 type HandshakeResponse struct {
-	ProtocolVersion string   `json:"protocolVersion"`
-	Capabilities    []string `json:"capabilities"`
+	ProtocolVersion string             `json:"protocolVersion"`
+	Capabilities    []string           `json:"capabilities"`
+	Launch          WireLaunchMetadata `json:"launch"`
+}
+
+type WireLaunchMetadata struct {
+	Mode           string   `json:"mode,omitempty"`
+	ExecutablePath string   `json:"executablePath,omitempty"`
+	Arguments      []string `json:"chromeArgs"`
+	Width          int      `json:"width,omitempty"`
+	Height         int      `json:"height,omitempty"`
+	Attached       bool     `json:"attached"`
+	AutoInstalled  bool     `json:"autoInstalled"`
 }
 
 type OpenSessionResponse struct {
@@ -603,6 +626,52 @@ type HandleListResponse struct {
 }
 type InvalidationResponse struct {
 	InvalidatedSessionIDs []string `json:"invalidatedSessionIds,omitempty"`
+}
+
+type CaptureDiagnosticsRequest struct {
+	SessionID              string `json:"sessionId"`
+	Purpose                string `json:"purpose"`
+	Name                   string `json:"name,omitempty"`
+	Screenshots            bool   `json:"screenshots,omitempty"`
+	Outlines               bool   `json:"outlines,omitempty"`
+	Width                  int    `json:"width,omitempty"`
+	Height                 int    `json:"height,omitempty"`
+	MaxBytes               int    `json:"maxBytes,omitempty"`
+	IncludeScreenshotBytes bool   `json:"includeScreenshotBytes,omitempty"`
+}
+
+type ContextDiagnosticsOptions struct {
+	Purpose                string
+	Name                   string
+	Screenshots            bool
+	Outlines               bool
+	Width                  int
+	Height                 int
+	MaxBytes               int
+	IncludeScreenshotBytes bool
+}
+
+type DiagnosticsArtifactErrorResponse struct {
+	Artifact string `json:"artifact"`
+	Code     string `json:"code"`
+	Message  string `json:"message"`
+}
+
+type TabDiagnosticsResponse struct {
+	SessionID        string                             `json:"sessionId,omitempty"`
+	TargetID         string                             `json:"targetId"`
+	Title            string                             `json:"title"`
+	ScreenshotPath   string                             `json:"screenshotPath,omitempty"`
+	ScreenshotBase64 string                             `json:"screenshotBase64,omitempty"`
+	OutlinePath      string                             `json:"outlinePath,omitempty"`
+	DOMOutline       string                             `json:"domOutline,omitempty"`
+	Errors           []DiagnosticsArtifactErrorResponse `json:"errors"`
+}
+
+type ContextDiagnosticsResponse struct {
+	Purpose     string                   `json:"purpose"`
+	ArtifactDir string                   `json:"artifactDir,omitempty"`
+	Tabs        []TabDiagnosticsResponse `json:"tabs"`
 }
 
 type NavigateRequest struct {
@@ -998,10 +1067,13 @@ type Timings struct {
 }
 
 type Server struct {
-	backend   Backend
-	mu        sync.Mutex
-	sessions  map[string]*sessionEntry
-	callbacks CallbackInvoker
+	backend       Backend
+	mu            sync.Mutex
+	sessions      map[string]*sessionEntry
+	callbacks     CallbackInvoker
+	emitter       EventEmitter
+	subscriptions map[string]subscriptionEntry
+	eventSequence atomic.Uint64
 }
 
 type sessionEntry struct {
@@ -1009,11 +1081,17 @@ type sessionEntry struct {
 	session Session
 }
 
+type subscriptionEntry struct {
+	sessionID    string
+	subscription EventSubscription
+}
+
 func NewServer(backend Backend) *Server {
-	return &Server{backend: backend, sessions: map[string]*sessionEntry{}}
+	return &Server{backend: backend, sessions: map[string]*sessionEntry{}, subscriptions: map[string]subscriptionEntry{}}
 }
 
 func (s *Server) SetCallbackInvoker(invoker CallbackInvoker) { s.callbacks = invoker }
+func (s *Server) SetEventEmitter(emitter EventEmitter)       { s.emitter = emitter }
 
 func (s *Server) Dispatch(ctx context.Context, method string, params json.RawMessage) (any, *ProtocolError) {
 	switch method {
@@ -1025,7 +1103,14 @@ func (s *Server) Dispatch(ctx context.Context, method string, params json.RawMes
 		if request.ProtocolVersion != Version {
 			return nil, NewError(CodeProtocolMismatch, fmt.Sprintf("protocol version mismatch: client=%q daemon=%q", request.ProtocolVersion, Version))
 		}
-		return HandshakeResponse{ProtocolVersion: Version, Capabilities: append([]string(nil), Capabilities...)}, nil
+		launch := WireLaunchMetadata{Arguments: []string{}}
+		if provider, ok := s.backend.(LaunchMetadataProvider); ok {
+			launch = provider.LaunchMetadata()
+			arguments := make([]string, len(launch.Arguments))
+			copy(arguments, launch.Arguments)
+			launch.Arguments = arguments
+		}
+		return HandshakeResponse{ProtocolVersion: Version, Capabilities: append([]string(nil), Capabilities...), Launch: launch}, nil
 	case "openSession":
 		session, err := s.backend.OpenSession(ctx)
 		if err != nil {
@@ -1037,6 +1122,86 @@ func (s *Server) Dispatch(ctx context.Context, method string, params json.RawMes
 			return nil, openErr
 		}
 		return opened, nil
+	case "subscribeEvents":
+		var request SubscribeEventsRequest
+		if err := decodeParams(params, &request); err != nil {
+			return nil, err
+		}
+		if len(request.Types) == 0 {
+			return nil, NewError(CodeInvalidArgument, "event types are required")
+		}
+		seenTypes := map[string]bool{}
+		for _, kind := range request.Types {
+			if seenTypes[kind] {
+				return nil, NewError(CodeInvalidArgument, fmt.Sprintf("duplicate event type %q", kind))
+			}
+			seenTypes[kind] = true
+			if kind != "console" && kind != "warning" && kind != "debug" {
+				return nil, NewError(CodeInvalidArgument, fmt.Sprintf("unsupported event type %q", kind))
+			}
+		}
+		if seenTypes["debug"] && (len(request.Types) != 1 || request.SessionID != "") {
+			return nil, NewError(CodeInvalidArgument, "debug events are browser-scoped and cannot be mixed with session events")
+		}
+		var subscription EventSubscription
+		var subscribeErr error
+		if len(request.Types) == 1 && request.Types[0] == "debug" && request.SessionID == "" {
+			source, ok := s.backend.(DebugEventSource)
+			if !ok {
+				return nil, NewError(CodeDriver, "browser backend does not support debug events")
+			}
+			subscription, subscribeErr = source.SubscribeDebug()
+		} else {
+			if request.SessionID == "" {
+				return nil, NewError(CodeInvalidArgument, "sessionId is required for console and warning events")
+			}
+			entry, sessionErr := s.session(request.SessionID)
+			if sessionErr != nil {
+				return nil, sessionErr
+			}
+			source, ok := entry.session.(LiveEventSession)
+			if !ok {
+				return nil, NewError(CodeDriver, "session backend does not support live events")
+			}
+			subscription, subscribeErr = source.SubscribeEvents(append([]string(nil), request.Types...))
+		}
+		if subscribeErr != nil {
+			return nil, normalizeError(subscribeErr)
+		}
+		id, idErr := randomID()
+		if idErr != nil {
+			_ = subscription.Close()
+			return nil, NewError(CodeDriver, idErr.Error())
+		}
+		s.mu.Lock()
+		s.subscriptions[id] = subscriptionEntry{sessionID: request.SessionID, subscription: subscription}
+		emitter := s.emitter
+		s.mu.Unlock()
+		go func() {
+			for event := range subscription.Events() {
+				if emitter != nil {
+					_ = emitter(EventEnvelope{Event: event.Type, SubscriptionID: id, SessionID: request.SessionID, Generation: event.Generation, Sequence: s.eventSequence.Add(1), Payload: event.Payload})
+				}
+			}
+			s.mu.Lock()
+			delete(s.subscriptions, id)
+			s.mu.Unlock()
+		}()
+		return SubscribeEventsResponse{SubscriptionID: id}, nil
+	case "unsubscribeEvents":
+		var request UnsubscribeEventsRequest
+		if err := decodeParams(params, &request); err != nil {
+			return nil, err
+		}
+		s.mu.Lock()
+		subscription := s.subscriptions[request.SubscriptionID]
+		delete(s.subscriptions, request.SubscriptionID)
+		s.mu.Unlock()
+		if subscription.subscription == nil {
+			return nil, NewError(CodeInvalidArgument, "event subscription not found")
+		}
+		_ = subscription.subscription.Close()
+		return struct{}{}, nil
 	case "newTab":
 		var request SessionRequest
 		if err := decodeParams(params, &request); err != nil {
@@ -1148,6 +1313,46 @@ func (s *Server) Dispatch(ctx context.Context, method string, params json.RawMes
 			return nil, normalizeError(prepareErr)
 		}
 		return InvalidationResponse{InvalidatedSessionIDs: s.invalidateContext(entry.session, request.SessionID, true)}, nil
+	case "captureContextDiagnostics":
+		var request CaptureDiagnosticsRequest
+		if err := decodeParams(params, &request); err != nil {
+			return nil, err
+		}
+		if request.Purpose != "failure" && request.Purpose != "progress" && request.Purpose != "on-demand" {
+			return nil, NewError(CodeInvalidArgument, "purpose must be failure, progress, or on-demand")
+		}
+		if (request.Width == 0) != (request.Height == 0) || request.Width < 0 || request.Height < 0 {
+			return nil, NewError(CodeInvalidArgument, "width and height must both be positive")
+		}
+		if request.MaxBytes < 0 || request.MaxBytes > MaxScreenshotBytes {
+			return nil, NewError(CodeInvalidArgument, fmt.Sprintf("maxBytes must be between 0 and %d", MaxScreenshotBytes))
+		}
+		entry, sessionErr := s.session(request.SessionID)
+		if sessionErr != nil {
+			return nil, sessionErr
+		}
+		diagnostic, ok := entry.session.(ContextDiagnosticsSession)
+		if !ok {
+			return nil, NewError(CodeDriver, "session backend does not support context diagnostics")
+		}
+		entry.mu.Lock()
+		response, captureErr := diagnostic.CaptureContextDiagnostics(ctx, ContextDiagnosticsOptions{Purpose: request.Purpose, Name: request.Name, Screenshots: request.Screenshots, Outlines: request.Outlines, Width: request.Width, Height: request.Height, MaxBytes: request.MaxBytes, IncludeScreenshotBytes: request.IncludeScreenshotBytes})
+		entry.mu.Unlock()
+		if captureErr != nil {
+			return nil, normalizeError(captureErr)
+		}
+		s.mu.Lock()
+		for sessionID, candidate := range s.sessions {
+			if meta, ok := candidate.session.(DiscoverableSession); ok {
+				for index := range response.Tabs {
+					if response.Tabs[index].TargetID == meta.Metadata().TargetID {
+						response.Tabs[index].SessionID = sessionID
+					}
+				}
+			}
+		}
+		s.mu.Unlock()
+		return response, nil
 	case "closeSession":
 		var request SessionRequest
 		if err := decodeParams(params, &request); err != nil {
@@ -1668,6 +1873,7 @@ func (s *Server) closeSession(id string) (any, *ProtocolError) {
 	if err := entry.session.Close(); err != nil {
 		return nil, normalizeError(err)
 	}
+	s.closeSubscriptionsForSession(id)
 	s.mu.Lock()
 	if s.sessions[id] == entry {
 		delete(s.sessions, id)
@@ -1729,6 +1935,16 @@ func (s *Server) invalidateContext(session Session, keepID string, keepSelf bool
 
 func (s *Server) Close() error {
 	s.mu.Lock()
+	subscriptions := make([]EventSubscription, 0, len(s.subscriptions))
+	for id, subscription := range s.subscriptions {
+		subscriptions = append(subscriptions, subscription.subscription)
+		delete(s.subscriptions, id)
+	}
+	s.mu.Unlock()
+	for _, subscription := range subscriptions {
+		_ = subscription.Close()
+	}
+	s.mu.Lock()
 	entries := make([]*sessionEntry, 0, len(s.sessions))
 	for id, entry := range s.sessions {
 		entries = append(entries, entry)
@@ -1743,6 +1959,21 @@ func (s *Server) Close() error {
 	}
 	closeErrors = append(closeErrors, s.backend.Close())
 	return errors.Join(closeErrors...)
+}
+
+func (s *Server) closeSubscriptionsForSession(sessionID string) {
+	s.mu.Lock()
+	var subscriptions []EventSubscription
+	for id, entry := range s.subscriptions {
+		if entry.sessionID == sessionID {
+			subscriptions = append(subscriptions, entry.subscription)
+			delete(s.subscriptions, id)
+		}
+	}
+	s.mu.Unlock()
+	for _, subscription := range subscriptions {
+		_ = subscription.Close()
+	}
 }
 
 func randomID() (string, error) {

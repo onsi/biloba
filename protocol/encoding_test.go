@@ -63,7 +63,8 @@ var _ = Describe("the generated protocol declarations", func() {
 		// The zero-value pass catches fields that are always present; this catches the opposite
 		// mistake - a field that only shows up once something is set, under a name nobody generated.
 		visual := &protocol.WireVisualResult{Schemes: []protocol.WireVisualSchemeResult{}, Warnings: []string{}}
-		diagnostics := protocol.Diagnostics{Locator: `locator("#save")`, Expected: "visible", DOMOutline: "body", ScreenshotPath: "/tmp/x.png", DaemonDetail: "timed out", Visual: visual}
+		contextDiagnostics := &protocol.ContextDiagnosticsResponse{Purpose: "failure", Tabs: []protocol.TabDiagnosticsResponse{}}
+		diagnostics := protocol.Diagnostics{Locator: `locator("#save")`, Expected: "visible", DOMOutline: "body", ScreenshotPath: "/tmp/x.png", DaemonDetail: "timed out", Visual: visual, Context: contextDiagnostics}
 		populated := protocol.OperationResult{
 			Matched: true, ObservedJSON: `"Saved"`, AttemptCount: 2,
 			Trajectory:  []protocol.PollObservation{{Attempt: 1, ElapsedMS: 5, ObservedJSON: `"Saving"`, RetryReason: "text mismatch"}},

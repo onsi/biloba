@@ -17,7 +17,7 @@ import {
   xPredicate,
   type Cookie,
 } from "../src/index.js";
-import {connectWithTransport, decodeBinaryBody, encodeBinaryBody} from "../src/internal/client.js";
+import {connectWithTransport, decodeBinaryBody, encodeBinaryBody, launchFromWire} from "../src/internal/client.js";
 import type {HandshakeResponse, OpenSessionResponse, OperationResult, Request, VisualResult as WireVisualResult} from "../src/generated/protocol.js";
 import {encodeFrame, FrameDecoder} from "../src/internal/framing.js";
 import {expectTimedOutAction, expectTimedOutAssertion} from "./support/assertions.js";
@@ -46,6 +46,14 @@ function operationResult(overrides: Partial<OperationResult> = {}): OperationRes
 }
 
 describe("Biloba TypeScript client", () => {
+  it("rejects malformed launch metadata before exposing a browser", () => {
+    for (const launch of [
+      {mode: "unknown", executablePath: "/opt/chrome", chromeArgs: [], width: 1024, height: 768, attached: false, autoInstalled: false},
+      {mode: "headless", executablePath: "", chromeArgs: [], width: 1024, height: 768, attached: false, autoInstalled: false},
+      {mode: "headless", executablePath: "/opt/chrome", chromeArgs: [42], width: 1024, height: 768, attached: false, autoInstalled: false},
+      {mode: "headless", executablePath: "/opt/chrome", chromeArgs: [], width: 1.5, height: 768, attached: false, autoInstalled: false},
+    ]) expect(() => launchFromWire(launch as never)).toThrow(expect.objectContaining({code: "DRIVER_ERROR"}));
+  });
   it("strictly decodes daemon binary bodies at the inclusive sixteen MiB boundary", () => {
     const rawAtLimit = Buffer.alloc(16 * 1024 * 1024);
     const atLimit = rawAtLimit.toString("base64");
@@ -107,7 +115,7 @@ describe("Biloba TypeScript client", () => {
     const reply = (result: unknown) => toClient.write(encodeFrame({id: envelope.id, result}));
     const respond: Respond = reply;
     switch (envelope.method) {
-      case "handshake": reply({protocolVersion: "1", capabilities: ["assertions", "evaluate"]} satisfies HandshakeResponse); break;
+      case "handshake": reply({protocolVersion: "2", capabilities: ["assertions", "evaluate", "session.context_diagnostics"], launch: {mode: "headless-shell", executablePath: "/opt/chrome-headless-shell", chromeArgs: [], width: 1024, height: 768, attached: false, autoInstalled: false}} satisfies HandshakeResponse); break;
       case "openSession": reply({sessionId: `session-${++openedSessions}`, contextId: `context-${openedSessions}`, targetId: `target-${openedSessions}`, ownsContext: true} satisfies OpenSessionResponse); break;
       case "newTab": reply({sessionId: `session-${++openedSessions}`, contextId: "context-1", targetId: `target-${openedSessions}`, openerId: "target-1"} satisfies OpenSessionResponse); break;
       case "listTabs": reply({handles: [{sessionId: "session-2", contextId: "context-1", targetId: "target-2", openerId: "target-1"}]}); break;
@@ -147,6 +155,9 @@ describe("Biloba TypeScript client", () => {
       case "dom": assertImplementation(request, respond); break;
       case "click": clickImplementation(request, respond); break;
       case "screenshot": screenshotImplementation(request, respond); break;
+      case "captureContextDiagnostics": reply({purpose: "on-demand", tabs: [{sessionId: "session-1", targetId: "target-1", title: "Ready", screenshotBase64: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString("base64"), domOutline: "body", errors: []}]}); break;
+      case "subscribeEvents": reply({subscriptionId: "subscription-1"}); break;
+      case "unsubscribeEvents": reply({}); break;
       case "cancel": observeCancel?.(); break;
       case "closeSession": closeSessionError === undefined ? reply({}) : toClient.write(encodeFrame({id: envelope.id, error: {code: "INVALID_ARGUMENT", message: closeSessionError}})); break;
       case "prepareSession": warningHistory = []; reply({}); break;
@@ -168,6 +179,57 @@ describe("Biloba TypeScript client", () => {
       {kind: "CAPTURE", target: {kind: "PAGE"}, output: "BYTES"},
       {kind: "CAPTURE", target: {kind: "ELEMENT", locator: {kind: "TEST_ID", value: "card", match: "EXACT", first: false}}, output: "PATH", name: "checkout/card", masks: [{kind: "CSS", value: ".clock", match: "EXACT", first: false}]},
     ]);
+  });
+
+  it("returns launch metadata and bounded all-tab diagnostics", async () => {
+    browser = await connectClient();
+    expect(browser.launch).toEqual({mode: "headless-shell", executablePath: "/opt/chrome-headless-shell", chromeArgs: [], windowSize: {width: 1024, height: 768}, attached: false, autoInstalled: false});
+    const session = await browser.openSession();
+    const diagnostics = await session.captureDiagnostics({includeScreenshotBytes: true});
+    expect(diagnostics.tabs[0]).toMatchObject({sessionId: "session-1", targetId: "target-1", title: "Ready", screenshot: new Uint8Array([0x89, 0x50, 0x4e, 0x47]), domOutline: "body"});
+    expect(requests.at(-1)).toEqual({method: "CaptureContextDiagnostics", request: {sessionId: "session-1", purpose: "on-demand", screenshots: true, outlines: true, includeScreenshotBytes: true}});
+  });
+
+  it("delivers live console messages and unsubscribes the last listener", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    const seen: unknown[] = [];
+    const remove = session.onConsoleMessage((message) => seen.push(message));
+    await expect.poll(() => requests.some(({method}) => method === "SubscribeEvents")).toBe(true);
+    toClient.write(encodeFrame({event: "console", params: {subscriptionId: "subscription-1", sessionId: session.id, generation: 1, sequence: 1, payload: {type: "error", text: "boom", args: ["boom"], timestamp: "2026-01-01T00:00:00Z", stack: []}}}));
+    await expect.poll(() => seen.length).toBe(1);
+    await session.prepare();
+    toClient.write(encodeFrame({event: "console", params: {subscriptionId: "subscription-1", sessionId: session.id, generation: 1, sequence: 2, payload: {type: "error", text: "stale", args: [], timestamp: "", stack: []}}}));
+    toClient.write(encodeFrame({event: "console", params: {subscriptionId: "subscription-1", sessionId: session.id, generation: 2, sequence: 3, payload: {type: "log", text: "fresh", args: [], timestamp: "", stack: []}}}));
+    await expect.poll(() => seen.length).toBe(2);
+    expect(seen.at(-1)).toMatchObject({text: "fresh"});
+    remove();
+    await expect.poll(() => requests.some(({method}) => method === "UnsubscribeEvents")).toBe(true);
+    expect(requests.find(({method}) => method === "SubscribeEvents")!.request).toEqual({sessionId: session.id, types: ["console"]});
+  });
+
+  it("routes debug loss as a typed event instead of a debug entry cast", async () => {
+    const debug: unknown[] = [];
+    browser = await connectClient({debugLog: (event) => debug.push(event)});
+    await expect.poll(() => requests.some(({method}) => method === "SubscribeEvents")).toBe(true);
+    toClient.write(encodeFrame({event: "eventsDropped", params: {subscriptionId: "subscription-1", sequence: 0, payload: {code: "EVENTS_DROPPED", message: "7 live events were dropped", details: {count: 7}}}}));
+    await expect.poll(() => debug.length).toBe(1);
+    expect(debug).toEqual([{code: "EVENTS_DROPPED", message: "7 live events were dropped", details: {count: 7}}]);
+  });
+
+  it("serializes a rapid last-remove and first-readd without duplicate delivery", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    const first = session.onConsoleMessage(() => undefined);
+    await expect.poll(() => requests.filter(({method}) => method === "SubscribeEvents").length).toBe(1);
+    first();
+    const seen: unknown[] = [];
+    const second = session.onConsoleMessage((message) => seen.push(message));
+    await expect.poll(() => requests.filter(({method}) => method === "UnsubscribeEvents").length).toBe(1);
+    await expect.poll(() => requests.filter(({method}) => method === "SubscribeEvents").length).toBe(2);
+    toClient.write(encodeFrame({event: "console", params: {subscriptionId: "subscription-1", sessionId: session.id, generation: 0, sequence: 1, payload: {type: "log", text: "once", args: [], timestamp: "", stack: []}}}));
+    await expect.poll(() => seen.length).toBe(1);
+    second();
   });
 
   it("returns visual results and preserves them on timeout errors", async () => {
@@ -224,8 +286,8 @@ describe("Biloba TypeScript client", () => {
 
   it("negotiates the protocol and sends idiomatic session operations over gRPC", async () => {
     browser = await connectClient();
-    expect(browser.protocolVersion).toBe("1");
-    expect(browser.capabilities).toEqual(new Set(["assertions", "evaluate"]));
+    expect(browser.protocolVersion).toBe("2");
+    expect(browser.capabilities).toEqual(new Set(["assertions", "evaluate", "session.context_diagnostics"]));
 
     const session = await browser.openSession();
     const cookies: Cookie[] = [{name: "auth", value: "abc", domain: "localhost", httpOnly: true}];
@@ -246,7 +308,7 @@ describe("Biloba TypeScript client", () => {
     await session.close();
 
     expect(requests).toMatchObject([
-      {method: "Handshake", request: {protocolVersion: "1"}},
+      {method: "Handshake", request: {protocolVersion: "2"}},
       {method: "OpenSession"},
       {method: "PrepareSession", request: {sessionId: "session-1"}},
       {method: "SetCookies", request: {sessionId: "session-1", cookies}},
@@ -760,6 +822,7 @@ describe("Biloba TypeScript client", () => {
           expected: "Saved",
           domOutline: "body\n  button Saving",
           screenshotPath: "/tmp/failure.png",
+          context: {purpose: "failure", tabs: [{sessionId: "session-1", targetId: "target-1", title: "Checkout", screenshotPath: "/tmp/failure.png", errors: []}]},
           daemonDetail: "timed out after 50ms",
         },
       }));
@@ -784,6 +847,7 @@ describe("Biloba TypeScript client", () => {
       daemonDetail: "timed out after 50ms",
       rpcRequestCount: 1,
       rpcResponseCount: 1,
+      diagnostics: {purpose: "failure", tabs: [{targetId: "target-1", title: "Checkout"}]},
     });
     expect((error as Error).stack).toContain("invokeFromTest");
     expect((error as BilobaError).trajectory).toEqual([

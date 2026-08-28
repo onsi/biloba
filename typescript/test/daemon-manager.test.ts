@@ -34,6 +34,10 @@ setInterval(() => {}, 1000);
     daemon = await startDaemon({
       executable,
       chromePath: "/opt/chrome",
+      mode: "headless",
+      chromeArgs: ["--site-per-process", "--lang=en-US"],
+      autoInstall: true,
+      windowSize: {width: 640, height: 480},
       artifactDir: "/tmp/biloba-artifacts",
       screenshotBaselinesDir: "/tmp/biloba-baselines",
       updateScreenshots: true,
@@ -45,6 +49,12 @@ setInterval(() => {}, 1000);
     await expect.poll(async () => await readFile(argumentsPath, "utf8").catch(() => "")).not.toBe("");
     expect(JSON.parse(await readFile(argumentsPath, "utf8"))).toEqual([
       "--chrome-path=/opt/chrome",
+      "--chrome-mode=headless",
+      "--chrome-arg=--site-per-process",
+      "--chrome-arg=--lang=en-US",
+      "--auto-install=true",
+      "--window-width=640",
+      "--window-height=480",
       "--artifact-dir=/tmp/biloba-artifacts",
       "--screenshot-baselines-dir=/tmp/biloba-baselines",
       "--update-screenshots=true",
@@ -137,16 +147,28 @@ process.exit(7);
     const executable = join(directory, "fake-bilobad");
     await writeFile(executable, `#!/usr/bin/env node
 if (process.argv[2] !== "serve-browser") process.exit(2);
-console.log(JSON.stringify({wsURL: "ws://127.0.0.1:43123/devtools/browser/test", width: 1920, height: 1080}));
+console.log(JSON.stringify({wsURL: "ws://127.0.0.1:43123/devtools/browser/test", pid: process.pid, launch: {mode: "headless", executablePath: "/opt/chrome", chromeArgs: ["--site-per-process"], windowSize: {width: 640, height: 480}, autoInstalled: false}}));
 process.stdin.resume();
 process.stdin.on("end", () => process.exit(0));
 setInterval(() => {}, 1000);
 `);
     await chmod(executable, 0o755);
 
-    browser = await startSharedBrowser({executable, chromePath: "/opt/chrome"});
+    browser = await startSharedBrowser({executable, chromePath: "/opt/chrome", mode: "headless", chromeArgs: ["--site-per-process"], windowSize: {width: 640, height: 480}});
     expect(browser.wsURL).toBe("ws://127.0.0.1:43123/devtools/browser/test");
+    expect(browser.connection.launch).toEqual({mode: "headless", executablePath: "/opt/chrome", chromeArgs: ["--site-per-process"], windowSize: {width: 640, height: 480}, autoInstalled: false});
     expect(browser.pid).toBeGreaterThan(0);
+  });
+
+  it("rejects and reaps a host that writes malformed ready metadata", async () => {
+    directory = await mkdtemp(join(tmpdir(), "biloba-browser-test-"));
+    const executable = join(directory, "fake-bilobad");
+    await writeFile(executable, `#!/usr/bin/env node
+console.log(JSON.stringify({wsURL: "ws://127.0.0.1:43123/devtools/browser/test", pid: process.pid, launch: {mode: "unknown", executablePath: "", chromeArgs: [42], windowSize: {width: 0, height: 768}, autoInstalled: "no"}}));
+process.stdin.resume(); setInterval(() => {}, 1000);
+`);
+    await chmod(executable, 0o755);
+    await expect(startSharedBrowser({executable, readyTimeoutMs: 2_000})).rejects.toMatchObject({code: "DRIVER_ERROR"});
   });
 
   it.runIf(process.platform !== "win32")("signals the process group while the daemon is still alive", async () => {

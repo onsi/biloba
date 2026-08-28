@@ -35,6 +35,12 @@ import type {
   TypeRequest,
   SendKeysRequest,
   ScreenshotRequest,
+  CaptureDiagnosticsRequest,
+  ContextDiagnosticsResponse,
+  SubscribeEventsRequest,
+  SubscribeEventsResponse,
+  UnsubscribeEventsRequest,
+  EventEnvelope,
 } from "../generated/protocol.js";
 import {encodeFrame, FrameDecoder} from "./framing.js";
 
@@ -59,6 +65,9 @@ interface PendingRequest {
   reject(reason: unknown): void;
   cleanup(): void;
 }
+type QueuedEvent = {event: string; envelope: EventEnvelope};
+type EventListenerState = {listener?: (event: string, envelope: EventEnvelope) => void; queue: QueuedEvent[]; scheduled: boolean; dropped: number};
+const eventQueueLimit = 256;
 
 type ResponseCallback = (payload: unknown) => WireNetworkOverride | Promise<WireNetworkOverride>;
 
@@ -68,6 +77,7 @@ export class StdioTransport {
   readonly #decoder = new FrameDecoder();
   readonly #pending = new Map<number, PendingRequest>();
   readonly #callbacks = new Map<string, ResponseCallback>();
+  readonly #eventListeners = new Map<string, EventListenerState>();
   #nextID = 1;
   #closed = false;
   #writeChain = Promise.resolve();
@@ -107,6 +117,7 @@ export class StdioTransport {
     }
     this.#pending.clear();
     this.#callbacks.clear();
+    this.#eventListeners.clear();
   }
 
   handshake(request: HandshakeRequest, options: TransportOptions = {}): Promise<HandshakeResponse> {
@@ -199,6 +210,14 @@ export class StdioTransport {
   screenshot(request: ScreenshotRequest, options: TransportOptions = {}): Promise<OperationResult> {
     return this.#request("screenshot", request, options);
   }
+  captureContextDiagnostics(request: CaptureDiagnosticsRequest, options: TransportOptions = {}): Promise<ContextDiagnosticsResponse> { return this.#request("captureContextDiagnostics", request, withDefaultDeadline(options)); }
+  subscribeEvents(request: SubscribeEventsRequest, options: TransportOptions = {}): Promise<SubscribeEventsResponse> { return this.#request("subscribeEvents", request, withDefaultDeadline(options)); }
+  unsubscribeEvents(request: UnsubscribeEventsRequest, options: TransportOptions = {}): Promise<unknown> { return this.#request("unsubscribeEvents", request, withDefaultDeadline(options)); }
+  registerEventListener(id: string, listener: (event: string, envelope: EventEnvelope) => void): void {
+    const state = this.#eventListeners.get(id) ?? {queue: [], scheduled: false, dropped: 0};
+    state.listener = listener; this.#eventListeners.set(id, state); this.#scheduleEventDrain(id, state);
+  }
+  removeEventListener(id: string): void { this.#eventListeners.delete(id); }
   eventful<Result = unknown>(request: EventfulRequest, options: TransportOptions = {}): Promise<Result> {
     return this.#request("eventful", request, options);
   }
@@ -270,6 +289,15 @@ export class StdioTransport {
   }
 
   async #receiveEvent(frame: EventFrame): Promise<void> {
+    if (frame.params && typeof frame.params === "object" && "subscriptionId" in frame.params) {
+      const envelope = frame.params as EventEnvelope;
+      const state = this.#eventListeners.get(envelope.subscriptionId) ?? {queue: [], scheduled: false, dropped: 0};
+      if (state.queue.length === eventQueueLimit) state.dropped++;
+      else state.queue.push({event: frame.event, envelope});
+      this.#eventListeners.set(envelope.subscriptionId, state);
+      this.#scheduleEventDrain(envelope.subscriptionId, state);
+      return;
+    }
     if (frame.event !== "responseIntercepted" || !frame.invocationId || !frame.callbackId) return;
     const callback = this.#callbacks.get(frame.callbackId);
     if (!callback) {
@@ -282,6 +310,22 @@ export class StdioTransport {
     } catch (error) {
       await this.#callbackResult({invocationId: frame.invocationId, error: error instanceof Error ? error.message : String(error)});
     }
+  }
+
+  #scheduleEventDrain(id: string, state: EventListenerState): void {
+    if (!state.listener || state.scheduled || (state.queue.length === 0 && state.dropped === 0)) return;
+    state.scheduled = true;
+    queueMicrotask(() => {
+      state.scheduled = false;
+      const listener = state.listener; if (!listener) return;
+      if (state.dropped > 0) {
+        const dropped = state.dropped; state.dropped = 0;
+        try { listener("eventsDropped", {subscriptionId: id, sequence: 0, payload: {code: "EVENTS_DROPPED", message: `${dropped} live events were dropped`, details: {count: dropped}}}); } catch { /* listener isolation */ }
+      }
+      const queued = state.queue.splice(0);
+      for (const item of queued) { try { listener(item.event, item.envelope); } catch { /* listener isolation */ } }
+      this.#scheduleEventDrain(id, state);
+    });
   }
 
   async #callbackResult(params: {invocationId: string; result?: WireNetworkOverride; error?: string}): Promise<void> {
@@ -320,8 +364,18 @@ function protocolError(error: ProtocolError): BilobaError {
     ...(error.diagnostics?.domOutline && {domOutline: error.diagnostics.domOutline}),
     ...(error.diagnostics?.screenshotPath && {screenshotPath: error.diagnostics.screenshotPath}),
     ...(error.diagnostics?.daemonDetail && {daemonDetail: error.diagnostics.daemonDetail}),
+    ...(error.diagnostics?.context && {diagnostics: decodeContextDiagnostics(error.diagnostics.context)}),
     ...(error.diagnostics?.visual && {visual: error.diagnostics.visual as import("../index.js").VisualResult, artifactPaths: visualArtifactPaths(error.diagnostics.visual as import("../index.js").VisualResult)}),
   });
+}
+
+function decodeContextDiagnostics(value: import("../generated/protocol.js").ContextDiagnosticsResponse): import("../index.js").ContextDiagnostics {
+  return {purpose: value.purpose as import("../index.js").DiagnosticsPurpose, ...(value.artifactDir && {artifactDir: value.artifactDir}), tabs: value.tabs.map((tab) => ({...(tab.sessionId && {sessionId: tab.sessionId}), targetId: tab.targetId, title: tab.title, ...(tab.screenshotPath && {screenshotPath: tab.screenshotPath}), ...(tab.screenshotBase64 && {screenshot: decodeDiagnosticBase64(tab.screenshotBase64)}), ...(tab.outlinePath && {outlinePath: tab.outlinePath}), ...(tab.domOutline && {domOutline: tab.domOutline}), errors: tab.errors as import("../index.js").DiagnosticsArtifactError[]}))};
+}
+
+function decodeDiagnosticBase64(value: string): Uint8Array {
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) throw new BilobaError({code: "DRIVER_ERROR", message: "diagnostic screenshot is malformed base64"});
+  const bytes = Buffer.from(value, "base64"); if (bytes.byteLength > 16 * 1024 * 1024) throw new BilobaError({code: "DRIVER_ERROR", message: "diagnostic screenshot exceeds decoded limit"}); return bytes;
 }
 
 function visualArtifactPaths(visual: import("../index.js").VisualResult): readonly string[] {

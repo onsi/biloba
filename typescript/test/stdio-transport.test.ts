@@ -156,6 +156,17 @@ describe("stdio transport", () => {
     toClient.write(encodeFrame({id: request.id, result: {protocolVersion: "1", capabilities: []}}));
     await expect(handshake).resolves.toMatchObject({protocolVersion: "1"});
   });
+
+  it("buffers events that arrive before the subscribe response continuation registers its listener", async () => {
+    const subscribing = transport.subscribeEvents({sessionId: "session-1", types: ["console"]});
+    const request = await nextRequest(requests);
+    toClient.write(encodeFrame({event: "console", params: {subscriptionId: "sub-1", sequence: 1, payload: {text: "immediate"}}}));
+    toClient.write(encodeFrame({id: request.id, result: {subscriptionId: "sub-1"}}));
+    const {subscriptionId} = await subscribing;
+    const received: unknown[] = [];
+    transport.registerEventListener(subscriptionId, (_event, envelope) => received.push(envelope.payload));
+    await expect.poll(() => received).toEqual([{text: "immediate"}]);
+  });
 });
 
 // unhandledRejection is emitted a turn after the microtask queue drains, so give it a few.

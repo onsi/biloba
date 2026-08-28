@@ -42,10 +42,46 @@ var _ = Describe("bilobad", func() {
 			Expect(err).To(MatchError(ContainSubstring("valid base64")))
 		})
 	})
+	It("serializes empty attached Chrome arguments as an array", func() {
+		for _, metadata := range []any{
+			(&engineBackend{launch: protocol.WireLaunchMetadata{Attached: true}}).LaunchMetadata(),
+			launchMetadataToWire(engine.LaunchMetadata{Attached: true}),
+			launchMetadataForHost(engine.LaunchMetadata{}),
+		} {
+			encoded, err := json.Marshal(metadata)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(encoded)).To(ContainSubstring(`"chromeArgs":[]`))
+		}
+	})
+	It("keeps browser debug delivery bounded and reports slow-listener loss", func() {
+		hub := newDebugHub()
+		subscription, err := hub.subscribe()
+		Expect(err).NotTo(HaveOccurred())
+		for index := 0; index < 257; index++ {
+			hub.publish(engine.DebugEntry{Message: fmt.Sprintf("event %d", index)})
+		}
+		for index := 0; index < 256; index++ {
+			<-subscription.Events()
+		}
+		hub.publish(engine.DebugEntry{Message: "after overflow"})
+		var dropped protocol.SessionEvent
+		Eventually(subscription.Events()).Should(Receive(&dropped, WithTransform(func(event protocol.SessionEvent) string { return event.Type }, Equal("eventsDropped"))))
+		Expect(dropped.Payload).To(Equal(map[string]any{"code": "EVENTS_DROPPED", "message": "1 debug events were dropped", "details": map[string]any{"count": uint64(1)}}))
+		Expect(subscription.Close()).To(Succeed())
+		Eventually(subscription.Events()).Should(BeClosed())
+		hub.close()
+		_, err = hub.subscribe()
+		Expect(err).To(MatchError(ContainSubstring("debug stream is closed")))
+	})
 	It("parses daemon flags", func() {
 		parsed, err := parseConfig([]string{
 			"-chrome-path", "/opt/chrome",
-			"-chrome-ws-url", "ws://127.0.0.1:9222/devtools/browser/test",
+			"-chrome-mode", "headless-shell",
+			"-chrome-arg=--site-per-process",
+			"-chrome-arg=--lang=en-US",
+			"-auto-install=true",
+			"-window-width=640",
+			"-window-height=480",
 			"-artifact-dir", "/tmp/artifacts",
 			"-screenshot-baselines-dir", "/tmp/baselines",
 			"-update-screenshots=true",
@@ -55,10 +91,26 @@ var _ = Describe("bilobad", func() {
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(parsed).To(Equal(config{
-			chromePath: "/opt/chrome", chromeWSURL: "ws://127.0.0.1:9222/devtools/browser/test", artifactDir: "/tmp/artifacts",
+			chromePath: "/opt/chrome", chromeMode: engine.ChromeModeHeadlessShell,
+			chromeArgs: []string{"--site-per-process", "--lang=en-US"}, autoInstall: true, windowWidth: 640, windowHeight: 480, artifactDir: "/tmp/artifacts",
 			screenshotBaselinesDir: "/tmp/baselines", updateScreenshots: true, screenshotPixelTolerance: 0.02, screenshotChannelTolerance: 8, maxScreenshotBytes: 1024,
 		}))
 	})
+
+	DescribeTable("rejects invalid launch configuration",
+		func(arguments ...string) {
+			_, err := parseConfig(arguments)
+			Expect(err).To(HaveOccurred())
+		},
+		Entry("invalid mode", "-chrome-mode=incognito"),
+		Entry("one-sided width", "-window-width=640"),
+		Entry("one-sided height", "-window-height=480"),
+		Entry("nonpositive width", "-window-width=0", "-window-height=480"),
+		Entry("nonpositive height", "-window-width=640", "-window-height=-1"),
+		Entry("attach and launch mode", "-chrome-ws-url=ws://example.test", "-chrome-mode=headful"),
+		Entry("attach and raw argument", "-chrome-ws-url=ws://example.test", "-chrome-arg=--site-per-process"),
+		Entry("attach and auto install", "-chrome-ws-url=ws://example.test", "-auto-install"),
+	)
 
 	DescribeTable("rejects unsafe screenshot daemon bounds",
 		func(arguments ...string) {

@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/onsi/biloba/engine"
@@ -279,9 +281,13 @@ func dialogsToWire(values []engine.Dialog) []map[string]any {
 func warningsToWire(values []engine.Warning) []map[string]any {
 	result := make([]map[string]any, len(values))
 	for i, value := range values {
-		result[i] = map[string]any{"code": value.Code, "message": value.Message, "dialog": dialogToWire(value.Dialog)}
+		result[i] = warningToWire(value)
 	}
 	return result
+}
+
+func warningToWire(value engine.Warning) map[string]any {
+	return map[string]any{"code": value.Code, "message": value.Message, "dialog": dialogToWire(value.Dialog), "generation": value.Generation}
 }
 func downloadToWire(v engine.Download) map[string]any {
 	result := map[string]any{"id": v.ID, "url": v.URL, "filename": v.Filename, "state": v.State, "receivedBytes": v.ReceivedBytes, "totalBytes": v.TotalBytes, "startedAt": v.StartedAt.UnixMilli()}
@@ -362,8 +368,127 @@ func shadowsToWire(values []engine.NetworkShadowDiagnostic) []map[string]any {
 
 type engineBackend struct {
 	browser            *engine.Browser
+	launch             protocol.WireLaunchMetadata
 	visual             engine.VisualOptions
 	maxScreenshotBytes int
+	debug              *debugHub
+}
+
+type debugHub struct {
+	mu          sync.Mutex
+	next        uint64
+	subscribers map[uint64]*debugSubscriber
+	closed      bool
+}
+
+type debugSubscriber struct {
+	events   chan protocol.SessionEvent
+	dropped  uint64
+	reported uint64
+}
+
+func newDebugHub() *debugHub { return &debugHub{subscribers: map[uint64]*debugSubscriber{}} }
+func (h *debugHub) publish(entry engine.DebugEntry) {
+	if h == nil {
+		return
+	}
+	payload := map[string]any{"timestamp": entry.Timestamp, "direction": entry.Direction, "message": entry.Message, "truncated": entry.Truncated}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return
+	}
+	for _, subscriber := range h.subscribers {
+		if subscriber.dropped > subscriber.reported {
+			count := subscriber.dropped - subscriber.reported
+			select {
+			case subscriber.events <- protocol.SessionEvent{Type: "eventsDropped", Payload: map[string]any{"code": "EVENTS_DROPPED", "message": fmt.Sprintf("%d debug events were dropped", count), "details": map[string]any{"count": count}}}:
+				subscriber.reported = subscriber.dropped
+			default:
+			}
+		}
+		select {
+		case subscriber.events <- protocol.SessionEvent{Type: "debug", Payload: payload}:
+		default:
+			subscriber.dropped++
+		}
+	}
+}
+func (h *debugHub) subscribe() (*debugHubSubscription, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return nil, protocol.NewError(protocol.CodeDriverClosed, "debug stream is closed")
+	}
+	h.next++
+	events := make(chan protocol.SessionEvent, 256)
+	h.subscribers[h.next] = &debugSubscriber{events: events}
+	return &debugHubSubscription{hub: h, id: h.next, events: events}, nil
+}
+func (h *debugHub) close() {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	if !h.closed {
+		h.closed = true
+		for id, subscriber := range h.subscribers {
+			close(subscriber.events)
+			delete(h.subscribers, id)
+		}
+	}
+	h.mu.Unlock()
+}
+
+type debugHubSubscription struct {
+	hub    *debugHub
+	id     uint64
+	events <-chan protocol.SessionEvent
+	once   sync.Once
+}
+
+func (s *debugHubSubscription) Events() <-chan protocol.SessionEvent { return s.events }
+func (s *debugHubSubscription) Close() error {
+	s.once.Do(func() {
+		s.hub.mu.Lock()
+		if subscriber, ok := s.hub.subscribers[s.id]; ok {
+			delete(s.hub.subscribers, s.id)
+			close(subscriber.events)
+		}
+		s.hub.mu.Unlock()
+	})
+	return nil
+}
+
+func (b *engineBackend) SubscribeDebug() (protocol.EventSubscription, error) {
+	if b.debug == nil {
+		return nil, protocol.NewError(protocol.CodeInvalidArgument, "debug logging is disabled")
+	}
+	return b.debug.subscribe()
+}
+
+func launchMetadataToWire(value engine.LaunchMetadata) protocol.WireLaunchMetadata {
+	arguments := make([]string, len(value.Arguments))
+	copy(arguments, value.Arguments)
+	return protocol.WireLaunchMetadata{Mode: string(value.Mode), ExecutablePath: value.ExecutablePath, Arguments: arguments, Width: value.WindowWidth, Height: value.WindowHeight, Attached: value.Attached, AutoInstalled: value.AutoInstalled}
+}
+
+func launchMetadataForHost(value engine.LaunchMetadata) hostLaunchMetadata {
+	arguments := make([]string, len(value.Arguments))
+	copy(arguments, value.Arguments)
+	result := hostLaunchMetadata{Mode: string(value.Mode), ExecutablePath: value.ExecutablePath, ChromeArgs: arguments, AutoInstalled: value.AutoInstalled}
+	result.WindowSize.Width, result.WindowSize.Height = value.WindowWidth, value.WindowHeight
+	return result
+}
+
+func (b *engineBackend) LaunchMetadata() protocol.WireLaunchMetadata {
+	if b.launch.Attached {
+		value := b.launch
+		value.Arguments = make([]string, len(b.launch.Arguments))
+		copy(value.Arguments, b.launch.Arguments)
+		return value
+	}
+	return launchMetadataToWire(b.browser.LaunchMetadata())
 }
 
 func (b *engineBackend) OpenSession(ctx context.Context) (protocol.Session, error) {
@@ -378,13 +503,143 @@ func (b *engineBackend) wrap(session *engine.Session, frameURL string) *engineSe
 	return &engineSession{session: session, frameURL: frameURL, visual: b.visual, maxScreenshotBytes: b.maxScreenshotBytes}
 }
 
-func (b *engineBackend) Close() error { return b.browser.Close() }
+func (b *engineBackend) Close() error {
+	b.debug.close()
+	return b.browser.Close()
+}
 
 type engineSession struct {
 	session            *engine.Session
 	frameURL           string
 	visual             engine.VisualOptions
 	maxScreenshotBytes int
+}
+
+type engineEventSubscription struct {
+	events   chan protocol.SessionEvent
+	stop     chan struct{}
+	once     sync.Once
+	closers  []func() error
+	dropped  atomic.Uint64
+	reported atomic.Uint64
+}
+
+func (s *engineEventSubscription) Events() <-chan protocol.SessionEvent { return s.events }
+func (s *engineEventSubscription) Close() error {
+	s.once.Do(func() {
+		close(s.stop)
+		for _, closeSubscription := range s.closers {
+			_ = closeSubscription()
+		}
+	})
+	return nil
+}
+
+func (s *engineSession) SubscribeEvents(types []string) (protocol.EventSubscription, error) {
+	result := &engineEventSubscription{events: make(chan protocol.SessionEvent, 256), stop: make(chan struct{})}
+	var wg sync.WaitGroup
+	forward := func(kind string, receive func() (any, uint64, bool), sourceDropped func() uint64) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				payload, generation, ok := receive()
+				if !ok {
+					return
+				}
+				dropped := sourceDropped() + result.dropped.Load()
+				if dropped > result.reported.Load() {
+					select {
+					case result.events <- protocol.SessionEvent{Type: "eventsDropped", Generation: generation, Payload: map[string]any{"type": kind, "count": dropped}}:
+						result.reported.Store(dropped)
+					case <-result.stop:
+						return
+					default:
+					}
+				}
+				select {
+				case result.events <- protocol.SessionEvent{Type: kind, Generation: generation, Payload: payload}:
+				case <-result.stop:
+					return
+				default:
+					result.dropped.Add(1)
+				}
+			}
+		}()
+	}
+	for _, kind := range types {
+		switch kind {
+		case "console":
+			subscription, err := s.session.SubscribeConsole(256)
+			if err != nil {
+				_ = result.Close()
+				return nil, engineRPCError(err)
+			}
+			result.closers = append(result.closers, subscription.Close)
+			forward("console", func() (any, uint64, bool) {
+				message, ok := <-subscription.Events()
+				return consoleMessageToWire(message), message.Generation, ok
+			}, subscription.Dropped)
+		case "warning":
+			subscription, err := s.session.SubscribeWarnings(256)
+			if err != nil {
+				_ = result.Close()
+				return nil, engineRPCError(err)
+			}
+			result.closers = append(result.closers, subscription.Close)
+			forward("warning", func() (any, uint64, bool) {
+				warning, ok := <-subscription.Events()
+				return warningToWire(warning), warning.Generation, ok
+			}, subscription.Dropped)
+		default:
+			_ = result.Close()
+			return nil, protocol.NewError(protocol.CodeInvalidArgument, "session subscriptions support console and warning events")
+		}
+	}
+	go func() {
+		wg.Wait()
+		close(result.events)
+	}()
+	return result, nil
+}
+
+func (s *engineSession) CaptureContextDiagnostics(ctx context.Context, options protocol.ContextDiagnosticsOptions) (protocol.ContextDiagnosticsResponse, error) {
+	return s.captureContextDiagnostics(ctx, options, "")
+}
+
+func (s *engineSession) captureContextDiagnostics(ctx context.Context, options protocol.ContextDiagnosticsOptions, primaryScreenshotPrefix string) (protocol.ContextDiagnosticsResponse, error) {
+	capture := engine.DiagnosticsCaptureOptions{Purpose: engine.DiagnosticsPurpose(options.Purpose), Name: options.Name, Screenshots: options.Screenshots, Outlines: options.Outlines, MaxBytes: options.MaxBytes, IncludeScreenshotBytes: options.IncludeScreenshotBytes, PrimaryScreenshotPrefix: primaryScreenshotPrefix}
+	if options.Width > 0 {
+		capture.Viewport = &engine.ViewportSize{Width: options.Width, Height: options.Height}
+	}
+	value, err := s.session.CaptureContextDiagnostics(ctx, capture)
+	response := protocol.ContextDiagnosticsResponse{Purpose: string(value.Purpose), ArtifactDir: value.ArtifactDir, Tabs: make([]protocol.TabDiagnosticsResponse, len(value.Tabs))}
+	for index, tab := range value.Tabs {
+		errors := make([]protocol.DiagnosticsArtifactErrorResponse, len(tab.Errors))
+		for errorIndex, artifactErr := range tab.Errors {
+			errors[errorIndex] = protocol.DiagnosticsArtifactErrorResponse{Artifact: artifactErr.Artifact, Code: diagnosticsErrorCodeToWire(artifactErr.Code), Message: artifactErr.Message}
+		}
+		response.Tabs[index] = protocol.TabDiagnosticsResponse{TargetID: string(tab.TargetID), Title: tab.Title, ScreenshotPath: tab.ScreenshotPath, OutlinePath: tab.OutlinePath, DOMOutline: tab.DOMOutline, Errors: errors}
+		if len(tab.Screenshot) > 0 {
+			response.Tabs[index].ScreenshotBase64 = base64.StdEncoding.EncodeToString(tab.Screenshot)
+		}
+	}
+	return response, engineRPCError(err)
+}
+
+func diagnosticsErrorCodeToWire(code engine.ErrorCode) string {
+	switch code {
+	case engine.CodeIO:
+		return "IO_ERROR"
+	case engine.CodeActionFailed:
+		return "ACTION_FAILED"
+	case engine.CodeDeadline:
+		return "DEADLINE_EXCEEDED"
+	}
+	if protocolCode, ok := engineProtocolCodes[code]; ok {
+		return string(protocolCode)
+	}
+	return string(protocol.CodeDriver)
 }
 
 func (s *engineSession) wrap(session *engine.Session, frameURL string) *engineSession {
@@ -926,7 +1181,11 @@ func (s *engineSession) lifecycle(ctx context.Context, operation protocol.Operat
 }
 
 func consoleMessageToWire(message engine.ConsoleMessage) map[string]any {
-	return map[string]any{"type": message.Type, "text": message.Text, "args": message.Args, "timestamp": message.Timestamp}
+	stack := make([]map[string]any, len(message.Stack))
+	for index, frame := range message.Stack {
+		stack[index] = map[string]any{"url": frame.URL, "functionName": frame.FunctionName, "line": frame.Line, "column": frame.Column}
+	}
+	return map[string]any{"type": message.Type, "text": message.Text, "args": message.Args, "timestamp": message.Timestamp, "stack": stack, "generation": message.Generation}
 }
 
 func consoleMessagesToWire(messages []engine.ConsoleMessage) []map[string]any {
@@ -1416,10 +1675,14 @@ func (s *engineSession) poll(ctx context.Context, operation protocol.Operation, 
 	}
 	diagnosticCtx, cancel := context.WithTimeout(context.Background(), diagnosticsBudget(ctx, time.Now()))
 	defer cancel()
-	diagnostics, diagnosticErr := s.session.CaptureDiagnostics(diagnosticCtx, "biloba-failure")
+	diagnostics, diagnosticErr := s.captureContextDiagnostics(diagnosticCtx, protocol.ContextDiagnosticsOptions{Purpose: "failure", Name: "biloba-failure", Screenshots: true, Outlines: true, MaxBytes: s.maxScreenshotBytes}, "biloba-failure")
 	converted.Diagnostics = protocol.Diagnostics{
 		Locator: locatorDescription(operation), Expected: expectedDescription(operation),
-		DOMOutline: diagnostics.DOMOutline, ScreenshotPath: diagnostics.ScreenshotPath, DaemonDetail: pollErr.Error(),
+		DaemonDetail: pollErr.Error(), Context: &diagnostics,
+	}
+	if len(diagnostics.Tabs) > 0 {
+		converted.Diagnostics.DOMOutline = diagnostics.Tabs[0].DOMOutline
+		converted.Diagnostics.ScreenshotPath = diagnostics.Tabs[0].ScreenshotPath
 	}
 	if diagnosticErr != nil {
 		converted.Diagnostics.DaemonDetail += "; capture diagnostics: " + diagnosticErr.Error()

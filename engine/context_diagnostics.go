@@ -36,6 +36,9 @@ type DiagnosticsCaptureOptions struct {
 	MaxBytes    int
 	// IncludeScreenshotBytes retains the same bounded PNG bytes used for artifact output.
 	IncludeScreenshotBytes bool
+	// PrimaryScreenshotPrefix preserves a caller's established first-tab artifact name while the
+	// same capture also gathers typed diagnostics for every tab.
+	PrimaryScreenshotPrefix string
 }
 
 type DiagnosticsArtifactError struct {
@@ -85,8 +88,12 @@ func (s *Session) CaptureContextDiagnostics(ctx context.Context, options Diagnos
 		}
 		return tabs[i].targetID < tabs[j].targetID
 	})
-	for _, tab := range tabs {
-		tabResult := tab.captureContextTabDiagnostics(ctx, options)
+	for index, tab := range tabs {
+		tabOptions := options
+		if index > 0 {
+			tabOptions.PrimaryScreenshotPrefix = ""
+		}
+		tabResult := tab.captureContextTabDiagnostics(ctx, tabOptions)
 		result.Tabs = append(result.Tabs, tabResult)
 		if ctx.Err() != nil {
 			return result, contextError("capture context diagnostics", ctx.Err())
@@ -155,7 +162,7 @@ func (s *Session) captureContextTabDiagnostics(ctx context.Context, options Diag
 					result.Screenshot = append([]byte(nil), image...)
 				}
 				if s.artifactDir != "" {
-					path, writeErr := writeDiagnosticsArtifact(s.artifactDir, options, s.targetID, "png", image)
+					path, writeErr := writeDiagnosticsScreenshot(s.artifactDir, options, s.targetID, image)
 					if writeErr != nil {
 						result.Errors = append(result.Errors, diagnosticsError("screenshot-write", writeErr))
 					} else {
@@ -173,6 +180,20 @@ func (s *Session) captureContextTabDiagnostics(ctx context.Context, options Diag
 		result.Errors = append(result.Errors, diagnosticsError("tab", err))
 	}
 	return result
+}
+
+func writeDiagnosticsScreenshot(dir string, options DiagnosticsCaptureOptions, targetID target.ID, image []byte) (string, error) {
+	if options.PrimaryScreenshotPrefix == "" {
+		return writeDiagnosticsArtifact(dir, options, targetID, "png", image)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	path := artifactPath(dir, options.PrimaryScreenshotPrefix, "png")
+	if err := os.WriteFile(path, image, 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 func diagnosticsError(artifact string, err error) DiagnosticsArtifactError {
