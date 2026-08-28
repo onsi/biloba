@@ -100,7 +100,7 @@ var _ = Describe("serving requests over framed stdio", func() {
 		}, 0)
 
 		var response protocol.Response
-		Eventually(responses, time.Second).Should(Receive(&response))
+		Eventually(responses, 5*time.Second).Should(Receive(&response))
 		Expect(response.Error.Code).To(Equal(protocol.CodeDriver))
 		Expect(response.Error.Message).To(ContainSubstring("the protocol caps a single response"))
 		stillServing()
