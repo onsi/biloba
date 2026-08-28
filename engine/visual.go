@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -102,11 +103,11 @@ func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, opt
 		defer func() {
 			cleanupCtx, cancel := s.visualCleanupContext()
 			defer cancel()
-			if restoreErr := EmulateColorSchemeContext(cleanupCtx, ""); err == nil && restoreErr != nil {
-				err = fmt.Errorf("restore color scheme emulation: %w", restoreErr)
+			if restoreErr := s.clearVisualColor(cleanupCtx); restoreErr != nil {
+				err = errors.Join(err, fmt.Errorf("restore color scheme emulation: %w", restoreErr))
 			}
 		}()
-		if err = EmulateColorSchemeContext(ctx, options.ColorScheme); err != nil {
+		if err = s.applyVisualColor(ctx, options.ColorScheme); err != nil {
 			return shot, err
 		}
 	}
@@ -114,11 +115,12 @@ func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, opt
 		defer func() {
 			cleanupCtx, cancel := s.visualCleanupContext()
 			defer cancel()
-			_, _ = RunHandlerContext(cleanupCtx, "unfreezeRendering", "")
+			if restoreErr := s.clearVisualFreeze(cleanupCtx); restoreErr != nil {
+				err = errors.Join(err, restoreErr)
+			}
 		}()
-		response, callErr := RunHandlerContext(ctx, "freezeRendering", "")
-		if callErr != nil || response.Err != "" {
-			return shot, handlerCallError("freeze rendering", response, callErr)
+		if err = s.applyVisualFreeze(ctx); err != nil {
+			return shot, err
 		}
 	}
 

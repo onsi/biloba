@@ -289,6 +289,199 @@ var _ = Describe("runner-neutral visual comparison", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(after).To(Equal([]any{before, float64(0)}))
 	})
+
+	It("retries failed color and freeze cleanup during prepare without crossing sessions", func(ctx SpecContext) {
+		first, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(first.Close)
+		second, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(second.Close)
+		page := "data:text/html,<style>.box{width:20px;height:20px;background:white}@media(prefers-color-scheme:dark){.box{background:black}}</style><div class=box></div>"
+		Expect(first.Navigate(ctx, page)).To(Succeed())
+		Expect(second.Navigate(ctx, page)).To(Succeed())
+
+		colorClears, freezeClears := 0, 0
+		restore := engine.SetVisualOperationHooksForTest(first, engine.VisualOperationHooksForTest{
+			EmulateColorScheme: func(hookCtx context.Context, scheme string) error {
+				if scheme == "" {
+					colorClears++
+					if colorClears == 1 {
+						return errors.New("injected color cleanup failure")
+					}
+				}
+				return engine.EmulateColorSchemeContext(hookCtx, scheme)
+			},
+			RunHandler: func(hookCtx context.Context, name, arg string) (engine.HandlerResponse, error) {
+				if name == "unfreezeRendering" {
+					freezeClears++
+					if freezeClears == 1 {
+						return engine.HandlerResponse{}, errors.New("injected freeze cleanup failure")
+					}
+				}
+				return engine.RunHandlerContext(hookCtx, name, arg)
+			},
+		})
+		DeferCleanup(restore)
+
+		_, err = first.CaptureElementScreenshot(ctx, engine.CSS(".box"), engine.ScreenshotCaptureOptions{ColorScheme: "dark"})
+		Expect(err).To(MatchError(And(
+			ContainSubstring("injected color cleanup failure"),
+			ContainSubstring("injected freeze cleanup failure"),
+		)))
+		firstState, err := first.Evaluate(ctx, `[matchMedia('(prefers-color-scheme: dark)').matches, document.querySelectorAll('#_biloba-freeze').length]`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(firstState).To(Equal([]any{true, float64(1)}))
+		secondState, err := second.Evaluate(ctx, `[matchMedia('(prefers-color-scheme: dark)').matches, document.querySelectorAll('#_biloba-freeze').length]`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(secondState).To(Equal([]any{false, float64(0)}))
+
+		Expect(first.Prepare(ctx)).To(Succeed())
+		Expect(colorClears).To(Equal(2))
+		Expect(freezeClears).To(Equal(2))
+		Expect(first.Navigate(ctx, page)).To(Succeed())
+		cleared, err := first.Evaluate(ctx, `[matchMedia('(prefers-color-scheme: dark)').matches, document.querySelectorAll('#_biloba-freeze').length]`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cleared).To(Equal([]any{false, float64(0)}))
+	})
+
+	It("remembers color emulation when cancellation races setup and cleanup fails", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		page := "data:text/html,<style>.box{width:20px;height:20px;background:white}@media(prefers-color-scheme:dark){.box{background:black}}</style><div class=box></div>"
+		Expect(session.Navigate(ctx, page)).To(Succeed())
+
+		captureCtx, cancel := context.WithCancel(ctx)
+		colorClears := 0
+		restore := engine.SetVisualOperationHooksForTest(session, engine.VisualOperationHooksForTest{
+			EmulateColorScheme: func(hookCtx context.Context, scheme string) error {
+				if scheme == "dark" {
+					if applyErr := engine.EmulateColorSchemeContext(hookCtx, scheme); applyErr != nil {
+						return applyErr
+					}
+					cancel()
+					return context.Canceled
+				}
+				colorClears++
+				if colorClears == 1 {
+					return errors.New("injected canceled cleanup failure")
+				}
+				return engine.EmulateColorSchemeContext(hookCtx, scheme)
+			},
+		})
+		DeferCleanup(restore)
+
+		_, err = session.CaptureElementScreenshot(captureCtx, engine.CSS(".box"), engine.ScreenshotCaptureOptions{ColorScheme: "dark", Animated: true})
+		Expect(err).To(HaveOccurred())
+		active, err := session.Evaluate(ctx, `matchMedia('(prefers-color-scheme: dark)').matches`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(active).To(BeTrue())
+		Expect(session.Navigate(ctx, page)).To(Succeed())
+		active, err = session.Evaluate(ctx, `matchMedia('(prefers-color-scheme: dark)').matches`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(active).To(BeTrue(), "navigation must not hide a leaked target-level override")
+		Expect(session.Prepare(ctx)).To(Succeed())
+		Expect(colorClears).To(Equal(2))
+		Expect(session.Navigate(ctx, page)).To(Succeed())
+		active, err = session.Evaluate(ctx, `matchMedia('(prefers-color-scheme: dark)').matches`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(active).To(BeFalse())
+	})
+
+	It("clears a possibly-landed freeze through crash recovery navigation", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		page := "data:text/html,<style>.box{width:20px;height:20px;background:red;animation:pulse 1s infinite}@keyframes pulse{to{background:blue}}</style><div class=box></div>"
+		Expect(session.Navigate(ctx, page)).To(Succeed())
+
+		colorClears, freezeClears := 0, 0
+		restore := engine.SetVisualOperationHooksForTest(session, engine.VisualOperationHooksForTest{
+			EmulateColorScheme: func(hookCtx context.Context, scheme string) error {
+				if scheme == "" {
+					colorClears++
+					if colorClears <= 2 {
+						return errors.New("injected crashed color cleanup failure")
+					}
+				}
+				return engine.EmulateColorSchemeContext(hookCtx, scheme)
+			},
+			RunHandler: func(hookCtx context.Context, name, arg string) (engine.HandlerResponse, error) {
+				if name == "freezeRendering" {
+					response, runErr := engine.RunHandlerContext(hookCtx, name, arg)
+					if runErr != nil {
+						return response, runErr
+					}
+					return response, errors.New("injected freeze setup acknowledgment failure")
+				}
+				if name == "unfreezeRendering" {
+					freezeClears++
+					if freezeClears == 1 {
+						return engine.HandlerResponse{}, errors.New("injected freeze recovery failure")
+					}
+				}
+				return engine.RunHandlerContext(hookCtx, name, arg)
+			},
+		})
+		DeferCleanup(restore)
+
+		_, err = session.CaptureElementScreenshot(ctx, engine.CSS(".box"), engine.ScreenshotCaptureOptions{ColorScheme: "dark"})
+		Expect(err).To(MatchError(And(
+			ContainSubstring("setup acknowledgment failure"),
+			ContainSubstring("freeze recovery failure"),
+			ContainSubstring("crashed color cleanup failure"),
+		)))
+		frozen, err := session.Evaluate(ctx, `[matchMedia('(prefers-color-scheme: dark)').matches, document.querySelectorAll('#_biloba-freeze').length]`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(frozen).To(Equal([]any{true, float64(1)}))
+
+		engine.MarkSessionCrashedForTest(session)
+		Expect(session.Prepare(ctx)).To(Succeed())
+		Expect(colorClears).To(Equal(3), "prepare retries target emulation cleanup after recovery when the crashed target rejects it")
+		Expect(freezeClears).To(Equal(1), "successful recovery navigation makes an old-DOM retry unnecessary")
+		Expect(session.Navigate(ctx, page)).To(Succeed())
+		frozen, err = session.Evaluate(ctx, `[matchMedia('(prefers-color-scheme: dark)').matches, document.querySelectorAll('#_biloba-freeze').length]`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(frozen).To(Equal([]any{false, float64(0)}))
+	})
+
+	It("retries a leaked freeze before a same-document navigation", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		page := "data:text/html,<div class=box style='width:20px;height:20px;background:red'></div>"
+		Expect(session.Navigate(ctx, page)).To(Succeed())
+
+		freezeClears := 0
+		restore := engine.SetVisualOperationHooksForTest(session, engine.VisualOperationHooksForTest{
+			RunHandler: func(hookCtx context.Context, name, arg string) (engine.HandlerResponse, error) {
+				if name == "freezeRendering" {
+					response, runErr := engine.RunHandlerContext(hookCtx, name, arg)
+					if runErr != nil {
+						return response, runErr
+					}
+					return response, errors.New("injected navigation setup failure")
+				}
+				if name == "unfreezeRendering" {
+					freezeClears++
+					if freezeClears == 1 {
+						return engine.HandlerResponse{}, errors.New("injected navigation cleanup failure")
+					}
+				}
+				return engine.RunHandlerContext(hookCtx, name, arg)
+			},
+		})
+		DeferCleanup(restore)
+
+		_, err = session.CaptureElementScreenshot(ctx, engine.CSS(".box"), engine.ScreenshotCaptureOptions{})
+		Expect(err).To(HaveOccurred())
+		Expect(session.Navigate(ctx, page+"#next")).To(Succeed())
+		Expect(freezeClears).To(Equal(2))
+		frozen, err := session.Evaluate(ctx, `document.querySelectorAll('#_biloba-freeze').length`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(frozen).To(Equal(float64(0)))
+	})
 })
 
 var _ = Describe("screenshot diff", func() {

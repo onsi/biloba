@@ -93,6 +93,7 @@ type Session struct {
 	initialWidth     int
 	initialHeight    int
 	restoreViewport  *ViewportSize
+	visual           visualLifecycle
 	highFidelity     bool
 	initScriptIDs    []page.ScriptIdentifier
 	// crashed is closed by Chrome's Inspector.targetCrashed listener, which runs on chromedp's event
@@ -280,6 +281,10 @@ func (s *Session) Prepare(ctx context.Context) error {
 	return s.serial(ctx, "prepare", func(opCtx context.Context) error {
 		s.eventsEnabled.Store(false)
 		defer s.eventsEnabled.Store(true)
+		wasCrashed := s.hasCrashed()
+		if err := s.cleanupVisualState(opCtx, !wasCrashed); err != nil && !wasCrashed {
+			return err
+		}
 		if err := s.resetResponseHolds(opCtx); err != nil {
 			return err
 		}
@@ -308,8 +313,9 @@ func (s *Session) Prepare(ctx context.Context) error {
 		if err := ClearCookiesContext(opCtx, s.browserContextID); err != nil {
 			return err
 		}
-		if err := s.resetEmulation(opCtx); err != nil {
-			return err
+		emulationErr := s.resetEmulation(opCtx)
+		if emulationErr != nil && !wasCrashed {
+			return emulationErr
 		}
 		navigateBlank := func() error {
 			return chromedp.Run(opCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
@@ -323,6 +329,15 @@ func (s *Session) Prepare(ctx context.Context) error {
 		}
 		if err != nil {
 			return err
+		}
+		s.visual.frozen = false
+		if err := s.clearVisualColor(opCtx); err != nil {
+			return err
+		}
+		if emulationErr != nil {
+			if err := s.resetEmulation(opCtx); err != nil {
+				return err
+			}
 		}
 		viewportWidth, viewportHeight := s.initialWidth, s.initialHeight
 		if s.restoreViewport != nil {
@@ -351,6 +366,12 @@ func (s *Session) Navigate(ctx context.Context, destination string) error {
 // downstream failure instead of at the navigation that caused it.
 func (s *Session) NavigateWithStatus(ctx context.Context, destination string, expectedStatus int) error {
 	return s.serial(ctx, "navigate", func(opCtx context.Context) error {
+		recoveringCrash := s.hasCrashed()
+		if !recoveringCrash {
+			if err := s.clearVisualFreeze(opCtx); err != nil {
+				return err
+			}
+		}
 		width, height := int64(s.initialWidth), int64(s.initialHeight)
 		if s.highFidelity && !s.hasCrashed() {
 			var sizeErr error
@@ -376,6 +397,9 @@ func (s *Session) NavigateWithStatus(ctx context.Context, destination string, ex
 		if err == nil {
 			s.clearCrashed()
 			s.eventsEnabled.Store(true)
+		}
+		if recoveringCrash && (err == nil || result.HTTPFailure) {
+			s.visual.frozen = false
 		}
 		if (err == nil || result.HTTPFailure) && (s.highFidelity || restoreDiagnosticsViewport) {
 			if viewportErr := s.applyViewport(opCtx, int(width), int(height)); viewportErr != nil {
