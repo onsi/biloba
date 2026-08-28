@@ -25,12 +25,12 @@ var _ = Describe("lifecycle engine foundations", func() {
 		Expect(root.OwnsContext()).To(BeTrue())
 		Expect(sibling.ContextID()).To(Equal(root.ContextID()))
 		Expect(sibling.OwnsContext()).To(BeFalse())
-		Expect(browser.Sessions()).To(ContainElements(root, sibling))
+		Expect(sessionTargetIDs(browser.Sessions())).To(ContainElements(string(root.TargetID()), string(sibling.TargetID())))
 
 		Expect(root.Prepare(ctx)).To(Succeed())
 		_, err = sibling.Evaluate(ctx, "1")
 		Expect(err).To(MatchError(ContainSubstring("session is closed")))
-		Expect(browser.Sessions()).To(ConsistOf(root))
+		Expect(sessionTargetIDs(browser.Sessions())).To(ConsistOf(string(root.TargetID())))
 	})
 
 	It("invalidates descendant handles when their context owner closes", func(ctx SpecContext) {
@@ -42,7 +42,7 @@ var _ = Describe("lifecycle engine foundations", func() {
 		Expect(root.Close()).To(Succeed())
 		_, err = sibling.Evaluate(ctx, "1")
 		Expect(err).To(MatchError(ContainSubstring("session is closed")))
-		Expect(browser.Sessions()).NotTo(ContainElements(root, sibling))
+		Expect(sessionTargetIDs(browser.Sessions())).NotTo(ContainElements(string(root.TargetID()), string(sibling.TargetID())))
 	})
 
 	It("discovers a spawned tab and can wait for it by typed query", func(ctx SpecContext) {
@@ -347,3 +347,11 @@ var _ = Describe("lifecycle engine foundations", func() {
 })
 
 func selectorPtr(selector engine.Selector) *engine.Selector { return &selector }
+
+func sessionTargetIDs(sessions []*engine.Session) []string {
+	ids := make([]string, 0, len(sessions))
+	for _, session := range sessions {
+		ids = append(ids, string(session.TargetID()))
+	}
+	return ids
+}
