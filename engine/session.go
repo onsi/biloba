@@ -92,6 +92,7 @@ type Session struct {
 	root             *Session
 	initialWidth     int
 	initialHeight    int
+	restoreViewport  *ViewportSize
 	highFidelity     bool
 	initScriptIDs    []page.ScriptIdentifier
 	// crashed is closed by Chrome's Inspector.targetCrashed listener, which runs on chromedp's event
@@ -323,9 +324,14 @@ func (s *Session) Prepare(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if err := s.applyViewport(opCtx, s.initialWidth, s.initialHeight); err != nil {
+		viewportWidth, viewportHeight := s.initialWidth, s.initialHeight
+		if s.restoreViewport != nil {
+			viewportWidth, viewportHeight = s.restoreViewport.Width, s.restoreViewport.Height
+		}
+		if err := s.applyViewport(opCtx, viewportWidth, viewportHeight); err != nil {
 			return err
 		}
+		s.restoreViewport = nil
 		s.installed = false
 		s.clearCrashed()
 		return nil
@@ -353,6 +359,11 @@ func (s *Session) NavigateWithStatus(ctx context.Context, destination string, ex
 				return sizeErr
 			}
 		}
+		restoreDiagnosticsViewport := s.restoreViewport != nil
+		if restoreDiagnosticsViewport {
+			width = int64(s.restoreViewport.Width)
+			height = int64(s.restoreViewport.Height)
+		}
 		result, err := NavigateContext(opCtx, destination)
 		// A navigation gives the target a fresh renderer, which is how a crashed page recovers - but
 		// Chrome needs a beat to spawn one, and a navigation issued before it exists comes back
@@ -366,9 +377,12 @@ func (s *Session) NavigateWithStatus(ctx context.Context, destination string, ex
 			s.clearCrashed()
 			s.eventsEnabled.Store(true)
 		}
-		if (err == nil || result.HTTPFailure) && s.highFidelity {
+		if (err == nil || result.HTTPFailure) && (s.highFidelity || restoreDiagnosticsViewport) {
 			if viewportErr := s.applyViewport(opCtx, int(width), int(height)); viewportErr != nil {
 				return viewportErr
+			}
+			if restoreDiagnosticsViewport {
+				s.restoreViewport = nil
 			}
 		}
 		// Chrome reports a 4xx/5xx document as a loading failure, so that particular error is not

@@ -68,6 +68,7 @@ type Browser struct {
 	launch       LaunchMetadata
 	mu           sync.Mutex
 	sessions     map[*Session]struct{}
+	closedIDs    map[target.ID]struct{}
 	closed       bool
 	webSocketURL string
 }
@@ -463,6 +464,12 @@ func (b *Browser) Close() error {
 func (b *Browser) removeSession(session *Session) {
 	b.mu.Lock()
 	delete(b.sessions, session)
+	if session.targetID != "" {
+		if b.closedIDs == nil {
+			b.closedIDs = map[target.ID]struct{}{}
+		}
+		b.closedIDs[session.targetID] = struct{}{}
+	}
 	b.mu.Unlock()
 }
 

@@ -42,6 +42,9 @@ func (s *Session) Tabs(ctx context.Context) ([]*Session, error) {
 		if attachErr != nil {
 			return nil, attachErr
 		}
+		if tab == nil {
+			continue
+		}
 		out = append(out, tab)
 	}
 	return out, nil
@@ -52,6 +55,9 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 	defer b.mu.Unlock()
 	if b.closed {
 		return nil, &Error{Code: CodeSessionClosed, Operation: "attach tab", Message: "browser is closed"}
+	}
+	if _, closed := b.closedIDs[targetID]; closed {
+		return nil, nil
 	}
 	for session := range b.sessions {
 		if session.targetID == targetID {
