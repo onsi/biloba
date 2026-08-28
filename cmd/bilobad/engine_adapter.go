@@ -689,13 +689,25 @@ func (s *engineSession) screenshot(ctx context.Context, operation protocol.Opera
 	})
 	final, _ := result.Final.Value.(engine.VisualResult)
 	if pollErr != nil && !engine.IsFatal(pollErr) && ctx.Err() == nil {
+		// Reporting re-runs the whole capture and comparison so the artifacts get written.  On a tall
+		// page that costs as much as a poll attempt did, while the client grants only a fixed slack
+		// past the poll timeout - so running it unbounded turned a diagnosable mismatch into a bare
+		// "request timed out" carrying no visual result at all.  Bound it against the request
+		// deadline and keep what the poll already observed if it cannot finish in time.
+		reportCtx, cancelReport := context.WithTimeout(ctx, diagnosticsBudget(ctx, time.Now()))
 		writeArtifacts = true
-		reported, reportErr := s.session.CompareScreenshot(ctx, request.Name, target, visualOptions)
-		if reported.Schemes != nil || len(reported.Warnings) > 0 {
-			final = reported
-		}
-		if reportErr != nil && engine.IsFatal(reportErr) {
+		reported, reportErr := s.session.CompareScreenshot(reportCtx, request.Name, target, visualOptions)
+		writeArtifacts = false
+		cancelReport()
+		switch {
+		case reportErr != nil && engine.IsFatal(reportErr):
 			pollErr = reportErr
+		case reported.Match:
+			// The page settled between the final attempt and this one, so there is nothing left to
+			// show.  Adopting it would report match:true on the very result the client is about to
+			// raise as a mismatch.
+		case reported.Schemes != nil || len(reported.Warnings) > 0:
+			final = reported
 		}
 	}
 	wire := visualResultToWire(final, uint32(result.AttemptCount), time.Since(started))

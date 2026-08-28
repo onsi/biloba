@@ -40,6 +40,8 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
   let session: Session;
   let sharedBrowser: SharedBrowserProcess;
   let artifactDir: string;
+  let baselineDir: string;
+  const screenshotWarnings: string[] = [];
 
   beforeAll(async () => {
     if (!daemonExecutable) {
@@ -70,11 +72,114 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     if (!address || typeof address === "string") throw new Error("fixture server did not bind TCP");
     baseUrl = `http://127.0.0.1:${address.port}`;
     artifactDir = await mkdtemp(join(tmpdir(), "biloba-parity-"));
+    baselineDir = join(artifactDir, "baselines");
     // No chromePath: bilobad runs the same runner-neutral Chrome search the Go suite does, so this
     // exercises the resolution path a real worker takes.
     sharedBrowser = await startSharedBrowser({executable: daemonExecutable});
-    browser = await connect({daemonExecutable: daemonExecutable, chromeWsUrl: sharedBrowser.wsURL, artifactDir});
+    browser = await connect({daemonExecutable: daemonExecutable, chromeWsUrl: sharedBrowser.wsURL, artifactDir, screenshotBaselinesDir: baselineDir, onScreenshotWarning: ({message}) => screenshotWarnings.push(message)});
     session = await browser.openSession();
+  });
+
+  it("captures raw screenshots and runs the visual baseline workflow through the real daemon", async () => {
+    await session.prepare();
+    await session.navigate(baseUrl);
+    const page = await session.captureScreenshot();
+    expect([...page.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+    const heading = await session.getByRole("heading", {name: "Biloba parity"}).captureScreenshot({mask: ["#count"]});
+    expect([...heading.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+    expect((await session.xpath(xpath("h1").withText("Biloba parity")).captureScreenshot()).byteLength).toBeGreaterThan(0);
+    const path = await session.captureScreenshot({output: "path", name: "raw/page"});
+    expect(path.startsWith(artifactDir)).toBe(true);
+    expect((await readFile(path)).subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+
+    const updater = await connect({daemonExecutable: daemonExecutable, chromeWsUrl: sharedBrowser.wsURL, artifactDir, screenshotBaselinesDir: baselineDir, updateScreenshots: true});
+    const updateSession = await updater.openSession();
+    await updateSession.navigate(baseUrl);
+    const created = await updateSession.getByRole("heading", {name: "Biloba parity"}).expectScreenshot("visual/heading");
+    expect(created.schemes[0]?.status).toBe("created");
+    expect((await updateSession.expectScreenshot("visual/page")).schemes[0]?.status).toBe("created");
+    const unchanged = await updateSession.getByRole("heading", {name: "Biloba parity"}).expectScreenshot("visual/heading");
+    expect(unchanged.schemes[0]?.status).toBe("unchanged");
+    await updateSession.getByRole("heading", {name: "Biloba parity"}).expectScreenshot("visual/changed");
+    await updateSession.evaluate(`document.querySelector("h1").style.background = "rgb(0, 0, 255)"`);
+    const updated = await updateSession.getByRole("heading", {name: "Biloba parity"}).expectScreenshot("visual/changed");
+    expect(updated.schemes[0]).toMatchObject({status: "updated", previousDiff: {match: false}});
+    expect(updated.schemes[0]?.updateSummary).toContain("pixels changed");
+    await updateSession.evaluate(`document.querySelector("h1").style.background = ""`);
+    const schemes = await updateSession.getByRole("heading", {name: "Biloba parity"}).expectScreenshot("visual/schemes", {colorSchemes: ["light", "dark"]});
+    expect(schemes.schemes.map(({scheme, status}) => [scheme, status])).toEqual([["light", "created"], ["dark", "created"]]);
+    await updateSession.getByRole("heading", {name: "Biloba parity"}).expectScreenshot("visual/masked", {mask: ["h1"]});
+    await updateSession.evaluate(`document.body.insertAdjacentHTML("beforeend", '<div id="tolerance" style="width:20px;height:20px;background:rgb(0,0,0)"></div>')`);
+    await updateSession.locator("#tolerance").expectScreenshot("visual/tolerance");
+    await updater.close();
+
+    const matched = await session.getByRole("heading", {name: "Biloba parity"}).expectScreenshot("visual/heading");
+    expect(matched.schemes[0]?.status).toBe("matched");
+    // channelTolerance, not pixelTolerance: what varies between two captures of the same page is
+    // rasterization noise - a small delta on many pixels - and visual_diff.go names 8 as the
+    // threshold for it. A pixel budget would instead license a handful of pixels to change by any
+    // amount, which is exactly the small-glyph or one-pixel-border regression worth catching.
+    await expect(session.expectScreenshot("visual/page", {timeoutMs: 20_000, channelTolerance: 8})).resolves.toMatchObject({match: true});
+    await expect(session.xpath(xpath("h1").withText("Biloba parity")).expectScreenshot("visual/heading")).resolves.toMatchObject({match: true});
+    await expect(session.getByRole("heading", {name: "Biloba parity"}).expectScreenshot("visual/missing", {timeoutMs: 500})).rejects.toMatchObject({
+      code: "VISUAL_BASELINE",
+      visual: {match: false, schemes: [{status: "missing"}]},
+    });
+    await session.evaluate(`document.querySelector("h1").style.background = "rgb(0, 255, 0)"`);
+    await expect(session.getByRole("heading", {name: "Biloba parity"}).expectScreenshot("visual/masked", {mask: ["h1"]})).resolves.toMatchObject({match: true});
+    await session.evaluate(`document.querySelector("h1").style.background = ""`);
+    await expect(session.getByRole("heading", {name: "Biloba parity"}).expectScreenshot("visual/schemes", {colorSchemes: ["light", "dark"]})).resolves.toMatchObject({match: true});
+    await session.evaluate(`document.body.insertAdjacentHTML("beforeend", '<div id="tolerance" style="position:relative;width:20px;height:20px;background:rgb(0,0,0)"><i style="position:absolute;width:1px;height:1px;background:white"></i></div>')`);
+    await expect(session.locator("#tolerance").expectScreenshot("visual/tolerance", {timeoutMs: 50, intervalMs: 10})).rejects.toMatchObject({code: "TIMEOUT"});
+    await expect(session.locator("#tolerance").expectScreenshot("visual/tolerance", {pixelTolerance: 0.01})).resolves.toMatchObject({match: true});
+    await session.evaluate(`document.querySelector("#tolerance").innerHTML = ""; document.querySelector("#tolerance").style.background = "rgb(1,1,1)"`);
+    await expect(session.locator("#tolerance").expectScreenshot("visual/tolerance", {timeoutMs: 50, intervalMs: 10})).rejects.toMatchObject({code: "TIMEOUT"});
+    await expect(session.locator("#tolerance").expectScreenshot("visual/tolerance", {channelTolerance: 1})).resolves.toMatchObject({match: true});
+    await session.evaluate(`document.querySelector("h1").style.background = "rgb(255, 0, 0)"`);
+    let mismatch: unknown;
+    try { await session.getByRole("heading", {name: "Biloba parity"}).expectScreenshot("visual/heading", {timeoutMs: 100, intervalMs: 10}); } catch (error) { mismatch = error; }
+    expect(mismatch).toMatchObject({
+      code: "TIMEOUT",
+      visual: {match: false, attemptCount: expect.any(Number), schemes: [{status: "mismatched", diagnosis: expect.stringContaining("differs from baseline")}]},
+    });
+    expect((mismatch as BilobaError).artifactPaths.some((entry) => entry.endsWith(".actual.png"))).toBe(true);
+    expect((mismatch as BilobaError).artifactPaths.some((entry) => entry.endsWith(".diff.png"))).toBe(true);
+    // The diagnosis and the artifact paths have to be in the message.  Carried only as error
+    // properties they are invisible: Vitest renders message and stack, so a mismatch read as
+    // "did not match" while the diff PNG sat on disk unmentioned.
+    const rendered = (mismatch as BilobaError).message;
+    expect(rendered).toContain("differs from baseline");
+    expect(rendered).toMatch(/^diff: .*\.diff\.png$/m);
+    expect(rendered).toMatch(/^actual: .*\.actual\.png$/m);
+    expect(rendered).toMatch(/^baseline: .*\.png$/m);
+  });
+
+  it("preserves capture warnings and visual lifecycle state across cancellation", async () => {
+    screenshotWarnings.length = 0;
+    await session.prepare();
+    await session.navigate(baseUrl);
+    await session.evaluate(`document.body.insertAdjacentHTML("beforeend", '<div id="clip" style="width:20px;height:20px;overflow:hidden"><div id="clipped" style="margin-top:40px;width:10px;height:10px;background:red"></div></div>')`);
+    const clipped = await session.locator("#clipped").captureScreenshot();
+    expect(clipped.byteLength).toBeGreaterThan(0);
+    expect(screenshotWarnings.some((warning) => warning.includes("clipped"))).toBe(true);
+
+    await session.evaluate(`document.body.insertAdjacentHTML("beforeend", '<style>@keyframes visual-red {from{background:#a00}to{background:#a00}} #animated-visual{width:40px;height:30px;background:#0a0;animation:visual-red 100000s linear forwards}</style><div id="animated-visual"></div>')`);
+    const frozen = await session.locator("#animated-visual").captureScreenshot();
+    const animated = await session.locator("#animated-visual").captureScreenshot({animated: true});
+    expect(animated).not.toEqual(frozen);
+
+    await session.setMedia({colorScheme: "dark", reducedMotion: "reduce"});
+    const before = await session.evaluate(`[matchMedia("(prefers-color-scheme: dark)").matches, matchMedia("(prefers-reduced-motion: reduce)").matches]`);
+    expect(before).toEqual([true, true]);
+    await expect(session.getByRole("heading", {name: "Biloba parity"}).expectScreenshot("visual/schemes", {colorSchemes: ["light", "dark"]})).resolves.toMatchObject({match: true});
+    expect(await session.evaluate(`[matchMedia("(prefers-color-scheme: dark)").matches, matchMedia("(prefers-reduced-motion: reduce)").matches]`)).toEqual([true, true]);
+
+    await session.evaluate(`_biloba.fontsReady = () => new Promise(() => {})`);
+    const controller = new AbortController();
+    setTimeout(() => controller.abort("cancel visual capture"), 30);
+    await expect(session.captureScreenshot({signal: controller.signal, timeoutMs: 2_000})).rejects.toMatchObject({code: "CANCELLED"});
+    await session.navigate(baseUrl);
+    expect(await session.evaluate("1 + 1")).toBe(2);
   });
 
   afterAll(async () => {

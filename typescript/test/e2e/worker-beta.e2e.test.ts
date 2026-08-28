@@ -1,6 +1,6 @@
 import {afterAll, beforeAll, expect, inject, it} from "vitest";
 
-import {claimState, connectWorker, expectOwnStateOnly, rendezvous, type Worker} from "./harness.js";
+import {claimState, connectWorker, expectOwnStateOnly, expectScreenshotIsolation, rendezvous, type Worker} from "./harness.js";
 
 // One of three files, therefore one of three vitest worker processes, each with its own bilobad
 // attached to the run's single shared Chrome.  See worker-gamma.e2e.test.ts for the teardown half.
@@ -27,6 +27,8 @@ it("keeps its browser state to itself while the other workers write theirs", asy
 
   await expectOwnStateOnly(worker);
 });
+
+it("keeps screenshot bytes and paths isolated from other workers", async () => { await expectScreenshotIsolation(worker); });
 
 it("survives another worker closing its daemon mid-run", async () => {
   await rendezvous("ready-for-close", NAME, 3);

@@ -12,6 +12,7 @@ import type {
   SetUploadRequest,
   TypeRequest,
 } from "../generated/protocol.js";
+import {resolve} from "node:path";
 import {
   BilobaError,
   type AssertionResult,
@@ -61,12 +62,19 @@ import {
   type ValueLabel,
   type WindowKeyboardOptions,
   type XPathExpression,
+  type ScreenshotBytesOptions,
+  type ScreenshotPathOptions,
+  type ScreenshotWarning,
+  type VisualResult,
+  type VisualScreenshotOptions,
 } from "../index.js";
 import {StdioTransport} from "./stdio-transport.js";
 
 type DriverTransport = StdioTransport;
 type DriverOperationResult = StdioOperationResult;
 let callbackSequence = 0;
+const maxScreenshotBytes = 16 * 1024 * 1024;
+type VisualClientConfig = {readonly maxBytes: number; readonly warningSink?: (warning: ScreenshotWarning) => void};
 
 class ClientBrowser implements Browser {
   readonly #transport: DriverTransport;
@@ -75,6 +83,7 @@ class ClientBrowser implements Browser {
   readonly protocolVersion: string;
   readonly capabilities: ReadonlySet<string>;
   readonly #warningSink?: (warning: Warning) => void;
+  readonly #visual: VisualClientConfig;
   #closed = false;
 
   constructor(
@@ -83,12 +92,14 @@ class ClientBrowser implements Browser {
     capabilities: readonly string[],
     stopDaemon?: () => Promise<void>,
     warningSink?: (warning: Warning) => void,
+    visual: VisualClientConfig = {maxBytes: maxScreenshotBytes},
   ) {
     this.#transport = transport;
     this.protocolVersion = protocolVersion;
     this.capabilities = new Set(capabilities);
     if (stopDaemon) this.#stopDaemon = stopDaemon;
     if (warningSink) this.#warningSink = warningSink;
+    this.#visual = visual;
   }
 
   // Every call opens a genuinely new daemon session with its own browser context.  Sessions are
@@ -125,6 +136,7 @@ class ClientBrowser implements Browser {
       (sibling) => this.#trackSession(sibling),
       (ids) => this.#invalidateSessions(ids),
       this.#warningSink,
+      this.#visual,
     );
     this.#sessions.add(session);
     return session;
@@ -150,6 +162,7 @@ class ClientSession implements Session {
   readonly #registerSibling: (response: import("../generated/protocol.js").OpenSessionResponse) => ClientSession;
   readonly #invalidateSessions: (ids: readonly string[]) => void;
   readonly #warningSink?: (warning: Warning) => void;
+  readonly #visual: VisualClientConfig;
   #warningCount = 0;
   readonly #callbackIDs = new Set<string>();
   #warningFlush: Promise<void> | undefined;
@@ -162,6 +175,7 @@ class ClientSession implements Session {
     registerSibling: (response: import("../generated/protocol.js").OpenSessionResponse) => ClientSession,
     invalidateSessions: (ids: readonly string[]) => void,
     warningSink?: (warning: Warning) => void,
+    visual: VisualClientConfig = {maxBytes: maxScreenshotBytes},
   ) {
     this.id = response.sessionId;
     this.contextId = response.contextId ?? "";
@@ -175,6 +189,7 @@ class ClientSession implements Session {
     this.#registerSibling = registerSibling;
     this.#invalidateSessions = invalidateSessions;
     if (warningSink) this.#warningSink = warningSink;
+    this.#visual = visual;
   }
 
   async newTab(options: WaitingCommandOptions = {}): Promise<Session> {
@@ -183,6 +198,96 @@ class ClientSession implements Session {
     const response = await this.#transport.newTab({sessionId: this.id}, options);
     await this.#flushWarnings();
     return this.#registerSibling(response);
+  }
+
+  async captureScreenshot(options?: ScreenshotBytesOptions): Promise<Uint8Array>;
+  async captureScreenshot(options: ScreenshotPathOptions): Promise<string>;
+  async captureScreenshot(options: ScreenshotBytesOptions | ScreenshotPathOptions = {}): Promise<Uint8Array | string> {
+    return await this.captureScreenshotTarget(undefined, options);
+  }
+
+  async expectScreenshot(name: string, options: VisualScreenshotOptions = {}): Promise<VisualResult> {
+    return await this.expectScreenshotTarget(undefined, name, options);
+  }
+
+  async captureScreenshotTarget(locator: WireLocator | undefined, options: ScreenshotBytesOptions | ScreenshotPathOptions): Promise<Uint8Array | string> {
+    this.#assertOpen();
+    assertOptionKeys(options, "captureScreenshot", new Set(["signal", "timeoutMs", "output", "name", "mask", "animated", "colorScheme", "maxBytes"]));
+    const limit = this.#screenshotLimit(options.maxBytes);
+    const output = options.output === "path" ? "PATH" : "BYTES";
+    const response = await this.#transport.screenshot({
+      sessionId: this.id,
+      operation: {
+        kind: "CAPTURE",
+        target: locator === undefined ? {kind: "PAGE"} : {kind: "ELEMENT", locator},
+        output,
+        ...(options.name !== undefined && {name: options.name}),
+        ...(options.mask !== undefined && {masks: options.mask.map((mask) => wireScreenshotSubject(this, mask))}),
+        ...(options.animated !== undefined && {animated: options.animated}),
+        ...(options.colorScheme !== undefined && {colorScheme: options.colorScheme}),
+        ...(options.maxBytes !== undefined && {maxBytes: limit}),
+      },
+    }, options);
+    if (response.visual !== undefined || response.screenshot === undefined) throw driverShapeError("screenshot capture response contained an invalid result shape");
+    const capture = response.screenshot;
+    this.#emitScreenshotWarnings("captureScreenshot", capture.warnings ?? []);
+    const hasBytes = capture.pngBase64 !== undefined;
+    const hasPath = capture.artifactPath !== undefined;
+    if (hasBytes === hasPath || (output === "BYTES") !== hasBytes) throw driverShapeError("screenshot capture response contained conflicting output fields");
+    return hasBytes ? decodeBinaryBody(capture.pngBase64!, limit) : capture.artifactPath!;
+  }
+
+  async expectScreenshotTarget(locator: WireLocator | undefined, name: string, options: VisualScreenshotOptions): Promise<VisualResult> {
+    this.#assertOpen();
+    assertOptionKeys(options, "expectScreenshot", new Set(["signal", "timeoutMs", "intervalMs", "mode", "mask", "animated", "colorSchemes", "pixelTolerance", "channelTolerance", "maxBytes"]));
+    if (options.mode === "consistently") throw new BilobaError({code: "INVALID_ARGUMENT", message: "expectScreenshot does not support consistently"});
+    const limit = this.#screenshotLimit(options.maxBytes);
+    const callsiteStack = new Error().stack;
+    try {
+      const response = await this.#transport.screenshot({
+        sessionId: this.id,
+        operation: {
+          kind: "EXPECT",
+          target: locator === undefined ? {kind: "PAGE"} : {kind: "ELEMENT", locator},
+          name,
+          ...(options.mask !== undefined && {masks: options.mask.map((mask) => wireScreenshotSubject(this, mask))}),
+          ...(options.animated !== undefined && {animated: options.animated}),
+          ...(options.colorSchemes !== undefined && {colorSchemes: [...options.colorSchemes]}),
+          ...(options.pixelTolerance !== undefined && {pixelTolerance: options.pixelTolerance}),
+          ...(options.channelTolerance !== undefined && {channelTolerance: options.channelTolerance}),
+          ...(options.maxBytes !== undefined && {maxBytes: limit}),
+        },
+        poll: pollPolicy(options),
+      }, {...options, ...(options.timeoutMs !== undefined && {deadlineMs: options.timeoutMs + 2_100})});
+      if (response.screenshot !== undefined || response.visual === undefined) throw driverShapeError("visual comparison response contained an invalid result shape");
+      const visual = response.visual as VisualResult;
+      this.#emitScreenshotWarnings("expectScreenshot", visual.warnings);
+      if (!response.matched || !visual.match) {
+        throw new BilobaError({code: "TIMEOUT", message: visualFailureMessage(name, visual), visual, artifactPaths: visualArtifactPaths(visual), ...(callsiteStack && {callsiteStack})});
+      }
+      return visual;
+    } catch (error) {
+      if (error instanceof BilobaError && callsiteStack && !error.stack?.includes(stripStackHeader(callsiteStack))) error.stack = `${error.name}: ${error.message}\n${stripStackHeader(callsiteStack)}`;
+      throw error;
+    }
+  }
+
+  #screenshotLimit(requested: number | undefined): number {
+    const value = requested ?? this.#visual.maxBytes;
+    if (!Number.isSafeInteger(value) || value <= 0 || value > this.#visual.maxBytes || value > maxScreenshotBytes) throw new BilobaError({code: "INVALID_ARGUMENT", message: `maxBytes must be a positive integer no greater than ${Math.min(this.#visual.maxBytes, maxScreenshotBytes)}`});
+    return value;
+  }
+
+  // Go prints these unconditionally.  They include both vacuity guards - a baseline that never
+  // settled, and two color schemes that captured byte-identical images - and the second fires on a
+  // *passing* assertion, so a visual test that can never fail said nothing at all.  Default to
+  // stderr; onScreenshotWarning stays the way to redirect them.
+  #emitScreenshotWarnings(operation: ScreenshotWarning["operation"], warnings: readonly string[]): void {
+    for (const message of warnings) {
+      const warning = {sessionId: this.id, operation, message};
+      if (this.#visual.warningSink) this.#visual.warningSink(warning);
+      else process.stderr.write(`biloba ${operation}: ${message}\n`);
+    }
   }
 
   async tabs(options: CommandOptions = {}): Promise<readonly Session[]> { return await this.#listHandles("tabs", false, options); }
@@ -801,17 +906,70 @@ function wireNetworkOverride(value: RequestOverride | ResponseOverride): import(
   return definedEntries({...rest, ...(headers !== undefined && {headers: [...headers]}), ...(body !== undefined && {bodyBase64: encodeBinaryBody(body)})}) as import("../generated/protocol.js").NetworkOverride;
 }
 const maxDecodedBodySize = 16 * 1024 * 1024;
+export function resolveUpdateScreenshots(explicit: boolean | undefined, raw: string | undefined, warn: (message: string) => void): boolean {
+  if (explicit !== undefined) return explicit;
+  if (raw === undefined || raw.trim() === "") return false;
+  const normalized = raw.trim().toLowerCase();
+  if (["1", "t", "true", "y", "yes", "on"].includes(normalized)) return true;
+  if (["0", "f", "false", "n", "no", "off"].includes(normalized)) return false;
+  warn(`BILOBA_UPDATE_SCREENSHOTS has unrecognized value ${JSON.stringify(raw)}; screenshots will not be updated`);
+  return false;
+}
+export function resolveVisualConnectOptions(
+  options: Pick<ConnectOptions, "artifactDir" | "screenshotBaselinesDir" | "updateScreenshots" | "screenshotPixelTolerance" | "screenshotChannelTolerance" | "maxScreenshotBytes">,
+  environment: Readonly<Record<string, string | undefined>>,
+  warn: (message: string) => void,
+): Required<Pick<ConnectOptions, "artifactDir" | "screenshotBaselinesDir" | "updateScreenshots" | "screenshotPixelTolerance" | "screenshotChannelTolerance" | "maxScreenshotBytes">> {
+  const maxBytes = options.maxScreenshotBytes ?? maxScreenshotBytes;
+  const pixelTolerance = options.screenshotPixelTolerance ?? 0;
+  const channelTolerance = options.screenshotChannelTolerance ?? 0;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0 || maxBytes > maxScreenshotBytes) throw new BilobaError({code: "INVALID_ARGUMENT", message: `maxScreenshotBytes must be a positive integer no greater than ${maxScreenshotBytes}`});
+  if (!Number.isFinite(pixelTolerance) || pixelTolerance < 0 || pixelTolerance > 1) throw new BilobaError({code: "INVALID_ARGUMENT", message: "screenshotPixelTolerance must be between 0 and 1"});
+  if (!Number.isInteger(channelTolerance) || channelTolerance < 0 || channelTolerance > 255) throw new BilobaError({code: "INVALID_ARGUMENT", message: "screenshotChannelTolerance must be an integer between 0 and 255"});
+  return {
+    artifactDir: resolve(options.artifactDir ?? environment.BILOBA_SCREENSHOTS_DIR ?? "biloba-screenshots"),
+    screenshotBaselinesDir: resolve(options.screenshotBaselinesDir ?? environment.BILOBA_SCREENSHOT_BASELINES_DIR ?? "biloba-baselines"),
+    updateScreenshots: resolveUpdateScreenshots(options.updateScreenshots, environment.BILOBA_UPDATE_SCREENSHOTS, warn),
+    screenshotPixelTolerance: pixelTolerance,
+    screenshotChannelTolerance: channelTolerance,
+    maxScreenshotBytes: maxBytes,
+  };
+}
 export function encodeBinaryBody(value: Uint8Array): string {
   if (value.byteLength > maxDecodedBodySize) throw new BilobaError({code: "INVALID_ARGUMENT", message: `binary body exceeds decoded limit ${maxDecodedBodySize}`});
   return Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("base64");
 }
-export function decodeBinaryBody(value: string): Uint8Array {
+export function decodeBinaryBody(value: string, limit = maxDecodedBodySize): Uint8Array {
+  if (!Number.isSafeInteger(limit) || limit <= 0 || limit > maxDecodedBodySize) throw new BilobaError({code: "INVALID_ARGUMENT", message: `decoded binary limit must be between 1 and ${maxDecodedBodySize}`});
   if (value.length % 4 !== 0) throw new BilobaError({code: "DRIVER_ERROR", message: "daemon returned malformed base64 body"});
-  if (Buffer.byteLength(value, "ascii") > Math.ceil(maxDecodedBodySize / 3) * 4) throw new BilobaError({code: "DRIVER_ERROR", message: `daemon body exceeds decoded limit ${maxDecodedBodySize}`});
+  if (Buffer.byteLength(value, "ascii") > Math.ceil(limit / 3) * 4) throw new BilobaError({code: "DRIVER_ERROR", message: `daemon body exceeds decoded limit ${limit}`});
   const decoded = Buffer.from(value, "base64");
-  if (decoded.length > maxDecodedBodySize || decoded.toString("base64") !== value) throw new BilobaError({code: "DRIVER_ERROR", message: decoded.length > maxDecodedBodySize ? `daemon body exceeds decoded limit ${maxDecodedBodySize}` : "daemon returned malformed base64 body"});
+  if (decoded.length > limit || decoded.toString("base64") !== value) throw new BilobaError({code: "DRIVER_ERROR", message: decoded.length > limit ? `daemon body exceeds decoded limit ${limit}` : "daemon returned malformed base64 body"});
   return new Uint8Array(decoded);
 }
+function driverShapeError(message: string): BilobaError { return new BilobaError({code: "DRIVER_ERROR", message}); }
+// The daemon computes the same diagnosis Go renders - pixel counts, the amplitude verdict, the shape
+// of the changed region - and writes the actual/diff PNGs.  It rode along as an error property,
+// where no runner shows it: Vitest prints message and stack, not arbitrary own properties.  So a
+// mismatch read as "did not match" and the diff image sat on disk unmentioned.  Fold it into the
+// message, which is the part a human and a CI log actually see.
+function visualFailureMessage(name: string, visual: VisualResult): string {
+  const lines = [`Biloba screenshot ${JSON.stringify(name)} did not match`];
+  for (const scheme of visual.schemes) {
+    if (scheme.match) continue;
+    const heading = scheme.scheme ? `${scheme.scheme} scheme:` : undefined;
+    if (heading) lines.push(heading);
+    if (scheme.diagnosis) lines.push(scheme.diagnosis);
+    for (const [label, path] of [["baseline", scheme.baselinePath], ["actual", scheme.actualPath], ["diff", scheme.diffPath]] as const) {
+      if (path) lines.push(`${label}: ${path}`);
+    }
+  }
+  // A comparison that produced no per-scheme detail still has to say where to look.
+  if (lines.length === 1) lines.push(...visualArtifactPaths(visual));
+  return lines.join("\n");
+}
+
+function visualArtifactPaths(visual: VisualResult): readonly string[] { return [...new Set(visual.schemes.flatMap((scheme) => [scheme.baselinePath, scheme.actualPath, scheme.diffPath].filter((path): path is string => Boolean(path))))]; }
 function decodeBytes(value: string): Uint8Array { return decodeBinaryBody(value); }
 type WireNetworkRecord = {url: string; method?: string; status?: number; headers: readonly HeaderEntry[]; resourceType: string};
 function headerMap(headers: readonly HeaderEntry[]): Readonly<Record<string, string>> { return Object.fromEntries(headers.map(({name, value}) => [name, value])); }
@@ -829,6 +987,16 @@ class ClientLocator implements Locator {
     this.#session = session;
     this.#locator = locator;
     this.#realistic = realistic;
+  }
+
+  async captureScreenshot(options?: ScreenshotBytesOptions): Promise<Uint8Array>;
+  async captureScreenshot(options: ScreenshotPathOptions): Promise<string>;
+  async captureScreenshot(options: ScreenshotBytesOptions | ScreenshotPathOptions = {}): Promise<Uint8Array | string> {
+    return await this.#session.captureScreenshotTarget(this.#locator, options);
+  }
+
+  async expectScreenshot(name: string, options: VisualScreenshotOptions = {}): Promise<VisualResult> {
+    return await this.#session.expectScreenshotTarget(this.#locator, name, options);
   }
 
   realistic(): Locator {
@@ -1297,6 +1465,8 @@ class ClientLocator implements Locator {
   wireLocator(): WireLocator {
     return this.#locator;
   }
+
+  belongsTo(session: ClientSession): boolean { return this.#session === session; }
 }
 
 function wireLocator(locator: Locator | string): WireLocator {
@@ -1305,6 +1475,12 @@ function wireLocator(locator: Locator | string): WireLocator {
   }
   if (locator instanceof ClientLocator) return locator.wireLocator();
   throw new BilobaError({code: "INVALID_ARGUMENT", message: "locator belongs to a different Biloba client"});
+}
+
+function wireScreenshotSubject(session: ClientSession, locator: Locator | string): WireLocator {
+  if (typeof locator === "string") return {kind: "CSS", value: locator, match: "EXACT", first: false};
+  if (locator instanceof ClientLocator && locator.belongsTo(session)) return locator.wireLocator();
+  throw new BilobaError({code: "INVALID_ARGUMENT", message: "screenshot mask locator belongs to a different session"});
 }
 
 function wireTabQuery(query: TabQuery): import("../generated/protocol.js").TabQueryRequest {
@@ -1417,7 +1593,7 @@ function assertWindowKeyboardOptions(options: WindowKeyboardOptions): void {
 // so this stays reachable from the repo's own tests and from nowhere else.
 export async function connectWithTransport(
   transport: StdioTransport,
-  options: Pick<ConnectOptions, "signal" | "warningSink"> = {},
+  options: Pick<ConnectOptions, "signal" | "warningSink" | "maxScreenshotBytes" | "onScreenshotWarning"> = {},
   stopDaemon?: () => Promise<void>,
 ): Promise<Browser> {
   try {
@@ -1437,6 +1613,7 @@ export async function connectWithTransport(
       handshake.capabilities ?? [],
       stopDaemon,
       options.warningSink,
+      {maxBytes: options.maxScreenshotBytes ?? maxScreenshotBytes, ...(options.onScreenshotWarning && {warningSink: options.onScreenshotWarning})},
     );
   } catch (error) {
     transport.close();

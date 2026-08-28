@@ -10,6 +10,11 @@ export interface StartDaemonOptions {
   chromePath?: string | undefined;
   chromeWsUrl?: string | undefined;
   artifactDir?: string | undefined;
+  screenshotBaselinesDir?: string | undefined;
+  updateScreenshots?: boolean | undefined;
+  screenshotPixelTolerance?: number | undefined;
+  screenshotChannelTolerance?: number | undefined;
+  maxScreenshotBytes?: number | undefined;
   readyTimeoutMs?: number | undefined;
 }
 
@@ -29,6 +34,11 @@ export async function startDaemon(options: StartDaemonOptions): Promise<ManagedD
     ...(options.chromePath ? [`--chrome-path=${options.chromePath}`] : []),
     ...(options.chromeWsUrl ? [`--chrome-ws-url=${options.chromeWsUrl}`] : []),
     ...(options.artifactDir ? [`--artifact-dir=${options.artifactDir}`] : []),
+    ...(options.screenshotBaselinesDir ? [`--screenshot-baselines-dir=${options.screenshotBaselinesDir}`] : []),
+    ...(options.updateScreenshots !== undefined ? [`--update-screenshots=${String(options.updateScreenshots)}`] : []),
+    ...(options.screenshotPixelTolerance !== undefined ? [`--screenshot-pixel-tolerance=${String(options.screenshotPixelTolerance)}`] : []),
+    ...(options.screenshotChannelTolerance !== undefined ? [`--screenshot-channel-tolerance=${String(options.screenshotChannelTolerance)}`] : []),
+    ...(options.maxScreenshotBytes !== undefined ? [`--max-screenshot-bytes=${String(options.maxScreenshotBytes)}`] : []),
   ];
   const child = spawn(options.executable, args, {
     stdio: ["pipe", "pipe", "pipe"],

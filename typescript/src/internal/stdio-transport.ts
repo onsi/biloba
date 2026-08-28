@@ -34,6 +34,7 @@ import type {
   SetWindowSizeRequest,
   TypeRequest,
   SendKeysRequest,
+  ScreenshotRequest,
 } from "../generated/protocol.js";
 import {encodeFrame, FrameDecoder} from "./framing.js";
 
@@ -195,6 +196,9 @@ export class StdioTransport {
   dom(request: DOMRequest, options: TransportOptions = {}): Promise<OperationResult> {
     return this.#request("dom", request, options);
   }
+  screenshot(request: ScreenshotRequest, options: TransportOptions = {}): Promise<OperationResult> {
+    return this.#request("screenshot", request, options);
+  }
   eventful<Result = unknown>(request: EventfulRequest, options: TransportOptions = {}): Promise<Result> {
     return this.#request("eventful", request, options);
   }
@@ -316,7 +320,12 @@ function protocolError(error: ProtocolError): BilobaError {
     ...(error.diagnostics?.domOutline && {domOutline: error.diagnostics.domOutline}),
     ...(error.diagnostics?.screenshotPath && {screenshotPath: error.diagnostics.screenshotPath}),
     ...(error.diagnostics?.daemonDetail && {daemonDetail: error.diagnostics.daemonDetail}),
+    ...(error.diagnostics?.visual && {visual: error.diagnostics.visual as import("../index.js").VisualResult, artifactPaths: visualArtifactPaths(error.diagnostics.visual as import("../index.js").VisualResult)}),
   });
+}
+
+function visualArtifactPaths(visual: import("../index.js").VisualResult): readonly string[] {
+  return [...new Set(visual.schemes.flatMap((scheme) => [scheme.baselinePath, scheme.actualPath, scheme.diffPath].filter((path): path is string => Boolean(path))))];
 }
 
 function abortedError(reason: unknown): BilobaError {

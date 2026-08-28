@@ -1,4 +1,4 @@
-import {connectWithTransport, stripStackHeader} from "./internal/client.js";
+import {connectWithTransport, resolveVisualConnectOptions, stripStackHeader} from "./internal/client.js";
 import {
   startSharedBrowser as spawnSharedBrowser,
   type SharedBrowserProcess,
@@ -183,6 +183,54 @@ export interface CancellationOptions {
 export interface WaitingCommandOptions extends CancellationOptions {timeoutMs?: number | undefined}
 export type CommandOptions = CancellationOptions;
 
+export type ScreenshotColorScheme = "light" | "dark";
+export type ScreenshotSubject = Locator | string;
+export interface ScreenshotRenderingOptions {
+  mask?: readonly ScreenshotSubject[] | undefined;
+  animated?: boolean | undefined;
+  colorScheme?: ScreenshotColorScheme | undefined;
+  maxBytes?: number | undefined;
+}
+export interface ScreenshotBytesOptions extends ScreenshotRenderingOptions, WaitingCommandOptions {
+  output?: "bytes" | undefined;
+  name?: never;
+}
+export interface ScreenshotPathOptions extends ScreenshotRenderingOptions, WaitingCommandOptions {
+  output: "path";
+  name?: string | undefined;
+}
+export interface VisualScreenshotOptions extends PollOptions {
+  mask?: readonly ScreenshotSubject[] | undefined;
+  animated?: boolean | undefined;
+  colorSchemes?: readonly ScreenshotColorScheme[] | undefined;
+  pixelTolerance?: number | undefined;
+  channelTolerance?: number | undefined;
+  maxBytes?: number | undefined;
+}
+export interface ScreenshotPoint {readonly x: number; readonly y: number}
+export interface ScreenshotRect {readonly min: ScreenshotPoint; readonly max: ScreenshotPoint}
+export interface ScreenshotBounds {readonly width: number; readonly height: number}
+export interface VisualRegion {readonly rect: ScreenshotRect; readonly differingPixels: number}
+export interface VisualDiff {
+  readonly match: boolean; readonly dimensionMismatch: boolean;
+  readonly baseline: ScreenshotBounds; readonly actual: ScreenshotBounds;
+  readonly totalPixels: number; readonly differingPixels: number; readonly fraction: number; readonly maxChannelDelta: number;
+  readonly regions: readonly VisualRegion[]; readonly regionCount: number;
+  readonly shifted: boolean; readonly shift?: ScreenshotPoint; readonly scattered: boolean; readonly rasterizationLikely: boolean; readonly unchanged?: string;
+}
+export type VisualSchemeStatus = "matched" | "missing" | "mismatched" | "created" | "updated" | "unchanged";
+export interface VisualSchemeResult {
+  readonly scheme?: ScreenshotColorScheme; readonly status: VisualSchemeStatus; readonly match: boolean;
+  readonly baselinePath: string; readonly actualPath?: string; readonly diffPath?: string;
+  readonly diff?: VisualDiff; readonly previousDiff?: VisualDiff; readonly diagnosis?: string;
+  readonly warning?: string; readonly updateSummary?: string;
+}
+export interface VisualResult {
+  readonly match: boolean; readonly updated: boolean; readonly warnings: readonly string[];
+  readonly schemes: readonly VisualSchemeResult[]; readonly attemptCount: number; readonly elapsedMs: number;
+}
+export interface ScreenshotWarning {readonly sessionId: string; readonly operation: "captureScreenshot" | "expectScreenshot"; readonly message: string}
+
 export type Modifier = "Shift" | "Control" | "Alt" | "Meta";
 export type TextMode = "innerText" | "textContent" | "normalizedText";
 export type NameSpec = string | {readonly name: string; readonly allowMissing: true};
@@ -365,7 +413,9 @@ export type BilobaErrorCode =
   /** The shared Chrome exited or crashed underneath this worker. */
   | "BROWSER_GONE"
   /** This session's page crashed; the browser is fine. Navigate again to recover. */
-  | "PAGE_CRASHED";
+  | "PAGE_CRASHED"
+  | "VISUAL_BASELINE";
+
 
 interface BilobaErrorOptions {
   code: BilobaErrorCode;
@@ -380,6 +430,8 @@ interface BilobaErrorOptions {
   rpcRequestCount?: number;
   rpcResponseCount?: number;
   callsiteStack?: string;
+  visual?: VisualResult;
+  artifactPaths?: readonly string[];
 }
 
 export class BilobaError extends Error {
@@ -393,6 +445,8 @@ export class BilobaError extends Error {
   readonly daemonDetail?: string;
   readonly rpcRequestCount?: number;
   readonly rpcResponseCount?: number;
+  readonly visual?: VisualResult;
+  readonly artifactPaths: readonly string[];
 
   constructor(options: BilobaErrorOptions) {
     super(options.message);
@@ -407,6 +461,8 @@ export class BilobaError extends Error {
     if (options.daemonDetail !== undefined) this.daemonDetail = options.daemonDetail;
     if (options.rpcRequestCount !== undefined) this.rpcRequestCount = options.rpcRequestCount;
     if (options.rpcResponseCount !== undefined) this.rpcResponseCount = options.rpcResponseCount;
+    if (options.visual !== undefined) this.visual = options.visual;
+    this.artifactPaths = options.artifactPaths ?? [];
     if (options.callsiteStack) {
       this.stack = `${this.name}: ${this.message}\n${stripStackHeader(options.callsiteStack)}`;
     }
@@ -544,6 +600,9 @@ export interface Locator {
   documentOrder(other: Locator | string, options?: WaitOptions): Promise<DocumentOrder>;
   computedStyle(name: string, options?: WaitOptions): Promise<string>;
   computedStyleNumber(name: string, options?: WaitOptions): Promise<number>;
+  captureScreenshot(options?: ScreenshotBytesOptions): Promise<Uint8Array>;
+  captureScreenshot(options: ScreenshotPathOptions): Promise<string>;
+  expectScreenshot(name: string, options?: VisualScreenshotOptions): Promise<VisualResult>;
 }
 
 export interface Session {
@@ -566,6 +625,9 @@ export interface Session {
   prepare(options?: WaitingCommandOptions): Promise<{readonly invalidatedSessionIds: readonly string[]}>;
   navigate(url: string, options?: WaitingCommandOptions): Promise<void>;
   navigateWithStatus(url: string, expectedStatus: number, options?: WaitingCommandOptions): Promise<void>;
+  captureScreenshot(options?: ScreenshotBytesOptions): Promise<Uint8Array>;
+  captureScreenshot(options: ScreenshotPathOptions): Promise<string>;
+  expectScreenshot(name: string, options?: VisualScreenshotOptions): Promise<VisualResult>;
   setCookies(cookies: readonly Cookie[], options?: CommandOptions): Promise<void>;
   getCookies(options?: CommandOptions): Promise<readonly Cookie[]>;
   clearCookies(options?: CommandOptions): Promise<void>;
@@ -674,6 +736,12 @@ export interface ConnectOptions {
   artifactDir?: string | undefined;
   signal?: AbortSignal | undefined;
   warningSink?: WarningSink | undefined;
+  screenshotBaselinesDir?: string | undefined;
+  updateScreenshots?: boolean | undefined;
+  screenshotPixelTolerance?: number | undefined;
+  screenshotChannelTolerance?: number | undefined;
+  maxScreenshotBytes?: number | undefined;
+  onScreenshotWarning?: ((warning: ScreenshotWarning) => void) | undefined;
 }
 
 export async function connect(options: ConnectOptions = {}): Promise<Browser> {
@@ -684,13 +752,18 @@ export async function connect(options: ConnectOptions = {}): Promise<Browser> {
       message: "connect requires daemonExecutable",
     });
   }
+  const screenshotWarning = options.onScreenshotWarning;
+  const visual = resolveVisualConnectOptions(options, process.env, (message) => {
+    if (screenshotWarning) screenshotWarning({sessionId: "", operation: "expectScreenshot", message});
+    else process.emitWarning(message, {code: "BILOBA_UPDATE_SCREENSHOTS"});
+  });
   const daemon = await spawnDaemon({
     executable,
     ...(options.chromePath && {chromePath: options.chromePath}),
     ...(options.chromeWsUrl && {chromeWsUrl: options.chromeWsUrl}),
-    ...(options.artifactDir && {artifactDir: options.artifactDir}),
+    ...visual,
   });
-  return await connectWithTransport(daemon.transport, options, () => daemon.stop());
+  return await connectWithTransport(daemon.transport, {...options, maxScreenshotBytes: visual.maxScreenshotBytes, onScreenshotWarning: screenshotWarning}, () => daemon.stop());
 }
 
 export async function startDaemon(options: StartDaemonOptions): Promise<DaemonProcess> {

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"time"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/target"
@@ -55,13 +56,47 @@ func (s *Session) tabs(ctx context.Context) ([]*Session, error) {
 	return out, nil
 }
 
+// A brand-new or app-spawned target can transiently fail - not wedge - its first attach under heavy
+// parallel load, and Chrome keeps a closing target visible in Target.getTargets for a few tens of
+// milliseconds while it tears down.  Both are mirrored from registerTabFor in biloba.go: retry the
+// probe on the same context, and give it a watchdog of its own rather than spending the caller's
+// deadline.  A target that still will not attach is skipped, not raised - otherwise one dying popup
+// fails the whole listTabs, and with it the Prepare that calls it.
+const (
+	tabProbeAttempts     = 3
+	tabProbeRetryBackoff = 50 * time.Millisecond
+	tabAttachTimeout     = 20 * time.Second
+)
+
 func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID target.ID, root *Session) (*Session, error) {
+	if existing, settled, err := b.registeredSessionForTarget(targetID, openerID); settled {
+		return existing, err
+	}
+	// The probe runs unlocked.  Holding b.mu across it puts every other session on this worker -
+	// OpenSession, openTab, Close, Sessions, target reconciliation - behind a round trip to a target
+	// that may be mid-teardown.  listenToSession's own comment says as much from the other side.
+	tabCtx, cancelTab := chromedp.NewContext(b.ctx, chromedp.WithTargetID(targetID))
+	if !attachProbeSucceeds(ctx, tabCtx) {
+		cancelTab()
+		// A target that will not attach is skipped - it is almost always one Chrome is still
+		// reporting while it tears down.  The caller giving up is a different thing and stays an
+		// error, or a cancelled Prepare would quietly report an empty tab list.
+		if ctx.Err() != nil {
+			return nil, contextError("attach tab", ctx.Err())
+		}
+		return nil, nil
+	}
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	// Re-check under the lock: the browser may have closed, the target may have been destroyed, or
+	// another goroutine may have attached to it while we were probing.
 	if b.closed {
+		b.mu.Unlock()
+		cancelTab()
 		return nil, &Error{Code: CodeSessionClosed, Operation: "attach tab", Message: "browser is closed"}
 	}
 	if _, closed := b.closedIDs[targetID]; closed {
+		b.mu.Unlock()
+		cancelTab()
 		return nil, nil
 	}
 	for session := range b.sessions {
@@ -69,22 +104,12 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 			if session.openerID == "" {
 				session.openerID = openerID
 			}
+			b.mu.Unlock()
+			cancelTab()
 			return session, nil
 		}
 	}
-	tabCtx, cancelTab := chromedp.NewContext(b.ctx, chromedp.WithTargetID(targetID))
-	done := make(chan error, 1)
-	go func() { done <- chromedp.Run(tabCtx, chromedp.Evaluate("1", nil)) }()
-	select {
-	case err := <-done:
-		if err != nil {
-			cancelTab()
-			return nil, contextError("attach tab", err)
-		}
-	case <-ctx.Done():
-		cancelTab()
-		return nil, contextError("attach tab", ctx.Err())
-	}
+	defer b.mu.Unlock()
 	session := &Session{
 		browser: b, ctx: tabCtx, cancel: cancelTab, browserContextID: root.browserContextID,
 		targetID: targetID, openerID: openerID, root: root, artifactDir: b.artifactDir,
@@ -169,4 +194,54 @@ func (s *Session) matchesTabQuery(ctx context.Context, query TabQuery) (bool, er
 		}
 	}
 	return true, nil
+}
+
+// registeredSessionForTarget answers from the registry alone, without attaching.  settled reports
+// whether the answer is final; when it is false the caller has to attach.
+func (b *Browser) registeredSessionForTarget(targetID, openerID target.ID) (session *Session, settled bool, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return nil, true, &Error{Code: CodeSessionClosed, Operation: "attach tab", Message: "browser is closed"}
+	}
+	if _, closed := b.closedIDs[targetID]; closed {
+		return nil, true, nil // destroyed: the caller skips it rather than failing
+	}
+	for existing := range b.sessions {
+		if existing.targetID == targetID {
+			if existing.openerID == "" {
+				existing.openerID = openerID
+			}
+			return existing, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+// attachProbeSucceeds runs Runtime.evaluate against a freshly attached target, retrying a transient
+// failure on the same context.  It never cancels between attempts: once the attach has landed,
+// cancelling closes a healthy target out from under its owner.
+func attachProbeSucceeds(ctx context.Context, tabCtx context.Context) bool {
+	for attempt := range tabProbeAttempts {
+		if attempt > 0 {
+			select {
+			case <-time.After(tabProbeRetryBackoff):
+			case <-ctx.Done():
+				return false
+			}
+		}
+		done := make(chan error, 1)
+		go func() { done <- chromedp.Run(tabCtx, chromedp.Evaluate("1", nil)) }()
+		select {
+		case err := <-done:
+			if err == nil {
+				return true
+			}
+		case <-time.After(tabAttachTimeout):
+			return false // a genuine wedge; a context timeout cannot unblock it
+		case <-ctx.Done():
+			return false
+		}
+	}
+	return false
 }

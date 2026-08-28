@@ -404,6 +404,9 @@ func resolvedSettleStreak(options VisualOptions) int {
 	return 3
 }
 
+// maxVisualPathSegment mirrors sanitizeForFilename's cap in screenshots.go.
+const maxVisualPathSegment = 80
+
 func ScreenshotBaselinePath(name, scheme string) (string, error) {
 	if strings.TrimSpace(name) == "" {
 		return "", fmt.Errorf("screenshot baseline name must not be empty")
@@ -419,6 +422,12 @@ func ScreenshotBaselinePath(name, scheme string) (string, error) {
 		parts[i] = strings.Trim(visualFilenameRE.ReplaceAllString(part, "_"), "_")
 		if parts[i] == "" {
 			return "", fmt.Errorf("screenshot baseline name %q contains an unusable path segment", name)
+		}
+		// Same 80-character cap as sanitizeForFilename in screenshots.go.  Without it a long spec name
+		// produces a path the filesystem rejects with ENAMETOOLONG, which reads as an I/O fault rather
+		// than as a name to shorten.
+		if len(parts[i]) > maxVisualPathSegment {
+			parts[i] = parts[i][:maxVisualPathSegment]
 		}
 	}
 	if scheme != "" {

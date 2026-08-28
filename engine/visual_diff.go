@@ -137,11 +137,14 @@ func CompareScreenshotPNGs(baseline, actual []byte, tolerance ScreenshotToleranc
 	}
 	allRegions, combined := changedRegions(changed, w, h)
 	diff.RegionCount = len(allRegions)
-	diff.Scattered = scatteredRegions(allRegions, combined, w, h)
 	diff.Regions = allRegions
 	if len(diff.Regions) > maxReportedScreenshotRegions {
 		diff.Regions = diff.Regions[:maxReportedScreenshotRegions]
 	}
+	// Judged on the reported regions, exactly as isScattered does in visual_diff.go: the list is
+	// ordered by pixel count, which is not the same ordering as area, so weighing every region here
+	// reaches a different verdict on the same pixels.
+	diff.Scattered = scatteredRegions(diff.Regions, diff.RegionCount, combined, w, h)
 	diff.Shift, diff.Shifted = detectScreenshotShift(base, act, diff.Fraction, diff.DifferingPixels, tolerance.ChannelDelta)
 	diff.RasterizationLikely = diff.DifferingPixels > 0 && diff.MaxChannelDelta <= rasterizationChannelDelta
 	diff.Unchanged = unchangedSide(diff, w, h)
@@ -344,12 +347,22 @@ func changedRegions(changed []bool, w, h int) ([]ScreenshotRegion, image.Rectang
 			combined = combined.Union(region.Rect)
 		}
 	}
-	sort.Slice(regions, func(i, j int) bool { return regions[i].Count > regions[j].Count })
+	// Largest-first, with a stable tie-break on position so the same diff always renders the same
+	// list - map iteration order is not stable, and the diagnosis names these regions.
+	sort.Slice(regions, func(i, j int) bool {
+		if regions[i].Count != regions[j].Count {
+			return regions[i].Count > regions[j].Count
+		}
+		if regions[i].Rect.Min.Y != regions[j].Rect.Min.Y {
+			return regions[i].Rect.Min.Y < regions[j].Rect.Min.Y
+		}
+		return regions[i].Rect.Min.X < regions[j].Rect.Min.X
+	})
 	return regions, combined
 }
 
-func scatteredRegions(regions []ScreenshotRegion, combined image.Rectangle, w, h int) bool {
-	if len(regions) < scatteredMinRegions || w == 0 || h == 0 {
+func scatteredRegions(regions []ScreenshotRegion, totalRegions int, combined image.Rectangle, w, h int) bool {
+	if totalRegions < scatteredMinRegions || len(regions) == 0 || w == 0 || h == 0 {
 		return false
 	}
 	limit := float64(w*h) * scatteredMaxRegionArea

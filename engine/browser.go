@@ -69,6 +69,7 @@ type Browser struct {
 	mu           sync.Mutex
 	sessions     map[*Session]struct{}
 	closedIDs    map[target.ID]struct{}
+	closedOrder  []target.ID
 	closed       bool
 	webSocketURL string
 }
@@ -230,10 +231,13 @@ func (b *Browser) removeDestroyedTarget(targetID target.ID) {
 			destroyed = append(destroyed, session)
 		}
 	}
-	if b.closedIDs == nil {
-		b.closedIDs = map[target.ID]struct{}{}
+	// Only remember targets this browser was actually driving.  Target discovery is enabled on the
+	// *browser* connection of a shared Chrome, so every worker sees every other worker's targets
+	// destroyed; recording all of them grew a map forever with entries this browser can never be
+	// asked about - tabs() only ever lists targets in its own context.
+	if len(destroyed) > 0 {
+		b.rememberClosedTargetLocked(targetID)
 	}
-	b.closedIDs[targetID] = struct{}{}
 	b.mu.Unlock()
 	for _, session := range destroyed {
 		go session.markTargetDestroyed()
@@ -513,10 +517,7 @@ func (b *Browser) removeSession(session *Session) {
 	b.mu.Lock()
 	delete(b.sessions, session)
 	if session.targetID != "" {
-		if b.closedIDs == nil {
-			b.closedIDs = map[target.ID]struct{}{}
-		}
-		b.closedIDs[session.targetID] = struct{}{}
+		b.rememberClosedTargetLocked(session.targetID)
 	}
 	b.mu.Unlock()
 }
@@ -596,4 +597,25 @@ func artifactPath(dir, prefix, suffix string) string {
 		return ""
 	}
 	return filepath.Join(dir, fmt.Sprintf("%s-%d.%s", prefix, time.Now().UnixNano(), suffix))
+}
+
+// maxRememberedClosedTargets bounds the closed-target set.  It exists to stop a target that was just
+// closed being re-attached while Chrome still reports it, which is a question about the last handful
+// of closures; a worker that opens and closes tabs all run should not accumulate their IDs forever.
+const maxRememberedClosedTargets = 1024
+
+// rememberClosedTargetLocked records a target this browser closed.  Callers hold b.mu.
+func (b *Browser) rememberClosedTargetLocked(targetID target.ID) {
+	if b.closedIDs == nil {
+		b.closedIDs = map[target.ID]struct{}{}
+	}
+	if _, known := b.closedIDs[targetID]; known {
+		return
+	}
+	b.closedIDs[targetID] = struct{}{}
+	b.closedOrder = append(b.closedOrder, targetID)
+	if len(b.closedOrder) > maxRememberedClosedTargets {
+		delete(b.closedIDs, b.closedOrder[0])
+		b.closedOrder = b.closedOrder[1:]
+	}
 }
