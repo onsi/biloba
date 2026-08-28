@@ -114,6 +114,65 @@ var _ = Describe("eventful engine state", func() {
 		Expect(first.Warnings()).To(BeEmpty())
 	})
 
+	It("bounds and streams warning history without crossing session or reset boundaries", func(ctx SpecContext) {
+		first, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(first.Close)
+		second, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(second.Close)
+		Expect(first.Navigate(ctx, server.URL)).To(Succeed())
+		Expect(second.Navigate(ctx, server.URL)).To(Succeed())
+		subscription, err := first.SubscribeWarnings(1)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(subscription.Close)
+
+		_, err = second.Evaluate(ctx, `alert("isolated")`)
+		Expect(err).NotTo(HaveOccurred())
+		Consistently(subscription.Events(), 100*time.Millisecond).ShouldNot(Receive())
+		for i := 0; i < 1005; i++ {
+			engine.EmitWarningForTest(first, engine.Warning{Code: engine.WarningDialogAutoHandled, Message: fmt.Sprintf("warning-%d", i)})
+		}
+		Eventually(func() int { return len(first.WarningSnapshot().Warnings) }).Should(Equal(engine.DefaultEventHistoryLimit))
+		Expect(first.WarningSnapshot().Dropped).To(Equal(uint64(5)))
+		Eventually(subscription.Dropped).Should(BeNumerically(">", 0))
+		var before engine.Warning
+		Eventually(subscription.Events()).Should(Receive(&before))
+
+		Expect(first.Prepare(ctx)).To(Succeed())
+		Expect(first.Navigate(ctx, server.URL)).To(Succeed())
+		_, err = first.Evaluate(ctx, `alert("after-prepare")`)
+		Expect(err).NotTo(HaveOccurred())
+		var after engine.Warning
+		Eventually(subscription.Events()).Should(Receive(&after))
+		Expect(after.Generation).To(BeNumerically(">", before.Generation))
+		Expect(first.WarningSnapshot().Warnings).To(ConsistOf(HaveField("Message", ContainSubstring("after-prepare"))))
+		Expect(first.WarningSnapshot().Dropped).To(BeZero())
+
+		Expect(first.Close()).To(Succeed())
+		Eventually(subscription.Events()).Should(BeClosed())
+	})
+
+	It("bounds warning payloads retained in history and subscriptions", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		subscription, err := session.SubscribeWarnings(1)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(subscription.Close)
+		large := strings.Repeat("warning", engine.DefaultWarningPreviewBytes)
+		engine.EmitWarningForTest(session, engine.Warning{
+			Code: engine.WarningDialogAutoHandled, Message: large,
+			Dialog: engine.Dialog{Message: large, DefaultPrompt: large, PromptText: large},
+		})
+
+		var warning engine.Warning
+		Eventually(subscription.Events()).Should(Receive(&warning))
+		Expect(len(warning.Message)).To(BeNumerically("<=", engine.DefaultWarningPreviewBytes+len("… [truncated]")))
+		Expect(len(warning.Dialog.Message)).To(BeNumerically("<=", engine.DefaultWarningPreviewBytes+len("… [truncated]")))
+		Expect(session.WarningSnapshot().Warnings).To(ConsistOf(warning))
+	})
+
 	It("tracks completed downloads with bounded content and clears artifacts on prepare", func(ctx SpecContext) {
 		session, err := browser.OpenSession(ctx)
 		Expect(err).NotTo(HaveOccurred())

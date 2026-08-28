@@ -60,11 +60,17 @@ type Session struct {
 	requests         []Request
 	consoleMu        sync.Mutex
 	consoleMessages  []ConsoleMessage
+	consoleDropped   uint64
+	consoleSubs      map[uint64]*consoleSubscriber
+	consoleSubSeq    uint64
 	dialogMu         sync.Mutex
 	dialogHandlers   []dialogHandlerEntry
 	dialogHistory    []Dialog
 	dialogSequence   uint64
 	warnings         []Warning
+	warningsDropped  uint64
+	warningSubs      map[uint64]*warningSubscriber
+	warningSubSeq    uint64
 	downloadMu       sync.Mutex
 	downloads        map[string]*Download
 	downloadOrder    []string
@@ -81,6 +87,7 @@ type Session struct {
 	networkState     NetworkState
 	networkShadows   []NetworkShadowDiagnostic
 	eventsEnabled    atomic.Bool
+	eventGeneration  atomic.Uint64
 	holdMu           sync.Mutex
 	holds            map[string]*responseHold
 	holdOrder        []string
@@ -140,6 +147,7 @@ func (s *Session) markCrashed() {
 		close(s.crashed)
 	}
 	s.eventsEnabled.Store(false)
+	s.closeEventSubscriptions()
 	s.releaseAllResponseHolds()
 	s.cancelActiveDownloads()
 }
@@ -163,6 +171,7 @@ func (s *Session) Close() error {
 	// A response hold may be blocking an operation that owns mu. Release it before touching mu,
 	// otherwise Close and the paused renderer would wait on each other forever.
 	s.eventsEnabled.Store(false)
+	s.closeEventSubscriptions()
 	s.releaseAllResponseHolds()
 	s.mu.Lock()
 	alreadyClosed := s.closed
@@ -230,6 +239,7 @@ func (s *Session) Close() error {
 
 func (s *Session) markTargetDestroyed() {
 	s.eventsEnabled.Store(false)
+	s.closeEventSubscriptions()
 	s.releaseAllResponseHolds()
 	s.cancelActiveDownloads()
 	s.mu.Lock()
@@ -296,6 +306,7 @@ func (s *Session) Prepare(ctx context.Context) error {
 			}
 		}
 		s.eventsEnabled.Store(false)
+		s.eventGeneration.Add(1)
 		defer s.eventsEnabled.Store(true)
 		wasCrashed := s.hasCrashed()
 		if err := s.cleanupVisualState(opCtx, !wasCrashed); err != nil && !wasCrashed {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -190,6 +191,91 @@ var _ = Describe("lifecycle engine foundations", func() {
 		)))
 		Expect(session.Prepare(ctx)).To(Succeed())
 		Expect(session.ConsoleMessages()).To(BeEmpty())
+	})
+
+	It("bounds console history, reports drops, and preserves safe previews and stack metadata", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+
+		_, err = session.Evaluate(ctx, `(() => {
+			for (let i = 0; i < 1005; i++) console.log("bounded-" + i)
+			console.error("stacked", "x".repeat(10000))
+		})()`)
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(func() int { return len(session.ConsoleSnapshot().Messages) }).Should(Equal(engine.DefaultEventHistoryLimit))
+		snapshot := session.ConsoleSnapshot()
+		Expect(snapshot.Dropped).To(BeNumerically(">=", 6))
+		stacked := snapshot.Messages[len(snapshot.Messages)-1]
+		Expect(stacked.Text).To(HavePrefix("stacked "))
+		Expect(len(stacked.Text)).To(BeNumerically("<=", engine.DefaultConsolePreviewBytes*2))
+		Expect(stacked.Args[1]).To(And(BeAssignableToTypeOf(""), HaveSuffix("… [truncated]")))
+		Expect(stacked.Stack).NotTo(BeEmpty())
+		Expect(stacked.Stack[0].Line).To(BeNumerically(">=", 0))
+		Expect(stacked.Stack[0].Column).To(BeNumerically(">=", 0))
+	})
+
+	It("delivers console subscriptions without blocking Chrome and resets generations", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		subscription, err := session.SubscribeConsole(1)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(subscription.Close)
+
+		started := time.Now()
+		_, err = session.Evaluate(ctx, `for (let i = 0; i < 200; i++) console.log("queued-" + i)`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(time.Since(started)).To(BeNumerically("<", time.Second))
+		Eventually(subscription.Dropped).Should(BeNumerically(">", 0))
+		var before engine.ConsoleMessage
+		Eventually(subscription.Events()).Should(Receive(&before))
+
+		Expect(session.Prepare(ctx)).To(Succeed())
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		_, err = session.Evaluate(ctx, `console.log("after-prepare")`)
+		Expect(err).NotTo(HaveOccurred())
+		var after engine.ConsoleMessage
+		Eventually(subscription.Events()).Should(Receive(&after))
+		Expect(after.Text).To(Equal("after-prepare"))
+		Expect(after.Generation).To(BeNumerically(">", before.Generation))
+		Expect(session.ConsoleSnapshot().Messages).To(ConsistOf(HaveField("Text", "after-prepare")))
+		Expect(session.ConsoleSnapshot().Dropped).To(BeZero())
+	})
+
+	It("isolates console subscriptions and closes them with the session", func(ctx SpecContext) {
+		first, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		second, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(second.Close)
+		Expect(first.Navigate(ctx, server.URL)).To(Succeed())
+		Expect(second.Navigate(ctx, server.URL)).To(Succeed())
+		subscription, err := first.SubscribeConsole(4)
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = second.Evaluate(ctx, `console.log("other-session")`)
+		Expect(err).NotTo(HaveOccurred())
+		Consistently(subscription.Events(), 100*time.Millisecond).ShouldNot(Receive())
+		Expect(first.Close()).To(Succeed())
+		Eventually(subscription.Events()).Should(BeClosed())
+		Expect(subscription.Close()).To(Succeed())
+	})
+
+	It("closes event subscriptions immediately when the renderer crashes", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		console, err := session.SubscribeConsole(1)
+		Expect(err).NotTo(HaveOccurred())
+		warnings, err := session.SubscribeWarnings(1)
+		Expect(err).NotTo(HaveOccurred())
+
+		engine.MarkSessionCrashedForTest(session)
+		Eventually(console.Events()).Should(BeClosed())
+		Eventually(warnings.Events()).Should(BeClosed())
 	})
 
 	It("removes registered init scripts during prepare", func(ctx SpecContext) {
@@ -406,6 +492,65 @@ var _ = Describe("lifecycle engine foundations", func() {
 		state, err = session.Evaluate(ctx, `[innerWidth, innerHeight, screen.width, screen.height]`)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(state).To(Equal([]any{float64(640), float64(480), float64(640), float64(480)}))
+	})
+
+	It("emits structured bounded CDP debug entries through the tabless allocator", func(ctx SpecContext) {
+		entries := make(chan engine.DebugEntry, engine.DefaultDebugQueueSize*2)
+		debugBrowser, err := engine.StartBrowser(ctx, engine.BrowserConfig{
+			ExecutablePath: chromePath(),
+			DebugSink:      func(entry engine.DebugEntry) { entries <- entry },
+		})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(debugBrowser.Close)
+		session, err := debugBrowser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		_, err = session.Evaluate(ctx, `"`+strings.Repeat("x", engine.DefaultDebugEntryBytes*2)+`"`)
+		Expect(err).NotTo(HaveOccurred())
+
+		var sent, received engine.DebugEntry
+		Eventually(entries).Should(Receive(&sent, HaveField("Direction", engine.DebugSend)))
+		Eventually(entries).Should(Receive(&received, HaveField("Direction", engine.DebugReceive)))
+		Expect(len(sent.Message)).To(BeNumerically("<=", engine.DefaultDebugEntryBytes+len("… [truncated]")))
+		Expect(sent.Timestamp).NotTo(BeZero())
+		Expect(received.Timestamp).NotTo(BeZero())
+	})
+
+	It("never lets a slow or panicking debug sink block Chrome operations", func(ctx SpecContext) {
+		release := make(chan struct{})
+		blocked := make(chan struct{}, 1)
+		debugBrowser, err := engine.StartBrowser(ctx, engine.BrowserConfig{
+			ExecutablePath: chromePath(),
+			DebugSink: func(engine.DebugEntry) {
+				select {
+				case blocked <- struct{}{}:
+				default:
+				}
+				<-release
+			},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { close(release); _ = debugBrowser.Close() })
+		Eventually(blocked).Should(Receive())
+		session, err := debugBrowser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		started := time.Now()
+		for i := 0; i < engine.DefaultDebugQueueSize*2; i++ {
+			_, err = session.Evaluate(ctx, `1`)
+			Expect(err).NotTo(HaveOccurred())
+		}
+		Expect(time.Since(started)).To(BeNumerically("<", 5*time.Second))
+		Expect(debugBrowser.DebugDropped()).To(BeNumerically(">", 0))
+
+		panicBrowser, err := engine.StartBrowser(ctx, engine.BrowserConfig{
+			ExecutablePath: chromePath(), DebugSink: func(engine.DebugEntry) { panic("sink") },
+		})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(panicBrowser.Close)
+		panicSession, err := panicBrowser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = panicSession.Evaluate(ctx, `2`)
+		Expect(err).NotTo(HaveOccurred())
 	})
 })
 
