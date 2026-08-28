@@ -66,6 +66,9 @@ type Session struct {
 	closed           bool
 	installed        bool
 	root             *Session
+	initialWidth     int
+	initialHeight    int
+	highFidelity     bool
 	initScriptIDs    []page.ScriptIdentifier
 	// crashed is closed by Chrome's Inspector.targetCrashed listener, which runs on chromedp's event
 	// goroutine rather than under mu - hence its own lock.  A channel rather than a bool because an
@@ -253,6 +256,9 @@ func (s *Session) Prepare(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if err := s.applyViewport(opCtx, s.initialWidth, s.initialHeight); err != nil {
+			return err
+		}
 		s.installed = false
 		s.clearCrashed()
 		return nil
@@ -272,6 +278,14 @@ func (s *Session) Navigate(ctx context.Context, destination string) error {
 // downstream failure instead of at the navigation that caused it.
 func (s *Session) NavigateWithStatus(ctx context.Context, destination string, expectedStatus int) error {
 	return s.serial(ctx, "navigate", func(opCtx context.Context) error {
+		width, height := int64(s.initialWidth), int64(s.initialHeight)
+		if s.highFidelity && !s.hasCrashed() {
+			var sizeErr error
+			width, height, sizeErr = ViewportDimensionsContext(opCtx)
+			if sizeErr != nil {
+				return sizeErr
+			}
+		}
 		result, err := NavigateContext(opCtx, destination)
 		// A navigation gives the target a fresh renderer, which is how a crashed page recovers - but
 		// Chrome needs a beat to spawn one, and a navigation issued before it exists comes back
@@ -283,6 +297,11 @@ func (s *Session) NavigateWithStatus(ctx context.Context, destination string, ex
 		s.installed = false
 		if err == nil {
 			s.clearCrashed()
+		}
+		if (err == nil || result.HTTPFailure) && s.highFidelity {
+			if viewportErr := s.applyViewport(opCtx, int(width), int(height)); viewportErr != nil {
+				return viewportErr
+			}
 		}
 		// Chrome reports a 4xx/5xx document as a loading failure, so that particular error is not
 		// a navigation failure - the status we observed is what decides.  Any other error is.
@@ -352,8 +371,15 @@ func (s *Session) SetWindowSize(ctx context.Context, width, height int) error {
 		return &Error{Code: CodeInvalidArgument, Operation: "set window size", Message: "width and height must be positive"}
 	}
 	return s.serial(ctx, "set window size", func(opCtx context.Context) error {
-		return EmulateViewportContext(opCtx, width, height)
+		return s.applyViewport(opCtx, width, height)
 	})
+}
+
+func (s *Session) applyViewport(ctx context.Context, width, height int) error {
+	if s.highFidelity {
+		return EmulateViewportMatchingScreenContext(ctx, width, height)
+	}
+	return EmulateViewportContext(ctx, width, height)
 }
 
 // SetUpload attaches paths to the first file input matching selector.

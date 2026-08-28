@@ -1,6 +1,9 @@
 package engine_test
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -189,6 +192,157 @@ var _ = Describe("lifecycle engine foundations", func() {
 		userAgent, err := session.Evaluate(ctx, `navigator.userAgent`)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(userAgent).To(Equal("BilobaLifecycleTest"))
+	})
+
+	It("uses Go's 1024 by 768 starting size when none is configured", func(ctx SpecContext) {
+		launched, err := engine.StartBrowser(ctx, engine.BrowserConfig{ExecutablePath: chromePath()})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(launched.Close)
+		session, err := launched.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+
+		width, height, err := session.WindowSize(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(width).To(Equal(1024))
+		Expect(height).To(Equal(768))
+
+		metadata := launched.LaunchMetadata()
+		Expect(metadata.Mode).To(Equal(engine.ChromeModeHeadlessShell))
+		Expect(metadata.ExecutablePath).To(Equal(chromePath()))
+		Expect(metadata.WindowWidth).To(Equal(1024))
+		Expect(metadata.WindowHeight).To(Equal(768))
+		Expect(metadata.Attached).To(BeFalse())
+		metadata.Arguments = append(metadata.Arguments, "--mutated")
+		Expect(launched.LaunchMetadata().Arguments).To(BeEmpty(), "metadata snapshots must not mutate browser state")
+	})
+
+	It("rejects malformed raw Chrome arguments before launching", func(ctx SpecContext) {
+		_, err := engine.StartBrowser(ctx, engine.BrowserConfig{
+			ExecutablePath: chromePath(),
+			Arguments:      []string{"--bad name=value"},
+		})
+		Expect(err).To(MatchError(ContainSubstring("Chrome argument name")))
+	})
+
+	It("accepts headful mode as a full-Chrome launch mode", func(ctx SpecContext) {
+		canceled, cancel := context.WithCancel(ctx)
+		cancel()
+		_, err := engine.StartBrowser(canceled, engine.BrowserConfig{
+			ExecutablePath: "/usr/bin/google-chrome",
+			Mode:           engine.ChromeMode("headful"),
+			Arguments:      []string{"--no-sandbox"},
+		})
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).NotTo(ContainSubstring("mode must"))
+	})
+
+	It("resolves an installed full Chrome for high-fidelity mode", func(ctx SpecContext) {
+		launched, err := engine.StartBrowser(ctx, engine.BrowserConfig{
+			Mode:      engine.ChromeModeHeadless,
+			Arguments: []string{"--no-sandbox"},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(launched.Close)
+		Expect(launched.LaunchMetadata().ExecutablePath).NotTo(BeEmpty())
+	})
+
+	It("does not invent launch metadata for an attached browser", func(ctx SpecContext) {
+		attached, err := engine.StartBrowser(ctx, engine.BrowserConfig{
+			WebSocketURL: browser.WebSocketURL(),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(attached.Close)
+
+		metadata := attached.LaunchMetadata()
+		Expect(metadata.Attached).To(BeTrue())
+		Expect(metadata.Mode).To(BeEmpty())
+		Expect(metadata.ExecutablePath).To(BeEmpty())
+		Expect(metadata.WindowWidth).To(BeZero())
+		Expect(metadata.WindowHeight).To(BeZero())
+
+		session, err := attached.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		width, height, err := session.WindowSize(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(width).To(Equal(1024))
+		Expect(height).To(Equal(768))
+	})
+
+	It("keeps the default mode compatible with an explicitly supplied full Chrome", func(ctx SpecContext) {
+		launched, err := engine.StartBrowser(ctx, engine.BrowserConfig{
+			ExecutablePath: engine.LocateFullChrome(""),
+			Arguments:      []string{"--no-sandbox"},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(launched.Close)
+		Expect(launched.LaunchMetadata().Mode).To(Equal(engine.ChromeModeHeadlessShell))
+		session, err := launched.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		value, err := session.Evaluate(ctx, `1 + 1`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(value).To(BeNumerically("==", 2))
+	})
+
+	It("never installs the headless shell unless explicitly opted in", func(ctx SpecContext) {
+		GinkgoT().Setenv(engine.ChromeEnvVar, "")
+		GinkgoT().Setenv("PATH", "")
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+		GinkgoT().Setenv("XDG_CACHE_HOME", GinkgoT().TempDir())
+		installedPath := filepath.Join(GinkgoT().TempDir(), engine.ChromeBinaryName())
+		Expect(os.WriteFile(installedPath, []byte("binary"), 0o755)).To(Succeed())
+		calls := 0
+		restore := engine.SetHeadlessShellInstallerForTest(func(context.Context) (string, error) {
+			calls++
+			return installedPath, nil
+		})
+		DeferCleanup(restore)
+
+		_, _, err := engine.ResolveHeadlessShell(ctx, "", false)
+		Expect(err).To(MatchError(ContainSubstring("could not find chrome-headless-shell")))
+		Expect(calls).To(BeZero())
+
+		path, autoInstalled, err := engine.ResolveHeadlessShell(ctx, "", true)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(path).To(Equal(installedPath))
+		Expect(autoInstalled).To(BeTrue())
+		Expect(calls).To(Equal(1))
+	})
+
+	It("reasserts the high-fidelity viewport after navigation and restores it during prepare", func(ctx SpecContext) {
+		launched, err := engine.StartBrowser(ctx, engine.BrowserConfig{
+			ExecutablePath: "/usr/bin/google-chrome",
+			Mode:           engine.ChromeModeHeadless,
+			Arguments:      []string{"--no-sandbox"},
+			WindowWidth:    640,
+			WindowHeight:   480,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(launched.Close)
+		session, err := launched.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+
+		Expect(session.SetWindowSize(ctx, 700, 650)).To(Succeed())
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		state, err := session.Evaluate(ctx, `[innerWidth, innerHeight, screen.width, screen.height]`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state).To(Equal([]any{float64(700), float64(650), float64(700), float64(650)}))
+
+		_, err = session.Evaluate(ctx, `void window.open("about:blank", "_blank")`)
+		Expect(err).NotTo(HaveOccurred())
+		spawned, err := session.WaitForTab(ctx, engine.TabQuery{SpawnedOnly: true}, engine.PollPolicy{Timeout: time.Second})
+		Expect(err).NotTo(HaveOccurred())
+		spawnedState, err := spawned.Evaluate(ctx, `[innerWidth, innerHeight, screen.width, screen.height]`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(spawnedState).To(Equal([]any{float64(640), float64(480), float64(640), float64(480)}))
+
+		Expect(session.Prepare(ctx)).To(Succeed())
+		state, err = session.Evaluate(ctx, `[innerWidth, innerHeight, screen.width, screen.height]`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state).To(Equal([]any{float64(640), float64(480), float64(640), float64(480)}))
 	})
 })
 

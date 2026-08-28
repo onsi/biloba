@@ -74,7 +74,24 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 		cancelTab()
 		return nil, contextError("attach tab", ctx.Err())
 	}
-	session := &Session{browser: b, ctx: tabCtx, cancel: cancelTab, browserContextID: root.browserContextID, targetID: targetID, openerID: openerID, root: root, artifactDir: b.artifactDir}
+	session := &Session{
+		browser: b, ctx: tabCtx, cancel: cancelTab, browserContextID: root.browserContextID,
+		targetID: targetID, openerID: openerID, root: root, artifactDir: b.artifactDir,
+		initialWidth: b.windowWidth, initialHeight: b.windowHeight,
+		highFidelity: b.mode == ChromeModeHeadless,
+	}
+	if session.initialWidth <= 0 || session.initialHeight <= 0 {
+		width, height, sizeErr := ViewportDimensionsContext(tabCtx)
+		if sizeErr != nil {
+			cancelTab()
+			return nil, contextError("read initial window size", sizeErr)
+		}
+		session.initialWidth, session.initialHeight = int(width), int(height)
+	}
+	if err := session.applyViewport(tabCtx, session.initialWidth, session.initialHeight); err != nil {
+		cancelTab()
+		return nil, contextError("apply initial viewport", err)
+	}
 	b.listenToSession(session)
 	b.sessions[session] = struct{}{}
 	return session, nil

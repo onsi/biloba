@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +13,24 @@ import (
 // ChromeEnvVar lets you point Biloba at a chrome-headless-shell binary without code changes.
 // It is honored by the Ginkgo adapter, by the engine's own suite, and by the bilobad daemon.
 const ChromeEnvVar = "BILOBA_CHROME_HEADLESS_SHELL"
+
+var headlessShellInstaller = InstallHeadlessShell
+
+// ResolveHeadlessShell finds a local chrome-headless-shell and, only when autoInstall is true,
+// installs Chrome for Testing's stable shell into Biloba's cache as a fallback.
+func ResolveHeadlessShell(ctx context.Context, explicit string, autoInstall bool) (string, bool, error) {
+	if path := LocateChrome(explicit); path != "" {
+		return path, false, nil
+	}
+	if !autoInstall {
+		return "", false, fmt.Errorf("could not find chrome-headless-shell; install it, set %s, provide an explicit path, or opt in to auto-install", ChromeEnvVar)
+	}
+	path, err := headlessShellInstaller(ctx)
+	if err != nil {
+		return "", false, fmt.Errorf("auto-install chrome-headless-shell: %w", err)
+	}
+	return path, true, nil
+}
 
 // LocateChrome returns the path to a chrome-headless-shell binary, searching (in order): an
 // explicit path, ChromeEnvVar, $PATH, and the puppeteer / Biloba download caches.  It returns ""
@@ -35,6 +55,37 @@ func LocateChrome(explicit string) string {
 		if len(matches) > 0 {
 			sort.Strings(matches) // prefer the lexically-last (typically newest) version
 			return matches[len(matches)-1]
+		}
+	}
+	return ""
+}
+
+// LocateFullChrome returns a full Chrome/Chromium executable for high-fidelity or headful mode.
+func LocateFullChrome(explicit string) string {
+	if explicit != "" && IsExecutableFile(explicit) {
+		return explicit
+	}
+	var candidates []string
+	switch runtime.GOOS {
+	case "darwin":
+		candidates = []string{
+			"/Applications/Chromium.app/Contents/MacOS/Chromium",
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+		}
+	case "windows":
+		candidates = []string{
+			"chrome", "chrome.exe",
+			`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
+			`C:\Program Files\Google\Chrome\Application\chrome.exe`,
+			filepath.Join(os.Getenv("USERPROFILE"), `AppData\Local\Google\Chrome\Application\chrome.exe`),
+			filepath.Join(os.Getenv("USERPROFILE"), `AppData\Local\Chromium\Application\chrome.exe`),
+		}
+	default:
+		candidates = []string{"chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "google-chrome-beta", "google-chrome-unstable", "/usr/bin/google-chrome", "/usr/local/bin/chrome", "/snap/bin/chromium", "chrome"}
+	}
+	for _, candidate := range candidates {
+		if path, err := exec.LookPath(candidate); err == nil && IsExecutableFile(path) {
+			return path
 		}
 	}
 	return ""
