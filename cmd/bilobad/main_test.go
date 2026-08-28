@@ -47,12 +47,34 @@ var _ = Describe("bilobad", func() {
 			"-chrome-path", "/opt/chrome",
 			"-chrome-ws-url", "ws://127.0.0.1:9222/devtools/browser/test",
 			"-artifact-dir", "/tmp/artifacts",
+			"-screenshot-baselines-dir", "/tmp/baselines",
+			"-update-screenshots=true",
+			"-screenshot-pixel-tolerance", "0.02",
+			"-screenshot-channel-tolerance", "8",
+			"-max-screenshot-bytes", "1024",
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(parsed).To(Equal(config{
 			chromePath: "/opt/chrome", chromeWSURL: "ws://127.0.0.1:9222/devtools/browser/test", artifactDir: "/tmp/artifacts",
+			screenshotBaselinesDir: "/tmp/baselines", updateScreenshots: true, screenshotPixelTolerance: 0.02, screenshotChannelTolerance: 8, maxScreenshotBytes: 1024,
 		}))
 	})
+
+	DescribeTable("rejects unsafe screenshot daemon bounds",
+		func(arguments ...string) {
+			_, err := parseConfig(arguments)
+			Expect(err).To(HaveOccurred())
+		},
+		Entry("NaN pixel tolerance", "-screenshot-pixel-tolerance", "NaN"),
+		Entry("positive infinite pixel tolerance", "-screenshot-pixel-tolerance", "+Inf"),
+		Entry("negative infinite pixel tolerance", "-screenshot-pixel-tolerance", "-Inf"),
+		Entry("negative pixel tolerance", "-screenshot-pixel-tolerance", "-0.01"),
+		Entry("pixel tolerance above one", "-screenshot-pixel-tolerance", "1.01"),
+		Entry("negative channel tolerance", "-screenshot-channel-tolerance", "-1"),
+		Entry("channel tolerance above 255", "-screenshot-channel-tolerance", "256"),
+		Entry("zero screenshot bound", "-max-screenshot-bytes", "0"),
+		Entry("screenshot bound above the hard limit", "-max-screenshot-bytes", "16777217"),
+	)
 
 	Describe("evaluation arguments", func() {
 		It("preserves an expression for an empty argument array", func() {

@@ -93,6 +93,17 @@ var declarations = []reflect.Type{
 	reflect.TypeFor[protocol.WireExpectation](),
 	reflect.TypeFor[protocol.WireAssertion](),
 	reflect.TypeFor[protocol.AssertRequest](),
+	reflect.TypeFor[protocol.WireScreenshotTarget](),
+	reflect.TypeFor[protocol.WireScreenshotOperation](),
+	reflect.TypeFor[protocol.ScreenshotRequest](),
+	reflect.TypeFor[protocol.ScreenshotCaptureResult](),
+	reflect.TypeFor[protocol.WireScreenshotPoint](),
+	reflect.TypeFor[protocol.WireScreenshotRect](),
+	reflect.TypeFor[protocol.WireScreenshotBounds](),
+	reflect.TypeFor[protocol.WireVisualRegion](),
+	reflect.TypeFor[protocol.WireVisualDiff](),
+	reflect.TypeFor[protocol.WireVisualSchemeResult](),
+	reflect.TypeFor[protocol.WireVisualResult](),
 	reflect.TypeFor[protocol.PollObservation](),
 	reflect.TypeFor[protocol.Timings](),
 	reflect.TypeFor[protocol.OperationResult](),
@@ -102,7 +113,7 @@ func typeScript() string {
 	var output strings.Builder
 	output.WriteString("// Code generated from the Go protocol definition; DO NOT EDIT.\n\n")
 	output.WriteString("export type ErrorCode =\n")
-	for _, code := range []protocol.ErrorCode{protocol.CodeInvalidArgument, protocol.CodeTimeout, protocol.CodeTargetNotFound, protocol.CodeTargetNotReady, protocol.CodeNavigation, protocol.CodeJavaScript, protocol.CodeProtocolMismatch, protocol.CodeDriverClosed, protocol.CodeDriver, protocol.CodeCancelled, protocol.CodeBrowserGone, protocol.CodePageCrashed} {
+	for _, code := range []protocol.ErrorCode{protocol.CodeInvalidArgument, protocol.CodeTimeout, protocol.CodeTargetNotFound, protocol.CodeTargetNotReady, protocol.CodeNavigation, protocol.CodeJavaScript, protocol.CodeProtocolMismatch, protocol.CodeDriverClosed, protocol.CodeDriver, protocol.CodeCancelled, protocol.CodeBrowserGone, protocol.CodePageCrashed, protocol.CodeVisualBaseline} {
 		fmt.Fprintf(&output, "  | %q\n", code)
 	}
 	output.WriteString(";\n\n")
@@ -171,6 +182,29 @@ func tsType(owner reflect.Type, field reflect.StructField) string {
 			return `"VISIBLE" | "TEXT" | "COUNT" | "ATTRIBUTE" | "VALUE" | "URL" | "EVALUATE" | "EXISTS" | "ENABLED" | "CLICKABLE" | "PROPERTY" | "ALL_TEXT" | "REQUEST"`
 		case "Match":
 			return `"EXACT" | "CONTAINS"`
+		}
+	}
+	if owner == reflect.TypeFor[protocol.WireScreenshotTarget]() && field.Name == "Kind" {
+		return `"PAGE" | "ELEMENT"`
+	}
+	if owner == reflect.TypeFor[protocol.WireScreenshotOperation]() {
+		switch field.Name {
+		case "Kind":
+			return `"CAPTURE" | "EXPECT"`
+		case "Output":
+			return `"BYTES" | "PATH"`
+		case "ColorScheme":
+			return `"light" | "dark"`
+		case "ColorSchemes":
+			return `("light" | "dark")[]`
+		}
+	}
+	if owner == reflect.TypeFor[protocol.WireVisualSchemeResult]() {
+		switch field.Name {
+		case "Scheme":
+			return `"light" | "dark"`
+		case "Status":
+			return `"matched" | "missing" | "mismatched" | "created" | "updated" | "unchanged"`
 		}
 	}
 	if owner == reflect.TypeFor[protocol.WireLifecycleOperation]() && field.Name == "Kind" {

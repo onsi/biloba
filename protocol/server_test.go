@@ -93,6 +93,96 @@ var _ = Describe("driver protocol", func() {
 		Expect(recorder.operation.Kind).To(Equal(protocol.EventfulDialogs))
 	})
 
+	It("validates and carries screenshot capture and comparison operations", func() {
+		recorder := &recordingSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+		limit := 1024
+		pixel, channel := 0.02, 8
+
+		Expect(client.call("screenshot", protocol.ScreenshotRequest{SessionID: opened.SessionID, Operation: &protocol.WireScreenshotOperation{
+			Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "ELEMENT", Locator: &protocol.WireLocator{Kind: "TEST_ID", Value: "card"}},
+			Output: "BYTES", Masks: []protocol.WireLocator{{Kind: "CSS", Value: ".clock"}}, ColorScheme: "dark", MaxBytes: &limit,
+		}}, nil)).To(Succeed())
+		capture := recorder.lastOperation().Screenshot
+		Expect(capture.Kind).To(Equal(protocol.ScreenshotCapture))
+		Expect(capture.Target.Kind).To(Equal(protocol.ScreenshotElement))
+		Expect(capture.Target.Locator.Kind).To(Equal(protocol.LocatorTestID))
+		Expect(capture.Masks).To(HaveLen(1))
+		Expect(capture.MaxBytes).To(Equal(1024))
+
+		Expect(client.call("screenshot", protocol.ScreenshotRequest{SessionID: opened.SessionID, Operation: &protocol.WireScreenshotOperation{
+			Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "checkout/receipt", Masks: []protocol.WireLocator{{Kind: "CSS", Value: ".clock"}},
+			ColorSchemes: []string{"light", "dark"}, PixelTolerance: &pixel, ChannelTolerance: &channel, MaxBytes: &limit,
+		}, Poll: protocol.PollOptions{Mode: "EVENTUALLY", TimeoutMS: 500, IntervalMS: 20}}, nil)).To(Succeed())
+		expect := recorder.lastOperation().Screenshot
+		Expect(expect.Kind).To(Equal(protocol.ScreenshotExpect))
+		Expect(expect.Name).To(Equal("checkout/receipt"))
+		Expect(expect.ColorSchemes).To(Equal([]string{"light", "dark"}))
+		Expect(expect.PixelTolerance).To(Equal(0.02))
+		Expect(expect.ChannelTolerance).To(Equal(8))
+		Expect(recorder.lastOperation().Poll.Timeout).To(Equal(500 * time.Millisecond))
+	})
+
+	maxZero, maxTooLarge := 0, protocol.MaxScreenshotBytes+1
+	pixelNegative, pixelTooLarge := -0.01, 1.01
+	channelNegative, channelTooLarge := -1, 256
+	DescribeTable("rejects invalid screenshot requests",
+		func(operation *protocol.WireScreenshotOperation, poll protocol.PollOptions) {
+			client, cleanup := startTestServer(&fakeBackend{})
+			DeferCleanup(cleanup)
+			var opened protocol.OpenSessionResponse
+			Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+			err := client.call("screenshot", protocol.ScreenshotRequest{SessionID: opened.SessionID, Operation: operation, Poll: poll}, nil)
+			Expect(err).NotTo(BeNil())
+			Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
+		},
+		Entry("nil operation", nil, protocol.PollOptions{}),
+		Entry("unknown kind", &protocol.WireScreenshotOperation{Kind: "NOPE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}}, protocol.PollOptions{}),
+		Entry("page locator", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE", Locator: &protocol.WireLocator{Kind: "CSS", Value: "body"}}}, protocol.PollOptions{}),
+		Entry("element missing locator", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "ELEMENT"}}, protocol.PollOptions{}),
+		Entry("capture visual name", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x"}, protocol.PollOptions{}),
+		Entry("expect output", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x", Output: "BYTES"}, protocol.PollOptions{}),
+		Entry("unsafe name", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "../x"}, protocol.PollOptions{}),
+		Entry("absolute name", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "/x"}, protocol.PollOptions{}),
+		Entry("empty name segment", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x//y"}, protocol.PollOptions{}),
+		Entry("unusable name segment", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "***"}, protocol.PollOptions{}),
+		Entry("invalid mask locator", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Masks: []protocol.WireLocator{{Kind: "NOPE", Value: "x"}}}, protocol.PollOptions{}),
+		Entry("zero max bytes", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, MaxBytes: &maxZero}, protocol.PollOptions{}),
+		Entry("max bytes above hard bound", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, MaxBytes: &maxTooLarge}, protocol.PollOptions{}),
+		Entry("negative pixel tolerance", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x", PixelTolerance: &pixelNegative}, protocol.PollOptions{}),
+		Entry("pixel tolerance above one", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x", PixelTolerance: &pixelTooLarge}, protocol.PollOptions{}),
+		Entry("negative channel tolerance", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x", ChannelTolerance: &channelNegative}, protocol.PollOptions{}),
+		Entry("channel tolerance above 255", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x", ChannelTolerance: &channelTooLarge}, protocol.PollOptions{}),
+		Entry("unsupported capture scheme", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, ColorScheme: "sepia"}, protocol.PollOptions{}),
+		Entry("unsupported visual scheme", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x", ColorSchemes: []string{"sepia"}}, protocol.PollOptions{}),
+		Entry("more than two visual schemes", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x", ColorSchemes: []string{"light", "dark", "light"}}, protocol.PollOptions{}),
+		Entry("duplicate schemes", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x", ColorSchemes: []string{"dark", "dark"}}, protocol.PollOptions{}),
+		Entry("capture comparison schemes", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, ColorSchemes: []string{"dark"}}, protocol.PollOptions{}),
+		Entry("capture pixel tolerance", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, PixelTolerance: &pixelNegative}, protocol.PollOptions{}),
+		Entry("capture channel tolerance", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, ChannelTolerance: &channelNegative}, protocol.PollOptions{}),
+		Entry("expect capture scheme", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x", ColorScheme: "dark"}, protocol.PollOptions{}),
+		Entry("raw poll mode", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}}, protocol.PollOptions{Mode: "EVENTUALLY"}),
+		Entry("visual consistently", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x"}, protocol.PollOptions{Mode: "CONSISTENTLY"}),
+	)
+
+	It("preserves a visual result on fatal screenshot errors", func() {
+		visual := &protocol.WireVisualResult{Match: false, AttemptCount: 1, Warnings: []string{"clipped"}, Schemes: []protocol.WireVisualSchemeResult{{Status: "missing", BaselinePath: "/baselines/card.png", ActualPath: "/artifacts/card.actual.png"}}}
+		backend := &fakeBackend{session: &fakeSession{result: protocol.Result{Visual: visual}, executeErr: protocol.NewError(protocol.CodeVisualBaseline, "missing baseline")}}
+		client, cleanup := startTestServer(backend)
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+
+		err := client.call("screenshot", protocol.ScreenshotRequest{SessionID: opened.SessionID, Operation: &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "card"}}, nil)
+
+		Expect(err.Code).To(Equal(protocol.CodeVisualBaseline))
+		Expect(err.Diagnostics).NotTo(BeNil())
+		Expect(err.Diagnostics.Visual).To(Equal(visual))
+	})
+
 	It("validates and carries lifecycle operation categories", func() {
 		recorder := &recordingSession{}
 		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
@@ -727,7 +817,7 @@ type fakeSession struct {
 func (s *fakeSession) Prepare(context.Context) error { s.prepared++; return nil }
 func (s *fakeSession) Execute(ctx context.Context, operation protocol.Operation) (protocol.Result, error) {
 	if s.executeErr != nil {
-		return protocol.Result{}, s.executeErr
+		return s.result, s.executeErr
 	}
 	if s.blockNavigate && operation.Kind == protocol.OperationNavigate {
 		s.startOnce.Do(func() { close(s.started) })

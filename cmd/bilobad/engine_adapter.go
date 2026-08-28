@@ -360,21 +360,35 @@ func shadowsToWire(values []engine.NetworkShadowDiagnostic) []map[string]any {
 	return result
 }
 
-type engineBackend struct{ browser *engine.Browser }
+type engineBackend struct {
+	browser            *engine.Browser
+	visual             engine.VisualOptions
+	maxScreenshotBytes int
+}
 
 func (b *engineBackend) OpenSession(ctx context.Context) (protocol.Session, error) {
 	session, err := b.browser.OpenSession(ctx)
 	if err != nil {
 		return nil, engineRPCError(err)
 	}
-	return &engineSession{session: session}, nil
+	return b.wrap(session, ""), nil
+}
+
+func (b *engineBackend) wrap(session *engine.Session, frameURL string) *engineSession {
+	return &engineSession{session: session, frameURL: frameURL, visual: b.visual, maxScreenshotBytes: b.maxScreenshotBytes}
 }
 
 func (b *engineBackend) Close() error { return b.browser.Close() }
 
 type engineSession struct {
-	session  *engine.Session
-	frameURL string
+	session            *engine.Session
+	frameURL           string
+	visual             engine.VisualOptions
+	maxScreenshotBytes int
+}
+
+func (s *engineSession) wrap(session *engine.Session, frameURL string) *engineSession {
+	return &engineSession{session: session, frameURL: frameURL, visual: s.visual, maxScreenshotBytes: s.maxScreenshotBytes}
 }
 
 func (s *engineSession) Metadata() protocol.SessionMetadata {
@@ -388,7 +402,7 @@ func (s *engineSession) Tabs(ctx context.Context) ([]protocol.Session, error) {
 	}
 	result := make([]protocol.Session, len(tabs))
 	for index, tab := range tabs {
-		result[index] = &engineSession{session: tab}
+		result[index] = s.wrap(tab, "")
 	}
 	return result, nil
 }
@@ -402,7 +416,7 @@ func (s *engineSession) WaitForTab(ctx context.Context, query protocol.TabQuery,
 	if waitErr != nil {
 		return nil, engineRPCError(waitErr)
 	}
-	return &engineSession{session: tab}, nil
+	return s.wrap(tab, ""), nil
 }
 
 func (s *engineSession) Frames(ctx context.Context) ([]protocol.Session, error) {
@@ -412,7 +426,7 @@ func (s *engineSession) Frames(ctx context.Context) ([]protocol.Session, error) 
 	}
 	result := make([]protocol.Session, len(frames))
 	for index, frame := range frames {
-		result[index] = &engineSession{session: frame.Session, frameURL: frame.URL()}
+		result[index] = s.wrap(frame.Session, frame.URL())
 	}
 	return result, nil
 }
@@ -426,7 +440,7 @@ func (s *engineSession) WaitForFrame(ctx context.Context, query protocol.FrameQu
 	if waitErr != nil {
 		return nil, engineRPCError(waitErr)
 	}
-	return &engineSession{session: frame.Session, frameURL: frame.URL()}, nil
+	return s.wrap(frame.Session, frame.URL()), nil
 }
 
 const defaultPollTimeout = 10 * time.Second
@@ -439,12 +453,14 @@ func (s *engineSession) NewTab(ctx context.Context) (protocol.Session, error) {
 	if err != nil {
 		return nil, engineRPCError(err)
 	}
-	return &engineSession{session: tab}, nil
+	return s.wrap(tab, ""), nil
 }
 
 func (s *engineSession) Execute(ctx context.Context, operation protocol.Operation) (protocol.Result, error) {
 	started := time.Now()
 	switch operation.Kind {
+	case protocol.OperationScreenshot:
+		return s.screenshot(ctx, operation, started)
 	case protocol.OperationNavigate:
 		return oneAttempt(started, s.session.NavigateWithStatus(ctx, operation.URL, operation.ExpectedStatus))
 	case protocol.OperationSetCookies:
@@ -581,6 +597,171 @@ func (s *engineSession) Execute(ctx context.Context, operation protocol.Operatio
 	default:
 		return protocol.Result{}, protocol.NewError(protocol.CodeInvalidArgument, "unsupported operation")
 	}
+}
+
+func (s *engineSession) screenshot(ctx context.Context, operation protocol.Operation, started time.Time) (protocol.Result, error) {
+	request := operation.Screenshot
+	maxBytes := request.MaxBytes
+	configuredMax := s.maxScreenshotBytes
+	if configuredMax <= 0 {
+		configuredMax = engine.DefaultMaxScreenshotBytes
+	}
+	if maxBytes == 0 {
+		maxBytes = configuredMax
+	}
+	if maxBytes > configuredMax {
+		return protocol.Result{}, protocol.NewError(protocol.CodeInvalidArgument, fmt.Sprintf("maxBytes %d exceeds daemon limit %d", maxBytes, configuredMax))
+	}
+	masks := make([]engine.Selector, len(request.Masks))
+	for index, locator := range request.Masks {
+		selector, err := selectorFromProtocol(locator)
+		if err != nil {
+			return protocol.Result{}, err
+		}
+		masks[index] = selector
+	}
+	var target engine.ScreenshotTarget
+	var selector engine.Selector
+	if request.Target.Kind == protocol.ScreenshotElement {
+		var err error
+		selector, err = selectorFromProtocol(request.Target.Locator)
+		if err != nil {
+			return protocol.Result{}, err
+		}
+		target = engine.ElementScreenshotTarget(selector)
+	} else {
+		target = engine.PageScreenshotTarget()
+	}
+	if request.Kind == protocol.ScreenshotCapture {
+		captureOptions := engine.ScreenshotCaptureOptions{Masks: masks, Animated: request.Animated, ColorScheme: request.ColorScheme, MaxBytes: maxBytes}
+		var shot engine.Screenshot
+		var err error
+		if request.Target.Kind == protocol.ScreenshotElement {
+			shot, err = s.session.CaptureElementScreenshot(ctx, selector, captureOptions)
+		} else {
+			shot, err = s.session.CapturePageScreenshot(ctx, captureOptions)
+		}
+		if err != nil {
+			return protocol.Result{}, engineRPCError(err)
+		}
+		if len(shot.PNG) > maxBytes {
+			return protocol.Result{}, protocol.NewError(protocol.CodeDriver, fmt.Sprintf("captured screenshot exceeds decoded limit %d", maxBytes))
+		}
+		capture := &protocol.ScreenshotCaptureResult{Width: shot.Width, Height: shot.Height, FullyClipped: shot.FullyClipped, Vanished: shot.Vanished}
+		if shot.Warning != "" {
+			capture.Warnings = []string{shot.Warning}
+		}
+		if request.Output == protocol.ScreenshotPath {
+			name := request.Name
+			if name == "" {
+				name = map[bool]string{true: "element", false: "page"}[request.Target.Kind == protocol.ScreenshotElement]
+			}
+			capture.ArtifactPath, err = s.session.WriteScreenshotArtifact(name, shot.PNG, maxBytes)
+			if err != nil {
+				return protocol.Result{}, engineRPCError(err)
+			}
+		} else {
+			capture.PNGBase64 = base64.StdEncoding.EncodeToString(shot.PNG)
+		}
+		return protocol.Result{Matched: true, Attempts: 1, StartedAt: started, Elapsed: time.Since(started), Screenshot: capture}, nil
+	}
+	visualOptions := s.visual
+	visualOptions.Masks = masks
+	visualOptions.Animated = request.Animated
+	visualOptions.ColorSchemes = append([]string(nil), request.ColorSchemes...)
+	visualOptions.MaxBytes = maxBytes
+	if request.PixelToleranceSet {
+		visualOptions.Tolerance.PixelFraction = request.PixelTolerance
+	}
+	if request.ChannelToleranceSet {
+		visualOptions.Tolerance.ChannelDelta = request.ChannelTolerance
+	}
+	if visualOptions.Update {
+		result, err := s.session.CompareScreenshot(ctx, request.Name, target, visualOptions)
+		wire := visualResultToWire(result, 1, time.Since(started))
+		return protocol.Result{Matched: result.Match, Attempts: 1, StartedAt: started, Elapsed: time.Since(started), Visual: wire}, visualRPCError(err)
+	}
+	writeArtifacts := false
+	visualOptions.WriteArtifacts = &writeArtifacts
+	result, pollErr := engine.Poll(ctx, withDefaultPollTimeout(pollPolicyFromProtocol(operation.Poll)), func(attemptCtx context.Context) (engine.Observation, bool, error) {
+		visual, err := s.session.CompareScreenshot(attemptCtx, request.Name, target, visualOptions)
+		return engine.Observation{Value: visual}, visual.Match, err
+	})
+	final, _ := result.Final.Value.(engine.VisualResult)
+	if pollErr != nil && !engine.IsFatal(pollErr) && ctx.Err() == nil {
+		writeArtifacts = true
+		reported, reportErr := s.session.CompareScreenshot(ctx, request.Name, target, visualOptions)
+		if reported.Schemes != nil || len(reported.Warnings) > 0 {
+			final = reported
+		}
+		if reportErr != nil && engine.IsFatal(reportErr) {
+			pollErr = reportErr
+		}
+	}
+	wire := visualResultToWire(final, uint32(result.AttemptCount), time.Since(started))
+	converted := protocol.Result{Matched: final.Match && pollErr == nil, Attempts: uint32(result.AttemptCount), StartedAt: started, Elapsed: time.Since(started), Visual: wire}
+	if pollErr == nil {
+		return converted, nil
+	}
+	if engine.IsFatal(pollErr) || ctx.Err() != nil {
+		return converted, visualRPCError(pollErr)
+	}
+	return converted, nil
+}
+
+func visualRPCError(err error) error {
+	if err == nil {
+		return nil
+	}
+	message := err.Error()
+	for _, marker := range []string{"no screenshot baseline", "screenshot baseline", "baseline name"} {
+		if strings.Contains(message, marker) {
+			return protocol.NewError(protocol.CodeVisualBaseline, message)
+		}
+	}
+	return engineRPCError(err)
+}
+
+func visualResultToWire(value engine.VisualResult, attempts uint32, elapsed time.Duration) *protocol.WireVisualResult {
+	wire := &protocol.WireVisualResult{Match: value.Match, Updated: value.Updated, AttemptCount: attempts, ElapsedMS: elapsed.Milliseconds(), Warnings: append([]string{}, value.Warnings...), Schemes: make([]protocol.WireVisualSchemeResult, len(value.Schemes))}
+	for index, scheme := range value.Schemes {
+		status := string(scheme.UpdateDisposition)
+		if status == "" {
+			switch {
+			case scheme.Match:
+				status = "matched"
+			case scheme.ActualPath != "" && scheme.DiffPath == "" && scheme.Diff.TotalPixels == 0:
+				status = "missing"
+			default:
+				status = "mismatched"
+			}
+		}
+		converted := protocol.WireVisualSchemeResult{Scheme: scheme.Scheme, Status: status, Match: scheme.Match, BaselinePath: scheme.BaselinePath, ActualPath: scheme.ActualPath, DiffPath: scheme.DiffPath, Diagnosis: scheme.Diagnosis, Warning: scheme.Warning, UpdateSummary: scheme.UpdateSummary}
+		if screenshotDiffPresent(scheme.Diff) {
+			converted.Diff = screenshotDiffToWire(scheme.Diff)
+		}
+		if scheme.PreviousDiff != nil {
+			converted.PreviousDiff = screenshotDiffToWire(*scheme.PreviousDiff)
+		}
+		wire.Schemes[index] = converted
+	}
+	return wire
+}
+
+func screenshotDiffPresent(diff engine.ScreenshotDiff) bool {
+	return diff.Match || diff.DimensionMismatch || diff.TotalPixels != 0 || diff.DifferingPixels != 0
+}
+
+func screenshotDiffToWire(diff engine.ScreenshotDiff) *protocol.WireVisualDiff {
+	regions := make([]protocol.WireVisualRegion, len(diff.Regions))
+	for index, region := range diff.Regions {
+		regions[index] = protocol.WireVisualRegion{Rect: protocol.WireScreenshotRect{Min: protocol.WireScreenshotPoint{X: region.Rect.Min.X, Y: region.Rect.Min.Y}, Max: protocol.WireScreenshotPoint{X: region.Rect.Max.X, Y: region.Rect.Max.Y}}, DifferingPixels: region.Count}
+	}
+	wire := &protocol.WireVisualDiff{Match: diff.Match, DimensionMismatch: diff.DimensionMismatch, Baseline: protocol.WireScreenshotBounds{Width: diff.BaselineBounds.Dx(), Height: diff.BaselineBounds.Dy()}, Actual: protocol.WireScreenshotBounds{Width: diff.ActualBounds.Dx(), Height: diff.ActualBounds.Dy()}, TotalPixels: diff.TotalPixels, DifferingPixels: diff.DifferingPixels, Fraction: diff.Fraction, MaxChannelDelta: diff.MaxChannelDelta, Regions: regions, RegionCount: diff.RegionCount, Shifted: diff.Shifted, Scattered: diff.Scattered, RasterizationLikely: diff.RasterizationLikely, Unchanged: diff.Unchanged}
+	if diff.Shifted {
+		wire.Shift = &protocol.WireScreenshotPoint{X: diff.Shift.X, Y: diff.Shift.Y}
+	}
+	return wire
 }
 
 func tabQueryFromProtocol(query protocol.TabQuery) (engine.TabQuery, error) {

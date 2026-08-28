@@ -13,6 +13,7 @@ export type ErrorCode =
   | "CANCELLED"
   | "BROWSER_GONE"
   | "PAGE_CRASHED"
+  | "VISUAL_BASELINE"
 ;
 
 export interface Diagnostics {
@@ -21,6 +22,7 @@ export interface Diagnostics {
   domOutline?: string;
   screenshotPath?: string;
   daemonDetail?: string;
+  visual?: VisualResult;
 }
 
 export interface ProtocolError {
@@ -420,6 +422,102 @@ export interface AssertRequest {
   poll?: PollOptions;
 }
 
+export interface ScreenshotTarget {
+  kind: "PAGE" | "ELEMENT";
+  locator?: Locator;
+}
+
+export interface ScreenshotOperation {
+  kind: "CAPTURE" | "EXPECT";
+  target: ScreenshotTarget;
+  output?: "BYTES" | "PATH";
+  name?: string;
+  masks?: Locator[];
+  animated?: boolean;
+  colorScheme?: "light" | "dark";
+  colorSchemes?: ("light" | "dark")[];
+  maxBytes?: number;
+  pixelTolerance?: number;
+  channelTolerance?: number;
+}
+
+export interface ScreenshotRequest {
+  sessionId: string;
+  operation?: ScreenshotOperation;
+  poll?: PollOptions;
+}
+
+export interface ScreenshotCaptureResult {
+  pngBase64?: string;
+  artifactPath?: string;
+  width: number;
+  height: number;
+  warnings?: string[];
+  fullyClipped?: boolean;
+  vanished?: boolean;
+}
+
+export interface ScreenshotPoint {
+  x: number;
+  y: number;
+}
+
+export interface ScreenshotRect {
+  min: ScreenshotPoint;
+  max: ScreenshotPoint;
+}
+
+export interface ScreenshotBounds {
+  width: number;
+  height: number;
+}
+
+export interface VisualRegion {
+  rect: ScreenshotRect;
+  differingPixels: number;
+}
+
+export interface VisualDiff {
+  match: boolean;
+  dimensionMismatch: boolean;
+  baseline: ScreenshotBounds;
+  actual: ScreenshotBounds;
+  totalPixels: number;
+  differingPixels: number;
+  fraction: number;
+  maxChannelDelta: number;
+  regions: VisualRegion[];
+  regionCount: number;
+  shifted: boolean;
+  shift?: ScreenshotPoint;
+  scattered: boolean;
+  rasterizationLikely: boolean;
+  unchanged?: string;
+}
+
+export interface VisualSchemeResult {
+  scheme?: "light" | "dark";
+  status: "matched" | "missing" | "mismatched" | "created" | "updated" | "unchanged";
+  match: boolean;
+  baselinePath: string;
+  actualPath?: string;
+  diffPath?: string;
+  diff?: VisualDiff;
+  previousDiff?: VisualDiff;
+  diagnosis?: string;
+  warning?: string;
+  updateSummary?: string;
+}
+
+export interface VisualResult {
+  match: boolean;
+  updated: boolean;
+  schemes: VisualSchemeResult[];
+  warnings: string[];
+  attemptCount: number;
+  elapsedMs: number;
+}
+
 export interface PollObservation {
   attempt: number;
   elapsedMs: number;
@@ -441,6 +539,8 @@ export interface OperationResult {
   diagnostics?: Diagnostics;
   rpcRequestCount: number;
   rpcResponseCount: number;
+  screenshot?: ScreenshotCaptureResult;
+  visual?: VisualResult;
 }
 
 export interface Response<Result = unknown> {

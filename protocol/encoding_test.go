@@ -62,18 +62,39 @@ var _ = Describe("the generated protocol declarations", func() {
 	It("keeps a fully-populated operation result inside its declaration", func() {
 		// The zero-value pass catches fields that are always present; this catches the opposite
 		// mistake - a field that only shows up once something is set, under a name nobody generated.
-		diagnostics := protocol.Diagnostics{Locator: `locator("#save")`, Expected: "visible", DOMOutline: "body", ScreenshotPath: "/tmp/x.png", DaemonDetail: "timed out"}
+		visual := &protocol.WireVisualResult{Schemes: []protocol.WireVisualSchemeResult{}, Warnings: []string{}}
+		diagnostics := protocol.Diagnostics{Locator: `locator("#save")`, Expected: "visible", DOMOutline: "body", ScreenshotPath: "/tmp/x.png", DaemonDetail: "timed out", Visual: visual}
 		populated := protocol.OperationResult{
 			Matched: true, ObservedJSON: `"Saved"`, AttemptCount: 2,
 			Trajectory:  []protocol.PollObservation{{Attempt: 1, ElapsedMS: 5, ObservedJSON: `"Saving"`, RetryReason: "text mismatch"}},
 			Timings:     protocol.Timings{StartedUnixMS: 1, ElapsedMS: 2},
 			Diagnostics: &diagnostics, RPCRequestCount: 1, RPCResponseCount: 1,
+			Screenshot: &protocol.ScreenshotCaptureResult{}, Visual: visual,
 		}
 
 		Expect(marshalledKeys(populated)).To(ConsistOf(keysOf(declarations["OperationResult"])))
 		Expect(marshalledKeys(populated.Trajectory[0])).To(ConsistOf(keysOf(declarations["PollObservation"])))
 		Expect(marshalledKeys(diagnostics)).To(ConsistOf(keysOf(declarations["Diagnostics"])))
 	})
+
+	DescribeTable("round-trips each screenshot result shape without inventing another output",
+		func(result protocol.OperationResult, expected string, absent ...string) {
+			encoded, err := json.Marshal(result)
+			Expect(err).NotTo(HaveOccurred())
+			var decoded map[string]json.RawMessage
+			Expect(json.Unmarshal(encoded, &decoded)).To(Succeed())
+			Expect(decoded).To(HaveKey(expected))
+			for _, field := range absent {
+				Expect(decoded).NotTo(HaveKey(field))
+			}
+			var roundTrip protocol.OperationResult
+			Expect(json.Unmarshal(encoded, &roundTrip)).To(Succeed())
+			Expect(roundTrip).To(Equal(result))
+		},
+		Entry("bytes", protocol.OperationResult{Screenshot: &protocol.ScreenshotCaptureResult{PNGBase64: "iVBORw==", Width: 1, Height: 1}}, "screenshot", "visual"),
+		Entry("path", protocol.OperationResult{Screenshot: &protocol.ScreenshotCaptureResult{ArtifactPath: "/tmp/capture.png", Width: 2, Height: 3}}, "screenshot", "visual"),
+		Entry("visual", protocol.OperationResult{Visual: &protocol.WireVisualResult{Match: true, Schemes: []protocol.WireVisualSchemeResult{}, Warnings: []string{}}}, "visual", "screenshot"),
+	)
 
 	It("only omits diagnostics when there are none to report", func() {
 		// The reason diagnostics is a pointer rather than a value: a failed operation has to carry
@@ -94,7 +115,7 @@ var _ = Describe("the generated protocol declarations", func() {
 			string(protocol.CodeTargetNotReady), string(protocol.CodeNavigation), string(protocol.CodeJavaScript),
 			string(protocol.CodeProtocolMismatch),
 			string(protocol.CodeDriverClosed), string(protocol.CodeDriver), string(protocol.CodeCancelled),
-			string(protocol.CodeBrowserGone), string(protocol.CodePageCrashed),
+			string(protocol.CodeBrowserGone), string(protocol.CodePageCrashed), string(protocol.CodeVisualBaseline),
 		), "a code the daemon can send but TypeScript does not declare is a code the client cannot narrow on")
 	})
 
