@@ -10,9 +10,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
@@ -58,6 +60,24 @@ type Session struct {
 	requests         []Request
 	consoleMu        sync.Mutex
 	consoleMessages  []ConsoleMessage
+	dialogMu         sync.Mutex
+	dialogHandlers   []dialogHandlerEntry
+	dialogHistory    []Dialog
+	dialogSequence   uint64
+	downloadMu       sync.Mutex
+	downloads        map[string]*Download
+	downloadOrder    []string
+	downloadDir      string
+	networkMu        sync.Mutex
+	networkHandlers  map[string]*networkHandlerEntry
+	networkOrder     []string
+	networkSequence  uint64
+	interceptionMu   sync.Mutex
+	interceptionSeq  uint64
+	responses        []Response
+	inflight         map[network.RequestID]struct{}
+	cacheEnabled     bool
+	eventsEnabled    atomic.Bool
 	holdMu           sync.Mutex
 	holds            map[string]*responseHold
 	holdOrder        []string
@@ -112,6 +132,9 @@ func (s *Session) markCrashed() {
 	default:
 		close(s.crashed)
 	}
+	s.eventsEnabled.Store(false)
+	s.releaseAllResponseHolds()
+	s.cancelActiveDownloads()
 }
 
 func (s *Session) clearCrashed() {
@@ -130,6 +153,25 @@ func (s *Session) hasCrashed() bool {
 }
 
 func (s *Session) Close() error {
+	// A response hold may be blocking an operation that owns mu. Release it before touching mu,
+	// otherwise Close and the paused renderer would wait on each other forever.
+	s.eventsEnabled.Store(false)
+	s.releaseAllResponseHolds()
+	s.mu.Lock()
+	alreadyClosed := s.closed
+	s.mu.Unlock()
+	if alreadyClosed {
+		return nil
+	}
+	if s.browser != nil {
+		s.browser.mu.Lock()
+		browserClosing := s.browser.closed
+		s.browser.mu.Unlock()
+		if !browserClosing && s.browser.contextHasActiveDownloads(s.browserContextID) {
+			s.eventsEnabled.Store(true)
+			return &Error{Code: CodeActionFailed, Operation: "close session", Message: "browser context has active downloads"}
+		}
+	}
 	if s.ownsContext && s.browser != nil {
 		ctx, cancel := context.WithTimeout(s.browser.ctx, 5*time.Second)
 		_ = s.browser.closeContextDescendants(ctx, s)
@@ -141,7 +183,6 @@ func (s *Session) Close() error {
 		return nil
 	}
 	s.closed = true
-	s.releaseAllResponseHolds()
 	var disposeErr error
 	if s.browser != nil && s.ownsContext {
 		ctx, cancel := context.WithTimeout(s.browser.ctx, 5*time.Second)
@@ -157,6 +198,11 @@ func (s *Session) Close() error {
 		cancel()
 	}
 	s.cancel()
+	if s.ownsContext && s.downloadDir != "" {
+		_ = os.RemoveAll(s.downloadDir)
+	} else if s.downloadDir != "" {
+		s.removeOwnDownloadArtifacts()
+	}
 	s.mu.Unlock()
 	if s.browser != nil {
 		s.browser.removeSession(s)
@@ -219,11 +265,20 @@ func (s *Session) Prepare(ctx context.Context) error {
 		}
 	}
 	return s.serial(ctx, "prepare", func(opCtx context.Context) error {
+		s.eventsEnabled.Store(false)
+		defer s.eventsEnabled.Store(true)
 		if err := s.resetResponseHolds(opCtx); err != nil {
+			return err
+		}
+		if err := s.resetNetworkState(opCtx); err != nil {
 			return err
 		}
 		s.clearRequests()
 		s.clearConsoleMessages()
+		s.clearDialogs()
+		if err := s.resetDownloads(opCtx); err != nil {
+			return err
+		}
 		for _, identifier := range s.initScriptIDs {
 			if err := chromedp.Run(opCtx, page.RemoveScriptToEvaluateOnNewDocument(identifier)); err != nil {
 				return err
@@ -297,6 +352,7 @@ func (s *Session) NavigateWithStatus(ctx context.Context, destination string, ex
 		s.installed = false
 		if err == nil {
 			s.clearCrashed()
+			s.eventsEnabled.Store(true)
 		}
 		if (err == nil || result.HTTPFailure) && s.highFidelity {
 			if viewportErr := s.applyViewport(opCtx, int(width), int(height)); viewportErr != nil {
@@ -638,12 +694,31 @@ func (r HandlerResponse) observation(value any) Observation {
 
 func (s *Session) handler(ctx context.Context, name string, selector Selector, args ...any) (HandlerResponse, error) {
 	var response HandlerResponse
+	if err := s.waitForDownloadSlot(ctx); err != nil {
+		return response, contextError(name, err)
+	}
 	err := s.serial(ctx, name, func(opCtx context.Context) error {
 		var err error
 		response, err = s.runHandler(opCtx, name, selector, args...)
 		return err
 	})
 	return response, err
+}
+
+func (s *Session) waitForDownloadSlot(ctx context.Context) error {
+	if s.browser == nil {
+		return nil
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for s.browser.contextDownloadCount(s.browserContextID, time.Now()) >= 10 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+	return nil
 }
 
 func (s *Session) runHandler(ctx context.Context, name string, selector Selector, args ...any) (HandlerResponse, error) {
