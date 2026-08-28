@@ -34,6 +34,8 @@ type DiagnosticsCaptureOptions struct {
 	Outlines    bool
 	Viewport    *ViewportSize
 	MaxBytes    int
+	// IncludeScreenshotBytes retains the same bounded PNG bytes used for artifact output.
+	IncludeScreenshotBytes bool
 }
 
 type DiagnosticsArtifactError struct {
@@ -46,6 +48,7 @@ type TabDiagnostics struct {
 	TargetID       target.ID
 	Title          string
 	ScreenshotPath string
+	Screenshot     []byte
 	OutlinePath    string
 	DOMOutline     string
 	Errors         []DiagnosticsArtifactError
@@ -148,11 +151,19 @@ func (s *Session) captureContextTabDiagnostics(ctx context.Context, options Diag
 			} else if validationErr := validateScreenshotPNG(image, options.MaxBytes); validationErr != nil {
 				result.Errors = append(result.Errors, diagnosticsError("screenshot", validationErr))
 			} else {
-				path, writeErr := writeDiagnosticsArtifact(s.artifactDir, options, s.targetID, "png", image)
-				if writeErr != nil {
+				if options.IncludeScreenshotBytes {
+					result.Screenshot = append([]byte(nil), image...)
+				}
+				if s.artifactDir != "" {
+					path, writeErr := writeDiagnosticsArtifact(s.artifactDir, options, s.targetID, "png", image)
+					if writeErr != nil {
+						result.Errors = append(result.Errors, diagnosticsError("screenshot-write", writeErr))
+					} else {
+						result.ScreenshotPath = path
+					}
+				} else if !options.IncludeScreenshotBytes {
+					_, writeErr := writeDiagnosticsArtifact(s.artifactDir, options, s.targetID, "png", image)
 					result.Errors = append(result.Errors, diagnosticsError("screenshot-write", writeErr))
-				} else {
-					result.ScreenshotPath = path
 				}
 			}
 		}

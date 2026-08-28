@@ -1,6 +1,7 @@
 package engine_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -145,6 +146,65 @@ var _ = Describe("context diagnostics", func() {
 		width, height, sizeErr := root.WindowSize(ctx)
 		Expect(sizeErr).NotTo(HaveOccurred())
 		Expect([]int{width, height}).To(Equal([]int{619, 477}))
+	})
+
+	It("returns bounded screenshot bytes without requiring an artifact directory", func(ctx SpecContext) {
+		worker, err := engine.StartBrowser(ctx, engine.BrowserConfig{ExecutablePath: chromePath()})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(worker.Close)
+		root, err := worker.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(root.Navigate(ctx, server.URL+"/dom-surface")).To(Succeed())
+
+		capture, err := root.CaptureContextDiagnostics(ctx, engine.DiagnosticsCaptureOptions{
+			Purpose: engine.DiagnosticsPurposeOnDemand, Name: "memory-only", Screenshots: true,
+			IncludeScreenshotBytes: true,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(capture.ArtifactDir).To(BeEmpty())
+		Expect(capture.Tabs).To(HaveLen(1))
+		Expect(capture.Tabs[0].ScreenshotPath).To(BeEmpty())
+		Expect(capture.Tabs[0].Errors).To(BeEmpty())
+		image, decodeErr := png.Decode(bytes.NewReader(capture.Tabs[0].Screenshot))
+		Expect(decodeErr).NotTo(HaveOccurred())
+		Expect(image.Bounds().Dx()).To(BeNumerically(">", 0))
+	})
+
+	It("returns the exact bytes written to the artifact path from one capture", func(ctx SpecContext) {
+		root, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(root.Close)
+		Expect(root.Navigate(ctx, server.URL+"/dom-surface")).To(Succeed())
+
+		capture, err := root.CaptureContextDiagnostics(ctx, engine.DiagnosticsCaptureOptions{
+			Purpose: engine.DiagnosticsPurposeOnDemand, Name: "bytes-and-path", Screenshots: true,
+			IncludeScreenshotBytes: true,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(capture.Tabs).To(HaveLen(1))
+		written, readErr := os.ReadFile(capture.Tabs[0].ScreenshotPath)
+		Expect(readErr).NotTo(HaveOccurred())
+		Expect(capture.Tabs[0].Screenshot).To(Equal(written))
+	})
+
+	It("does not retain screenshot bytes when the bounded capture is rejected", func(ctx SpecContext) {
+		root, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(root.Close)
+		Expect(root.Navigate(ctx, server.URL+"/dom-surface")).To(Succeed())
+
+		capture, err := root.CaptureContextDiagnostics(ctx, engine.DiagnosticsCaptureOptions{
+			Purpose: engine.DiagnosticsPurposeOnDemand, Name: "bounded-memory", Screenshots: true,
+			IncludeScreenshotBytes: true, MaxBytes: 16,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(capture.Tabs).To(HaveLen(1))
+		Expect(capture.Tabs[0].Screenshot).To(BeEmpty())
+		Expect(capture.Tabs[0].ScreenshotPath).To(BeEmpty())
+		Expect(capture.Tabs[0].Errors).To(ContainElement(And(
+			HaveField("Artifact", "screenshot"),
+			HaveField("Message", ContainSubstring("exceeds the 16-byte limit")),
+		)))
 	})
 
 	It("reports artifact failures per tab and restores the temporary viewport", func(ctx SpecContext) {
