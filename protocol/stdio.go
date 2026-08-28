@@ -197,7 +197,9 @@ func (b *stdioCallbackBroker) Invoke(ctx context.Context, invocation CallbackInv
 	case value := <-answer:
 		return value.result, value.err
 	case <-ctx.Done():
-		b.remove(id)
+		if b.remove(id) {
+			return WireNetworkOverride{}, errors.New("callback transport disconnected")
+		}
 		return WireNetworkOverride{}, ctx.Err()
 	}
 }
@@ -224,7 +226,12 @@ func (b *stdioCallbackBroker) resolve(result CallbackResultRequest) {
 	answer <- callbackAnswer{result: value}
 }
 
-func (b *stdioCallbackBroker) remove(id string) { b.mu.Lock(); delete(b.pending, id); b.mu.Unlock() }
+func (b *stdioCallbackBroker) remove(id string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.pending, id)
+	return b.closed
+}
 
 func (b *stdioCallbackBroker) close() {
 	b.mu.Lock()
