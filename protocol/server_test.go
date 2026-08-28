@@ -66,6 +66,20 @@ var _ = Describe("driver protocol", func() {
 		Expect(cookies.Cookies).To(BeEmpty())
 	})
 
+	It("validates and carries typed eventful operation categories", func() {
+		recorder := &recordingEventfulSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+
+		Expect(client.call("eventful", protocol.EventfulRequest{
+			SessionID: opened.SessionID,
+			Operation: &protocol.WireEventfulOperation{Kind: "DIALOGS"},
+		}, nil)).To(Succeed())
+		Expect(recorder.operation.Kind).To(Equal(protocol.EventfulDialogs))
+	})
+
 	It("validates and carries lifecycle operation categories", func() {
 		recorder := &recordingSession{}
 		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
@@ -654,6 +668,16 @@ type recordingSession struct {
 	mu          sync.Mutex
 	operation   protocol.Operation
 	newTabCalls int
+}
+
+type recordingEventfulSession struct {
+	recordingSession
+	operation protocol.EventfulOperation
+}
+
+func (s *recordingEventfulSession) ExecuteEventful(_ context.Context, operation protocol.EventfulOperation) (any, error) {
+	s.operation = operation
+	return []any{}, nil
 }
 
 func (*recordingSession) Prepare(context.Context) error { return nil }
