@@ -19,7 +19,7 @@ var Capabilities = []string{
 	"locator.css", "locator.xpath", "locator.test_id", "locator.text", "locator.role", "locator.label", "locator.placeholder", "locator.alt_text", "locator.title", "locator.refinements", "locator.first",
 	"session.prepare", "session.new_tab", "session.add_init_script", "session.activate", "navigation", "cookies", "action.click", "action.set_value", "action.realistic", "action.type", "action.send_keys", "action.drag_to",
 	"action.set_upload", "viewport.set", "evaluate", "evaluate.async", "assert.visible", "assert.text", "assert.count", "assert.attribute",
-	"assert.value", "assert.url", "assert.evaluate", "poll.server_side", "diagnostics.structured",
+	"assert.value", "assert.url", "assert.evaluate", "assert.exists", "assert.enabled", "assert.clickable", "assert.property", "assert.all_text", "assert.request", "poll.server_side", "diagnostics.structured",
 	"dom.typed", "dom.collections", "dom.geometry", "dom.style", "dom.selection", "action.pointer_options", "action.scroll", "action.element_javascript", "keyboard.modifiers",
 	"lifecycle.tabs", "lifecycle.context_identity", "lifecycle.cookies", "lifecycle.storage", "lifecycle.javascript", "lifecycle.page_state", "lifecycle.console", "lifecycle.emulation", "lifecycle.frames",
 	"dialogs.handlers", "dialogs.history", "dialogs.warnings", "downloads.history", "downloads.content", "downloads.cancel",

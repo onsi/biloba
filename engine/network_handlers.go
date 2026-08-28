@@ -8,9 +8,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
+	"net/http"
 )
 
 const DefaultInterceptedBodyLimit int64 = 16 << 20
@@ -404,7 +406,10 @@ func (s *Session) resolveRequest(event *fetch.EventRequestPaused) {
 			}
 			return p.Do(run)
 		case h.options.Abort:
-			return fetch.FailRequest(event.RequestID, network.ErrorReasonFailed).Do(run)
+			// BlockedByClient, matching network.go: an aborted request was refused by the test, and
+			// that is what Network.loadingFailed's errorText should say.  ErrorReasonFailed reads as a
+			// transport fault, which is what the *internal* failure paths use.
+			return fetch.FailRequest(event.RequestID, network.ErrorReasonBlockedByClient).Do(run)
 		case h.options.Request != nil:
 			o := h.options.Request
 			p := fetch.ContinueRequest(event.RequestID).WithInterceptResponse(true)
@@ -505,8 +510,17 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 		} else {
 			o = *h.options.Response
 		}
-		if o.Status != nil {
+		// A callback *replaces* the response, matching ResponseModification.Using in network.go: an
+		// unset status means 200, and unset headers or body mean none rather than the original's.
+		// Patching instead produced things the page should never see - routeResponse(url, () =>
+		// ({status: 204})) handed back a 204 still carrying the original body.  A static override
+		// stays a patch on both sides.
+		replace := h.options.Transform != nil
+		switch {
+		case o.Status != nil:
 			status = *o.Status
+		case replace:
+			status = http.StatusOK
 		}
 		if status < 100 || status > 599 {
 			err = fmt.Errorf("response status %d is outside 100..599", status)
@@ -514,8 +528,13 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 			s.fallbackResponse(event.RequestID, int(event.ResponseStatusCode), originalHeaders, body)
 			return
 		}
-		orderedHeaders = mergeResponseHeaders(orderedHeaders, o)
-		if o.Body != nil {
+		if replace {
+			orderedHeaders = mergeResponseHeaders(nil, o)
+		} else {
+			orderedHeaders = mergeResponseHeaders(orderedHeaders, o)
+		}
+		switch {
+		case o.Body != nil:
 			if int64(len(*o.Body)) > limit {
 				err = fmt.Errorf("replacement response body size %d exceeds limit %d", len(*o.Body), limit)
 				s.recordNetworkHandlerError(h, err)
@@ -524,6 +543,8 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 			}
 			body = *o.Body
 			orderedHeaders = stripEntityHeaderEntries(orderedHeaders)
+		case replace:
+			body = nil
 		}
 		if err := s.fulfillResponse(event.RequestID, status, orderedHeaders, body); err != nil {
 			s.recordNetworkHandlerError(h, err)
@@ -542,7 +563,27 @@ func (s *Session) fulfillResponse(id fetch.RequestID, status int, headers []Head
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
 	headers = stripEntityHeaderEntries(headers)
-	return chromedp.Run(ctx, fetch.FulfillRequest(id, int64(status)).WithResponseHeaders(fetchHeaderEntries(headers)).WithBody(base64.StdEncoding.EncodeToString(body)))
+	return chromedp.Run(ctx, fulfillWithExplicitBody{
+		RequestID: id, ResponseCode: int64(status),
+		ResponseHeaders: fetchHeaderEntries(headers),
+		Body:            base64.StdEncoding.EncodeToString(body),
+	})
+}
+
+// fulfillWithExplicitBody is Fetch.fulfillRequest with the body always on the wire.  cdproto tags
+// Body omitempty, and Chrome documents an absent body as "the original response body will be used"
+// at the response stage - but we have already taken that body as a stream, so there is nothing left
+// to reuse and the renderer waits forever.  A replacement whose body is legitimately empty - a 204,
+// or a handler that only sets a status - has to say so explicitly.
+type fulfillWithExplicitBody struct {
+	RequestID       fetch.RequestID      `json:"requestId"`
+	ResponseCode    int64                `json:"responseCode"`
+	ResponseHeaders []*fetch.HeaderEntry `json:"responseHeaders"`
+	Body            string               `json:"body"`
+}
+
+func (p fulfillWithExplicitBody) Do(ctx context.Context) error {
+	return cdp.Execute(ctx, fetch.CommandFulfillRequest, p, nil)
 }
 
 func (s *Session) selectResponseOwner(url string) (*networkHandlerEntry, *responseHold) {

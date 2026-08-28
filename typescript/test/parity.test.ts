@@ -213,6 +213,22 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     expect(await session.evaluateAsync(`fetch("/callback").then(async response => [response.status, response.headers.get("x-original-duplicates"), await response.text()])`)).toEqual([202, "2", "CALLBACK"]);
     await transform.remove();
 
+    // A callback replaces the response, as ResponseModification.Using does: an unset status means
+    // 200, and an unset body means none.  Patching instead handed the page a 204 that still carried
+    // the original body - something a response is never allowed to be.
+    const statusOnly = await session.routeResponse(endsWith("/callback"), () => ({status: 204}));
+    expect(await session.evaluateAsync(`fetch("/callback").then(async response => [response.status, await response.text()])`)).toEqual([204, ""]);
+    await statusOnly.remove();
+    const bodyOnly = await session.routeResponse(endsWith("/callback"), () => ({body: new TextEncoder().encode("replaced")}));
+    expect(await session.evaluateAsync(`fetch("/callback").then(async response => [response.status, await response.text()])`)).toEqual([200, "replaced"]);
+    await bodyOnly.remove();
+    // An explicitly empty replacement body has to reach Chrome as an empty body.  Fetch.fulfillRequest
+    // reads an absent body as "reuse the original response body", and at the response stage that body
+    // has already been taken as a stream - so the request was never resolved and the page hung.
+    const emptyBody = await session.routeResponse(endsWith("/callback"), () => ({status: 204, body: new Uint8Array()}));
+    expect(await session.evaluateAsync(`fetch("/callback").then(async response => [response.status, await response.text()])`)).toEqual([204, ""]);
+    await emptyBody.remove();
+
     const failingTransform = await session.routeResponse(endsWith("/callback"), () => { throw new Error("route failed"); });
     expect(await session.evaluateAsync(`fetch("/callback").then(response => response.text())`)).toBe("callback");
     expect((await failingTransform.stats()).lastError).toContain("route failed");
@@ -248,13 +264,22 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     expect((await session.waitForRequest({url: endsWith("/observed"), method: "POST"}, {timeoutMs: 1_000})).method).toBe("POST");
     expect((await session.requests({url: endsWith("/observed")})).length).toBeGreaterThan(0);
     expect((await session.responses({url: endsWith("/observed")})).length).toBeGreaterThan(0);
-    expect((await session.expectNetworkIdle({timeoutMs: 1_000})).attemptCount).toBeGreaterThan(0);
+    const idle = await session.expectNetworkIdle({timeoutMs: 1_000});
+    expect(idle.attemptCount).toBeGreaterThan(0);
+    // The trajectory is the poll's own attempts. Reporting it empty made this a typed result whose
+    // diagnostic half was a fiction, so "the network never went idle" said nothing about what the
+    // in-flight count had been doing.
+    expect(idle.trajectory).toHaveLength(idle.attemptCount);
+    expect(idle.trajectory[0]).toMatchObject({attempt: 1, elapsedMs: expect.any(Number)});
 
     await session.setOffline(true);
     expect(await session.networkState()).toMatchObject({offline: true});
     expect(await session.evaluate("navigator.onLine")).toBe(false);
     await session.resetNetworkState();
     expect(await session.evaluateAsync(`fetch("/network-json").then(response => response.text())`)).toBe("network");
+    await session.setNetworkState({latencyMs: 20, downloadThroughput: 64_000, uploadThroughput: 32_000, connectionType: "wifi"});
+    expect(await session.networkState()).toMatchObject({latencyMs: 20, downloadThroughput: 64_000, uploadThroughput: 32_000, connectionType: "wifi"});
+    await session.resetNetworkState();
     await session.setCacheEnabled(false);
     await session.setCacheEnabled(true);
     let staleCallbackInvocations = 0;
@@ -271,6 +296,10 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     try {
       const warningSession = await warningBrowser.openSession();
       await warningSession.navigate(baseUrl);
+      await warningSession.getByRole("button", {name: "Increment"}).click();
+      await warningSession.evaluate(`window.addEventListener("beforeunload", event => { event.preventDefault(); event.returnValue = "leave"; })`);
+      await warningSession.navigate(`${baseUrl}/?after-beforeunload=1`);
+      expect(warnings.map(({message}) => message)).toContainEqual(expect.stringContaining("beforeunload"));
       await warningSession.evaluateAsync(`new Promise(resolve => setTimeout(() => { window.confirm("timer warning"); resolve(true); }, 25))`);
       expect(warnings.map(({message}) => message)).toContainEqual(expect.stringContaining("timer warning"));
       await warningSession.prepare();

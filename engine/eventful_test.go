@@ -292,7 +292,9 @@ var _ = Describe("eventful engine state", func() {
 			Transform: func(_ context.Context, response engine.InterceptedResponse) (engine.ResponseOverride, error) {
 				transformed <- response
 				body := append([]byte("transformed:"), response.Body...)
-				return engine.ResponseOverride{Status: intPtr(207), Body: &body}, nil
+				// A callback replaces the response, so headers it wants kept have to be handed back.
+				// Echoing the duplicates is also what proves they survived interception intact.
+				return engine.ResponseOverride{Status: intPtr(207), Body: &body, HeaderEntries: response.HeaderEntries}, nil
 			},
 		})
 		Expect(err).NotTo(HaveOccurred())
@@ -315,6 +317,14 @@ var _ = Describe("eventful engine state", func() {
 			},
 		})
 		Expect(err).NotTo(HaveOccurred())
+		replacingHandler, err := session.RegisterNetworkHandler(ctx, engine.NetworkHandlerOptions{
+			URL: engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/replaced"},
+			Transform: func(_ context.Context, _ engine.InterceptedResponse) (engine.ResponseOverride, error) {
+				return engine.ResponseOverride{}, nil
+			},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { _ = session.RemoveNetworkHandler(ctx, replacingHandler.ID) })
 		boundedTransformHandler, err := session.RegisterNetworkHandler(ctx, engine.NetworkHandlerOptions{
 			URL:               engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/bounded-transform"},
 			ResponseBodyLimit: 4,
@@ -333,6 +343,11 @@ var _ = Describe("eventful engine state", func() {
 		result, err = session.EvaluateAsync(ctx, `fetch("/echo", {method:"POST", body:"original"}).then(async r => [r.headers.get("x-echo-method"), r.headers.get("x-echo-header"), await r.text()])`)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(Equal([]any{"PUT", "yes", "PUT:changed"}))
+		// A callback that hands back no headers gets none: it replaces the response, as
+		// ResponseModification.Using does, rather than patching the original.
+		result, err = session.EvaluateAsync(ctx, `fetch("/replaced").then(async r => [r.status, r.headers.get("x-duplicate"), await r.text()])`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal([]any{float64(200), nil, ""}))
 		result, err = session.EvaluateAsync(ctx, `fetch("/modifiable").then(async r => [r.status, r.headers.get("x-modified"), await r.text()])`)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(Equal([]any{float64(206), "yes", "modified body"}))
@@ -614,15 +629,21 @@ var _ = Describe("eventful engine state", func() {
 		Expect(err).NotTo(HaveOccurred())
 		_, err = session.AwaitResponseHold(ctx, holdID)
 		Expect(err).NotTo(HaveOccurred())
+		Expect(cacheRequests.Load() - holdBefore).To(Equal(int64(2)))
 		Expect(session.ReleaseResponseHold(ctx, holdID)).To(Succeed())
 		Eventually(func() any {
 			value, evaluateErr := session.Evaluate(ctx, `holdDone`)
 			Expect(evaluateErr).NotTo(HaveOccurred())
 			return value
 		}).Should(BeTrue())
-		_, err = session.EvaluateAsync(ctx, fmt.Sprintf(`fetch(%q).then(r => r.text())`, holdURL))
-		Expect(err).NotTo(HaveOccurred())
-		Expect(cacheRequests.Load() - holdBefore).To(Equal(int64(2)))
+		// Chrome may discard an entry while the cache is temporarily disabled for interception.
+		// Verify the restored preference by warming if necessary, then observing a cache hit.
+		restoredBefore := cacheRequests.Load()
+		for range 2 {
+			_, err = session.EvaluateAsync(ctx, fmt.Sprintf(`fetch(%q).then(r => r.text())`, holdURL))
+			Expect(err).NotTo(HaveOccurred())
+		}
+		Expect(cacheRequests.Load() - restoredBefore).To(BeNumerically("<=", 1))
 		holdStats, err := session.ResponseHoldStats(holdID)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(holdStats.Count).To(Equal(1))

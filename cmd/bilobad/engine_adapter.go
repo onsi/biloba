@@ -80,7 +80,7 @@ func (s *engineSession) ExecuteEventful(ctx context.Context, operation protocol.
 		return responsesToWire(s.session.Responses(query)), nil
 	case protocol.EventfulWaitForNetworkIdle:
 		result, err := s.session.WaitForNetworkIdle(ctx, pollPolicyFromProtocol(operation.Poll))
-		return map[string]any{"observed": result.Final.Value, "attemptCount": result.AttemptCount, "trajectory": []any{}, "rpcRequestCount": 1, "rpcResponseCount": 1, "elapsedMs": result.Duration.Milliseconds()}, engineRPCError(err)
+		return eventfulAssertionResult(result), engineRPCError(err)
 	case protocol.EventfulRegisterNetworkHandler:
 		options, err := networkHandlerOptionsFromProtocol(operation)
 		if err != nil {
@@ -1757,4 +1757,28 @@ func clearedReadError(matched bool, err error) error {
 		return nil
 	}
 	return err
+}
+
+// eventfulAssertionResult shapes a server-side poll the way the client's AssertionResult expects.
+// The trajectory is the poll's own attempts: hard-coding it empty made expectNetworkIdle report a
+// typed result whose diagnostic half was a fiction, so "the network never went idle" said nothing
+// about what the in-flight count had been doing.  rpcRequestCount stays 1 because that is the truth
+// of a server-side poll - one request owns the whole retry loop.
+func eventfulAssertionResult(result engine.PollResult) map[string]any {
+	trajectory := make([]any, len(result.Attempts))
+	for index, attempt := range result.Attempts {
+		entry := map[string]any{
+			"attempt":   attempt.Number,
+			"elapsedMs": attempt.StartedAt.Sub(result.StartedAt).Milliseconds(),
+			"observed":  attempt.Observation.Value,
+		}
+		if attempt.Error != "" {
+			entry["retryReason"] = attempt.Error
+		}
+		trajectory[index] = entry
+	}
+	return map[string]any{
+		"observed": result.Final.Value, "attemptCount": result.AttemptCount, "trajectory": trajectory,
+		"rpcRequestCount": 1, "rpcResponseCount": 1, "elapsedMs": result.Duration.Milliseconds(),
+	}
 }

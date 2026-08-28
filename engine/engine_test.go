@@ -375,7 +375,7 @@ var _ = BeforeSuite(func() {
 			fmt.Fprint(response, "original body")
 			return
 		}
-		if request.URL.Path == "/transformed" {
+		if request.URL.Path == "/transformed" || request.URL.Path == "/replaced" {
 			response.Header().Add("X-Duplicate", "first")
 			response.Header().Add("X-Duplicate", "second")
 			fmt.Fprint(response, "original body")
