@@ -64,6 +64,7 @@ type Session struct {
 	dialogHandlers   []dialogHandlerEntry
 	dialogHistory    []Dialog
 	dialogSequence   uint64
+	warnings         []Warning
 	downloadMu       sync.Mutex
 	downloads        map[string]*Download
 	downloadOrder    []string
@@ -77,6 +78,8 @@ type Session struct {
 	responses        []Response
 	inflight         map[network.RequestID]struct{}
 	cacheEnabled     bool
+	networkState     NetworkState
+	networkShadows   []NetworkShadowDiagnostic
 	eventsEnabled    atomic.Bool
 	holdMu           sync.Mutex
 	holds            map[string]*responseHold
@@ -183,6 +186,9 @@ func (s *Session) Close() error {
 		return nil
 	}
 	s.closed = true
+	s.clearDialogs()
+	s.clearResponseHoldBookkeeping()
+	s.clearNetworkBookkeeping()
 	var disposeErr error
 	if s.browser != nil && s.ownsContext {
 		ctx, cancel := context.WithTimeout(s.browser.ctx, 5*time.Second)
@@ -202,6 +208,11 @@ func (s *Session) Close() error {
 		_ = os.RemoveAll(s.downloadDir)
 	} else if s.downloadDir != "" {
 		s.removeOwnDownloadArtifacts()
+		if root := s.contextRoot(); root != s {
+			ctx, cancel := context.WithTimeout(root.ctx, 5*time.Second)
+			_ = ConfigureDownloadsContext(ctx, root.browserContextID, root.downloadDir)
+			cancel()
+		}
 	}
 	s.mu.Unlock()
 	if s.browser != nil {

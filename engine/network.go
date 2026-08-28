@@ -58,6 +58,7 @@ type HeldResponse struct {
 type ResponseHoldOptions struct {
 	Limit        int
 	MaxBodyBytes int64
+	Callsite     string
 }
 
 type ResponseHoldStats struct {
@@ -75,6 +76,8 @@ type heldResponseEntry struct {
 }
 
 type responseHold struct {
+	id          string
+	callsite    string
 	order       uint64
 	expectation Expectation
 	entries     []*heldResponseEntry
@@ -82,6 +85,7 @@ type responseHold struct {
 	limit       int
 	bodyLimit   int64
 	count       int
+	shadowed    int
 	passed      int
 	pending     int
 	lastError   string
@@ -183,7 +187,10 @@ func (s *Session) HoldResponseWithOptions(ctx context.Context, expectation Expec
 		if bodyLimit == 0 {
 			bodyLimit = DefaultInterceptedBodyLimit
 		}
-		s.holds[id] = &responseHold{order: s.nextInterceptionOrder(), expectation: expectation, notify: make(chan struct{}), limit: options.Limit, bodyLimit: bodyLimit}
+		s.holds[id] = &responseHold{
+			id: id, callsite: options.Callsite, order: s.nextInterceptionOrder(), expectation: expectation,
+			notify: make(chan struct{}), limit: options.Limit, bodyLimit: bodyLimit,
+		}
 		s.holdOrder = append(s.holdOrder, id)
 		s.holdMu.Unlock()
 		if err := s.ensureInterception(opCtx); err != nil {
@@ -319,7 +326,6 @@ func (s *Session) handlePausedResponse(event *fetch.EventRequestPaused, selected
 		return
 	}
 	s.holdMu.Lock()
-	selected.count++
 	if selected.released || (selected.limit > 0 && holdingCount(selected)+selected.pending >= selected.limit) {
 		selected.passed++
 		s.holdMu.Unlock()
@@ -400,6 +406,14 @@ func (s *Session) releaseAllResponseHolds() {
 			releaseHeldResponse(entry)
 		}
 	}
+}
+
+func (s *Session) clearResponseHoldBookkeeping() {
+	s.holdMu.Lock()
+	s.holds = nil
+	s.holdOrder = nil
+	s.fetchEnabled = false
+	s.holdMu.Unlock()
 }
 
 func (s *Session) resetResponseHolds(ctx context.Context) error {

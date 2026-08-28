@@ -32,6 +32,17 @@ type Dialog struct {
 	AutoHandled            bool
 }
 
+type WarningCode string
+
+const WarningDialogAutoHandled WarningCode = "dialog_auto_handled"
+
+// Warning is a structured, runner-neutral session warning.
+type Warning struct {
+	Code    WarningCode
+	Message string
+	Dialog  Dialog
+}
+
 type DialogQuery struct {
 	Type    DialogType
 	Message *Expectation
@@ -82,6 +93,13 @@ func (s *Session) Dialogs() []Dialog {
 	return append([]Dialog(nil), s.dialogHistory...)
 }
 
+// Warnings returns structured warnings in emission order.
+func (s *Session) Warnings() []Warning {
+	s.dialogMu.Lock()
+	defer s.dialogMu.Unlock()
+	return append([]Warning(nil), s.warnings...)
+}
+
 // DialogsMatching returns dialog history in arrival order after applying query.
 func (s *Session) DialogsMatching(query DialogQuery) []Dialog {
 	dialogs := s.Dialogs()
@@ -113,6 +131,7 @@ func (s *Session) clearDialogs() {
 	s.dialogMu.Lock()
 	s.dialogHandlers = nil
 	s.dialogHistory = nil
+	s.warnings = nil
 	s.dialogMu.Unlock()
 }
 func (s *Session) handleDialog(event *page.EventJavascriptDialogOpening) {
@@ -123,6 +142,11 @@ func (s *Session) handleDialog(event *page.EventJavascriptDialogOpening) {
 		return
 	}
 	s.dialogMu.Lock()
+	if !s.eventsEnabled.Load() {
+		s.dialogMu.Unlock()
+		go func() { _ = chromedp.Run(s.ctx, page.HandleJavaScriptDialog(accept)) }()
+		return
+	}
 	var selected *dialogHandlerEntry
 	for i := len(s.dialogHandlers) - 1; i >= 0; i-- {
 		h := &s.dialogHandlers[i]
@@ -138,7 +162,8 @@ func (s *Session) handleDialog(event *page.EventJavascriptDialogOpening) {
 		selected = h
 		break
 	}
-	if selected == nil {
+	autoHandled := selected == nil
+	if autoHandled {
 		dialog.AutoHandled = true
 		dialog.Accepted = accept
 	} else {
@@ -153,6 +178,13 @@ func (s *Session) handleDialog(event *page.EventJavascriptDialogOpening) {
 		}
 	}
 	s.dialogHistory = append(s.dialogHistory, dialog)
+	if autoHandled {
+		s.warnings = append(s.warnings, Warning{
+			Code:    WarningDialogAutoHandled,
+			Message: fmt.Sprintf("auto-handled %s dialog %q", dialog.Type, dialog.Message),
+			Dialog:  dialog,
+		})
+	}
 	s.dialogMu.Unlock()
 	go func() {
 		action := page.HandleJavaScriptDialog(accept)

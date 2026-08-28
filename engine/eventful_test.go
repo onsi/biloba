@@ -80,6 +80,40 @@ var _ = Describe("eventful engine state", func() {
 		Expect(recent.PromptText).To(Equal(""))
 	})
 
+	It("emits structured warnings for auto-handled dialogs and resets them per session lifecycle", func(ctx SpecContext) {
+		first, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		second, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(second.Close)
+		Expect(first.Navigate(ctx, server.URL)).To(Succeed())
+		Expect(second.Navigate(ctx, server.URL)).To(Succeed())
+
+		value, err := first.Evaluate(ctx, `window.confirm("unhandled warning")`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(value).To(BeFalse())
+		Eventually(first.Warnings).Should(ConsistOf(SatisfyAll(
+			HaveField("Code", Equal(engine.WarningDialogAutoHandled)),
+			HaveField("Message", ContainSubstring("unhandled warning")),
+			HaveField("Dialog", SatisfyAll(
+				HaveField("Type", Equal(engine.DialogConfirm)),
+				HaveField("Message", Equal("unhandled warning")),
+				HaveField("AutoHandled", BeTrue()),
+			)),
+		)))
+		Expect(first.Dialogs()).To(ConsistOf(HaveField("AutoHandled", BeTrue())))
+		Expect(second.Warnings()).To(BeEmpty())
+
+		Expect(first.Prepare(ctx)).To(Succeed())
+		Expect(first.Warnings()).To(BeEmpty())
+		Expect(first.Navigate(ctx, server.URL)).To(Succeed())
+		_, err = first.Evaluate(ctx, `window.alert("close warning")`)
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(first.Warnings).Should(HaveLen(1))
+		Expect(first.Close()).To(Succeed())
+		Expect(first.Warnings()).To(BeEmpty())
+	})
+
 	It("tracks completed downloads with bounded content and clears artifacts on prepare", func(ctx SpecContext) {
 		session, err := browser.OpenSession(ctx)
 		Expect(err).NotTo(HaveOccurred())
@@ -164,6 +198,49 @@ var _ = Describe("eventful engine state", func() {
 		_, err = child.WaitForDownload(ctx, engine.DownloadQuery{State: engine.DownloadComplete}, engine.PollPolicy{Timeout: 2 * time.Second})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(root.Downloads(engine.DownloadQuery{})).To(BeEmpty())
+	})
+
+	It("initializes eventful state and shared download ownership for discovered popups", func(ctx SpecContext) {
+		root, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(root.Close)
+		Expect(root.Navigate(ctx, server.URL)).To(Succeed())
+		_, err = root.Evaluate(ctx, `void window.open("/destination", "_blank")`)
+		Expect(err).NotTo(HaveOccurred())
+		popup, err := root.WaitForTab(ctx, engine.TabQuery{
+			SpawnedOnly: true,
+			URL:         &engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/destination"},
+		}, engine.PollPolicy{Timeout: time.Second})
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = popup.Evaluate(ctx, `console.log("popup event")`)
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(popup.ConsoleMessages, 300*time.Millisecond).Should(ContainElement(HaveField("Text", Equal("popup event"))))
+		value, err := popup.Evaluate(ctx, `window.confirm("popup dialog")`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(value).To(BeFalse())
+		Eventually(popup.Warnings, 300*time.Millisecond).Should(ContainElement(HaveField("Code", Equal(engine.WarningDialogAutoHandled))))
+		_, err = popup.EvaluateAsync(ctx, `fetch("/popup-request").then(r => r.text())`)
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(popup.Requests, 300*time.Millisecond).Should(ContainElement(HaveField("URL", HaveSuffix("/popup-request"))))
+
+		_, err = popup.Evaluate(ctx, `(() => { const a=document.createElement("a"); a.href="/download?popup"; a.download=""; document.body.append(a); a.click(); })()`)
+		Expect(err).NotTo(HaveOccurred())
+		download, err := popup.WaitForDownload(ctx, engine.DownloadQuery{State: engine.DownloadComplete}, engine.PollPolicy{Timeout: time.Second})
+		Expect(err).NotTo(HaveOccurred())
+		content, err := popup.DownloadContent(ctx, download.ID, 1024)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(content)).To(Equal("downloaded report"))
+		Expect(root.Downloads(engine.DownloadQuery{})).To(BeEmpty())
+
+		Expect(popup.Close()).To(Succeed())
+		_, err = root.Evaluate(ctx, `(() => { const a=document.createElement("a"); a.href="/download?root-after-popup"; a.download=""; document.body.append(a); a.click(); })()`)
+		Expect(err).NotTo(HaveOccurred())
+		rootDownload, err := root.WaitForDownload(ctx, engine.DownloadQuery{State: engine.DownloadComplete}, engine.PollPolicy{Timeout: time.Second})
+		Expect(err).NotTo(HaveOccurred())
+		rootContent, err := root.DownloadContent(ctx, rootDownload.ID, 1024)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(rootContent)).To(Equal("downloaded report"))
 	})
 
 	It("throttles DOM handlers while Chrome's download completion window is saturated", func(ctx SpecContext) {
@@ -289,6 +366,113 @@ var _ = Describe("eventful engine state", func() {
 		result, err = session.EvaluateAsync(ctx, `fetch("/ordered").then(r => r.text())`)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(Equal("second"))
+	})
+
+	It("records first-match network shadows with client provenance and lifecycle isolation", func(ctx SpecContext) {
+		first, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		second, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(second.Close)
+		Expect(first.Navigate(ctx, server.URL)).To(Succeed())
+
+		winner, err := first.RegisterNetworkHandler(ctx, engine.NetworkHandlerOptions{
+			URL: engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/shadowed"}, Callsite: "catalog/winner.ts:10",
+			Fulfill: &engine.ResponseOverride{Body: bytesPtr([]byte("winner"))},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		shadowed, err := first.RegisterNetworkHandler(ctx, engine.NetworkHandlerOptions{
+			URL: engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/shadowed"}, Callsite: "catalog/shadowed.ts:20",
+			Fulfill: &engine.ResponseOverride{Body: bytesPtr([]byte("shadowed"))},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		for range 2 {
+			value, evaluateErr := first.EvaluateAsync(ctx, `fetch("/shadowed").then(r => r.text())`)
+			Expect(evaluateErr).NotTo(HaveOccurred())
+			Expect(value).To(Equal("winner"))
+		}
+
+		winnerStats, err := first.NetworkHandlerStats(winner.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(winnerStats).To(SatisfyAll(
+			HaveField("ID", Equal(winner.ID)),
+			HaveField("Callsite", Equal("catalog/winner.ts:10")),
+			HaveField("Count", Equal(2)),
+		))
+		shadowedStats, err := first.NetworkHandlerStats(shadowed.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(shadowedStats).To(SatisfyAll(
+			HaveField("ID", Equal(shadowed.ID)),
+			HaveField("Callsite", Equal("catalog/shadowed.ts:20")),
+			HaveField("Shadowed", Equal(2)),
+		))
+		Expect(first.NetworkShadowDiagnostics()).To(HaveLen(2))
+		latest := first.NetworkShadowDiagnostics()[1]
+		Expect(latest).To(SatisfyAll(
+			HaveField("URL", HaveSuffix("/shadowed")),
+			HaveField("Stage", Equal(engine.NetworkStageRequest)),
+			HaveField("Winner", Equal(engine.NetworkOwnerProvenance{
+				Kind: engine.NetworkOwnerHandler, ID: winner.ID, Callsite: "catalog/winner.ts:10", Count: 2,
+			})),
+			HaveField("Shadowed", Equal([]engine.NetworkOwnerProvenance{{
+				Kind: engine.NetworkOwnerHandler, ID: shadowed.ID, Callsite: "catalog/shadowed.ts:20", Shadowed: 2,
+			}})),
+		))
+		Expect(second.NetworkShadowDiagnostics()).To(BeEmpty())
+
+		Expect(first.Prepare(ctx)).To(Succeed())
+		Expect(first.NetworkShadowDiagnostics()).To(BeEmpty())
+		_, err = first.NetworkHandlerStats(winner.ID)
+		Expect(err).To(MatchError(ContainSubstring("not found")))
+
+		Expect(first.Navigate(ctx, server.URL)).To(Succeed())
+		winner, err = first.RegisterNetworkHandler(ctx, engine.NetworkHandlerOptions{
+			URL: engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/close-shadow"}, Callsite: "catalog/close-winner.ts:1",
+			Fulfill: &engine.ResponseOverride{Body: bytesPtr([]byte("winner"))},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = first.RegisterNetworkHandler(ctx, engine.NetworkHandlerOptions{
+			URL: engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/close-shadow"}, Callsite: "catalog/close-shadowed.ts:2",
+			Fulfill: &engine.ResponseOverride{Body: bytesPtr([]byte("shadowed"))},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = first.EvaluateAsync(ctx, `fetch("/close-shadow").then(r => r.text())`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(first.NetworkShadowDiagnostics()).To(HaveLen(1))
+		Expect(first.Close()).To(Succeed())
+		Expect(first.NetworkShadowDiagnostics()).To(BeEmpty())
+		_, err = first.NetworkHandlerStats(winner.ID)
+		Expect(err).To(MatchError(ContainSubstring("not found")))
+	})
+
+	It("validates typed network connection state and resets it without crossing sessions", func(ctx SpecContext) {
+		first, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		second, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(second.Close)
+
+		invalid := engine.NetworkState{ConnectionType: engine.NetworkConnectionType("satellite")}
+		Expect(first.SetNetworkState(ctx, invalid)).To(MatchError(ContainSubstring("unsupported connection type")))
+		Expect(first.CurrentNetworkState()).To(Equal(engine.NetworkState{}))
+
+		configured := engine.NetworkState{
+			Latency: 25 * time.Millisecond, DownloadThroughput: 4096, UploadThroughput: 2048,
+			ConnectionType: engine.NetworkConnectionCellular4G,
+		}
+		Expect(first.SetNetworkState(ctx, configured)).To(Succeed())
+		Expect(first.CurrentNetworkState()).To(Equal(configured))
+		Expect(second.CurrentNetworkState()).To(Equal(engine.NetworkState{}))
+		Expect(first.ResetNetworkState(ctx)).To(Succeed())
+		Expect(first.CurrentNetworkState()).To(Equal(engine.NetworkState{}))
+
+		configured.ConnectionType = engine.NetworkConnectionWiFi
+		Expect(first.SetNetworkState(ctx, configured)).To(Succeed())
+		Expect(first.Prepare(ctx)).To(Succeed())
+		Expect(first.CurrentNetworkState()).To(Equal(engine.NetworkState{}))
+		Expect(first.SetNetworkState(ctx, configured)).To(Succeed())
+		Expect(first.Close()).To(Succeed())
+		Expect(first.CurrentNetworkState()).To(Equal(engine.NetworkState{}))
 	})
 
 	It("tracks HTTP in-flight state, restores interception/cache/network state, and isolates sessions", func(ctx SpecContext) {
@@ -473,10 +657,14 @@ var _ = Describe("eventful engine state", func() {
 
 		body := []byte("handler won")
 		handler, err := session.RegisterNetworkHandler(ctx, engine.NetworkHandlerOptions{
-			URL: engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/handler-before-hold"}, Response: &engine.ResponseOverride{Body: &body},
+			URL: engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/handler-before-hold"}, Callsite: "catalog/handler-winner.ts:1",
+			Response: &engine.ResponseOverride{Body: &body},
 		})
 		Expect(err).NotTo(HaveOccurred())
-		laterHold, err := session.HoldResponse(ctx, engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/handler-before-hold"})
+		laterHold, err := session.HoldResponseWithOptions(ctx,
+			engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/handler-before-hold"},
+			engine.ResponseHoldOptions{Callsite: "catalog/hold-shadowed.ts:2"},
+		)
 		Expect(err).NotTo(HaveOccurred())
 		result, err = session.EvaluateAsync(ctx, `fetch("/handler-before-hold").then(r => r.text())`)
 		Expect(err).NotTo(HaveOccurred())
@@ -484,13 +672,30 @@ var _ = Describe("eventful engine state", func() {
 		laterStats, err := session.ResponseHoldStats(laterHold)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(laterStats.Count).To(Equal(0))
+		handlerStats, err := session.NetworkHandlerStats(handler.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(handlerStats.Count).To(Equal(1))
+		handlerWins := session.NetworkShadowDiagnostics()[len(session.NetworkShadowDiagnostics())-1]
+		Expect(handlerWins).To(SatisfyAll(
+			HaveField("Stage", Equal(engine.NetworkStageResponse)),
+			HaveField("Winner", Equal(engine.NetworkOwnerProvenance{
+				Kind: engine.NetworkOwnerHandler, ID: handler.ID, Callsite: "catalog/handler-winner.ts:1", Count: 1,
+			})),
+			HaveField("Shadowed", Equal([]engine.NetworkOwnerProvenance{{
+				Kind: engine.NetworkOwnerHold, ID: laterHold, Callsite: "catalog/hold-shadowed.ts:2", Shadowed: 1,
+			}})),
+		))
 		Expect(session.ReleaseResponseHold(ctx, laterHold)).To(Succeed())
 		Expect(session.RemoveNetworkHandler(ctx, handler.ID)).To(Succeed())
 
-		earlierHold, err := session.HoldResponse(ctx, engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/hold-before-handler"})
+		earlierHold, err := session.HoldResponseWithOptions(ctx,
+			engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/hold-before-handler"},
+			engine.ResponseHoldOptions{Callsite: "catalog/hold-winner.ts:3"},
+		)
 		Expect(err).NotTo(HaveOccurred())
 		laterHandler, err := session.RegisterNetworkHandler(ctx, engine.NetworkHandlerOptions{
-			URL: engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/hold-before-handler"}, Response: &engine.ResponseOverride{Body: &body},
+			URL: engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/hold-before-handler"}, Callsite: "catalog/handler-shadowed.ts:4",
+			Response: &engine.ResponseOverride{Body: &body},
 		})
 		Expect(err).NotTo(HaveOccurred())
 		_, err = session.Evaluate(ctx, `void fetch("/hold-before-handler")`)
@@ -500,6 +705,19 @@ var _ = Describe("eventful engine state", func() {
 		laterHandlerStats, err := session.NetworkHandlerStats(laterHandler.ID)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(laterHandlerStats.Shadowed).To(Equal(1))
+		earlierStats, err := session.ResponseHoldStats(earlierHold)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(earlierStats.Count).To(Equal(1))
+		holdWins := session.NetworkShadowDiagnostics()[len(session.NetworkShadowDiagnostics())-1]
+		Expect(holdWins).To(SatisfyAll(
+			HaveField("Stage", Equal(engine.NetworkStageResponse)),
+			HaveField("Winner", Equal(engine.NetworkOwnerProvenance{
+				Kind: engine.NetworkOwnerHold, ID: earlierHold, Callsite: "catalog/hold-winner.ts:3", Count: 1,
+			})),
+			HaveField("Shadowed", Equal([]engine.NetworkOwnerProvenance{{
+				Kind: engine.NetworkOwnerHandler, ID: laterHandler.ID, Callsite: "catalog/handler-shadowed.ts:4", Shadowed: 1,
+			}})),
+		))
 		Expect(session.ReleaseResponseHold(ctx, earlierHold)).To(Succeed())
 
 		boundedHold, err := session.HoldResponseWithOptions(ctx,
@@ -512,6 +730,11 @@ var _ = Describe("eventful engine state", func() {
 		_, err = session.AwaitResponseHold(ctx, boundedHold)
 		Expect(err).To(MatchError(ContainSubstring("exceeds limit")))
 		Expect(session.ReleaseResponseHold(ctx, boundedHold)).To(Succeed())
+
+		Expect(session.Close()).To(Succeed())
+		Expect(session.NetworkShadowDiagnostics()).To(BeEmpty())
+		_, err = session.ResponseHoldStats(earlierHold)
+		Expect(err).To(MatchError(ContainSubstring("not found")))
 	})
 
 	It("releases an in-flight response hold before closing the session", func(ctx SpecContext) {

@@ -37,6 +37,7 @@ type ResponseTransform func(context.Context, InterceptedResponse) (ResponseOverr
 
 type NetworkHandlerOptions struct {
 	URL               Expectation
+	Callsite          string
 	Fulfill           *ResponseOverride
 	Abort             bool
 	Request           *RequestOverride
@@ -47,8 +48,36 @@ type NetworkHandlerOptions struct {
 }
 type NetworkHandler struct{ ID string }
 type NetworkHandlerStats struct {
+	ID, Callsite    string
 	Count, Shadowed int
 	LastError       string
+}
+
+type NetworkInterceptionStage string
+
+const (
+	NetworkStageRequest  NetworkInterceptionStage = "request"
+	NetworkStageResponse NetworkInterceptionStage = "response"
+)
+
+type NetworkOwnerKind string
+
+const (
+	NetworkOwnerHandler NetworkOwnerKind = "handler"
+	NetworkOwnerHold    NetworkOwnerKind = "hold"
+)
+
+type NetworkOwnerProvenance struct {
+	Kind            NetworkOwnerKind
+	ID, Callsite    string
+	Count, Shadowed int
+}
+
+type NetworkShadowDiagnostic struct {
+	URL      string
+	Stage    NetworkInterceptionStage
+	Winner   NetworkOwnerProvenance
+	Shadowed []NetworkOwnerProvenance
 }
 type networkHandlerEntry struct {
 	id      string
@@ -68,7 +97,22 @@ type NetworkState struct {
 	Offline                              bool
 	Latency                              time.Duration
 	DownloadThroughput, UploadThroughput float64
+	ConnectionType                       NetworkConnectionType
 }
+
+type NetworkConnectionType string
+
+const (
+	NetworkConnectionNone       NetworkConnectionType = "none"
+	NetworkConnectionCellular2G NetworkConnectionType = "cellular2g"
+	NetworkConnectionCellular3G NetworkConnectionType = "cellular3g"
+	NetworkConnectionCellular4G NetworkConnectionType = "cellular4g"
+	NetworkConnectionBluetooth  NetworkConnectionType = "bluetooth"
+	NetworkConnectionEthernet   NetworkConnectionType = "ethernet"
+	NetworkConnectionWiFi       NetworkConnectionType = "wifi"
+	NetworkConnectionWiMAX      NetworkConnectionType = "wimax"
+	NetworkConnectionOther      NetworkConnectionType = "other"
+)
 
 func (s *Session) RegisterNetworkHandler(ctx context.Context, options NetworkHandlerOptions) (NetworkHandler, error) {
 	if _, err := MatchExpectation("", options.URL); err != nil {
@@ -119,7 +163,10 @@ func (s *Session) RegisterNetworkHandler(ctx context.Context, options NetworkHan
 		}
 		s.networkSequence++
 		id := fmt.Sprintf("%s-network-%d", s.targetID, s.networkSequence)
-		s.networkHandlers[id] = &networkHandlerEntry{id: id, order: s.nextInterceptionOrder(), options: cloneNetworkHandlerOptions(options), active: true}
+		s.networkHandlers[id] = &networkHandlerEntry{
+			id: id, order: s.nextInterceptionOrder(), options: cloneNetworkHandlerOptions(options),
+			stats: NetworkHandlerStats{ID: id, Callsite: options.Callsite}, active: true,
+		}
 		s.networkOrder = append(s.networkOrder, id)
 		s.networkMu.Unlock()
 		handle.ID = id
@@ -162,9 +209,25 @@ func (s *Session) NetworkHandlerStats(id string) (NetworkHandlerStats, error) {
 	}
 	return h.stats, nil
 }
+
+// NetworkShadowDiagnostics returns first-match shadow records in interception order.
+func (s *Session) NetworkShadowDiagnostics() []NetworkShadowDiagnostic {
+	s.networkMu.Lock()
+	defer s.networkMu.Unlock()
+	result := make([]NetworkShadowDiagnostic, len(s.networkShadows))
+	for i, diagnostic := range s.networkShadows {
+		result[i] = diagnostic
+		result[i].Shadowed = append([]NetworkOwnerProvenance(nil), diagnostic.Shadowed...)
+	}
+	return result
+}
+
 func (s *Session) selectNetworkHandler(url string, responseStage bool) *networkHandlerEntry {
 	s.networkMu.Lock()
 	defer s.networkMu.Unlock()
+	if !s.eventsEnabled.Load() {
+		return nil
+	}
 	var winner *networkHandlerEntry
 	for _, id := range s.networkOrder {
 		h := s.networkHandlers[id]
@@ -183,7 +246,56 @@ func (s *Session) selectNetworkHandler(url string, responseStage bool) *networkH
 			h.stats.Shadowed++
 		}
 	}
+	if winner != nil {
+		s.recordNetworkShadowLocked(url, networkStage(responseStage), winner)
+	}
 	return winner
+}
+
+func networkStage(response bool) NetworkInterceptionStage {
+	if response {
+		return NetworkStageResponse
+	}
+	return NetworkStageRequest
+}
+
+func (s *Session) recordNetworkShadowLocked(url string, stage NetworkInterceptionStage, winner *networkHandlerEntry) {
+	shadowed := make([]NetworkOwnerProvenance, 0)
+	for _, id := range s.networkOrder {
+		handler := s.networkHandlers[id]
+		if handler == nil || handler == winner || !handler.active {
+			continue
+		}
+		isResponseHandler := handler.options.Response != nil || handler.options.Transform != nil
+		if (stage == NetworkStageResponse) != isResponseHandler {
+			continue
+		}
+		matched, _ := MatchExpectation(url, handler.options.URL)
+		if matched {
+			shadowed = append(shadowed, networkHandlerOwnerProvenance(handler))
+		}
+	}
+	if len(shadowed) == 0 {
+		return
+	}
+	s.networkShadows = append(s.networkShadows, NetworkShadowDiagnostic{
+		URL: url, Stage: stage, Winner: networkHandlerOwnerProvenance(winner), Shadowed: shadowed,
+	})
+}
+
+func networkHandlerOwnerProvenance(handler *networkHandlerEntry) NetworkOwnerProvenance {
+	return NetworkOwnerProvenance{
+		Kind: NetworkOwnerHandler,
+		ID:   handler.id, Callsite: handler.options.Callsite,
+		Count: handler.stats.Count, Shadowed: handler.stats.Shadowed,
+	}
+}
+
+func responseHoldOwnerProvenance(hold *responseHold) NetworkOwnerProvenance {
+	return NetworkOwnerProvenance{
+		Kind: NetworkOwnerHold, ID: hold.id, Callsite: hold.callsite,
+		Count: hold.count, Shadowed: hold.shadowed,
+	}
 }
 func (s *Session) ensureInterception(ctx context.Context) error {
 	s.holdMu.Lock()
@@ -421,6 +533,12 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 
 func (s *Session) selectResponseOwner(url string) (*networkHandlerEntry, *responseHold) {
 	s.networkMu.Lock()
+	s.holdMu.Lock()
+	defer s.networkMu.Unlock()
+	defer s.holdMu.Unlock()
+	if !s.eventsEnabled.Load() {
+		return nil, nil
+	}
 	handlers := make([]*networkHandlerEntry, 0)
 	for _, id := range s.networkOrder {
 		handler := s.networkHandlers[id]
@@ -432,9 +550,6 @@ func (s *Session) selectResponseOwner(url string) (*networkHandlerEntry, *respon
 			handlers = append(handlers, handler)
 		}
 	}
-	s.networkMu.Unlock()
-
-	s.holdMu.Lock()
 	var hold *responseHold
 	for _, id := range s.holdOrder {
 		candidate := s.holds[id]
@@ -447,25 +562,38 @@ func (s *Session) selectResponseOwner(url string) (*networkHandlerEntry, *respon
 			break
 		}
 	}
-	s.holdMu.Unlock()
-
 	if len(handlers) == 0 && hold == nil {
 		return nil, nil
 	}
 	if hold != nil && (len(handlers) == 0 || hold.order < handlers[0].order) {
-		s.networkMu.Lock()
+		hold.count++
+		shadowed := make([]NetworkOwnerProvenance, 0, len(handlers))
 		for _, handler := range handlers {
 			handler.stats.Shadowed++
+			shadowed = append(shadowed, networkHandlerOwnerProvenance(handler))
 		}
-		s.networkMu.Unlock()
+		if len(shadowed) > 0 {
+			s.networkShadows = append(s.networkShadows, NetworkShadowDiagnostic{
+				URL: url, Stage: NetworkStageResponse, Winner: responseHoldOwnerProvenance(hold), Shadowed: shadowed,
+			})
+		}
 		return nil, hold
 	}
-	s.networkMu.Lock()
 	handlers[0].stats.Count++
+	shadowed := make([]NetworkOwnerProvenance, 0, len(handlers))
 	for _, handler := range handlers[1:] {
 		handler.stats.Shadowed++
+		shadowed = append(shadowed, networkHandlerOwnerProvenance(handler))
 	}
-	s.networkMu.Unlock()
+	if hold != nil {
+		hold.shadowed++
+		shadowed = append(shadowed, responseHoldOwnerProvenance(hold))
+	}
+	if len(shadowed) > 0 {
+		s.networkShadows = append(s.networkShadows, NetworkShadowDiagnostic{
+			URL: url, Stage: NetworkStageResponse, Winner: networkHandlerOwnerProvenance(handlers[0]), Shadowed: shadowed,
+		})
+	}
 	return handlers[0], nil
 }
 
@@ -597,6 +725,9 @@ func (s *Session) SetNetworkState(ctx context.Context, state NetworkState) error
 	if state.Latency < 0 || state.DownloadThroughput < 0 || state.UploadThroughput < 0 {
 		return &Error{Code: CodeInvalidArgument, Operation: "set network state", Message: "latency and throughput must not be negative"}
 	}
+	if !validNetworkConnectionType(state.ConnectionType) {
+		return &Error{Code: CodeInvalidArgument, Operation: "set network state", Message: "unsupported connection type", Observed: state.ConnectionType}
+	}
 	return s.serial(ctx, "set network state", func(op context.Context) error {
 		download, upload := state.DownloadThroughput, state.UploadThroughput
 		if download == 0 {
@@ -605,8 +736,36 @@ func (s *Session) SetNetworkState(ctx context.Context, state NetworkState) error
 		if upload == 0 {
 			upload = -1
 		}
-		return chromedp.Run(op, network.OverrideNetworkState(state.Offline, float64(state.Latency.Milliseconds()), download, upload))
+		action := network.OverrideNetworkState(state.Offline, float64(state.Latency.Milliseconds()), download, upload)
+		if state.ConnectionType != "" {
+			action = action.WithConnectionType(network.ConnectionType(state.ConnectionType))
+		}
+		if err := chromedp.Run(op, action); err != nil {
+			return err
+		}
+		s.networkMu.Lock()
+		s.networkState = state
+		s.networkMu.Unlock()
+		return nil
 	})
+}
+
+func validNetworkConnectionType(connectionType NetworkConnectionType) bool {
+	switch connectionType {
+	case "", NetworkConnectionNone, NetworkConnectionCellular2G, NetworkConnectionCellular3G,
+		NetworkConnectionCellular4G, NetworkConnectionBluetooth, NetworkConnectionEthernet,
+		NetworkConnectionWiFi, NetworkConnectionWiMAX, NetworkConnectionOther:
+		return true
+	default:
+		return false
+	}
+}
+
+// CurrentNetworkState returns the last successfully applied network override.
+func (s *Session) CurrentNetworkState() NetworkState {
+	s.networkMu.Lock()
+	defer s.networkMu.Unlock()
+	return s.networkState
 }
 func (s *Session) ResetNetworkState(ctx context.Context) error {
 	return s.SetNetworkState(ctx, NetworkState{})
@@ -623,14 +782,23 @@ func (s *Session) SetCacheEnabled(ctx context.Context, enabled bool) error {
 	})
 }
 func (s *Session) resetNetworkState(ctx context.Context) error {
+	if err := chromedp.Run(ctx, network.OverrideNetworkState(false, 0, -1, -1), network.SetCacheDisabled(false)); err != nil {
+		return err
+	}
+	s.clearNetworkBookkeeping()
+	return nil
+}
+
+func (s *Session) clearNetworkBookkeeping() {
 	s.networkMu.Lock()
 	s.networkHandlers = nil
 	s.networkOrder = nil
 	s.responses = nil
 	s.inflight = nil
 	s.cacheEnabled = true
+	s.networkState = NetworkState{}
+	s.networkShadows = nil
 	s.networkMu.Unlock()
-	return chromedp.Run(ctx, network.OverrideNetworkState(false, 0, -1, -1), network.SetCacheDisabled(false))
 }
 func cloneStringMap(in map[string]string) map[string]string {
 	out := make(map[string]string, len(in))
