@@ -174,10 +174,14 @@ export interface WaitOptions {
   signal?: AbortSignal | undefined;
   mode?: "eventually" | "immediate" | "consistently" | undefined;
 }
+export type PollOptions = WaitOptions;
 
 export interface CancellationOptions {
   signal?: AbortSignal | undefined;
 }
+
+export interface WaitingCommandOptions extends CancellationOptions {timeoutMs?: number | undefined}
+export type CommandOptions = CancellationOptions;
 
 export type Modifier = "Shift" | "Control" | "Alt" | "Meta";
 export type TextMode = "innerText" | "textContent" | "normalizedText";
@@ -256,7 +260,52 @@ export interface Cookie {
   secure?: boolean | undefined;
   httpOnly?: boolean | undefined;
   sameSite?: string | undefined;
+	readonly session?: boolean | undefined;
 }
+
+export interface CookieQuery {
+	name?: ExpectedValue | undefined;
+	value?: ExpectedValue | undefined;
+	domain?: ExpectedValue | undefined;
+	path?: ExpectedValue | undefined;
+	sameSite?: ExpectedValue | undefined;
+	secure?: boolean | undefined;
+	httpOnly?: boolean | undefined;
+}
+
+export type StorageArea = "localStorage" | "sessionStorage";
+export type StorageItem<T = unknown> = {readonly found: true; readonly value: T} | {readonly found: false};
+export interface BrowserStorage {
+	set(key: string, value: SerializableValue, options?: CommandOptions): Promise<void>;
+	get<T = unknown>(key: string, options?: CommandOptions): Promise<StorageItem<T>>;
+	getAll(options?: CommandOptions): Promise<Readonly<Record<string, unknown>>>;
+	remove(key: string, options?: CommandOptions): Promise<void>;
+	clear(options?: CommandOptions): Promise<void>;
+	length(options?: CommandOptions): Promise<number>;
+	expectItem<T = unknown>(key: string, expected?: ExpectedValue, options?: PollOptions): Promise<T>;
+	expectLength(expected: number | Expectation, options?: PollOptions): Promise<AssertionResult>;
+}
+
+export interface TabQuery {
+	title?: ExpectedValue | undefined;
+	url?: ExpectedValue | undefined;
+	has?: Locator | string | undefined;
+}
+export interface WindowSize {readonly width: number; readonly height: number}
+export interface ConsoleMessage {readonly type: string; readonly text: string; readonly args: readonly unknown[]; readonly timestamp: string}
+export interface DeviceMetrics {readonly width: number; readonly height: number; readonly deviceScaleFactor?: number | undefined; readonly mobile?: boolean | undefined}
+export interface Geolocation {readonly latitude: number; readonly longitude: number; readonly accuracy?: number | undefined}
+export type Permission =
+	| "ar" | "audioCapture" | "automaticFullscreen" | "backgroundFetch" | "backgroundSync"
+	| "cameraPanTiltZoom" | "capturedSurfaceControl" | "clipboardReadWrite" | "clipboardSanitizedWrite"
+	| "displayCapture" | "durableStorage" | "geolocation" | "handTracking" | "idleDetection"
+	| "keyboardLock" | "localFonts" | "localNetwork" | "localNetworkAccess" | "loopbackNetwork"
+	| "midi" | "midiSysex" | "nfc" | "notifications" | "paymentHandler" | "periodicBackgroundSync"
+	| "pointerLock" | "protectedMediaIdentifier" | "sensors" | "smartCard" | "speakerSelection"
+	| "storageAccess" | "topLevelStorageAccess" | "videoCapture" | "vr" | "wakeLockScreen"
+	| "wakeLockSystem" | "webAppInstallation" | "webPrinting" | "windowManagement";
+export type PermissionState = "granted" | "denied" | "prompt";
+export interface MediaEmulation {readonly type?: "screen" | "print" | "" | undefined; readonly colorScheme?: "light" | "dark" | "no-preference" | undefined; readonly reducedMotion?: "reduce" | "no-preference" | undefined}
 
 export interface PollObservation {
   readonly attempt: number;
@@ -473,16 +522,55 @@ export interface Locator {
 
 export interface Session {
   readonly id: string;
-  newTab(): Promise<Session>;
-  addInitScript(script: string, options?: WaitOptions): Promise<void>;
-  activate(options?: WaitOptions): Promise<void>;
-  prepare(): Promise<void>;
-  navigate(url: string, options?: WaitOptions): Promise<void>;
-  navigateWithStatus(url: string, expectedStatus: number, options?: WaitOptions): Promise<void>;
-  setCookies(cookies: readonly Cookie[]): Promise<void>;
-  evaluate<T = unknown>(expression: string, args?: readonly SerializableValue[], options?: WaitOptions): Promise<T>;
-  evaluateAsync<T = unknown>(expression: string, args?: readonly SerializableValue[], options?: WaitOptions): Promise<T>;
-  setWindowSize(width: number, height: number, options?: WaitOptions): Promise<void>;
+	readonly contextId: string;
+	readonly targetId: string;
+	readonly openerId?: string;
+	readonly ownsContext: boolean;
+	readonly isFrame: boolean;
+	readonly frameUrl?: string;
+	newTab(options?: WaitingCommandOptions): Promise<Session>;
+	tabs(options?: CommandOptions): Promise<readonly Session[]>;
+	spawnedTabs(options?: CommandOptions): Promise<readonly Session[]>;
+	findTab(query: TabQuery, options?: CommandOptions): Promise<Session | undefined>;
+	waitForTab(query: TabQuery, options?: PollOptions): Promise<Session>;
+	frames(options?: CommandOptions): Promise<readonly Session[]>;
+	waitForFrame(query: TabQuery, options?: PollOptions): Promise<Session>;
+  addInitScript(script: string, options?: CommandOptions): Promise<void>;
+  activate(options?: CommandOptions): Promise<void>;
+  prepare(options?: WaitingCommandOptions): Promise<{readonly invalidatedSessionIds: readonly string[]}>;
+  navigate(url: string, options?: WaitingCommandOptions): Promise<void>;
+  navigateWithStatus(url: string, expectedStatus: number, options?: WaitingCommandOptions): Promise<void>;
+  setCookies(cookies: readonly Cookie[], options?: CommandOptions): Promise<void>;
+	getCookies(options?: CommandOptions): Promise<readonly Cookie[]>;
+	clearCookies(options?: CommandOptions): Promise<void>;
+	findCookie(query: CookieQuery, options?: CommandOptions): Promise<Cookie | undefined>;
+	expectCookie(query: CookieQuery, options?: PollOptions): Promise<Cookie>;
+	expectCookieCount(expected: number | Expectation, query?: CookieQuery, options?: PollOptions): Promise<AssertionResult>;
+	localStorage(): BrowserStorage;
+	sessionStorage(): BrowserStorage;
+  evaluate<T = unknown>(expression: string, args?: readonly SerializableValue[], options?: CommandOptions): Promise<T>;
+  evaluateAsync<T = unknown>(expression: string, args?: readonly SerializableValue[], options?: WaitingCommandOptions): Promise<T>;
+	waitForDefined<T = unknown>(expression: string, options?: PollOptions): Promise<T>;
+  setWindowSize(width: number, height: number, options?: CommandOptions): Promise<void>;
+	windowSize(options?: CommandOptions): Promise<WindowSize>;
+	title(options?: CommandOptions): Promise<string>;
+	expectTitle(expected: ExpectedValue, options?: PollOptions): Promise<AssertionResult>;
+	outline(options?: CommandOptions): Promise<string>;
+	accessibilityOutline(options?: CommandOptions): Promise<string>;
+	consoleMessages(options?: CommandOptions): Promise<readonly ConsoleMessage[]>;
+	expectConsoleMessage(expected: ExpectedValue, options?: PollOptions & {type?: string | undefined}): Promise<ConsoleMessage>;
+	setDeviceMetrics(metrics: DeviceMetrics, options?: CommandOptions): Promise<void>;
+	clearDeviceMetrics(options?: CommandOptions): Promise<void>;
+	setGeolocation(location: Geolocation, options?: CommandOptions): Promise<void>;
+	clearGeolocation(options?: CommandOptions): Promise<void>;
+	setPermissions(origin: string, permissions: Readonly<Partial<Record<Permission, PermissionState>>>, options?: CommandOptions): Promise<void>;
+	resetPermissions(options?: CommandOptions): Promise<void>;
+	setLocale(locale: string, options?: CommandOptions): Promise<void>;
+	clearLocale(options?: CommandOptions): Promise<void>;
+	setTimezone(timezone: string, options?: CommandOptions): Promise<void>;
+	clearTimezone(options?: CommandOptions): Promise<void>;
+	setMedia(media: MediaEmulation, options?: CommandOptions): Promise<void>;
+	clearMedia(options?: CommandOptions): Promise<void>;
   sendKeys(keys: string, options?: WindowKeyboardOptions): Promise<void>;
   clearSelection(options?: CancellationOptions): Promise<void>;
   normalizeColor(color: string, options?: CancellationOptions): Promise<string>;
@@ -496,11 +584,13 @@ export interface Session {
   getByPlaceholder(value: string, options?: {exact?: boolean | undefined}): Locator;
   getByAltText(value: string, options?: {exact?: boolean | undefined}): Locator;
   getByTitle(value: string, options?: {exact?: boolean | undefined}): Locator;
+  // One URL assertion, as Go has one HaveURL.  expectUrl is the superset: exact tightens the match,
+  // pathname compares window.location.pathname instead of the whole URL.
   expectUrl(expected: ExpectedValue, options?: WaitOptions & {exact?: boolean | undefined; pathname?: boolean | undefined}): Promise<AssertionResult>;
-  url(): Promise<string>;
+  url(options?: CommandOptions): Promise<string>;
   expectEvaluation(expression: string, expected: ExpectedValue, options?: WaitOptions): Promise<AssertionResult>;
   expectRequest(expectedUrl: ExpectedValue, options?: WaitOptions & {method?: string | undefined}): Promise<AssertionResult>;
-  holdResponse(expectedUrl: ExpectedValue, options?: WaitOptions): Promise<ResponseHold>;
+  holdResponse(expectedUrl: ExpectedValue, options?: CommandOptions): Promise<ResponseHold>;
 }
 
 export interface HeldResponse {
@@ -509,8 +599,8 @@ export interface HeldResponse {
 }
 
 export interface ResponseHold {
-  await(options?: WaitOptions): Promise<HeldResponse>;
-  release(options?: WaitOptions): Promise<void>;
+  await(options?: WaitingCommandOptions): Promise<HeldResponse>;
+  release(options?: CommandOptions): Promise<void>;
 }
 
 export interface Browser {

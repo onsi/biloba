@@ -291,6 +291,97 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     expect(await session.normalizeColor("#0a141e")).toBe("rgb(10, 20, 30)");
   });
 
+	it("keeps lifecycle state and live handles coherent through the real daemon", async () => {
+		await session.prepare();
+		const startingSize = await session.windowSize();
+		await session.navigate(baseUrl);
+		const startingEmulation = await session.evaluate(`[Intl.NumberFormat().resolvedOptions().locale, Intl.DateTimeFormat().resolvedOptions().timeZone, matchMedia('(prefers-color-scheme: dark)').matches, innerWidth, innerHeight, devicePixelRatio]`);
+		const startingPermission = await session.evaluateAsync<string>(`navigator.permissions.query({name: "geolocation"}).then(result => result.state)`);
+		expect(await session.url()).toBe(baseUrl + "/");
+		await session.expectUrl(endsWith("/"));
+		expect(await session.title()).toBe("");
+		await session.evaluate(`document.title = "Biloba lifecycle"`);
+		await session.expectTitle(contains("Biloba"));
+
+		await session.setCookies([{name: "lifecycle", value: "ready", domain: "127.0.0.1", path: "/"}]);
+		expect(await session.expectCookie({name: "lifecycle", value: "ready"})).toMatchObject({name: "lifecycle", value: "ready"});
+		await session.expectCookieCount(numeric(">=", 1));
+		expect(await session.findCookie({name: "lifecycle"})).toBeDefined();
+		await session.clearCookies();
+		expect(await session.getCookies()).toEqual([]);
+		await session.setCookies([{name: "lifecycle", value: "ready", domain: "127.0.0.1", path: "/"}]);
+		await session.localStorage().set("count", 3);
+		await session.sessionStorage().set("token", {ready: true});
+		expect(await session.localStorage().get<number>("count")).toEqual({found: true, value: 3});
+		expect(await session.localStorage().getAll()).toEqual({count: 3});
+		await session.localStorage().remove("count");
+		expect(await session.localStorage().get("count")).toEqual({found: false});
+		await session.localStorage().set("count", 3);
+		expect(await session.sessionStorage().expectItem("token", {ready: true})).toEqual({ready: true});
+		await session.sessionStorage().clear();
+		expect(await session.sessionStorage().get("token")).toEqual({found: false});
+		await session.sessionStorage().set("token", {ready: true});
+		await session.localStorage().expectLength(1);
+		await session.addInitScript(`window.lifecycleInit = "installed"`);
+
+		await session.evaluate(`setTimeout(() => { window.lifecycleReady = 42 }, 25)`);
+		expect(await session.waitForDefined<number>("window.lifecycleReady", {timeoutMs: 1_000})).toBe(42);
+		const cancelled = new AbortController();
+		const pendingWait = session.waitForDefined("window.neverDefined", {timeoutMs: 1_000, signal: cancelled.signal});
+		cancelled.abort();
+		await expect(pendingWait).rejects.toMatchObject({code: "CANCELLED"});
+		expect(await session.outline()).toContain("Biloba parity");
+		expect(await session.accessibilityOutline()).toContain("Biloba parity");
+		await session.evaluate(`console.error("lifecycle-console")`);
+		expect((await session.expectConsoleMessage("lifecycle-console", {type: "error"})).text).toBe("lifecycle-console");
+
+		await session.setGeolocation({latitude: 0, longitude: 0, accuracy: 1});
+		await session.setPermissions(baseUrl, {geolocation: "granted"});
+		const position = await session.evaluateAsync<{latitude: number; longitude: number}>(`new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(p => resolve({latitude:p.coords.latitude, longitude:p.coords.longitude}), reject))`);
+		expect(position).toEqual({latitude: 0, longitude: 0});
+		await session.setLocale("fr-FR");
+		await session.setTimezone("Europe/Paris");
+		await session.setMedia({colorScheme: "dark", reducedMotion: "reduce"});
+		await session.setDeviceMetrics({width: 320, height: 640, deviceScaleFactor: 2, mobile: true});
+		expect(await session.evaluate(`[Intl.NumberFormat().resolvedOptions().locale, Intl.DateTimeFormat().resolvedOptions().timeZone, matchMedia('(prefers-color-scheme: dark)').matches]`)).toEqual(["fr-FR", "Europe/Paris", true]);
+		expect(await session.evaluate(`[screen.width, screen.height, devicePixelRatio, innerWidth]`)).toEqual([320, 640, 2, 980]);
+		await session.navigate(baseUrl);
+		expect(await session.evaluate("window.lifecycleInit")).toBe("installed");
+
+		await session.setWindowSize(640, 480);
+		expect(await session.windowSize()).toEqual({width: 640, height: 480});
+		const closedSibling = await session.newTab();
+		await closedSibling.navigate(baseUrl);
+		expect((await session.tabs()).map((tab) => tab.id)).toEqual(expect.arrayContaining([session.id, closedSibling.id]));
+		await expect(closedSibling.prepare()).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+		await closedSibling.close();
+		await expect(closedSibling.title()).rejects.toMatchObject({code: "DRIVER_CLOSED"});
+		expect(await session.title()).toBe("");
+		const sibling = await session.newTab();
+		await sibling.navigate(baseUrl);
+		await session.evaluate(`(() => { window.open(${JSON.stringify(baseUrl + "/?popup=1")}, "_blank"); return true })()`);
+		const popup = await session.waitForTab({url: contains("popup=1")}, {timeoutMs: 2_000});
+		expect(popup.contextId).toBe(session.contextId);
+		expect((await session.spawnedTabs()).map((tab) => tab.id)).toContain(popup.id);
+		expect((await session.findTab({url: contains("popup=1")}))?.id).toBe(popup.id);
+
+		const prepared = await session.prepare();
+		expect(prepared.invalidatedSessionIds).toEqual(expect.arrayContaining([sibling.id, popup.id]));
+		await expect(sibling.title()).rejects.toMatchObject({code: "DRIVER_CLOSED"});
+		expect(await session.windowSize()).toEqual(startingSize);
+		expect(await session.consoleMessages()).toEqual([]);
+		await session.navigate(baseUrl);
+		expect(await session.evaluate(`[Intl.NumberFormat().resolvedOptions().locale, Intl.DateTimeFormat().resolvedOptions().timeZone, matchMedia('(prefers-color-scheme: dark)').matches, innerWidth, innerHeight, devicePixelRatio]`)).toEqual(startingEmulation);
+		expect(await session.evaluateAsync<string>(`navigator.permissions.query({name: "geolocation"}).then(result => result.state)`)).toBe(startingPermission);
+		await session.setPermissions(baseUrl, {geolocation: "granted"});
+		const resetGeolocation = await session.evaluateAsync<number>(`new Promise(resolve => navigator.geolocation.getCurrentPosition(() => resolve(0), error => resolve(error.code), {timeout: 100}))`);
+		expect(resetGeolocation).not.toBe(0);
+		await session.resetPermissions();
+		expect(await session.evaluate("typeof window.lifecycleInit")).toBe("undefined");
+		expect(await session.localStorage().get("count")).toEqual({found: false});
+		expect(await session.getCookies()).toEqual([]);
+	});
+
   it("treats a non-200 page as navigable when the caller asks for that status", async () => {
     // Pairs with "treats a non-200 page as navigable when the spec asks for that status" in
     // graft_parity_test.go.  Go has Navigate/NavigateWithStatus; if TypeScript has only the former,
