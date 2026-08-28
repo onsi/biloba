@@ -538,7 +538,7 @@ This installs a family of `biloba:*` skills that activate automatically while yo
 | `biloba:explore-unfamiliar-page` | Orienting to a page you haven't seen, then drafting a starter spec. |
 | `biloba:debug-failures` | DOM outlines, screenshots, and the env/config knobs that surface them. |
 | `biloba:flaky-specs` | A spec that's flaky, order-dependent, or only fails under `-p`/CI — the smells and their polling fixes. |
-| `biloba:typescript` | Driving Biloba from a `vitest` suite instead of Go — the daemon topology, locators, assertions, and what isn't ported yet. |
+| `biloba:typescript` | Driving Biloba from a `vitest` suite — shared-browser setup, the complete TypeScript API, visual assertions, and diagnostics. |
 
 ### `chromedp`: Breaking the Fourth Wall
 
@@ -4288,8 +4288,12 @@ if (!daemonExecutable) throw new Error("BILOBA_DAEMON_EXECUTABLE is not set");
 let browser: SharedBrowserProcess | undefined;
 
 export async function setup(project: TestProject): Promise<void> {
-  browser = await startSharedBrowser({executable: daemonExecutable});
-  project.provide("chromeWsUrl", browser.wsURL);
+  browser = await startSharedBrowser({
+    executable: daemonExecutable,
+    mode: "headless-shell",
+    windowSize: {width: 1024, height: 768},
+  });
+  project.provide("chromeConnection", browser.connection);
 }
 
 export async function teardown(): Promise<void> {
@@ -4307,14 +4311,16 @@ let browser: Browser;
 let session: Session;
 
 beforeAll(async () => {
-  browser = await connect({chromeWsUrl: inject("chromeWsUrl")});
+  browser = await connect({chromeConnection: inject("chromeConnection")});
   session = await browser.openSession();
 });
 
 afterAll(async () => { await browser.close(); });
 ```
 
-`connect` reads the daemon's path from `BILOBA_DAEMON_EXECUTABLE` when you don't pass `daemonExecutable`, which is usually how you'll wire it up; pass it explicitly when you'd rather not depend on the environment.  Omit `chromeWsUrl` and the daemon will launch a Chrome of its own - fine for a single file, wasteful for a suite.
+`connect` reads the daemon's path from `BILOBA_DAEMON_EXECUTABLE` when you don't pass `daemonExecutable`, which is usually how you'll wire it up; pass it explicitly when you'd rather not depend on the environment.  Omit `chromeConnection` and the daemon launches Chrome itself - fine for a single file, wasteful for a suite.  The older `chromeWsUrl` attachment remains available, but it cannot report how an external Chrome was launched; prefer `chromeConnection` so every worker receives the host's validated launch metadata.
+
+Both `startSharedBrowser` and a self-launching `connect` accept `mode: "headless-shell" | "headless" | "headful"`, `chromePath`, `autoInstall`, ordered `chromeArgs`, and `windowSize`.  The default is the fast headless shell at 1024×768.  `browser.launch` reports the resolved executable, mode, arguments, size, and whether Biloba installed the shell.  Set `BILOBA_INTERACTIVE=true` for the headful interactive default, or select a mode explicitly.
 
 A `Session` is the TypeScript analogue of a Biloba tab.  A session returned by `browser.openSession()` owns its own browser context, so its cookies and storage are isolated from every other root session.  `session.prepare()` is `b.Prepare()` - it resets the session between tests and is what makes reuse cheap:
 
@@ -4331,7 +4337,7 @@ await popup.activate();
 await popup.close();
 ```
 
-This is the basic tab lifecycle.  The Go API still has richer helpers for enumerating and switching among spawned tabs.
+Use `tabs()` and `spawnedTabs()` for snapshots, `findTab()` for an optional match, and `waitForTab()` when a popup is expected.  `frames()` and `waitForFrame()` expose cross-origin frame targets as typed sessions.  Closing or preparing an owning session invalidates all of its descendant handles.
 
 ### Navigating and selecting
 
@@ -4351,6 +4357,10 @@ session.locator("#content")                            // css
 session.getByTestId("name")                            // [data-testid="name"]
 session.getByText("Save", {exact: true})               // by text content
 session.getByRole("button", {name: "Increment"})       // by ARIA role, optionally by accessible name
+session.getByLabel("Email")                            // by associated label
+session.getByPlaceholder("Search")                     // by placeholder
+session.getByAltText("Profile photo")                  // by image alt text
+session.getByTitle("Close")                            // by title
 session.xpath("//button[@name='save']")                 // a raw XPath expression
 session.locator(".row").first()                        // just the first match
 ```
@@ -4404,7 +4414,7 @@ await session.getByRole("button", {name: "Pay"}).realistic().click();
 await session.getByTestId("card-number").realistic().setValue("4242 4242 4242 4242");
 ```
 
-The TypeScript realistic track currently covers `click`, `setValue`, and `type`: Biloba scrolls the target into view, checks actionability, and uses real CDP input.  Go remains the complete realistic-interaction API for hover, click variants, tap, wheel, and realistic drag.
+The realistic track covers clicks and click variants, tap, hover, typing and value changes, wheel input, and drag.  Biloba scrolls the target into view, checks actionability, and uses real CDP input.  The fast default keeps each action atomic in the page runtime.
 
 An assertion resolves to an `AssertionResult` describing how it got there, which is occasionally useful and always available:
 
@@ -4425,16 +4435,26 @@ const now = await session.evaluate<number>("() => Date.now()", []);
 
 The distinction is the *presence* of the array, not its length - `[]` still means "call this".  That's deliberate: it means a zero-argument function doesn't have to be spelled differently from a two-argument one.
 
-Cookies work the way [they do in Go](#cookies), with `Date` accepted for expiry:
+Cookies work the way [they do in Go](#cookies), with `Date` accepted for expiry.  You can read, filter, wait for, count, and clear them as well as set them:
 
 ```ts
 await session.setCookies([{name: "session", value: "abc123", path: "/"}]);
+const cookie = await session.expectCookie({name: "session"});
+await session.clearCookies();
 ```
 
-TypeScript also supports request observation and response holding:
+`localStorage()` and `sessionStorage()` expose typed set/get/remove/clear, snapshot, length, and polling assertions.
+
+TypeScript supports request and response history, stubbing, aborting, request and response modification, callback-based response routing, response holding, cache control, and network emulation:
 
 ```ts
 await session.expectRequest(endsWith("/orders"), {method: "POST"});
+
+const stub = await session.stubRequest(endsWith("/feature-flags"), {
+  status: 200,
+  headers: [{name: "content-type", value: "application/json"}],
+  body: new TextEncoder().encode('{"available":true}'),
+});
 
 const hold = await session.holdResponse(endsWith("/inventory"));
 try {
@@ -4446,7 +4466,40 @@ try {
 }
 ```
 
-Import `endsWith` (or another Biloba expectation) from the package.  Always release a hold.  Arbitrary response stubbing, aborting, modifying, and the Go API's richer request inspection remain Go-only.
+Import `endsWith` (or another Biloba expectation) from the package.  Always release a hold.  Network handlers are first-match-wins; use each handler's `count()` or `stats()` and `networkShadowDiagnostics()` to prove that the intended handler claimed the request.
+
+Dialog handlers are newest-first and removable.  Dialog history records both explicitly handled and safely auto-handled dialogs.  Downloads expose lifecycle metadata, bounded binary content, cancellation, snapshot filters, and polling assertions.
+
+```ts
+const prompts = await session.handleDialogs("prompt", {message: "Name?", promptText: "Ada"});
+const download = await session.expectDownload({filename: endsWith(".csv")});
+const bytes = await download.content();
+await prompts.remove();
+```
+
+### Screenshots and visual assertions
+
+Capture a page or locator as bounded bytes, or ask the daemon to write a sanitized artifact path:
+
+```ts
+const png = await session.captureScreenshot();
+const path = await session.getByTestId("chart").captureScreenshot({output: "path", name: "chart"});
+```
+
+`expectScreenshot()` is the TypeScript equivalent of Go's `HaveScreenshot`.  It supports page and element baselines, masks, exact or tolerant pixel comparison, animation freezing with an opt-out, light and dark color schemes, update mode, diff artifacts, and structured diagnosis.
+
+```ts
+const result = await session.getByTestId("chart").expectScreenshot("revenue-chart", {
+  mask: [session.getByTestId("last-updated")],
+  colorSchemes: ["light", "dark"],
+  pixelTolerance: 0.001,
+});
+expect(result.match).toBe(true);
+```
+
+A mismatch throws, and the message carries the same diagnosis Go renders - the pixel counts, the amplitude verdict, and the baseline, actual, and diff paths - so a CI log tells you what changed without opening anything.  Capture warnings (a baseline that never settled, two color schemes that rendered identically) go to stderr; pass `onScreenshotWarning` to `connect` to route them somewhere else.
+
+When you need to absorb rendering noise, reach for `channelTolerance` before `pixelTolerance`: rasterization differences are a small delta spread over many pixels, while a pixel budget lets a handful of pixels change by any amount - which is exactly the one-pixel border or small glyph worth catching.
 
 ### When something fails
 
@@ -4462,11 +4515,18 @@ try {
   failure.expected;        // "ready"
   failure.trajectory;      // every attempt, with what it observed and why it retried
   failure.domOutline;      // the DOM at failure time
-  failure.screenshotPath;  // a PNG, when the daemon was given an artifactDir
+  failure.screenshotPath;  // the primary PNG path, when disk artifacts are enabled
+  failure.diagnostics;     // context-wide tab artifacts, when available
+  failure.visual;          // structured visual comparison, for expectScreenshot
+  failure.artifactPaths;   // all associated artifact paths
 }
 ```
 
 That trajectory is the [poll trajectory](#outline) the Go suite attaches on failure, handed to you as data instead of rendered as text.  Pass `artifactDir` to `connect` to get screenshots written to disk.
+
+For runner-level capture, load `installBilobaVitestHooks` from `@onsi/biloba-vitest-prototype/vitest` in a Vitest setup file.  The hook captures every live tab after any failed test, can capture a slow test after `progressAfterMs`, replays browser errors, and turns `console.assert` into a test-boundary failure.  `session.captureDiagnostics()` provides the same context-wide capture on demand.  Configure screenshots, outlines, artifact paths, inline output, viewport, byte limits, and poll trajectories under `connect({diagnostics: {...}})`; explicit members override CI and interactive defaults independently.
+
+Use `consoleMessages()` for bounded history and `onConsoleMessage()` for live delivery.  `warnings()` and `onWarning()` expose auto-handled dialog and dropped-event warnings.  Pass `debugLog` to `connect` for bounded structured daemon/CDP diagnostics; Biloba never mixes them into framed stdout.
 
 `failure.code` is worth narrowing on, because a few of the codes mean something quite specific:
 
@@ -4484,8 +4544,10 @@ That trajectory is the [poll trajectory](#outline) the Go suite attaches on fail
 
 The last three exist so that a crash reports itself as a crash.  Chrome doesn't fail calls to a dead renderer - it stops answering them - so without a dedicated signal a crashed page looks exactly like an assertion that never came true, and sends you off to debug a test that was fine.
 
-### What isn't here yet
+### Parity and TypeScript naming
 
-The TypeScript client does not yet cover dialog handling, download capture and assertions, or an equivalent of the Go `HaveScreenshot` visual assertion.  These are unported APIs, not limitations of the daemon architecture: dialog and download events can be surfaced by the engine and protocol, and visual comparison can have a TypeScript assertion API even though the literal Gomega matcher is Go-specific.  TypeScript supports the XPath DSL, basic tab lifecycle, realistic `click`/`setValue`/`type`, request observation, and response holding; the broader Go APIs in the remaining areas have not yet been threaded through the runner-neutral layers.
+The TypeScript client supports the observable behavior of Biloba's public Go API: selectors and locator algebra; DOM reads, collections, mutations, geometry, styles, input, and polling assertions; tabs and cross-origin frames; cookies, storage, navigation, JavaScript, emulation, dialogs, downloads, network interception, screenshots, visual comparison, and structured diagnostics.
+
+The spelling follows TypeScript conventions.  Async `expect*` methods replace Gomega matchers, `expectScreenshot()` replaces `HaveScreenshot`, and arrays and typed objects replace Go matcher captures and collection helpers.  Ginkgo hooks, Gomega failure formatting, and OS-signal progress reports are runner syntax rather than browser behavior; the Vitest integration provides failure capture, timed or explicit progress capture, console replay, and `console.assert` failure policy.
 
 {% endraw  %}

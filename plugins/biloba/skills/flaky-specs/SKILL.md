@@ -304,6 +304,8 @@ Same for `HaveBoundingBox`, `HaveScrollOffset`, `HaveOffsetTopWithin`/`HaveOffse
 
 **A visual baseline that was never reviewed asserts nothing.** If a missing baseline were written on first sight and the spec passed, the very first run would certify whatever the page happened to look like — a broken page included — and the assertion would be green from birth, so nobody would ever open the image. Biloba refuses: a missing baseline is a **failure** that writes the captured `.actual.png` and tells you to re-run with `BILOBA_UPDATE_SCREENSHOTS=1`.
 
+TypeScript `expectScreenshot()` follows the same missing-baseline and update-mode rule.
+
 Don't work around it. Pre-writing baselines blind — a scripted "run with update until it's green", or committing whatever the first run produced without looking — recreates exactly the vacuous assertion the refusal exists to prevent. Read the `.actual.png`, then update.
 
 **`BILOBA_UPDATE_SCREENSHOTS` set in CI turns the entire visual suite green.** In update mode every visual assertion captures, writes its baseline, and passes — no comparison happens at all. It's an environment variable, so it gets added to a CI config once, during a legitimate baseline refresh, and then stays. Nothing fails, nothing looks wrong, and the suite reads as coverage while proving nothing. Grep the CI config for it before trusting a green visual run, and keep the variable to local, scoped invocations (`ginkgo --focus=…`).

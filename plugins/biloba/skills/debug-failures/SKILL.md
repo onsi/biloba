@@ -44,6 +44,8 @@ On by default; `BilobaConfigPollTrajectory(false)` disables it (and the detached
 
 ### Visual diagnosis (a failed `b.HaveScreenshot`) → `biloba:visual-assertions`
 
+The TypeScript equivalent is a rejected `expectScreenshot()` with structured `BilobaError.visual` and `artifactPaths`; the same diagnosis and artifact guidance applies.
+
 Two extra PNGs land in the screenshots dir — `<name>.actual.png` (what Biloba saw) and `<name>.diff.png` (the actual, washed out, differing pixels in magenta) — and the failure message says what moved:
 
 ```
