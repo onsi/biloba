@@ -86,6 +86,7 @@ type Session struct {
 	holdOrder        []string
 	holdSequence     uint64
 	fetchEnabled     bool
+	interceptions    int
 	closed           bool
 	installed        bool
 	root             *Session

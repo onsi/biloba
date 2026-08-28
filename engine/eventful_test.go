@@ -305,6 +305,24 @@ var _ = Describe("eventful engine state", func() {
 			},
 		})
 		Expect(err).NotTo(HaveOccurred())
+		nearDeadlineHandler, err := session.RegisterNetworkHandler(ctx, engine.NetworkHandlerOptions{
+			URL:              engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/near-transform-deadline"},
+			TransformTimeout: 100 * time.Millisecond,
+			Transform: func(_ context.Context, response engine.InterceptedResponse) (engine.ResponseOverride, error) {
+				time.Sleep(90 * time.Millisecond)
+				body := append([]byte("near-deadline:"), response.Body...)
+				return engine.ResponseOverride{Body: &body}, nil
+			},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		boundedTransformHandler, err := session.RegisterNetworkHandler(ctx, engine.NetworkHandlerOptions{
+			URL:               engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/bounded-transform"},
+			ResponseBodyLimit: 4,
+			Transform: func(_ context.Context, _ engine.InterceptedResponse) (engine.ResponseOverride, error) {
+				return engine.ResponseOverride{}, nil
+			},
+		})
+		Expect(err).NotTo(HaveOccurred())
 
 		result, err := session.EvaluateAsync(ctx, `fetch("/stubbed").then(async r => [r.status, await r.text()])`)
 		Expect(err).NotTo(HaveOccurred())
@@ -318,21 +336,38 @@ var _ = Describe("eventful engine state", func() {
 		result, err = session.EvaluateAsync(ctx, `fetch("/modifiable").then(async r => [r.status, r.headers.get("x-modified"), await r.text()])`)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(Equal([]any{float64(206), "yes", "modified body"}))
-		result, err = session.EvaluateAsync(ctx, `fetch("/transformed").then(async r => [r.status, await r.text()])`)
+		result, err = session.EvaluateAsync(ctx, `fetch("/transformed").then(async r => [r.status, r.headers.get("x-duplicate"), await r.text()])`)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result).To(HaveLen(2))
+		Expect(result).To(HaveLen(3))
 		Expect(result.([]any)[0]).To(Equal(float64(207)))
-		Expect(result.([]any)[1]).To(ContainSubstring("transformed:<!doctype html>"))
+		Expect(result.([]any)[1]).To(Equal("first, second"))
+		Expect(result.([]any)[2]).To(Equal("transformed:original body"))
 		var original engine.InterceptedResponse
 		Expect(transformed).To(Receive(&original))
 		Expect(original.Status).To(Equal(200))
-		Expect(string(original.Body)).To(ContainSubstring("<!doctype html>"))
+		Expect(string(original.Body)).To(Equal("original body"))
+		Expect(original.HeaderEntries).To(ContainElements(
+			engine.HeaderEntry{Name: "X-Duplicate", Value: "first"},
+			engine.HeaderEntry{Name: "X-Duplicate", Value: "second"},
+		))
 		result, err = session.EvaluateAsync(ctx, `fetch("/transform-timeout").then(r => r.text())`)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(ContainSubstring("<!doctype html>"))
 		timeoutStats, err := session.NetworkHandlerStats(timeoutHandler.ID)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(timeoutStats.LastError).To(ContainSubstring("deadline exceeded"))
+		result, err = session.EvaluateAsync(ctx, `fetch("/near-transform-deadline").then(r => r.text())`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(ContainSubstring("near-deadline:"))
+		nearDeadlineStats, err := session.NetworkHandlerStats(nearDeadlineHandler.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(nearDeadlineStats.LastError).To(BeEmpty())
+		result, err = session.EvaluateAsync(ctx, `fetch("/bounded-transform").then(() => false, () => true)`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(BeTrue())
+		boundedTransformStats, err := session.NetworkHandlerStats(boundedTransformHandler.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(boundedTransformStats.LastError).To(ContainSubstring("exceeds limit 4"))
 		for _, handler := range []engine.NetworkHandler{stub, abort, requestHandler, responseHandler, transformHandler} {
 			stats, statsErr := session.NetworkHandlerStats(handler.ID)
 			Expect(statsErr).NotTo(HaveOccurred())
@@ -725,10 +760,15 @@ var _ = Describe("eventful engine state", func() {
 			engine.ResponseHoldOptions{MaxBodyBytes: 4},
 		)
 		Expect(err).NotTo(HaveOccurred())
-		_, err = session.Evaluate(ctx, `void fetch("/bounded-hold")`)
+		_, err = session.Evaluate(ctx, `window.boundedHoldFailed=false;void fetch("/bounded-hold").catch(()=>boundedHoldFailed=true)`)
 		Expect(err).NotTo(HaveOccurred())
 		_, err = session.AwaitResponseHold(ctx, boundedHold)
 		Expect(err).To(MatchError(ContainSubstring("exceeds limit")))
+		Eventually(func() any {
+			value, evaluateErr := session.Evaluate(ctx, `boundedHoldFailed`)
+			Expect(evaluateErr).NotTo(HaveOccurred())
+			return value
+		}).Should(BeTrue())
 		Expect(session.ReleaseResponseHold(ctx, boundedHold)).To(Succeed())
 
 		Expect(session.Close()).To(Succeed())

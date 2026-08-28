@@ -16,9 +16,10 @@ import (
 const DefaultInterceptedBodyLimit int64 = 16 << 20
 
 type ResponseOverride struct {
-	Status  *int
-	Headers map[string]string
-	Body    *[]byte
+	Status        *int
+	Headers       map[string]string
+	HeaderEntries []HeaderEntry
+	Body          *[]byte
 }
 type RequestOverride struct {
 	URL, Method *string
@@ -27,10 +28,16 @@ type RequestOverride struct {
 }
 
 type InterceptedResponse struct {
-	URL     string
-	Status  int
-	Headers map[string]string
-	Body    []byte
+	URL           string
+	Status        int
+	Headers       map[string]string
+	HeaderEntries []HeaderEntry
+	Body          []byte
+}
+
+// HeaderEntry preserves one HTTP header field, including repeated field names.
+type HeaderEntry struct {
+	Name, Value string
 }
 
 type ResponseTransform func(context.Context, InterceptedResponse) (ResponseOverride, error)
@@ -333,11 +340,12 @@ func (s *Session) disableInterceptionIfUnused(ctx context.Context) error {
 		}
 	}
 	enabled := s.fetchEnabled
-	if !hasHandlers && !hasHolds {
+	hasInterceptions := s.interceptions > 0
+	if !hasHandlers && !hasHolds && !hasInterceptions {
 		s.fetchEnabled = false
 	}
 	s.holdMu.Unlock()
-	if !enabled || hasHandlers || hasHolds {
+	if !enabled || hasHandlers || hasHolds || hasInterceptions {
 		return nil
 	}
 	return chromedp.Run(ctx, fetch.Disable(), network.SetCacheDisabled(!cacheEnabled))
@@ -386,11 +394,11 @@ func (s *Session) resolveRequest(event *fetch.EventRequestPaused) {
 			if o.Status != nil {
 				status = *o.Status
 			}
-			headers := cloneStringMap(o.Headers)
+			headers := mergeResponseHeaders(nil, *o)
 			if o.Body != nil {
-				stripEntityHeaders(headers)
+				headers = stripEntityHeaderEntries(headers)
 			}
-			p := fetch.FulfillRequest(event.RequestID, int64(status)).WithResponseHeaders(headerEntries(headers))
+			p := fetch.FulfillRequest(event.RequestID, int64(status)).WithResponseHeaders(fetchHeaderEntries(headers))
 			if o.Body != nil {
 				p = p.WithBody(base64.StdEncoding.EncodeToString(*o.Body))
 			}
@@ -444,7 +452,9 @@ func (s *Session) continueRequest(id fetch.RequestID) {
 	_ = chromedp.Run(ctx, fetch.ContinueRequest(id).WithInterceptResponse(true))
 }
 func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h *networkHandlerEntry) {
+	s.beginInterception()
 	go func() {
+		defer s.endInterception()
 		timeout := 5 * time.Second
 		if h.options.TransformTimeout > 0 {
 			timeout = h.options.TransformTimeout
@@ -453,24 +463,17 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 		defer cancel()
 		o := ResponseOverride{}
 		status := int(event.ResponseStatusCode)
-		headers := map[string]string{}
-		for _, entry := range event.ResponseHeaders {
-			headers[entry.Name] = entry.Value
-		}
-		body, err := ResponseBodyContext(ctx, event.RequestID)
-		if err != nil {
-			s.recordNetworkHandlerError(h, err)
-			s.continueResponse(event.RequestID)
-			return
-		}
+		headers, orderedHeaders := responseHeaders(event.ResponseHeaders)
+		originalHeaders := cloneHeaderEntries(orderedHeaders)
 		limit := h.options.ResponseBodyLimit
 		if limit == 0 {
 			limit = DefaultInterceptedBodyLimit
 		}
-		if int64(len(body)) > limit {
-			err = fmt.Errorf("intercepted response body size %d exceeds limit %d", len(body), limit)
+		body, stream, bodyTaken, err := responseBodyContext(ctx, event.RequestID, limit)
+		defer closeResponseStream(s.ctx, stream)
+		if err != nil {
 			s.recordNetworkHandlerError(h, err)
-			s.continueResponse(event.RequestID)
+			s.resolveResponseReadFailure(event.RequestID, bodyTaken)
 			return
 		}
 		if h.options.Transform != nil {
@@ -480,7 +483,7 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 			}
 			result := make(chan transformResult, 1)
 			response := InterceptedResponse{
-				URL: event.Request.URL, Status: status, Headers: cloneStringMap(headers), Body: append([]byte(nil), body...),
+				URL: event.Request.URL, Status: status, Headers: cloneStringMap(headers), HeaderEntries: cloneHeaderEntries(orderedHeaders), Body: append([]byte(nil), body...),
 			}
 			go func() {
 				override, transformErr := h.options.Transform(ctx, response)
@@ -491,12 +494,12 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 				o, err = transformed.override, transformed.err
 				if err != nil {
 					s.recordNetworkHandlerError(h, err)
-					s.continueResponse(event.RequestID)
+					s.fallbackResponse(event.RequestID, status, orderedHeaders, body)
 					return
 				}
 			case <-ctx.Done():
 				s.recordNetworkHandlerError(h, ctx.Err())
-				s.continueResponse(event.RequestID)
+				s.fallbackResponse(event.RequestID, status, orderedHeaders, body)
 				return
 			}
 		} else {
@@ -508,27 +511,38 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 		if status < 100 || status > 599 {
 			err = fmt.Errorf("response status %d is outside 100..599", status)
 			s.recordNetworkHandlerError(h, err)
-			s.continueResponse(event.RequestID)
+			s.fallbackResponse(event.RequestID, int(event.ResponseStatusCode), originalHeaders, body)
 			return
 		}
-		for k, v := range o.Headers {
-			headers[k] = v
-		}
+		orderedHeaders = mergeResponseHeaders(orderedHeaders, o)
 		if o.Body != nil {
 			if int64(len(*o.Body)) > limit {
 				err = fmt.Errorf("replacement response body size %d exceeds limit %d", len(*o.Body), limit)
 				s.recordNetworkHandlerError(h, err)
-				s.continueResponse(event.RequestID)
+				s.fallbackResponse(event.RequestID, int(event.ResponseStatusCode), originalHeaders, body)
 				return
 			}
 			body = *o.Body
-			stripEntityHeaders(headers)
+			orderedHeaders = stripEntityHeaderEntries(orderedHeaders)
 		}
-		if err := chromedp.Run(ctx, fetch.FulfillRequest(event.RequestID, int64(status)).WithResponseHeaders(headerEntries(headers)).WithBody(base64.StdEncoding.EncodeToString(body))); err != nil {
+		if err := s.fulfillResponse(event.RequestID, status, orderedHeaders, body); err != nil {
 			s.recordNetworkHandlerError(h, err)
-			s.continueResponse(event.RequestID)
+			s.resolveResponseReadFailure(event.RequestID, true)
 		}
 	}()
+}
+
+func (s *Session) fallbackResponse(id fetch.RequestID, status int, headers []HeaderEntry, body []byte) {
+	if err := s.fulfillResponse(id, status, headers, body); err != nil {
+		s.resolveResponseReadFailure(id, true)
+	}
+}
+
+func (s *Session) fulfillResponse(id fetch.RequestID, status int, headers []HeaderEntry, body []byte) error {
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+	headers = stripEntityHeaderEntries(headers)
+	return chromedp.Run(ctx, fetch.FulfillRequest(id, int64(status)).WithResponseHeaders(fetchHeaderEntries(headers)).WithBody(base64.StdEncoding.EncodeToString(body)))
 }
 
 func (s *Session) selectResponseOwner(url string) (*networkHandlerEntry, *responseHold) {
@@ -634,11 +648,80 @@ func cloneNetworkHandlerOptions(options NetworkHandlerOptions) NetworkHandlerOpt
 
 func cloneResponseOverride(override ResponseOverride) ResponseOverride {
 	override.Headers = cloneStringMap(override.Headers)
+	override.HeaderEntries = cloneHeaderEntries(override.HeaderEntries)
 	if override.Body != nil {
 		body := append([]byte(nil), (*override.Body)...)
 		override.Body = &body
 	}
 	return override
+}
+
+func responseHeaders(entries []*fetch.HeaderEntry) (map[string]string, []HeaderEntry) {
+	headers := make(map[string]string, len(entries))
+	ordered := make([]HeaderEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry == nil {
+			continue
+		}
+		headers[entry.Name] = entry.Value
+		ordered = append(ordered, HeaderEntry{Name: entry.Name, Value: entry.Value})
+	}
+	return headers, ordered
+}
+
+func cloneHeaderEntries(entries []HeaderEntry) []HeaderEntry {
+	return append([]HeaderEntry(nil), entries...)
+}
+
+func mergeResponseHeaders(original []HeaderEntry, override ResponseOverride) []HeaderEntry {
+	overridden := map[string]struct{}{}
+	for name := range override.Headers {
+		overridden[strings.ToLower(name)] = struct{}{}
+	}
+	for _, entry := range override.HeaderEntries {
+		overridden[strings.ToLower(entry.Name)] = struct{}{}
+	}
+	merged := make([]HeaderEntry, 0, len(original)+len(override.Headers)+len(override.HeaderEntries))
+	for _, entry := range original {
+		if _, found := overridden[strings.ToLower(entry.Name)]; !found {
+			merged = append(merged, entry)
+		}
+	}
+	keys := make([]string, 0, len(override.Headers))
+	for name := range override.Headers {
+		keys = append(keys, name)
+	}
+	sort.Strings(keys)
+	entryNames := map[string]struct{}{}
+	for _, entry := range override.HeaderEntries {
+		entryNames[strings.ToLower(entry.Name)] = struct{}{}
+	}
+	for _, name := range keys {
+		if _, replacedByEntries := entryNames[strings.ToLower(name)]; !replacedByEntries {
+			merged = append(merged, HeaderEntry{Name: name, Value: override.Headers[name]})
+		}
+	}
+	return append(merged, override.HeaderEntries...)
+}
+
+func fetchHeaderEntries(headers []HeaderEntry) []*fetch.HeaderEntry {
+	out := make([]*fetch.HeaderEntry, 0, len(headers))
+	for _, entry := range headers {
+		out = append(out, &fetch.HeaderEntry{Name: entry.Name, Value: entry.Value})
+	}
+	return out
+}
+
+func stripEntityHeaderEntries(headers []HeaderEntry) []HeaderEntry {
+	out := make([]HeaderEntry, 0, len(headers))
+	for _, entry := range headers {
+		switch strings.ToLower(entry.Name) {
+		case "content-length", "content-encoding", "transfer-encoding":
+		default:
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 func headerEntries(headers map[string]string) []*fetch.HeaderEntry {
 	keys := make([]string, 0, len(headers))

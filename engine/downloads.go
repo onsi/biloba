@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,6 +33,7 @@ type Download struct {
 type DownloadQuery struct {
 	State                  DownloadState
 	Filename, URL, Content *Expectation
+	ContentBytes           []byte
 }
 
 func (s *Session) setupDownloads(ctx context.Context) error {
@@ -116,7 +119,7 @@ func (s *Session) matchesDownload(ctx context.Context, d Download, q DownloadQue
 			}
 		}
 	}
-	if q.Content != nil {
+	if q.Content != nil || q.ContentBytes != nil {
 		if d.State != DownloadComplete {
 			return false, nil
 		}
@@ -124,7 +127,16 @@ func (s *Session) matchesDownload(ctx context.Context, d Download, q DownloadQue
 		if err != nil {
 			return false, err
 		}
-		return MatchExpectation(string(body), *q.Content)
+		if q.Content != nil {
+			matched, matchErr := MatchExpectation(string(body), *q.Content)
+			if matchErr != nil || !matched {
+				return false, matchErr
+			}
+		}
+		if q.ContentBytes != nil && !bytes.Equal(body, q.ContentBytes) {
+			return false, nil
+		}
+		return true, nil
 	}
 	return true, nil
 }
@@ -167,20 +179,20 @@ func (s *Session) DownloadContent(ctx context.Context, id string, maxBytes int64
 		return cached, nil
 	}
 	path := filepath.Join(dir, id)
-	info, err := os.Stat(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, typedError(CodeIO, "read download", err)
 	}
-	if info.Size() > maxBytes {
-		return nil, &Error{Code: CodeInvalidArgument, Operation: "read download", Message: fmt.Sprintf("download content size %d exceeds limit %d", info.Size(), maxBytes), Observed: info.Size()}
-	}
-	select {
-	case <-ctx.Done():
-		return nil, contextError("read download", ctx.Err())
-	default:
-	}
-	content, err := os.ReadFile(path)
+	defer file.Close()
+	content, err := readBounded(ctx, file, maxBytes)
 	if err != nil {
+		if err == context.Canceled || err == context.DeadlineExceeded {
+			return nil, contextError("read download", err)
+		}
+		var limitErr *contentLimitError
+		if errors.As(err, &limitErr) {
+			return nil, &Error{Code: CodeInvalidArgument, Operation: "read download", Message: fmt.Sprintf("download content exceeds limit %d", maxBytes), Observed: maxBytes + 1}
+		}
 		return nil, typedError(CodeIO, "read download", err)
 	}
 	select {

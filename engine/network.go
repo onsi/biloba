@@ -1,11 +1,16 @@
 package engine
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
+	"io"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
+	cdpio "github.com/chromedp/cdproto/io"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 )
@@ -25,13 +30,79 @@ func RunActionContext(ctx context.Context, action chromedp.Action) error {
 
 // ResponseBodyContext reads and decodes the body of a response paused by Fetch interception.
 func ResponseBodyContext(ctx context.Context, requestID fetch.RequestID) ([]byte, error) {
-	var body []byte
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		var readErr error
-		body, readErr = fetch.GetResponseBody(requestID).Do(runCtx)
-		return readErr
-	}))
+	body, stream, _, err := responseBodyContext(ctx, requestID, DefaultInterceptedBodyLimit)
+	closeResponseStream(ctx, stream)
 	return body, err
+}
+
+func responseBodyContext(ctx context.Context, requestID fetch.RequestID, maxBytes int64) ([]byte, cdpio.StreamHandle, bool, error) {
+	var stream cdpio.StreamHandle
+	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
+		var takeErr error
+		stream, takeErr = fetch.TakeResponseBodyAsStream(requestID).Do(runCtx)
+		return takeErr
+	}))
+	if err != nil {
+		return nil, "", false, err
+	}
+	body, err := readBounded(ctx, &cdpStreamReader{ctx: ctx, handle: stream}, maxBytes)
+	return body, stream, true, err
+}
+
+func closeResponseStream(ctx context.Context, stream cdpio.StreamHandle) {
+	if stream == "" {
+		return
+	}
+	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+	defer cancel()
+	_ = chromedp.Run(closeCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
+		return cdpio.Close(stream).Do(runCtx)
+	}))
+}
+
+type cdpStreamReader struct {
+	ctx     context.Context
+	handle  cdpio.StreamHandle
+	pending []byte
+	eof     bool
+}
+
+func (r *cdpStreamReader) Read(p []byte) (int, error) {
+	if len(r.pending) > 0 {
+		n := copy(p, r.pending)
+		r.pending = r.pending[n:]
+		return n, nil
+	}
+	if r.eof {
+		return 0, io.EOF
+	}
+	params := cdpio.Read(r.handle).WithSize(int64(len(p)))
+	var result struct {
+		Base64Encoded bool   `json:"base64Encoded"`
+		Data          string `json:"data"`
+		EOF           bool   `json:"eof"`
+	}
+	if err := chromedp.Run(r.ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
+		return cdp.Execute(runCtx, cdpio.CommandRead, params, &result)
+	})); err != nil {
+		return 0, err
+	}
+	r.eof = result.EOF
+	data := []byte(result.Data)
+	if result.Base64Encoded {
+		decoded := make([]byte, base64.StdEncoding.DecodedLen(len(result.Data)))
+		n, err := base64.StdEncoding.Decode(decoded, []byte(result.Data))
+		if err != nil {
+			return 0, err
+		}
+		data = decoded[:n]
+	}
+	n := copy(p, data)
+	r.pending = bytes.Clone(data[n:])
+	if n == 0 && r.eof {
+		return 0, io.EOF
+	}
+	return n, nil
 }
 
 // Request is one request observed in a session since its last Prepare.
@@ -48,11 +119,12 @@ type RequestQuery struct {
 
 // HeldResponse identifies a matching response paused by HoldResponse.
 type HeldResponse struct {
-	ID      string
-	URL     string
-	Status  int
-	Headers map[string]string
-	Body    []byte
+	ID            string
+	URL           string
+	Status        int
+	Headers       map[string]string
+	HeaderEntries []HeaderEntry
+	Body          []byte
 }
 
 type ResponseHoldOptions struct {
@@ -334,10 +406,13 @@ func (s *Session) handlePausedResponse(event *fetch.EventRequestPaused, selected
 	}
 	selected.pending++
 	s.holdMu.Unlock()
+	s.beginInterception()
 	go func() {
+		defer s.endInterception()
 		ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 		defer cancel()
-		body, err := ResponseBodyContext(ctx, event.RequestID)
+		body, stream, bodyTaken, err := responseBodyContext(ctx, event.RequestID, selected.bodyLimit)
+		defer closeResponseStream(s.ctx, stream)
 		if err != nil {
 			s.holdMu.Lock()
 			selected.pending--
@@ -346,26 +421,12 @@ func (s *Session) handlePausedResponse(event *fetch.EventRequestPaused, selected
 			close(selected.notify)
 			selected.notify = make(chan struct{})
 			s.holdMu.Unlock()
-			s.continueResponse(event.RequestID)
+			s.resolveResponseReadFailure(event.RequestID, bodyTaken)
 			return
 		}
-		if int64(len(body)) > selected.bodyLimit {
-			s.holdMu.Lock()
-			selected.pending--
-			selected.passed++
-			selected.lastError = fmt.Sprintf("intercepted response body size %d exceeds limit %d", len(body), selected.bodyLimit)
-			close(selected.notify)
-			selected.notify = make(chan struct{})
-			s.holdMu.Unlock()
-			s.continueResponse(event.RequestID)
-			return
-		}
-		headers := make(map[string]string, len(event.ResponseHeaders))
-		for _, header := range event.ResponseHeaders {
-			headers[header.Name] = header.Value
-		}
+		headers, orderedHeaders := responseHeaders(event.ResponseHeaders)
 		entry := &heldResponseEntry{
-			response: HeldResponse{ID: string(event.RequestID), URL: event.Request.URL, Status: int(event.ResponseStatusCode), Headers: headers, Body: body},
+			response: HeldResponse{ID: string(event.RequestID), URL: event.Request.URL, Status: int(event.ResponseStatusCode), Headers: headers, HeaderEntries: orderedHeaders, Body: body},
 			release:  make(chan struct{}),
 		}
 		s.holdMu.Lock()
@@ -374,7 +435,7 @@ func (s *Session) handlePausedResponse(event *fetch.EventRequestPaused, selected
 		if selected.released {
 			selected.passed++
 			s.holdMu.Unlock()
-			s.continueResponse(event.RequestID)
+			s.fallbackResponse(event.RequestID, int(event.ResponseStatusCode), orderedHeaders, body)
 			return
 		}
 		selected.entries = append(selected.entries, entry)
@@ -385,7 +446,7 @@ func (s *Session) handlePausedResponse(event *fetch.EventRequestPaused, selected
 		case <-entry.release:
 		case <-s.ctx.Done():
 		}
-		s.continueResponse(event.RequestID)
+		s.fallbackResponse(event.RequestID, int(event.ResponseStatusCode), orderedHeaders, body)
 	}()
 }
 
@@ -395,6 +456,33 @@ func (s *Session) continueResponse(id fetch.RequestID) {
 	_ = chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
 		return fetch.ContinueResponse(id).Do(runCtx)
 	}))
+}
+
+func (s *Session) resolveResponseReadFailure(id fetch.RequestID, bodyTaken bool) {
+	if !bodyTaken {
+		s.continueResponse(id)
+		return
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+	_ = chromedp.Run(ctx, fetch.FailRequest(id, network.ErrorReasonFailed))
+}
+
+func (s *Session) beginInterception() {
+	s.holdMu.Lock()
+	s.interceptions++
+	s.holdMu.Unlock()
+}
+
+func (s *Session) endInterception() {
+	s.holdMu.Lock()
+	if s.interceptions > 0 {
+		s.interceptions--
+	}
+	s.holdMu.Unlock()
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+	_ = s.disableInterceptionIfUnused(ctx)
 }
 
 func (s *Session) releaseAllResponseHolds() {
@@ -459,6 +547,7 @@ func holdingCount(hold *responseHold) int {
 
 func cloneHeldResponse(response HeldResponse) HeldResponse {
 	response.Headers = cloneStringMap(response.Headers)
+	response.HeaderEntries = cloneHeaderEntries(response.HeaderEntries)
 	response.Body = append([]byte(nil), response.Body...)
 	return response
 }

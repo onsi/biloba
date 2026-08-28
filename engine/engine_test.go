@@ -375,6 +375,12 @@ var _ = BeforeSuite(func() {
 			fmt.Fprint(response, "original body")
 			return
 		}
+		if request.URL.Path == "/transformed" {
+			response.Header().Add("X-Duplicate", "first")
+			response.Header().Add("X-Duplicate", "second")
+			fmt.Fprint(response, "original body")
+			return
+		}
 		if request.URL.Path == "/slow" {
 			time.Sleep(150 * time.Millisecond)
 			fmt.Fprint(response, "slow")
