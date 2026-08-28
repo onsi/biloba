@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/page"
@@ -57,7 +58,19 @@ type VisualOptions struct {
 	SettleAttempts           int
 	SettleStreak             int
 	SettleInterval           time.Duration
+	// WriteArtifacts controls actual/diff artifact generation for a mismatch. Nil preserves the
+	// ordinary one-attempt behavior and writes them; false lets a polling caller defer the expensive
+	// reporting work until its final attempt.
+	WriteArtifacts *bool
 }
+
+type ScreenshotUpdateDisposition string
+
+const (
+	ScreenshotCreated   ScreenshotUpdateDisposition = "created"
+	ScreenshotUpdated   ScreenshotUpdateDisposition = "updated"
+	ScreenshotUnchanged ScreenshotUpdateDisposition = "unchanged"
+)
 
 type VisualResult struct {
 	Match, Updated bool
@@ -71,6 +84,10 @@ type VisualSchemeResult struct {
 	BaselinePath, ActualPath, DiffPath string
 	Diff                               ScreenshotDiff
 	Diagnosis                          string
+	Warning                            string
+	UpdateDisposition                  ScreenshotUpdateDisposition
+	PreviousDiff                       *ScreenshotDiff
+	UpdateSummary                      string
 }
 
 func (s *Session) CapturePageScreenshot(ctx context.Context, options ScreenshotCaptureOptions) (shot Screenshot, err error) {
@@ -176,7 +193,7 @@ func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, opt
 			encoded[i] = mask.Encoded()
 		}
 		response, callErr := RunHandlerContext(ctx, "maskBoxes", "", encoded)
-		if callErr != nil || response.Err != "" {
+		if callErr != nil || response.Err != "" || !response.Success {
 			return shot, handlerCallError("resolve screenshot masks", response, callErr)
 		}
 		var rects []image.Rectangle
@@ -235,6 +252,7 @@ func (s *Session) compareScreenshot(ctx context.Context, name string, target Scr
 			return result, Fatal(err)
 		}
 		baselinePath := filepath.Join(options.BaselineDir, relative)
+		entry := VisualSchemeResult{Scheme: scheme, BaselinePath: absolutePath(baselinePath)}
 		captureOptions := ScreenshotCaptureOptions{Masks: options.Masks, Animated: options.Animated, ColorScheme: scheme, MaxBytes: options.MaxBytes}
 		var shot Screenshot
 		settled := true
@@ -246,7 +264,13 @@ func (s *Session) compareScreenshot(ctx context.Context, name string, target Scr
 		if err != nil {
 			return result, err
 		}
+		if shot.Warning != "" {
+			entry.Warning = shot.Warning
+			result.Warnings = append(result.Warnings, shot.Warning)
+		}
 		if shot.FullyClipped {
+			result.Match = false
+			result.Schemes = append(result.Schemes, entry)
 			message := shot.Warning
 			if options.Update {
 				message = "refusing to write a screenshot baseline: " + message
@@ -255,10 +279,9 @@ func (s *Session) compareScreenshot(ctx context.Context, name string, target Scr
 			return result, fmt.Errorf("%s", message)
 		}
 		if shot.Vanished {
+			result.Match = false
+			result.Schemes = append(result.Schemes, entry)
 			return result, fmt.Errorf("%s", shot.Warning)
-		}
-		if shot.Warning != "" {
-			result.Warnings = append(result.Warnings, shot.Warning)
 		}
 		if options.Update && !settled {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("the screenshot for %s never settled: no %d captures in a row matched across %d captures; writing the last frame", visualLabel(name, scheme), resolvedSettleStreak(options), resolvedSettleAttempts(options)))
@@ -270,19 +293,26 @@ func (s *Session) compareScreenshot(ctx context.Context, name string, target Scr
 			}
 		}
 		captures[scheme] = append([]byte(nil), shot.PNG...)
-		entry := VisualSchemeResult{Scheme: scheme, BaselinePath: absolutePath(baselinePath)}
-		baseline, readErr := os.ReadFile(baselinePath)
 		if options.Update {
-			if err := WriteScreenshotPNG(baselinePath, shot.PNG, options.MaxBytes); err != nil {
-				return result, Fatal(fmt.Errorf("write screenshot baseline: %w", err))
+			disposition, previousDiff, summary, updateErr := updateScreenshotBaseline(baselinePath, shot.PNG, options.MaxBytes, options.Tolerance, visualLabel(name, scheme))
+			if updateErr != nil {
+				return result, Fatal(updateErr)
 			}
-			entry.Match, entry.Updated = true, readErr != nil || !bytes.Equal(baseline, shot.PNG)
+			entry.UpdateDisposition = disposition
+			entry.PreviousDiff = previousDiff
+			entry.UpdateSummary = summary
+			entry.Match = true
+			entry.Updated = disposition == ScreenshotCreated || disposition == ScreenshotUpdated
 			result.Updated = result.Updated || entry.Updated
 			result.Schemes = append(result.Schemes, entry)
 			continue
 		}
+		baseline, readErr := readScreenshotFile(baselinePath)
 		if os.IsNotExist(readErr) {
-			entry.ActualPath = s.writeVisualArtifact(options.ArtifactDir, name, scheme, "actual", shot.PNG, options.MaxBytes)
+			entry.ActualPath, err = s.writeVisualArtifact(options.ArtifactDir, name, scheme, "actual", shot.PNG, options.MaxBytes)
+			if err != nil {
+				result.Warnings = append(result.Warnings, err.Error())
+			}
 			result.Match = false
 			result.Schemes = append(result.Schemes, entry)
 			return result, Fatal(fmt.Errorf("there is no screenshot baseline for %s; expected %s; captured actual: %s; rerun in update mode after reviewing it", visualLabel(name, scheme), entry.BaselinePath, entry.ActualPath))
@@ -299,9 +329,19 @@ func (s *Session) compareScreenshot(ctx context.Context, name string, target Scr
 		}
 		entry.Match, entry.Diff = diff.Match, diff
 		if !diff.Match {
-			entry.ActualPath = s.writeVisualArtifact(options.ArtifactDir, name, scheme, "actual", shot.PNG, options.MaxBytes)
-			entry.DiffPath = s.writeVisualArtifact(options.ArtifactDir, name, scheme, "diff", diffPNG, options.MaxBytes)
-			entry.Diagnosis = diff.Diagnose(visualLabel(name, scheme), ScreenshotPaths{Baseline: entry.BaselinePath, Actual: entry.ActualPath, Diff: entry.DiffPath})
+			if shouldWriteVisualArtifacts(options) {
+				entry.ActualPath, err = s.writeVisualArtifact(options.ArtifactDir, name, scheme, "actual", shot.PNG, options.MaxBytes)
+				if err != nil {
+					result.Warnings = append(result.Warnings, err.Error())
+				}
+				if len(diffPNG) > 0 {
+					entry.DiffPath, err = s.writeVisualArtifact(options.ArtifactDir, name, scheme, "diff", diffPNG, options.MaxBytes)
+					if err != nil {
+						result.Warnings = append(result.Warnings, err.Error())
+					}
+				}
+				entry.Diagnosis = diff.Diagnose(visualLabel(name, scheme), ScreenshotPaths{Baseline: entry.BaselinePath, Actual: entry.ActualPath, Diff: entry.DiffPath})
+			}
 			result.Match = false
 		}
 		result.Schemes = append(result.Schemes, entry)
@@ -391,7 +431,46 @@ func ScreenshotBaselinePath(name, scheme string) (string, error) {
 	return filepath.Join(parts...), nil
 }
 
+func shouldWriteVisualArtifacts(options VisualOptions) bool {
+	return options.WriteArtifacts == nil || *options.WriteArtifacts
+}
+
+func updateScreenshotBaseline(path string, data []byte, maxBytes int, tolerance ScreenshotTolerance, label string) (ScreenshotUpdateDisposition, *ScreenshotDiff, string, error) {
+	unlock := lockScreenshotPath(path)
+	defer unlock()
+	previous, readErr := os.ReadFile(path)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return "", nil, "", fmt.Errorf("read screenshot baseline %s: %w", path, readErr)
+	}
+	disposition := ScreenshotCreated
+	var previousDiff *ScreenshotDiff
+	summary := fmt.Sprintf("screenshot %q written (new baseline)", label)
+	if readErr == nil {
+		diff, _, err := CompareScreenshotPNGs(previous, data, tolerance)
+		if err != nil {
+			return "", nil, "", fmt.Errorf("compare existing screenshot baseline %s: %w", path, err)
+		}
+		previousDiff = &diff
+		if diff.Match {
+			disposition = ScreenshotUnchanged
+		} else {
+			disposition = ScreenshotUpdated
+		}
+		summary = diff.Summary(label)
+	}
+	if err := writeScreenshotPNGUnlocked(path, data, maxBytes); err != nil {
+		return "", previousDiff, summary, fmt.Errorf("write screenshot baseline: %w", err)
+	}
+	return disposition, previousDiff, summary, nil
+}
+
 func WriteScreenshotPNG(path string, data []byte, maxBytes int) error {
+	unlock := lockScreenshotPath(path)
+	defer unlock()
+	return writeScreenshotPNGUnlocked(path, data, maxBytes)
+}
+
+func writeScreenshotPNGUnlocked(path string, data []byte, maxBytes int) error {
 	if err := validateScreenshotPNG(data, maxBytes); err != nil {
 		return err
 	}
@@ -416,7 +495,7 @@ func WriteScreenshotPNG(path string, data []byte, maxBytes int) error {
 	if err = os.Chmod(temporary, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(temporary, path)
+	return replaceScreenshotFile(temporary, path)
 }
 
 func validateScreenshotPNG(data []byte, maxBytes int) error {
@@ -437,16 +516,91 @@ func validateScreenshotPNG(data []byte, maxBytes int) error {
 	return nil
 }
 
-func (s *Session) writeVisualArtifact(dir, name, scheme, kind string, data []byte, maxBytes int) string {
+func (s *Session) WriteScreenshotArtifact(name string, data []byte, maxBytes int) (string, error) {
+	relative, err := ScreenshotBaselinePath(name, "")
+	if err != nil {
+		return "", err
+	}
+	if s.artifactDir == "" {
+		return "", fmt.Errorf("screenshot artifact directory is not configured")
+	}
+	filename := strings.TrimSuffix(strings.ReplaceAll(relative, string(filepath.Separator), "_"), ".png")
+	if err := validateScreenshotPNG(data, maxBytes); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(s.artifactDir, 0o755); err != nil {
+		return "", fmt.Errorf("create screenshot artifact directory: %w", err)
+	}
+	temporary, err := os.CreateTemp(s.artifactDir, ".capture-"+filename+"-*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("reserve screenshot artifact path: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	if err := temporary.Close(); err != nil {
+		_ = os.Remove(temporaryPath)
+		return "", fmt.Errorf("reserve screenshot artifact path: %w", err)
+	}
+	if err := os.Remove(temporaryPath); err != nil {
+		return "", fmt.Errorf("reserve screenshot artifact path: %w", err)
+	}
+	base := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(temporaryPath), "."), ".tmp") + ".png"
+	path := filepath.Join(s.artifactDir, base)
+	if err := WriteScreenshotPNG(path, data, maxBytes); err != nil {
+		return "", fmt.Errorf("write screenshot artifact: %w", err)
+	}
+	return absolutePath(path), nil
+}
+
+func (s *Session) writeVisualArtifact(dir, name, scheme, kind string, data []byte, maxBytes int) (string, error) {
 	filename := strings.Trim(visualFilenameRE.ReplaceAllString(strings.ReplaceAll(name, "/", "_"), "_"), "_")
 	if scheme != "" {
 		filename += "-" + scheme
 	}
 	path := filepath.Join(dir, filename+"."+kind+".png")
 	if err := WriteScreenshotPNG(path, data, maxBytes); err != nil {
-		return ""
+		return "", fmt.Errorf("write screenshot %s artifact: %w", kind, err)
 	}
-	return absolutePath(path)
+	return absolutePath(path), nil
+}
+
+type screenshotPathLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+var screenshotPathLocks = struct {
+	sync.Mutex
+	entries map[string]*screenshotPathLock
+}{entries: map[string]*screenshotPathLock{}}
+
+var replaceScreenshotFile = atomicReplaceScreenshotFile
+
+func lockScreenshotPath(path string) func() {
+	path = absolutePath(filepath.Clean(path))
+	screenshotPathLocks.Lock()
+	entry := screenshotPathLocks.entries[path]
+	if entry == nil {
+		entry = &screenshotPathLock{}
+		screenshotPathLocks.entries[path] = entry
+	}
+	entry.refs++
+	screenshotPathLocks.Unlock()
+	entry.mu.Lock()
+	return func() {
+		entry.mu.Unlock()
+		screenshotPathLocks.Lock()
+		entry.refs--
+		if entry.refs == 0 {
+			delete(screenshotPathLocks.entries, path)
+		}
+		screenshotPathLocks.Unlock()
+	}
+}
+
+func readScreenshotFile(path string) ([]byte, error) {
+	unlock := lockScreenshotPath(path)
+	defer unlock()
+	return os.ReadFile(path)
 }
 
 func handlerCallError(operation string, response HandlerResponse, err error) error {

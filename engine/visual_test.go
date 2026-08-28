@@ -64,6 +64,46 @@ var _ = Describe("runner-neutral screenshots", func() {
 		Expect(after).To(Equal(before))
 	})
 
+	It("rejects a failed mask geometry response instead of silently returning unmasked pixels", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, "data:text/html,<div class=box style='width:20px;height:20px;background:red'></div>")).To(Succeed())
+		_, err = session.Exists(ctx, engine.CSS(".box"))
+		Expect(err).NotTo(HaveOccurred())
+		_, err = session.Evaluate(ctx, `_biloba.maskBoxes=()=>({success:false})`)
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = session.CaptureElementScreenshot(ctx, engine.CSS(".box"), engine.ScreenshotCaptureOptions{
+			Masks: []engine.Selector{engine.CSS(".box")},
+		})
+
+		Expect(err).To(MatchError(ContainSubstring("resolve screenshot masks failed")))
+	})
+
+	It("writes unique bounded raw screenshot artifacts beneath the session artifact directory", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		shot, err := session.CapturePageScreenshot(ctx, engine.ScreenshotCaptureOptions{})
+		Expect(err).NotTo(HaveOccurred())
+
+		first, err := session.WriteScreenshotArtifact("checkout/receipt", shot.PNG, 0)
+		Expect(err).NotTo(HaveOccurred())
+		second, err := session.WriteScreenshotArtifact("checkout/receipt", shot.PNG, 0)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(second).NotTo(Equal(first))
+		Expect(filepath.Base(first)).To(MatchRegexp(`^capture-checkout_receipt-[A-Za-z0-9_-]+\.png$`))
+		contents, err := os.ReadFile(first)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(contents).To(Equal(shot.PNG))
+		_, err = session.WriteScreenshotArtifact("../receipt", shot.PNG, 0)
+		Expect(err).To(MatchError(ContainSubstring("invalid path segment")))
+		_, err = session.WriteScreenshotArtifact("receipt", shot.PNG, 16)
+		Expect(err).To(MatchError(ContainSubstring("exceeds the 16-byte limit")))
+	})
+
 	It("freezes rendering by default and permits animated capture only when requested", func(ctx SpecContext) {
 		session, err := browser.OpenSession(ctx)
 		Expect(err).NotTo(HaveOccurred())
@@ -90,11 +130,16 @@ var _ = Describe("runner-neutral screenshots", func() {
 		Expect(shot.PNG).NotTo(BeEmpty())
 		Expect(shot.Warning).To(ContainSubstring("not painted because it is clipped"))
 
-		_, err = session.CompareScreenshot(ctx, "clipped", engine.ElementScreenshotTarget(engine.CSS(".box")), engine.VisualOptions{
+		result, err := session.CompareScreenshot(ctx, "clipped", engine.ElementScreenshotTarget(engine.CSS(".box")), engine.VisualOptions{
 			BaselineDir: GinkgoT().TempDir(), ArtifactDir: GinkgoT().TempDir(), Update: true,
 			SettleAttempts: 2, SettleStreak: 2, SettleInterval: time.Millisecond,
 		})
 		Expect(err).To(MatchError(ContainSubstring("refusing to write")))
+		Expect(result.Match).To(BeFalse())
+		Expect(result.Warnings).To(ContainElement(ContainSubstring("not painted because it is clipped")))
+		Expect(result.Schemes).To(HaveLen(1))
+		Expect(result.Schemes[0].BaselinePath).NotTo(BeEmpty())
+		Expect(result.Schemes[0].Warning).To(ContainSubstring("not painted because it is clipped"))
 	})
 
 	It("reports when viewport expansion removes the element being captured", func(ctx SpecContext) {
@@ -183,6 +228,118 @@ var _ = Describe("runner-neutral visual comparison", func() {
 			ContainSubstring("actual:"),
 			ContainSubstring("diff:"),
 		))
+	})
+
+	It("reports created, unchanged, and updated baseline dispositions with prior diffs", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, "data:text/html,<style>body{margin:0}.box{width:10px;height:10px;background:red}</style><div class=box></div>")).To(Succeed())
+		opts := engine.VisualOptions{
+			BaselineDir: GinkgoT().TempDir(), ArtifactDir: GinkgoT().TempDir(), Update: true,
+			SettleAttempts: 2, SettleStreak: 2, SettleInterval: time.Millisecond,
+		}
+
+		created, err := session.CompareScreenshot(ctx, "disposition", engine.ElementScreenshotTarget(engine.CSS(".box")), opts)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(created.Schemes[0].UpdateDisposition).To(Equal(engine.ScreenshotCreated))
+		Expect(created.Schemes[0].UpdateSummary).To(ContainSubstring("new baseline"))
+		Expect(created.Schemes[0].PreviousDiff).To(BeNil())
+
+		unchanged, err := session.CompareScreenshot(ctx, "disposition", engine.ElementScreenshotTarget(engine.CSS(".box")), opts)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(unchanged.Updated).To(BeFalse())
+		Expect(unchanged.Schemes[0].UpdateDisposition).To(Equal(engine.ScreenshotUnchanged))
+		Expect(unchanged.Schemes[0].UpdateSummary).To(ContainSubstring("unchanged"))
+		Expect(unchanged.Schemes[0].PreviousDiff).NotTo(BeNil())
+		Expect(unchanged.Schemes[0].PreviousDiff.Match).To(BeTrue())
+
+		_, err = session.Evaluate(ctx, `document.querySelector('.box').style.background='blue'`)
+		Expect(err).NotTo(HaveOccurred())
+		updated, err := session.CompareScreenshot(ctx, "disposition", engine.ElementScreenshotTarget(engine.CSS(".box")), opts)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updated.Updated).To(BeTrue())
+		Expect(updated.Schemes[0].UpdateDisposition).To(Equal(engine.ScreenshotUpdated))
+		Expect(updated.Schemes[0].PreviousDiff).NotTo(BeNil())
+		Expect(updated.Schemes[0].PreviousDiff.DifferingPixels).To(Equal(100))
+		Expect(updated.Schemes[0].UpdateSummary).To(And(ContainSubstring("100 of 100 pixels changed"), ContainSubstring("one box")))
+	})
+
+	It("preserves the scheme and warning when viewport expansion removes a visual subject", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		root := GinkgoT().TempDir()
+		opts := engine.VisualOptions{BaselineDir: filepath.Join(root, "baselines"), ArtifactDir: filepath.Join(root, "artifacts"), Update: true, SettleAttempts: 2, SettleStreak: 2, SettleInterval: time.Millisecond}
+		Expect(session.Navigate(ctx, "data:text/html,<div id=doomed style='width:150px;height:80px;background:red'></div>")).To(Succeed())
+		_, err = session.CompareScreenshot(ctx, "vanished", engine.ElementScreenshotTarget(engine.CSS("#doomed")), opts)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(session.SetWindowSize(ctx, 600, 400)).To(Succeed())
+		html := `<body style="margin:0;height:1500px"><div id="doomed" style="position:absolute;top:1200px;width:150px;height:80px;background:red"></div><script>let q=matchMedia('(max-width:100px)');let remove=()=>document.getElementById('doomed')?.remove();q.addEventListener('change',remove)</script>`
+		Expect(session.Navigate(ctx, "data:text/html,"+url.PathEscape(html))).To(Succeed())
+		opts.Update = false
+
+		result, err := session.CompareScreenshot(ctx, "vanished", engine.ElementScreenshotTarget(engine.CSS("#doomed")), opts)
+
+		Expect(err).To(MatchError(ContainSubstring("present before this capture and gone after it")))
+		Expect(result.Match).To(BeFalse())
+		Expect(result.Warnings).To(ContainElement(ContainSubstring("present before this capture and gone after it")))
+		Expect(result.Schemes).To(HaveLen(1))
+		Expect(result.Schemes[0].BaselinePath).NotTo(BeEmpty())
+		Expect(result.Schemes[0].Warning).To(ContainSubstring("present before this capture and gone after it"))
+	})
+
+	It("suppresses retry-attempt artifacts until explicitly requested", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, "data:text/html,<style>body{margin:0}.box{width:10px;height:10px;background:red}</style><div class=box></div>")).To(Succeed())
+		root := GinkgoT().TempDir()
+		opts := engine.VisualOptions{BaselineDir: filepath.Join(root, "baselines"), ArtifactDir: filepath.Join(root, "artifacts"), Update: true, SettleAttempts: 2, SettleStreak: 2, SettleInterval: time.Millisecond}
+		_, err = session.CompareScreenshot(ctx, "deferred", engine.ElementScreenshotTarget(engine.CSS(".box")), opts)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = session.Evaluate(ctx, `document.querySelector('.box').style.background='blue'`)
+		Expect(err).NotTo(HaveOccurred())
+		writeArtifacts := false
+		opts.Update = false
+		opts.WriteArtifacts = &writeArtifacts
+
+		result, err := session.CompareScreenshot(ctx, "deferred", engine.ElementScreenshotTarget(engine.CSS(".box")), opts)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Match).To(BeFalse())
+		Expect(result.Schemes[0].ActualPath).To(BeEmpty())
+		Expect(result.Schemes[0].DiffPath).To(BeEmpty())
+		Expect(result.Schemes[0].Diagnosis).To(BeEmpty())
+		Expect(filepath.Join(root, "artifacts")).NotTo(BeADirectory())
+	})
+
+	It("keeps mismatch primary while surfacing artifact write failures", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, "data:text/html,<style>body{margin:0}.box{width:10px;height:10px;background:red}</style><div class=box></div>")).To(Succeed())
+		root := GinkgoT().TempDir()
+		opts := engine.VisualOptions{BaselineDir: filepath.Join(root, "baselines"), ArtifactDir: filepath.Join(root, "artifacts"), Update: true, SettleAttempts: 2, SettleStreak: 2, SettleInterval: time.Millisecond}
+		_, err = session.CompareScreenshot(ctx, "unwritable", engine.ElementScreenshotTarget(engine.CSS(".box")), opts)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = session.Evaluate(ctx, `document.querySelector('.box').style.background='blue'`)
+		Expect(err).NotTo(HaveOccurred())
+		blocked := filepath.Join(root, "blocked")
+		Expect(os.WriteFile(blocked, []byte("not a directory"), 0o644)).To(Succeed())
+		opts.Update = false
+		opts.ArtifactDir = blocked
+
+		result, err := session.CompareScreenshot(ctx, "unwritable", engine.ElementScreenshotTarget(engine.CSS(".box")), opts)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Match).To(BeFalse())
+		Expect(result.Warnings).To(ContainElements(
+			ContainSubstring("write screenshot actual artifact"),
+			ContainSubstring("write screenshot diff artifact"),
+		))
+		Expect(result.Schemes[0].Diagnosis).To(ContainSubstring("differs from baseline"))
 	})
 
 	It("captures every color scheme into a distinct baseline and restores the original scheme", func(ctx SpecContext) {

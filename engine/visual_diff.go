@@ -38,6 +38,43 @@ type ScreenshotDiff struct {
 
 type ScreenshotPaths struct{ Baseline, Actual, Diff string }
 
+func (d ScreenshotDiff) Summary(name string) string {
+	if d.DimensionMismatch {
+		return fmt.Sprintf(
+			"screenshot %q updated — resized from %dx%d to %dx%d",
+			name,
+			d.BaselineBounds.Dx(),
+			d.BaselineBounds.Dy(),
+			d.ActualBounds.Dx(),
+			d.ActualBounds.Dy(),
+		)
+	}
+	if d.Match {
+		return fmt.Sprintf("screenshot %q unchanged", name)
+	}
+	return fmt.Sprintf(
+		"screenshot %q updated — %d of %d pixels changed (%.2f%%), %s",
+		name,
+		d.DifferingPixels,
+		d.TotalPixels,
+		d.Fraction*100,
+		d.changeShape(),
+	)
+}
+
+func (d ScreenshotDiff) changeShape() string {
+	switch {
+	case d.Shifted:
+		return fmt.Sprintf("content shifted by (%d,%d)", d.Shift.X, d.Shift.Y)
+	case d.Scattered:
+		return fmt.Sprintf("%d scattered regions", d.RegionCount)
+	case d.RegionCount == 1:
+		return "one box"
+	default:
+		return fmt.Sprintf("%d boxes", d.RegionCount)
+	}
+}
+
 const (
 	maxReportedScreenshotRegions = 5
 	diagnosticGridCell           = 8
