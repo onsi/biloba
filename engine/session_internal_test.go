@@ -23,6 +23,22 @@ func TestRequestContextErrorPreservesDeadlineCause(t *testing.T) {
 	g.Expect(engineErr.Code).To(gomega.Equal(CodeDeadline))
 }
 
+func TestRequestContextErrorPreservesNestedOperation(t *testing.T) {
+	g := gomega.NewWithT(t)
+	requestCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := requestContextError("prepare", requestCtx, &Error{
+		Code:      CodeCanceled,
+		Operation: "list tabs",
+		Message:   context.Canceled.Error(),
+		Cause:     context.Canceled,
+	})
+
+	g.Expect(err.Operation).To(gomega.Equal("list tabs"))
+	g.Expect(errors.Is(err, context.Canceled)).To(gomega.BeTrue())
+}
+
 // These are plain testing-based units (not Ginkgo specs) because dot-importing Gomega into package
 // engine collides with the engine's own Assertion type.  They need no browser: the diagnostics
 // outline just has to be truncated exactly the way the Go runner's Outline() truncates it (see the

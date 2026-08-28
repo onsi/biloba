@@ -961,7 +961,12 @@ func (s *Session) serial(requestCtx context.Context, operation string, run func(
 
 func requestContextError(operation string, requestCtx context.Context, err error) *Error {
 	if requestErr := requestCtx.Err(); requestErr != nil {
-		err = requestErr
+		result := contextError(operation, requestErr)
+		var engineErr *Error
+		if errors.As(err, &engineErr) {
+			result.Operation = engineErr.Operation
+		}
+		return result
 	}
 	return contextError(operation, err)
 }
