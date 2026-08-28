@@ -213,7 +213,20 @@ var _ = Describe("eventful engine state", func() {
 		Expect(err).NotTo(HaveOccurred())
 		download, err := session.WaitForDownload(ctx, engine.DownloadQuery{State: engine.DownloadActive}, engine.PollPolicy{Timeout: time.Second})
 		Expect(err).NotTo(HaveOccurred())
+		console, err := session.SubscribeConsole(4)
+		Expect(err).NotTo(HaveOccurred())
+		holdID, err := session.HoldResponse(ctx, engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/held"})
+		Expect(err).NotTo(HaveOccurred())
+
 		Expect(session.Close()).To(MatchError(ContainSubstring("active downloads")))
+		// Refusing is retryable, so it has to leave the session intact.  Tearing eventful state down
+		// before deciding left the caller a session that reports healthy but has lost its streams and
+		// its armed holds - silently, with nothing to retry against.
+		Consistently(console.Events()).ShouldNot(BeClosed())
+		_, err = session.Evaluate(ctx, `console.log("still streaming")`)
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(console.Events()).Should(Receive())
+		Expect(session.ReleaseResponseHold(ctx, holdID)).To(Succeed(), "the hold must still be armed after a refused close")
 		Expect(other.Downloads(engine.DownloadQuery{})).To(BeEmpty())
 
 		Expect(session.CancelDownload(ctx, download.ID)).To(Succeed())

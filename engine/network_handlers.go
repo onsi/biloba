@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -12,7 +13,6 @@ import (
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
-	"net/http"
 )
 
 const DefaultInterceptedBodyLimit int64 = 16 << 20
@@ -287,22 +287,47 @@ func (s *Session) recordNetworkShadowLocked(url string, stage NetworkInterceptio
 	if len(shadowed) == 0 {
 		return
 	}
-	s.networkShadows = append(s.networkShadows, NetworkShadowDiagnostic{
+	s.appendNetworkShadowLocked(NetworkShadowDiagnostic{
 		URL: url, Stage: stage, Winner: networkHandlerOwnerProvenance(winner), Shadowed: shadowed,
 	})
+}
+
+// appendNetworkShadowLocked records a shadowed dispatch under the same bound console and warning
+// history use.  One record is appended per *intercepted request*, each carrying the winner's and
+// every shadowed owner's client callsite, so an unbounded slice grows with traffic rather than with
+// the number of handlers - and once the retained set outgrows a protocol frame,
+// NetworkShadowDiagnostics stops being answerable at all.  The diagnostic that explains a shadowed
+// handler is not much use if it is the first thing to break.  Go keeps per-handler counters instead;
+// the per-dispatch detail is worth keeping, bounded.
+func (s *Session) appendNetworkShadowLocked(diagnostic NetworkShadowDiagnostic) {
+	diagnostic.URL = truncateUTF8(diagnostic.URL, DefaultWarningPreviewBytes)
+	if len(s.networkShadows) == DefaultEventHistoryLimit {
+		copy(s.networkShadows, s.networkShadows[1:])
+		s.networkShadows[len(s.networkShadows)-1] = diagnostic
+		s.networkShadowsDropped++
+		return
+	}
+	s.networkShadows = append(s.networkShadows, diagnostic)
+}
+
+// NetworkShadowsDropped reports shadow records evicted by the history bound.
+func (s *Session) NetworkShadowsDropped() uint64 {
+	s.networkMu.Lock()
+	defer s.networkMu.Unlock()
+	return s.networkShadowsDropped
 }
 
 func networkHandlerOwnerProvenance(handler *networkHandlerEntry) NetworkOwnerProvenance {
 	return NetworkOwnerProvenance{
 		Kind: NetworkOwnerHandler,
-		ID:   handler.id, Callsite: handler.options.Callsite,
+		ID:   handler.id, Callsite: truncateUTF8(handler.options.Callsite, DefaultWarningPreviewBytes),
 		Count: handler.stats.Count, Shadowed: handler.stats.Shadowed,
 	}
 }
 
 func responseHoldOwnerProvenance(hold *responseHold) NetworkOwnerProvenance {
 	return NetworkOwnerProvenance{
-		Kind: NetworkOwnerHold, ID: hold.id, Callsite: hold.callsite,
+		Kind: NetworkOwnerHold, ID: hold.id, Callsite: truncateUTF8(hold.callsite, DefaultWarningPreviewBytes),
 		Count: hold.count, Shadowed: hold.shadowed,
 	}
 }
@@ -628,7 +653,7 @@ func (s *Session) selectResponseOwner(url string) (*networkHandlerEntry, *respon
 			shadowed = append(shadowed, networkHandlerOwnerProvenance(handler))
 		}
 		if len(shadowed) > 0 {
-			s.networkShadows = append(s.networkShadows, NetworkShadowDiagnostic{
+			s.appendNetworkShadowLocked(NetworkShadowDiagnostic{
 				URL: url, Stage: NetworkStageResponse, Winner: responseHoldOwnerProvenance(hold), Shadowed: shadowed,
 			})
 		}
@@ -645,7 +670,7 @@ func (s *Session) selectResponseOwner(url string) (*networkHandlerEntry, *respon
 		shadowed = append(shadowed, responseHoldOwnerProvenance(hold))
 	}
 	if len(shadowed) > 0 {
-		s.networkShadows = append(s.networkShadows, NetworkShadowDiagnostic{
+		s.appendNetworkShadowLocked(NetworkShadowDiagnostic{
 			URL: url, Stage: NetworkStageResponse, Winner: networkHandlerOwnerProvenance(handlers[0]), Shadowed: shadowed,
 		})
 	}
@@ -921,7 +946,7 @@ func (s *Session) clearNetworkBookkeeping() {
 	s.inflight = nil
 	s.cacheEnabled = true
 	s.networkState = NetworkState{}
-	s.networkShadows = nil
+	s.networkShadows, s.networkShadowsDropped = nil, 0
 	s.networkMu.Unlock()
 }
 func cloneStringMap(in map[string]string) map[string]string {

@@ -480,7 +480,19 @@ func (s *Session) ClickWith(ctx context.Context, selector Selector, options Clic
 		case options.Button != LeftButton || options.Count != 1:
 			return invalidArgument("click", "unsupported fast click combination")
 		}
-		_, err := s.handler(ctx, handler, selector, pointerPayload(options.Offset, options.Modifiers))
+		response, err := s.handler(ctx, handler, selector, pointerPayload(options.Offset, options.Modifiers))
+		// biloba.js measures the topmost element at the target's centre before dispatching and reports
+		// it only when it was not the target itself.  Dropping that leaves a swallowed click to fail
+		// somewhere downstream, pointing nowhere near the click.  clicks.go renders the same fact.
+		if err == nil {
+			if occluder, ok := response.Result.(string); ok && occluder != "" {
+				s.recordWarning(Warning{
+					Code: WarningClickOccluded,
+					Message: fmt.Sprintf("Click on %s was dispatched while %s was the topmost element at its centre - the click may have been swallowed. Consider asserting it is clickable first, or using realistic mode.",
+						selector.Description(), occluder),
+				})
+			}
+		}
 		return err
 	}
 	if options.Mode != Realistic {

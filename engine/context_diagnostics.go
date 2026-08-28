@@ -190,7 +190,10 @@ func writeDiagnosticsScreenshot(dir string, options DiagnosticsCaptureOptions, t
 		return "", err
 	}
 	path := artifactPath(dir, options.PrimaryScreenshotPrefix, "png")
-	if err := os.WriteFile(path, image, 0o644); err != nil {
+	// Unlike the other diagnostics artifacts this one lands on a stable, predictable path, so a
+	// crash or a full disk mid-write leaves a truncated PNG exactly where the next run - and the
+	// reader following the path in the failure output - will pick it up.  Write beside it and rename.
+	if err := writeFileAtomically(path, image); err != nil {
 		return "", err
 	}
 	return path, nil
@@ -262,4 +265,30 @@ func writeDiagnosticsArtifact(dir string, options DiagnosticsCaptureOptions, tar
 		return path, nil
 	}
 	return abs, nil
+}
+
+// writeFileAtomically publishes data at path via a temporary file in the same directory, so a
+// reader either sees the previous contents or the complete new ones.
+func writeFileAtomically(path string, data []byte) error {
+	file, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	temporary := file.Name()
+	defer func() { _ = os.Remove(temporary) }()
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(temporary, 0o644); err != nil {
+		return err
+	}
+	return replaceScreenshotFile(temporary, path)
 }

@@ -264,18 +264,37 @@ var _ = Describe("lifecycle engine foundations", func() {
 		Expect(subscription.Close()).To(Succeed())
 	})
 
-	It("closes event subscriptions immediately when the renderer crashes", func(ctx SpecContext) {
+	It("silences event subscriptions across a crash and resumes them on recovery", func(ctx SpecContext) {
+		// A renderer crash must not end a subscription: Go's console stream is bound to the tab
+		// context, which a crash does not tear down, so "navigate again to recover it" restores
+		// eventing too.  Ending it here left a listener registered before the crash silently receiving
+		// nothing for the rest of the session - and re-registering did not help, because the client
+		// only re-subscribes when it has no subscription at all.
 		session, err := browser.OpenSession(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(session.Close)
-		console, err := session.SubscribeConsole(1)
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		console, err := session.SubscribeConsole(4)
 		Expect(err).NotTo(HaveOccurred())
-		warnings, err := session.SubscribeWarnings(1)
+		warnings, err := session.SubscribeWarnings(4)
 		Expect(err).NotTo(HaveOccurred())
+		_, err = session.Evaluate(ctx, `console.log("before")`)
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(console.Events()).Should(Receive())
 
 		engine.MarkSessionCrashedForTest(session)
-		Eventually(console.Events()).Should(BeClosed())
-		Eventually(warnings.Events()).Should(BeClosed())
+		Consistently(console.Events()).ShouldNot(BeClosed())
+		Consistently(warnings.Events()).ShouldNot(BeClosed())
+
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		_, err = session.Evaluate(ctx, `console.log("after recovery")`)
+		Expect(err).NotTo(HaveOccurred())
+		var message engine.ConsoleMessage
+		Eventually(console.Events()).Should(Receive(&message))
+		Expect(message.Text).To(ContainSubstring("after recovery"))
+
+		engine.EmitWarningForTest(session, engine.Warning{Message: "post-crash warning"})
+		Eventually(warnings.Events()).Should(Receive())
 	})
 
 	It("removes registered init scripts during prepare", func(ctx SpecContext) {

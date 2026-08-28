@@ -33,6 +33,24 @@ var _ = Describe("typed DOM engine surface", func() {
 		Expect(each.Value).To(Equal([]any{"visible SHOUT"}))
 	})
 
+	It("warns when a fast click was dispatched under another element", func(ctx SpecContext) {
+		// A swallowed click fails somewhere downstream, where nothing points back at the click.
+		// biloba.js measures the occluder before dispatching precisely so the failure can say so.
+		session := openDOMSurfaceSession(ctx)
+		warnings, err := session.SubscribeWarnings(4)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = session.Evaluate(ctx, `document.body.insertAdjacentHTML("beforeend", '<div id="cover" style="position:fixed;inset:0;background:rgba(0,0,0,0.1);z-index:99"></div>')`)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(session.ClickWith(ctx, engine.CSS("#action"), engine.ClickOptions{Count: 1, Mode: engine.Fast})).To(Succeed())
+
+		var warning engine.Warning
+		Eventually(warnings.Events()).Should(Receive(&warning))
+		Expect(warning.Code).To(Equal(engine.WarningClickOccluded))
+		Expect(warning.Message).To(ContainSubstring("cover"))
+		Expect(warning.Message).To(ContainSubstring("#action"))
+	})
+
 	It("encodes extended semantic locators and custom test-id attributes", func() {
 		Expect(engine.Label("Email", engine.Contains).Encoded()).To(ContainSubstring(`"by":"label"`))
 		Expect(engine.Placeholder("you@", engine.Contains).Description()).To(Equal(`getByPlaceholder("you@", contains)`))

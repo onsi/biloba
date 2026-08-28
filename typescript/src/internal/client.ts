@@ -851,7 +851,6 @@ class ClientSession implements Session {
 
   #clearLiveListeners(): void { this.#consoleListeners.clear(); this.#warningListeners.clear(); void this.#removeLiveSubscription("console"); void this.#removeLiveSubscription("warning"); }
 
-  async expectURL(expected: ExpectedValue, options: PollOptions = {}): Promise<AssertionResult> { return assertionResult(await this.lifecycleOperation({kind: "URL"}, options, wireExpectation(expected)), new Error().stack); }
   async url(options: CommandOptions = {}): Promise<string> { return await this.#lifecycleValue<string>({kind: "URL"}, options); }
 
   async assert(

@@ -38,6 +38,11 @@ type WarningCode string
 
 const WarningDialogAutoHandled WarningCode = "dialog_auto_handled"
 
+// WarningClickOccluded reports a fast click that was dispatched while another element was the
+// topmost one at the target's centre.  biloba.js measures this before dispatching, because a
+// swallowed click fails somewhere downstream where nothing points back at the click.
+const WarningClickOccluded WarningCode = "click_occluded"
+
 // DefaultWarningPreviewBytes bounds each warning and dialog string retained by the engine.
 const DefaultWarningPreviewBytes = 4096
 
