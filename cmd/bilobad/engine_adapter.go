@@ -118,7 +118,11 @@ func (s *engineSession) Execute(ctx context.Context, operation protocol.Operatio
 			return protocol.Result{}, err
 		}
 		return s.poll(ctx, operation, func(ctx context.Context) (engine.Observation, bool, error) {
-			err := s.session.DragTo(ctx, source, targetSelector)
+			mode := engine.Fast
+			if operation.Realistic {
+				mode = engine.Realistic
+			}
+			err := s.session.DragWith(ctx, source, targetSelector, mode)
 			return engine.Observation{}, err == nil, err
 		})
 	case protocol.OperationAddInitScript:
@@ -164,8 +168,284 @@ func (s *engineSession) Execute(ctx context.Context, operation protocol.Operatio
 			return protocol.Result{}, err
 		}
 		return s.poll(ctx, operation, assertion)
+	case protocol.OperationDOM:
+		assertion, err := s.domAssertion(operation.DOM)
+		if err != nil {
+			return protocol.Result{}, err
+		}
+		return s.poll(ctx, operation, assertion)
 	default:
 		return protocol.Result{}, protocol.NewError(protocol.CodeInvalidArgument, "unsupported operation")
+	}
+}
+
+func (s *engineSession) domAssertion(operation protocol.DOMOperation) (engine.Assertion, error) {
+	var selector, target, container engine.Selector
+	var err error
+	if operation.Kind != protocol.DOMSendKeys && operation.Kind != protocol.DOMClearSelection && operation.Kind != protocol.DOMNormalizeColor {
+		selector, err = selectorFromProtocol(operation.Locator)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if operation.Target.Kind != 0 {
+		target, err = selectorFromProtocol(operation.Target)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if operation.Container.Kind != 0 {
+		container, err = selectorFromProtocol(operation.Container)
+		if err != nil {
+			return nil, err
+		}
+	}
+	mode := engine.Fast
+	if operation.Realistic {
+		mode = engine.Realistic
+	}
+	modifiers, err := modifiersFromProtocol(operation.Modifiers)
+	if err != nil {
+		return nil, err
+	}
+	textModes := map[string]engine.TextMode{"INNER_TEXT": engine.InnerText, "TEXT_CONTENT": engine.TextContent, "NORMALIZED_TEXT": engine.NormalizedText}
+	states := map[string]engine.ElementState{"visible": engine.StateVisible, "enabled": engine.StateEnabled, "clickable": engine.StateClickable, "checked": engine.StateChecked, "focused": engine.StateFocused}
+	relations := map[string]engine.GeometryRelation{"above": engine.Above, "below": engine.Below, "leftOf": engine.LeftOf, "rightOf": engine.RightOf, "encloses": engine.Encloses, "overlaps": engine.Overlaps}
+	names := make([]engine.NameSpec, len(operation.Names))
+	plainNames := make([]string, len(operation.Names))
+	for index, name := range operation.Names {
+		plainNames[index] = name.Name
+		if name.AllowMissing {
+			names[index] = engine.OptionalName(name.Name)
+		} else {
+			names[index] = engine.RequiredName(name.Name)
+		}
+	}
+	var value any
+	if operation.Kind == protocol.DOMSetProperty {
+		if err := json.Unmarshal([]byte(operation.ValueJSON), &value); err != nil {
+			return nil, protocol.NewError(protocol.CodeInvalidArgument, fmt.Sprintf("valueJson: %v", err))
+		}
+	}
+	arguments := []any{}
+	if operation.ArgumentsJSON != "" {
+		if err := json.Unmarshal([]byte(operation.ArgumentsJSON), &arguments); err != nil {
+			return nil, protocol.NewError(protocol.CodeInvalidArgument, fmt.Sprintf("argumentsJson: %v", err))
+		}
+	}
+	expectation := engine.Expectation{Kind: engine.ExpectAnything}
+	if operation.Expectation.Kind != 0 {
+		expectation, err = expectationFromProtocol(operation.Expectation)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return func(ctx context.Context) (engine.Observation, bool, error) {
+		observation := engine.Observation{}
+		var operationErr error
+		switch operation.Kind {
+		case protocol.DOMText:
+			observation, operationErr = s.session.TextByMode(ctx, selector, textModes[operation.TextMode])
+		case protocol.DOMTexts:
+			observation, operationErr = s.session.Texts(ctx, selector, textModes[operation.TextMode])
+		case protocol.DOMClasses:
+			observation, operationErr = s.session.Classes(ctx, selector)
+		case protocol.DOMClassesForEach:
+			observation, operationErr = s.session.ClassesForEach(ctx, selector)
+		case protocol.DOMDistinctAttributeCount:
+			observation, operationErr = s.session.DistinctAttributeCount(ctx, selector, operation.Name)
+		case protocol.DOMAttributes:
+			observation, operationErr = s.session.Attributes(ctx, selector, names)
+		case protocol.DOMAttributesForEach:
+			observation, operationErr = s.session.AttributesForEach(ctx, selector, plainNames)
+		case protocol.DOMJSONAttribute:
+			observation, operationErr = s.session.JSONAttribute(ctx, selector, operation.Name)
+		case protocol.DOMProperties:
+			observation, operationErr = s.session.Properties(ctx, selector, names)
+		case protocol.DOMPropertiesForEach:
+			observation, operationErr = s.session.PropertiesForEach(ctx, selector, plainNames)
+		case protocol.DOMPropertyForEach:
+			observation, operationErr = s.session.PropertyForEach(ctx, selector, operation.Name)
+		case protocol.DOMValues:
+			observation, operationErr = s.session.Values(ctx, selector)
+		case protocol.DOMState:
+			state, ok := states[operation.State]
+			if !ok {
+				return observation, false, engine.Fatal(protocol.NewError(protocol.CodeInvalidArgument, "unsupported element state"))
+			}
+			observation, operationErr = s.session.State(ctx, selector, state)
+		case protocol.DOMAllState:
+			state, ok := states[operation.State]
+			if !ok {
+				return observation, false, engine.Fatal(protocol.NewError(protocol.CodeInvalidArgument, "unsupported all-element state"))
+			}
+			observation, operationErr = s.session.AllState(ctx, selector, state)
+		case protocol.DOMSetProperty:
+			scope := engine.FirstMatch
+			if operation.All {
+				scope = engine.AllMatches
+			}
+			operationErr = s.session.SetProperty(ctx, selector, operation.Name, value, scope)
+		case protocol.DOMFocus:
+			operationErr = s.session.Focus(ctx, selector)
+		case protocol.DOMBlur:
+			operationErr = s.session.Blur(ctx, selector)
+		case protocol.DOMHover:
+			operationErr = s.session.Hover(ctx, selector, mode)
+		case protocol.DOMType:
+			operationErr = s.session.TypeWith(ctx, selector, operation.Keys, engine.KeyboardOptions{Mode: mode, Modifiers: modifiers})
+		case protocol.DOMSendKeys:
+			operationErr = s.session.SendKeysWith(ctx, operation.Keys, modifiers)
+		case protocol.DOMClick:
+			button, buttonErr := buttonFromProtocol(operation.Button)
+			if buttonErr != nil {
+				return observation, false, engine.Fatal(buttonErr)
+			}
+			options := engine.ClickOptions{Mode: mode, Button: button, Count: operation.ClickCount, Modifiers: modifiers}
+			if operation.HasOffset {
+				options.Offset = &engine.Point{X: operation.OffsetX, Y: operation.OffsetY}
+			}
+			operationErr = s.session.ClickWith(ctx, selector, options)
+		case protocol.DOMClickEach:
+			operationErr = s.session.ClickEach(ctx, selector, mode)
+		case protocol.DOMTap:
+			options := engine.PointerOptions{Mode: mode, Modifiers: modifiers}
+			if operation.HasOffset {
+				options.Offset = &engine.Point{X: operation.OffsetX, Y: operation.OffsetY}
+			}
+			operationErr = s.session.Tap(ctx, selector, options)
+		case protocol.DOMDrag:
+			operationErr = s.session.DragWith(ctx, selector, target, mode)
+		case protocol.DOMScrollIntoView:
+			options := engine.ScrollIntoViewOptions{TopOffset: operation.TopOffset, HasTopOffset: operation.HasTopOffset}
+			if operation.Container.Kind != 0 {
+				options.Container = container
+			}
+			operationErr = s.session.ScrollIntoView(ctx, selector, options)
+		case protocol.DOMScrollWheel:
+			operationErr = s.session.ScrollWheel(ctx, selector, operation.DeltaX, operation.DeltaY, mode)
+		case protocol.DOMSelect:
+			operationErr = s.session.Select(ctx, selector, engine.Selection{Substring: operation.Substring, Occurrence: operation.Occurrence, Start: operation.Start, End: operation.End, Range: operation.Range})
+		case protocol.DOMClearSelection:
+			operationErr = s.session.ClearSelection(ctx)
+		case protocol.DOMInvokeMethod:
+			observation, operationErr = s.session.InvokeMethod(ctx, selector, operation.Method, arguments...)
+		case protocol.DOMInvokeFunction:
+			observation, operationErr = s.session.InvokeFunction(ctx, selector, operation.Expression, arguments...)
+		case protocol.DOMInvokeMethodForEach:
+			observation, operationErr = s.session.InvokeMethodForEach(ctx, selector, operation.Method, arguments...)
+		case protocol.DOMInvokeFunctionForEach:
+			observation, operationErr = s.session.InvokeFunctionForEach(ctx, selector, operation.Expression, arguments...)
+		case protocol.DOMBoundingBox:
+			var box engine.Box
+			box, operationErr = s.session.BoundingBox(ctx, selector)
+			observation.Value = box
+		case protocol.DOMScrollOffset:
+			var offset engine.ScrollOffset
+			offset, operationErr = s.session.ScrollOffset(ctx, selector)
+			observation.Value = offset
+		case protocol.DOMOffsetWithin:
+			var offset engine.Offset
+			offset, operationErr = s.session.OffsetWithin(ctx, selector, target)
+			observation.Value = offset
+		case protocol.DOMRelativeBoxes:
+			var boxes engine.BoxPair
+			boxes, operationErr = s.session.RelativeBoxes(ctx, selector, target)
+			observation.Value = boxes
+		case protocol.DOMGeometryRelation:
+			relation, ok := relations[operation.Relation]
+			if !ok {
+				return observation, false, engine.Fatal(protocol.NewError(protocol.CodeInvalidArgument, "unsupported geometry relation"))
+			}
+			observation, operationErr = s.session.GeometryRelation(ctx, selector, target, relation)
+		case protocol.DOMGapBetween:
+			var gap engine.BoxDelta
+			gap, operationErr = s.session.GapBetween(ctx, selector, target)
+			observation.Value = gap
+		case protocol.DOMInViewport:
+			observation, operationErr = s.session.InViewport(ctx, selector, operation.Fully)
+		case protocol.DOMDocumentOrder:
+			var order engine.DocumentOrder
+			order, operationErr = s.session.DocumentOrder(ctx, selector, target)
+			observation.Value = order
+		case protocol.DOMComputedStyle:
+			observation, operationErr = s.session.ComputedStyle(ctx, selector, operation.Name)
+		case protocol.DOMComputedStyleNumber:
+			observation, operationErr = s.session.ComputedStyleNumber(ctx, selector, operation.Name)
+		case protocol.DOMNormalizeColor:
+			observation, operationErr = s.session.NormalizeColor(ctx, operation.ValueJSON)
+		default:
+			return observation, false, engine.Fatal(protocol.NewError(protocol.CodeInvalidArgument, "unsupported DOM operation"))
+		}
+		matched := operationErr == nil
+		if operation.Expectation.Kind != 0 {
+			if operation.Every {
+				matched, err = everyMatches(observation.Value, operation.ProjectName, expectation)
+			} else {
+				matched, err = engine.MatchExpectation(observation.Value, expectation)
+			}
+			if err != nil {
+				return observation, false, engine.Fatal(protocol.NewError(protocol.CodeInvalidArgument, err.Error()))
+			}
+			if matched && operationErr != nil && !engine.IsFatal(operationErr) {
+				operationErr = nil
+			}
+		}
+		return observation, matched, operationErr
+	}, nil
+}
+
+func everyMatches(actual any, projectName string, expectation engine.Expectation) (bool, error) {
+	value := reflect.ValueOf(actual)
+	if !value.IsValid() || (value.Kind() != reflect.Array && value.Kind() != reflect.Slice) || value.Len() == 0 {
+		return false, nil
+	}
+	for index := 0; index < value.Len(); index++ {
+		item := value.Index(index).Interface()
+		if projectName != "" {
+			properties, ok := item.(map[string]any)
+			if !ok {
+				return false, nil
+			}
+			item = properties[projectName]
+		}
+		matched, err := engine.MatchExpectation(item, expectation)
+		if err != nil || !matched {
+			return matched, err
+		}
+	}
+	return true, nil
+}
+
+func modifiersFromProtocol(values []string) (engine.Modifier, error) {
+	var modifiers engine.Modifier
+	for _, value := range values {
+		switch value {
+		case "Shift":
+			modifiers |= engine.ShiftModifier
+		case "Control":
+			modifiers |= engine.ControlModifier
+		case "Alt":
+			modifiers |= engine.AltModifier
+		case "Meta":
+			modifiers |= engine.MetaModifier
+		default:
+			return 0, protocol.NewError(protocol.CodeInvalidArgument, fmt.Sprintf("unsupported modifier %q", value))
+		}
+	}
+	return modifiers, nil
+}
+
+func buttonFromProtocol(value string) (engine.MouseButton, error) {
+	switch value {
+	case "", "left":
+		return engine.LeftButton, nil
+	case "right":
+		return engine.RightButton, nil
+	case "middle":
+		return engine.MiddleButton, nil
+	default:
+		return 0, protocol.NewError(protocol.CodeInvalidArgument, fmt.Sprintf("unsupported mouse button %q", value))
 	}
 }
 
@@ -209,7 +489,7 @@ func evaluationArguments(argumentsJSON string) ([]any, error) {
 func (s *engineSession) poll(ctx context.Context, operation protocol.Operation, assertion engine.Assertion) (protocol.Result, error) {
 	policy := pollPolicyFromProtocol(operation.Poll)
 	policy = withDefaultPollTimeout(policy)
-	if operation.Kind == protocol.OperationAssert {
+	if operation.Kind == protocol.OperationAssert || operation.Kind == protocol.OperationDOM {
 		policy.AttemptTimeout = assertionAttemptTimeout
 	}
 	result, pollErr := engine.Poll(ctx, policy, assertion)
@@ -403,7 +683,11 @@ func selectorFromProtocol(locator protocol.Locator) (engine.Selector, error) {
 	case protocol.LocatorXPath:
 		selector = engine.XPath(locator.Value)
 	case protocol.LocatorTestID:
-		selector = engine.TestID(locator.Value)
+		if locator.Attribute != "" {
+			selector = engine.TestIDAttribute(locator.Value, locator.Attribute)
+		} else {
+			selector = engine.TestID(locator.Value)
+		}
 	case protocol.LocatorText:
 		selector = engine.Text(locator.Value, mode)
 	case protocol.LocatorRole:
@@ -560,6 +844,8 @@ func locatorDescription(operation protocol.Operation) string {
 	locator := operation.Locator
 	if operation.Kind == protocol.OperationAssert {
 		locator = operation.Assertion.Locator
+	} else if operation.Kind == protocol.OperationDOM {
+		locator = operation.DOM.Locator
 	}
 	selector, err := selectorFromProtocol(locator)
 	if err != nil {
@@ -569,6 +855,12 @@ func locatorDescription(operation protocol.Operation) string {
 }
 
 func expectedDescription(operation protocol.Operation) string {
+	if operation.Kind == protocol.OperationDOM {
+		if operation.DOM.Expectation.Kind != 0 {
+			return expectationDescription(operation.DOM.Expectation)
+		}
+		return "operation to succeed"
+	}
 	if operation.Kind != protocol.OperationAssert {
 		return "operation to succeed"
 	}

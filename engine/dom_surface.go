@@ -119,13 +119,42 @@ const (
 )
 
 type Box struct {
-	Top, Left, Width, Height, Bottom, Right, CenterX, CenterY, ClientWidth, ClientHeight float64
+	Top          float64 `json:"top"`
+	Left         float64 `json:"left"`
+	Width        float64 `json:"width"`
+	Height       float64 `json:"height"`
+	Bottom       float64 `json:"bottom"`
+	Right        float64 `json:"right"`
+	CenterX      float64 `json:"centerX"`
+	CenterY      float64 `json:"centerY"`
+	ClientWidth  float64 `json:"clientWidth"`
+	ClientHeight float64 `json:"clientHeight"`
 }
 
-type ScrollOffset struct{ Top, Left, MaxTop, MaxLeft float64 }
-type Offset struct{ Top, Left float64 }
-type BoxPair struct{ Subject, Other Box }
-type BoxDelta struct{ Top, Left, Width, Height, Bottom, Right, CenterX, CenterY float64 }
+type ScrollOffset struct {
+	Top     float64 `json:"top"`
+	Left    float64 `json:"left"`
+	MaxTop  float64 `json:"maxTop"`
+	MaxLeft float64 `json:"maxLeft"`
+}
+type Offset struct {
+	Top  float64 `json:"top"`
+	Left float64 `json:"left"`
+}
+type BoxPair struct {
+	Subject Box `json:"subject"`
+	Other   Box `json:"other"`
+}
+type BoxDelta struct {
+	Top     float64 `json:"top"`
+	Left    float64 `json:"left"`
+	Width   float64 `json:"width"`
+	Height  float64 `json:"height"`
+	Bottom  float64 `json:"bottom"`
+	Right   float64 `json:"right"`
+	CenterX float64 `json:"centerX"`
+	CenterY float64 `json:"centerY"`
+}
 
 type GeometryRelation string
 

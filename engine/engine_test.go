@@ -148,6 +148,7 @@ var _ = Describe("runner-neutral engine primitives", func() {
 		Expect(matches("Ada Lovelace", engine.Expectation{Kind: engine.ExpectRegexp, Expected: `^Ada\s`})).To(BeTrue())
 		Expect(matches("Ada Lovelace", engine.Expectation{Kind: engine.ExpectPrefix, Expected: "Ada"})).To(BeTrue())
 		Expect(matches("Ada Lovelace", engine.Expectation{Kind: engine.ExpectSuffix, Expected: "Lovelace"})).To(BeTrue())
+		Expect(matches([]any{"primary", "wide"}, engine.Expectation{Kind: engine.ExpectContains, Expected: "primary"})).To(BeTrue())
 		Expect(matches(3, engine.Expectation{Kind: engine.ExpectNumber, Operator: ">=", Expected: 2})).To(BeTrue())
 		Expect(matches("", engine.Expectation{Kind: engine.ExpectEmpty})).To(BeTrue())
 		Expect(matches("ready", engine.Expectation{Kind: engine.ExpectAll, Children: []engine.Expectation{

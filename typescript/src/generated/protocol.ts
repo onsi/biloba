@@ -70,6 +70,7 @@ export interface Locator {
   value?: string;
   role?: string;
   name?: string;
+  attribute?: string;
   match?: "EXACT" | "CONTAINS";
   operands?: Locator[];
   within?: Locator;
@@ -88,6 +89,58 @@ export interface LocatorFilter {
   match?: "EXACT" | "CONTAINS";
   selector?: Locator;
   negate?: boolean;
+}
+
+export interface NameSpec {
+  name: string;
+  allowMissing?: boolean;
+}
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+export interface DOMOperation {
+  kind: "TEXT" | "TEXTS" | "CLASSES" | "CLASSES_FOR_EACH" | "DISTINCT_ATTRIBUTE_COUNT" | "ATTRIBUTES" | "ATTRIBUTES_FOR_EACH" | "JSON_ATTRIBUTE" | "PROPERTIES" | "PROPERTIES_FOR_EACH" | "PROPERTY_FOR_EACH" | "VALUES" | "STATE" | "ALL_STATE" | "SET_PROPERTY" | "FOCUS" | "BLUR" | "HOVER" | "TYPE" | "SEND_KEYS" | "CLICK" | "CLICK_EACH" | "TAP" | "DRAG" | "SCROLL_INTO_VIEW" | "SCROLL_WHEEL" | "SELECT" | "CLEAR_SELECTION" | "INVOKE_METHOD" | "INVOKE_FUNCTION" | "INVOKE_METHOD_FOR_EACH" | "INVOKE_FUNCTION_FOR_EACH" | "BOUNDING_BOX" | "SCROLL_OFFSET" | "OFFSET_WITHIN" | "RELATIVE_BOXES" | "GEOMETRY_RELATION" | "GAP_BETWEEN" | "IN_VIEWPORT" | "DOCUMENT_ORDER" | "COMPUTED_STYLE" | "COMPUTED_STYLE_NUMBER" | "NORMALIZE_COLOR";
+  locator?: Locator;
+  target?: Locator;
+  container?: Locator;
+  textMode?: "INNER_TEXT" | "TEXT_CONTENT" | "NORMALIZED_TEXT";
+  names?: NameSpec[];
+  name?: string;
+  valueJson?: string;
+  all?: boolean;
+  every?: boolean;
+  projectName?: string;
+  state?: "visible" | "enabled" | "clickable" | "checked" | "focused";
+  realistic?: boolean;
+  button?: "left" | "right" | "middle";
+  clickCount?: number;
+  offset?: Point;
+  modifiers?: ("Shift" | "Control" | "Alt" | "Meta")[];
+  keys?: string;
+  topOffset?: number;
+  hasTopOffset?: boolean;
+  deltaX?: number;
+  deltaY?: number;
+  substring?: string;
+  occurrence?: number;
+  start?: number;
+  end?: number;
+  range?: boolean;
+  method?: string;
+  expression?: string;
+  argumentsJson?: string;
+  fully?: boolean;
+  relation?: "above" | "below" | "leftOf" | "rightOf" | "encloses" | "overlaps";
+}
+
+export interface DOMRequest {
+  sessionId: string;
+  operation?: DOMOperation;
+  expectation?: Expectation;
+  poll?: PollOptions;
 }
 
 export interface Cookie {
@@ -152,6 +205,7 @@ export interface DragToRequest {
   source?: Locator;
   target?: Locator;
   poll?: PollOptions;
+  realistic?: boolean;
 }
 
 export interface AddInitScriptRequest {

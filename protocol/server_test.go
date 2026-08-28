@@ -175,6 +175,29 @@ var _ = Describe("driver protocol", func() {
 		}
 	})
 
+	It("accepts a typed DOM operation and rejects unknown DOM kinds", func() {
+		recorder := &recordingSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+
+		request := json.RawMessage(`{"sessionId":"` + opened.SessionID + `","operation":{"kind":"TEXT","locator":{"kind":"CSS","value":"#status"},"textMode":"TEXT_CONTENT"},"expectation":{"kind":"EQUAL","expectedJson":"\"ready\""}}`)
+		Expect(client.call("dom", request, nil)).To(Succeed())
+		collection := json.RawMessage(`{"sessionId":"` + opened.SessionID + `","operation":{"kind":"CLASSES_FOR_EACH","locator":{"kind":"CSS","value":".row"},"every":true},"expectation":{"kind":"CONTAINS","expectedJson":"\"ready\""}}`)
+		Expect(client.call("dom", collection, nil)).To(Succeed())
+		Expect(recorder.lastOperation().DOM.Every).To(BeTrue())
+
+		invalid := json.RawMessage(`{"sessionId":"` + opened.SessionID + `","operation":{"kind":"RAW_HANDLER","locator":{"kind":"CSS","value":"#status"}}}`)
+		err := client.call("dom", invalid, nil)
+		Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
+		Expect(err.Message).To(ContainSubstring("unsupported DOM operation"))
+		invalidEvery := json.RawMessage(`{"sessionId":"` + opened.SessionID + `","operation":{"kind":"TEXT","locator":{"kind":"CSS","value":"#status"},"textMode":"INNER_TEXT","every":true}}`)
+		err = client.call("dom", invalidEvery, nil)
+		Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
+		Expect(err.Message).To(ContainSubstring("every is only valid"))
+	})
+
 	It("rejects invalid semantic locator refinements at the protocol boundary", func() {
 		recorder := &recordingSession{}
 		client, cleanup := startTestServer(&fakeBackend{custom: recorder})

@@ -53,6 +53,10 @@ var declarations = []reflect.Type{
 	reflect.TypeFor[protocol.PollOptions](),
 	reflect.TypeFor[protocol.WireLocator](),
 	reflect.TypeFor[protocol.WireLocatorFilter](),
+	reflect.TypeFor[protocol.WireNameSpec](),
+	reflect.TypeFor[protocol.WirePoint](),
+	reflect.TypeFor[protocol.WireDOMOperation](),
+	reflect.TypeFor[protocol.DOMRequest](),
 	reflect.TypeFor[protocol.WireCookie](),
 	reflect.TypeFor[protocol.SetCookiesRequest](),
 	reflect.TypeFor[protocol.LocatorRequest](),
@@ -123,6 +127,22 @@ func tsType(owner reflect.Type, field reflect.StructField) string {
 			return `"CONTAINS_TEXT" | "CONTAINS" | "WITHIN"`
 		case "Match":
 			return `"EXACT" | "CONTAINS"`
+		}
+	}
+	if owner == reflect.TypeFor[protocol.WireDOMOperation]() {
+		switch field.Name {
+		case "Kind":
+			return `"TEXT" | "TEXTS" | "CLASSES" | "CLASSES_FOR_EACH" | "DISTINCT_ATTRIBUTE_COUNT" | "ATTRIBUTES" | "ATTRIBUTES_FOR_EACH" | "JSON_ATTRIBUTE" | "PROPERTIES" | "PROPERTIES_FOR_EACH" | "PROPERTY_FOR_EACH" | "VALUES" | "STATE" | "ALL_STATE" | "SET_PROPERTY" | "FOCUS" | "BLUR" | "HOVER" | "TYPE" | "SEND_KEYS" | "CLICK" | "CLICK_EACH" | "TAP" | "DRAG" | "SCROLL_INTO_VIEW" | "SCROLL_WHEEL" | "SELECT" | "CLEAR_SELECTION" | "INVOKE_METHOD" | "INVOKE_FUNCTION" | "INVOKE_METHOD_FOR_EACH" | "INVOKE_FUNCTION_FOR_EACH" | "BOUNDING_BOX" | "SCROLL_OFFSET" | "OFFSET_WITHIN" | "RELATIVE_BOXES" | "GEOMETRY_RELATION" | "GAP_BETWEEN" | "IN_VIEWPORT" | "DOCUMENT_ORDER" | "COMPUTED_STYLE" | "COMPUTED_STYLE_NUMBER" | "NORMALIZE_COLOR"`
+		case "TextMode":
+			return `"INNER_TEXT" | "TEXT_CONTENT" | "NORMALIZED_TEXT"`
+		case "Button":
+			return `"left" | "right" | "middle"`
+		case "Modifiers":
+			return `("Shift" | "Control" | "Alt" | "Meta")[]`
+		case "State":
+			return `"visible" | "enabled" | "clickable" | "checked" | "focused"`
+		case "Relation":
+			return `"above" | "below" | "leftOf" | "rightOf" | "encloses" | "overlaps"`
 		}
 	}
 	if owner == reflect.TypeFor[protocol.WireAssertion]() {

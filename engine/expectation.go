@@ -39,15 +39,29 @@ func MatchExpectation(actual any, expectation Expectation) (bool, error) {
 			}
 		}
 		return reflect.DeepEqual(actual, expectation.Expected), nil
-	case ExpectContains, ExpectRegexp, ExpectPrefix, ExpectSuffix:
+	case ExpectContains:
+		value := reflect.ValueOf(actual)
+		if value.IsValid() && (value.Kind() == reflect.Array || value.Kind() == reflect.Slice) {
+			for index := 0; index < value.Len(); index++ {
+				if reflect.DeepEqual(value.Index(index).Interface(), expectation.Expected) {
+					return true, nil
+				}
+			}
+			return false, nil
+		}
+		actualString, actualOK := actual.(string)
+		expectedString, expectedOK := expectation.Expected.(string)
+		if !actualOK || !expectedOK {
+			return false, nil
+		}
+		return strings.Contains(actualString, expectedString), nil
+	case ExpectRegexp, ExpectPrefix, ExpectSuffix:
 		actualString, actualOK := actual.(string)
 		expectedString, expectedOK := expectation.Expected.(string)
 		if !actualOK || !expectedOK {
 			return false, nil
 		}
 		switch expectation.Kind {
-		case ExpectContains:
-			return strings.Contains(actualString, expectedString), nil
 		case ExpectRegexp:
 			expression, err := regexp.Compile(expectedString)
 			if err != nil {

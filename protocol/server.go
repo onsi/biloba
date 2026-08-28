@@ -19,6 +19,7 @@ var Capabilities = []string{
 	"session.prepare", "session.new_tab", "session.add_init_script", "session.activate", "navigation", "cookies", "action.click", "action.set_value", "action.realistic", "action.type", "action.send_keys", "action.drag_to",
 	"action.set_upload", "viewport.set", "evaluate", "evaluate.async", "assert.visible", "assert.text", "assert.count", "assert.attribute",
 	"assert.value", "assert.url", "assert.evaluate", "poll.server_side", "diagnostics.structured",
+	"dom.typed", "dom.collections", "dom.geometry", "dom.style", "dom.selection", "action.pointer_options", "action.scroll", "action.element_javascript", "keyboard.modifiers",
 }
 
 type ErrorCode string
@@ -99,6 +100,7 @@ const (
 	OperationDragTo
 	OperationAddInitScript
 	OperationActivate
+	OperationDOM
 )
 
 type Operation struct {
@@ -124,6 +126,7 @@ type Operation struct {
 	Paths          []string
 	Expectation    Expectation
 	HoldID         string
+	DOM            DOMOperation
 }
 
 type LocatorKind uint8
@@ -150,19 +153,111 @@ const (
 )
 
 type Locator struct {
-	Kind     LocatorKind
-	Value    string
-	Role     string
-	Name     string
-	Match    MatchMode
-	Operands []Locator
-	Within   *Locator
-	Filters  []LocatorFilter
-	Level    int
-	LevelSet bool
-	States   []string
-	Nth      int
-	NthSet   bool
+	Kind      LocatorKind
+	Value     string
+	Role      string
+	Name      string
+	Attribute string
+	Match     MatchMode
+	Operands  []Locator
+	Within    *Locator
+	Filters   []LocatorFilter
+	Level     int
+	LevelSet  bool
+	States    []string
+	Nth       int
+	NthSet    bool
+}
+
+type DOMOperationKind uint8
+
+const (
+	DOMText DOMOperationKind = iota + 1
+	DOMTexts
+	DOMClasses
+	DOMClassesForEach
+	DOMDistinctAttributeCount
+	DOMAttributes
+	DOMAttributesForEach
+	DOMJSONAttribute
+	DOMProperties
+	DOMPropertiesForEach
+	DOMPropertyForEach
+	DOMValues
+	DOMState
+	DOMAllState
+	DOMSetProperty
+	DOMFocus
+	DOMBlur
+	DOMHover
+	DOMType
+	DOMSendKeys
+	DOMClick
+	DOMClickEach
+	DOMTap
+	DOMDrag
+	DOMScrollIntoView
+	DOMScrollWheel
+	DOMSelect
+	DOMClearSelection
+	DOMInvokeMethod
+	DOMInvokeFunction
+	DOMInvokeMethodForEach
+	DOMInvokeFunctionForEach
+	DOMBoundingBox
+	DOMScrollOffset
+	DOMOffsetWithin
+	DOMRelativeBoxes
+	DOMGeometryRelation
+	DOMGapBetween
+	DOMInViewport
+	DOMDocumentOrder
+	DOMComputedStyle
+	DOMComputedStyleNumber
+	DOMNormalizeColor
+)
+
+type NameSpec struct {
+	Name         string
+	AllowMissing bool
+}
+
+type DOMOperation struct {
+	Kind          DOMOperationKind
+	Expectation   Expectation
+	Locator       Locator
+	Target        Locator
+	Container     Locator
+	TextMode      string
+	Names         []NameSpec
+	Name          string
+	ValueJSON     string
+	All           bool
+	Every         bool
+	ProjectName   string
+	State         string
+	Realistic     bool
+	Button        string
+	ClickCount    int
+	OffsetX       float64
+	OffsetY       float64
+	HasOffset     bool
+	Modifiers     []string
+	Keys          string
+	TopOffset     float64
+	HasTopOffset  bool
+	DeltaX        float64
+	DeltaY        float64
+	Substring     string
+	Occurrence    int
+	Start         int
+	End           int
+	Range         bool
+	Method        string
+	Expression    string
+	ArgumentsJSON string
+	Fully         bool
+	Relation      string
 }
 
 type LocatorFilterKind uint8
@@ -328,20 +423,73 @@ type PollOptions struct {
 }
 
 type WireLocator struct {
-	Kind     string              `json:"kind"`
-	Value    string              `json:"value,omitempty"`
-	Role     string              `json:"role,omitempty"`
-	Name     string              `json:"name,omitempty"`
-	Match    string              `json:"match,omitempty"`
-	Operands []*WireLocator      `json:"operands,omitempty"`
-	Within   *WireLocator        `json:"within,omitempty"`
-	Filters  []WireLocatorFilter `json:"filters,omitempty"`
-	Level    int                 `json:"level,omitempty"`
-	LevelSet bool                `json:"levelSet,omitempty"`
-	States   []string            `json:"states,omitempty"`
-	Nth      int                 `json:"nth,omitempty"`
-	NthSet   bool                `json:"nthSet,omitempty"`
-	First    bool                `json:"first"`
+	Kind      string              `json:"kind"`
+	Value     string              `json:"value,omitempty"`
+	Role      string              `json:"role,omitempty"`
+	Name      string              `json:"name,omitempty"`
+	Attribute string              `json:"attribute,omitempty"`
+	Match     string              `json:"match,omitempty"`
+	Operands  []*WireLocator      `json:"operands,omitempty"`
+	Within    *WireLocator        `json:"within,omitempty"`
+	Filters   []WireLocatorFilter `json:"filters,omitempty"`
+	Level     int                 `json:"level,omitempty"`
+	LevelSet  bool                `json:"levelSet,omitempty"`
+	States    []string            `json:"states,omitempty"`
+	Nth       int                 `json:"nth,omitempty"`
+	NthSet    bool                `json:"nthSet,omitempty"`
+	First     bool                `json:"first"`
+}
+
+type WireNameSpec struct {
+	Name         string `json:"name"`
+	AllowMissing bool   `json:"allowMissing,omitempty"`
+}
+
+type WirePoint struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
+type WireDOMOperation struct {
+	Kind          string         `json:"kind"`
+	Locator       *WireLocator   `json:"locator,omitempty"`
+	Target        *WireLocator   `json:"target,omitempty"`
+	Container     *WireLocator   `json:"container,omitempty"`
+	TextMode      string         `json:"textMode,omitempty"`
+	Names         []WireNameSpec `json:"names,omitempty"`
+	Name          string         `json:"name,omitempty"`
+	ValueJSON     string         `json:"valueJson,omitempty"`
+	All           bool           `json:"all,omitempty"`
+	Every         bool           `json:"every,omitempty"`
+	ProjectName   string         `json:"projectName,omitempty"`
+	State         string         `json:"state,omitempty"`
+	Realistic     bool           `json:"realistic,omitempty"`
+	Button        string         `json:"button,omitempty"`
+	ClickCount    int            `json:"clickCount,omitempty"`
+	Offset        *WirePoint     `json:"offset,omitempty"`
+	Modifiers     []string       `json:"modifiers,omitempty"`
+	Keys          string         `json:"keys,omitempty"`
+	TopOffset     float64        `json:"topOffset,omitempty"`
+	HasTopOffset  bool           `json:"hasTopOffset,omitempty"`
+	DeltaX        float64        `json:"deltaX,omitempty"`
+	DeltaY        float64        `json:"deltaY,omitempty"`
+	Substring     string         `json:"substring,omitempty"`
+	Occurrence    int            `json:"occurrence,omitempty"`
+	Start         int            `json:"start,omitempty"`
+	End           int            `json:"end,omitempty"`
+	Range         bool           `json:"range,omitempty"`
+	Method        string         `json:"method,omitempty"`
+	Expression    string         `json:"expression,omitempty"`
+	ArgumentsJSON string         `json:"argumentsJson,omitempty"`
+	Fully         bool           `json:"fully,omitempty"`
+	Relation      string         `json:"relation,omitempty"`
+}
+
+type DOMRequest struct {
+	SessionID   string            `json:"sessionId"`
+	Operation   *WireDOMOperation `json:"operation"`
+	Expectation *WireExpectation  `json:"expectation,omitempty"`
+	Poll        PollOptions       `json:"poll,omitempty"`
 }
 
 type WireLocatorFilter struct {
@@ -414,6 +562,7 @@ type DragToRequest struct {
 	Source    *WireLocator `json:"source"`
 	Target    *WireLocator `json:"target"`
 	Poll      PollOptions  `json:"poll,omitempty"`
+	Realistic bool         `json:"realistic,omitempty"`
 }
 
 type AddInitScriptRequest struct {
@@ -721,7 +870,7 @@ func (s *Server) Dispatch(ctx context.Context, method string, params json.RawMes
 		if pollErr != nil {
 			return nil, pollErr
 		}
-		return s.execute(ctx, request.SessionID, Operation{Kind: OperationDragTo, Locator: source, Target: targetLocator, Poll: poll})
+		return s.execute(ctx, request.SessionID, Operation{Kind: OperationDragTo, Locator: source, Target: targetLocator, Poll: poll, Realistic: request.Realistic})
 	case "addInitScript":
 		var request AddInitScriptRequest
 		if err := decodeParams(params, &request); err != nil {
@@ -783,9 +932,172 @@ func (s *Server) Dispatch(ctx context.Context, method string, params json.RawMes
 			return nil, pollErr
 		}
 		return s.execute(ctx, request.SessionID, Operation{Kind: OperationAssert, Assertion: assertion, Poll: poll})
+	case "dom":
+		var request DOMRequest
+		if err := decodeParams(params, &request); err != nil {
+			return nil, err
+		}
+		domOperation, err := domOperationFromWire(request.Operation)
+		if err != nil {
+			return nil, err
+		}
+		if request.Expectation != nil {
+			expectation, expectationErr := expectationFromWire(request.Expectation, 0)
+			if expectationErr != nil {
+				return nil, expectationErr
+			}
+			domOperation.Expectation = expectation
+		}
+		poll, pollErr := pollFromWire(request.Poll)
+		if pollErr != nil {
+			return nil, pollErr
+		}
+		return s.execute(ctx, request.SessionID, Operation{Kind: OperationDOM, DOM: domOperation, Poll: poll})
 	default:
 		return nil, NewError(CodeInvalidArgument, fmt.Sprintf("unsupported method %q", method))
 	}
+}
+
+func domOperationFromWire(operation *WireDOMOperation) (DOMOperation, *ProtocolError) {
+	if operation == nil || operation.Kind == "" {
+		return DOMOperation{}, NewError(CodeInvalidArgument, "DOM operation kind is required")
+	}
+	kinds := map[string]DOMOperationKind{
+		"TEXT": DOMText, "TEXTS": DOMTexts, "CLASSES": DOMClasses, "CLASSES_FOR_EACH": DOMClassesForEach,
+		"DISTINCT_ATTRIBUTE_COUNT": DOMDistinctAttributeCount, "ATTRIBUTES": DOMAttributes, "ATTRIBUTES_FOR_EACH": DOMAttributesForEach,
+		"JSON_ATTRIBUTE": DOMJSONAttribute, "PROPERTIES": DOMProperties, "PROPERTIES_FOR_EACH": DOMPropertiesForEach,
+		"PROPERTY_FOR_EACH": DOMPropertyForEach, "VALUES": DOMValues, "STATE": DOMState, "ALL_STATE": DOMAllState,
+		"SET_PROPERTY": DOMSetProperty, "FOCUS": DOMFocus, "BLUR": DOMBlur, "HOVER": DOMHover, "TYPE": DOMType,
+		"SEND_KEYS": DOMSendKeys, "CLICK": DOMClick, "CLICK_EACH": DOMClickEach, "TAP": DOMTap, "DRAG": DOMDrag,
+		"SCROLL_INTO_VIEW": DOMScrollIntoView, "SCROLL_WHEEL": DOMScrollWheel, "SELECT": DOMSelect,
+		"CLEAR_SELECTION": DOMClearSelection, "INVOKE_METHOD": DOMInvokeMethod, "INVOKE_FUNCTION": DOMInvokeFunction,
+		"INVOKE_METHOD_FOR_EACH": DOMInvokeMethodForEach, "INVOKE_FUNCTION_FOR_EACH": DOMInvokeFunctionForEach,
+		"BOUNDING_BOX": DOMBoundingBox, "SCROLL_OFFSET": DOMScrollOffset, "OFFSET_WITHIN": DOMOffsetWithin,
+		"RELATIVE_BOXES": DOMRelativeBoxes, "GEOMETRY_RELATION": DOMGeometryRelation, "GAP_BETWEEN": DOMGapBetween,
+		"IN_VIEWPORT": DOMInViewport, "DOCUMENT_ORDER": DOMDocumentOrder, "COMPUTED_STYLE": DOMComputedStyle,
+		"COMPUTED_STYLE_NUMBER": DOMComputedStyleNumber, "NORMALIZE_COLOR": DOMNormalizeColor,
+	}
+	kind, ok := kinds[operation.Kind]
+	if !ok {
+		return DOMOperation{}, NewError(CodeInvalidArgument, fmt.Sprintf("unsupported DOM operation %q", operation.Kind))
+	}
+	result := DOMOperation{Kind: kind, TextMode: operation.TextMode, Name: operation.Name, ValueJSON: operation.ValueJSON, All: operation.All, Every: operation.Every, ProjectName: operation.ProjectName, State: operation.State, Realistic: operation.Realistic, Button: operation.Button, ClickCount: operation.ClickCount, Modifiers: append([]string(nil), operation.Modifiers...), Keys: operation.Keys, TopOffset: operation.TopOffset, HasTopOffset: operation.HasTopOffset, DeltaX: operation.DeltaX, DeltaY: operation.DeltaY, Substring: operation.Substring, Occurrence: operation.Occurrence, Start: operation.Start, End: operation.End, Range: operation.Range, Method: operation.Method, Expression: operation.Expression, ArgumentsJSON: operation.ArgumentsJSON, Fully: operation.Fully, Relation: operation.Relation}
+	if operation.Offset != nil {
+		result.HasOffset, result.OffsetX, result.OffsetY = true, operation.Offset.X, operation.Offset.Y
+	}
+	for _, name := range operation.Names {
+		if name.Name == "" {
+			return DOMOperation{}, NewError(CodeInvalidArgument, "DOM operation names must not be empty")
+		}
+		result.Names = append(result.Names, NameSpec{Name: name.Name, AllowMissing: name.AllowMissing})
+	}
+	withoutLocator := kind == DOMSendKeys || kind == DOMClearSelection || kind == DOMNormalizeColor
+	if !withoutLocator {
+		locator, err := locatorFromWire(operation.Locator)
+		if err != nil {
+			return DOMOperation{}, err
+		}
+		result.Locator = locator
+	}
+	needsTarget := kind == DOMDrag || kind == DOMOffsetWithin || kind == DOMRelativeBoxes || kind == DOMGeometryRelation || kind == DOMGapBetween || kind == DOMDocumentOrder
+	if needsTarget {
+		target, err := locatorFromWire(operation.Target)
+		if err != nil {
+			return DOMOperation{}, err
+		}
+		result.Target = target
+	}
+	if operation.Container != nil {
+		container, err := locatorFromWire(operation.Container)
+		if err != nil {
+			return DOMOperation{}, err
+		}
+		result.Container = container
+	}
+	if kind == DOMText || kind == DOMTexts {
+		if operation.TextMode != "INNER_TEXT" && operation.TextMode != "TEXT_CONTENT" && operation.TextMode != "NORMALIZED_TEXT" {
+			return DOMOperation{}, NewError(CodeInvalidArgument, "unsupported DOM text mode")
+		}
+	}
+	if (kind == DOMAttributes || kind == DOMProperties || kind == DOMAttributesForEach || kind == DOMPropertiesForEach) && len(result.Names) == 0 {
+		return DOMOperation{}, NewError(CodeInvalidArgument, "DOM operation requires names")
+	}
+	if operation.Every && kind != DOMTexts && kind != DOMClassesForEach && kind != DOMPropertyForEach {
+		if kind != DOMAttributesForEach || operation.ProjectName == "" {
+			return DOMOperation{}, NewError(CodeInvalidArgument, "every is only valid for DOM collection assertions")
+		}
+	}
+	if operation.ProjectName != "" && (kind != DOMAttributesForEach || !operation.Every) {
+		return DOMOperation{}, NewError(CodeInvalidArgument, "projectName is only valid for all-element attribute assertions")
+	}
+	if (kind == DOMJSONAttribute || kind == DOMPropertyForEach || kind == DOMDistinctAttributeCount || kind == DOMSetProperty || kind == DOMComputedStyle || kind == DOMComputedStyleNumber) && operation.Name == "" {
+		return DOMOperation{}, NewError(CodeInvalidArgument, "DOM operation requires name")
+	}
+	if (kind == DOMType || kind == DOMSendKeys) && operation.Keys == "" {
+		return DOMOperation{}, NewError(CodeInvalidArgument, "DOM operation requires keys")
+	}
+	if (kind == DOMInvokeMethod || kind == DOMInvokeMethodForEach) && operation.Method == "" {
+		return DOMOperation{}, NewError(CodeInvalidArgument, "DOM operation requires method")
+	}
+	if (kind == DOMInvokeFunction || kind == DOMInvokeFunctionForEach) && operation.Expression == "" {
+		return DOMOperation{}, NewError(CodeInvalidArgument, "DOM operation requires expression")
+	}
+	validModifiers := map[string]bool{"Shift": true, "Control": true, "Alt": true, "Meta": true}
+	for _, modifier := range operation.Modifiers {
+		if !validModifiers[modifier] {
+			return DOMOperation{}, NewError(CodeInvalidArgument, fmt.Sprintf("unsupported DOM modifier %q", modifier))
+		}
+	}
+	if kind == DOMClick {
+		if operation.ClickCount != 1 && operation.ClickCount != 2 {
+			return DOMOperation{}, NewError(CodeInvalidArgument, "DOM clickCount must be one or two")
+		}
+		if operation.Button != "left" && operation.Button != "right" && operation.Button != "middle" {
+			return DOMOperation{}, NewError(CodeInvalidArgument, "unsupported DOM mouse button")
+		}
+	}
+	if kind == DOMState || kind == DOMAllState {
+		valid := map[string]bool{"visible": true, "enabled": true, "clickable": true, "checked": true, "focused": true}
+		if !valid[operation.State] {
+			return DOMOperation{}, NewError(CodeInvalidArgument, "unsupported DOM element state")
+		}
+		if kind == DOMAllState && operation.State != "visible" && operation.State != "enabled" {
+			return DOMOperation{}, NewError(CodeInvalidArgument, "all-state only supports visible or enabled")
+		}
+	}
+	if kind == DOMGeometryRelation {
+		valid := map[string]bool{"above": true, "below": true, "leftOf": true, "rightOf": true, "encloses": true, "overlaps": true}
+		if !valid[operation.Relation] {
+			return DOMOperation{}, NewError(CodeInvalidArgument, "unsupported DOM geometry relation")
+		}
+	}
+	if kind == DOMSetProperty && operation.ValueJSON == "" {
+		return DOMOperation{}, NewError(CodeInvalidArgument, "set property requires valueJson")
+	}
+	if operation.ValueJSON != "" && kind != DOMNormalizeColor {
+		var decoded any
+		if err := json.Unmarshal([]byte(operation.ValueJSON), &decoded); err != nil {
+			return DOMOperation{}, NewError(CodeInvalidArgument, fmt.Sprintf("DOM valueJson: %v", err))
+		}
+	}
+	if operation.ArgumentsJSON != "" {
+		var decoded []any
+		if err := json.Unmarshal([]byte(operation.ArgumentsJSON), &decoded); err != nil {
+			return DOMOperation{}, NewError(CodeInvalidArgument, fmt.Sprintf("DOM argumentsJson must be an array: %v", err))
+		}
+	}
+	if kind == DOMNormalizeColor && operation.ValueJSON == "" {
+		return DOMOperation{}, NewError(CodeInvalidArgument, "normalize color requires a color")
+	}
+	if kind == DOMSelect {
+		if operation.Range && (operation.Start < 0 || operation.End < operation.Start) {
+			return DOMOperation{}, NewError(CodeInvalidArgument, "invalid DOM selection range")
+		}
+		if operation.Substring != "" && operation.Occurrence < 1 {
+			return DOMOperation{}, NewError(CodeInvalidArgument, "DOM selection occurrence must be positive")
+		}
+	}
+	return result, nil
 }
 
 func decodeParams(params json.RawMessage, destination any) *ProtocolError {
@@ -904,6 +1216,9 @@ func locatorFromWireAt(locator *WireLocator, depth int) (Locator, *ProtocolError
 	if kind == LocatorRole && locator.Role == "" {
 		return Locator{}, NewError(CodeInvalidArgument, "role locator requires role")
 	}
+	if locator.Attribute != "" && kind != LocatorTestID {
+		return Locator{}, NewError(CodeInvalidArgument, "custom locator attribute is only valid for test IDs")
+	}
 	if kind != LocatorRole && kind != LocatorAnd && kind != LocatorOr && locator.Value == "" {
 		return Locator{}, NewError(CodeInvalidArgument, "locator value is required")
 	}
@@ -921,7 +1236,7 @@ func locatorFromWireAt(locator *WireLocator, depth int) (Locator, *ProtocolError
 		return Locator{}, matchErr
 	}
 	result := Locator{
-		Kind: kind, Value: locator.Value, Role: locator.Role, Name: locator.Name, Match: match,
+		Kind: kind, Value: locator.Value, Role: locator.Role, Name: locator.Name, Attribute: locator.Attribute, Match: match,
 		Level: locator.Level, LevelSet: locator.LevelSet, States: append([]string(nil), locator.States...),
 		Nth: locator.Nth, NthSet: locator.NthSet || locator.First,
 	}
