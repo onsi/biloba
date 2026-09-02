@@ -32,16 +32,18 @@ Matchers are built with `gcustom.MakeMatcher` and return `(bool, error)` (common
 
 **Not everything polls — the four-bucket model** (enforced by `b.guardConfig(name, allowed...)`): **polling** methods (dual actions + `Get*` value-getters) honor all four knobs; **waiting commands** (`Navigate`, screenshots) keep their own default deadline and honor only `WithTimeout`+`WithContext`; **snapshots** (`Current*ForEach`, `HasElement`, `Count`) and **one-shot mutations** (`SetCookie`, `Run`, …) reject every knob.
 
+Underneath all four sits a deadline the buckets say nothing about: every command Biloba sends Chrome goes through `runCDP` (`cdp.go`), which bounds it so an unresponsive browser fails the spec instead of hanging the suite. It is a liveness backstop, not a wait — you don't configure it and `WithTimeout` doesn't shorten it, because on a polling method `WithTimeout` means "how long to keep retrying" and cutting each individual call would fail healthy-but-slow calls that Gomega accepts today. A new call into Chrome goes through `runCDP`, with one exception the file explains: a context must never bound the first `chromedp.Run` on it, since chromedp allocates the browser and target there and that context then owns them.
+
 Also common: a `Get*`/`Current*ForEach`/`*Immediately` family — `Get*` (singular) **polls** the **first** match and returns its value; `Current*ForEach` is a no-poll **snapshot** over **all** matches (returns slices, empty when nothing matches); `*Immediately` acts on **all** current matches without polling (the double-suffix length is an intentional "know what you're doing" smell). The matcher counterpart `EachHaveFoo` asserts over all matches and **fails on empty** (≥1 match AND all satisfy — a vacuous pass is a footgun). The "first vs. all" and "poll vs. snapshot" distinctions are conveyed by the method name.
 
 **A matcher that names a Go type in its doc must hand that type to the sub-matcher.** A specialization built on a generic matcher (`EachHaveInnerText` on `EachHaveProperty`) has to convert the raw JSON-decoded value the way its `Get*`/`Current*ForEach` twin does — `eachHaveProperty`'s `convert` hook is that seam. Skipping it produces the worst kind of bug: `Equal([]string{…})` against a `[]any` compiles, reads correctly, can never pass, and fails with two renderings that are character-identical apart from the type header. Where a generic matcher *can't* honestly convert (heterogeneous property values), say so in the doc and name the element-wise form (`HaveExactElements`) instead.
 
 ## Testing
 
-**All tests are Ginkgo specs.** The `Makefile` wraps the canonical invocations: `make test` (standard headless parallel run — `ginkgo -r -p -randomize-all`), `make test-all` (also runs the high-fidelity google-chrome lane CI uses), and `make stress-test` (6 procs under `stress` load, 41 repeats — for flushing out timing/concurrency races). Run `make stress-test` only periodically or when you suspect a change might be flaky; see the `biloba-testing` skill for details.
+**All tests are Ginkgo specs.** The `Makefile` wraps the canonical invocations: `make test` (standard headless parallel run — `ginkgo -r -p --randomize-all`), `make test-all` (also runs the high-fidelity google-chrome lane CI uses), and `make stress-test` (6 procs under `stress` load, 41 repeats — for flushing out timing/concurrency races). Run `make stress-test` only periodically or when you suspect a change might be flaky; see the `biloba-testing` skill for details.
 
 ```
-make test     # or: ginkgo -r -p -randomize-all
+make test     # or: ginkgo -r -p --randomize-all
 ```
 
 Repo-specific testing conventions (see `biloba_suite_test.go`):

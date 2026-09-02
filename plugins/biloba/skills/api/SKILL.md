@@ -114,7 +114,7 @@ Eventually(".figure-frame").Should(b.HaveAttribute("data-block-id", Not(BeEmpty(
 - `b.GetInnerText(selector)` → string (polls on presence — `""` is a valid value) · `b.HaveInnerText(string|matcher)` (exact).
 - `b.GetTextContent(selector)` → string · `b.HaveTextContent(string|matcher)`.
 - `b.HaveText(string|matcher)` — trims & collapses whitespace first.
-- `b.CurrentInnerTextForEach(selector)` → []string · `b.EachHaveInnerText(value|matcher)`. Same pair for `CurrentTextContentForEach`/`EachHaveTextContent`. The **no-arg** `EachHaveInnerText()`/`EachHaveTextContent()` no longer mean "every text is empty" — they assert the property is *defined* on every match and capture the slice. Sub-matcher and `.Capture` both see a typed `[]string` (the same slice the `Current*ForEach` getter returns), so `Equal([]string{...})` and `HaveExactElements(...)` both work — contrast the generic `EachHaveProperty` below, which hands over raw `[]any`.
+- `b.CurrentInnerTextForEach(selector)` → []string · `b.EachHaveInnerText(value|matcher)`. Same pair for `CurrentTextContentForEach`/`EachHaveTextContent`. The **no-arg** `EachHaveInnerText()`/`EachHaveTextContent()` assert the property is *defined* on every match, and capture the slice — they do **not** mean "every text is empty". Sub-matcher and `.Capture` both see a typed `[]string` (the same slice the `Current*ForEach` getter returns), so `Equal([]string{...})` and `HaveExactElements(...)` both work — contrast the generic `EachHaveProperty` below, which hands over raw `[]any`.
 - `b.HaveClass(string|matcher)` — a string ⇒ "list contains"; a matcher receives `[]string`. · `b.EachHaveClass(string)`.
 - `b.HaveAttribute(name[, string|matcher])` — via `getAttribute`.
 - `b.HaveComputedStyle(prop, string|matcher)` — via `getComputedStyle`; getter `b.GetComputedStyle` (see Geometry).
@@ -209,7 +209,7 @@ Each produces a genuine `window.getSelection()` range and dispatches `mouseup` (
 - `b.HandleAlertDialogs()` / `HandleConfirmDialogs()` / `HandlePromptDialogs()` / `HandleBeforeunloadDialogs()` → `DialogHandler`; chain `.MatchingMessage(string|matcher)`, `.WithResponse(bool)`, `.WithText(s)`. · `b.RemoveDialogHandler(h)`.
 - `b.Dialogs()` → `Dialogs`, filtered with `.OfType(biloba.DialogTypeAlert|DialogTypeConfirm|DialogTypePrompt|DialogTypeBeforeunload)`, `.MatchingMessage(string|matcher)`, `.MostRecent()`. There is **no** dialog matcher — assert with plain Gomega: `Ω(b.Dialogs().MostRecent()).Should(HaveField("Message", "…"))`.
 - `Dialog{Type, Message, DefaultPrompt, HandleResponse, HandleText, Autohandled}` (`Autohandled` = no registered handler matched, so a Biloba default ran).
-- Default handling: alerts accepted; confirm/prompt cancelled; beforeunload accepted. An unhandled dialog also prints a "you should add an explicit dialog handler" warning — except the `beforeunload` `Prepare`'s own `about:blank` navigation raises when unloading the previous spec's page, which is accepted silently and left out of `b.Dialogs()`.
+- Default handling: alerts accepted; confirm/prompt cancelled; beforeunload accepted. An unhandled dialog also prints a "you should add an explicit dialog handler" warning — except the `beforeunload` that `Prepare`'s own `about:blank` navigation raises when it unloads the previous spec's page, which is accepted silently and left out of `b.Dialogs()`.
 
 ## Downloads  (per-tab; auto-tracked)
 

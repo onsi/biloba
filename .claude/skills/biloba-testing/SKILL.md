@@ -89,7 +89,7 @@ It("errors when the selector is malformed", func() {
 
 This `gt`/`ExpectFailures` path is also how you assert **hard errors from the four-bucket guards** — e.g. configuring a method that doesn't support a knob (`b.WithPolling(...).Navigate(...)`, `b.Immediate().Count(...)`) or configuring a bare matcher (`b.WithTimeout(d).Click()`). These are `gt.Fatalf` calls, so capture them with `ExpectFailures(ContainSubstring("does not support WithPolling"))` (or `ContainSubstring("returns a matcher")` for the bare-matcher guard).
 
-**Every test in this repo is a Ginkgo spec — always.** That includes the internal ones in package `biloba` (the ones that reflect over unexported fields or exercise a pure function). Import Ginkgo and Gomega under their **package names** rather than dot-importing, which is all it takes to avoid colliding with biloba's own exported names: `ginkgo "github.com/onsi/ginkgo/v2"` / `gomega "github.com/onsi/gomega"`, then `ginkgo.Describe`/`ginkgo.It`/`gomega.Expect`. Both test packages compile into one binary, so specs registered from package `biloba` run under the same `RunSpecs`. Label them `no-browser` if they don't need a tab. `tab_state_internal_test.go` is the model. (`visual_diff_internal_test.go` and `probe_trajectory_internal_test.go` are plain `func TestXxx` units and their header comment claims a dot-import collision forces that — it does not, and they should be converted rather than copied.)
+**Every test in this repo is a Ginkgo spec — always.** That includes the internal ones in package `biloba` (the ones that reflect over unexported fields or exercise a pure function). Import Ginkgo and Gomega under their **package names** rather than dot-importing, which is all it takes to avoid colliding with biloba's own exported names: `ginkgo "github.com/onsi/ginkgo/v2"` / `gomega "github.com/onsi/gomega"`, then `ginkgo.Describe`/`ginkgo.It`/`gomega.Expect`. Both test packages compile into one binary, so specs registered from package `biloba` run under the same `RunSpecs`. Label them `no-browser` if they don't need a tab. `tab_state_internal_test.go` is the model.
 
 ### Half-coverage of a two-sided API reads as coverage
 
@@ -108,7 +108,7 @@ The smell: **an assertion on a timeout, a status, an empty tally, or an error pa
 
 The fix is a **second spec from the opposite direction**, not a bigger assertion on the first: one spec proves the deadline is honoured, another proves the handler fires. Widening the original would only have made a one-sided spec longer.
 
-Watch for it wherever a spec composes a *view* (`Realistic()`, `WithTimeout(d)`, `Immediate()`, `ViewportOnly()`) with a method that registers or mutates state — that composition has two halves by construction.
+Watch for it wherever a spec composes a *view* (`Realistic()`, `WithTimeout(d)`, `WithPolling(d)`, `Immediate()`) with a method that registers or mutates state — that composition has two halves by construction.
 
 For **matchers**, you usually don't go through `gt` — call `Match` directly and inspect the returned error:
 ```go

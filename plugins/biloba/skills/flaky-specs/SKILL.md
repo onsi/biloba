@@ -228,7 +228,7 @@ Works for every decode target (`.Capture` and the getters' trailing pointer), an
 
 `GetValue`/`GetInnerText`/`GetTextContent` have no "defined" axis (empty string is a valid value) — they poll on presence only and never need `AllowMissing`.
 
-**The `Each*` matchers fail on zero matches** (`EachBeVisible`/`EachBeEnabled`/`EachHaveClass`/`EachHaveInnerText`/`EachHaveProperty`/…): "≥1 match AND all satisfy", so they wait for elements to appear instead of passing vacuously. To assert nothing matches, use `Eventually(sel).Should(b.HaveCount(0))` or `ShouldNot(b.Exist())` — **not** the no-arg `EachHaveInnerText()`/`EachHaveTextContent()`, which now assert the property is *defined* on every match (and capture the slice).
+**The `Each*` matchers fail on zero matches** (`EachBeVisible`/`EachBeEnabled`/`EachHaveClass`/`EachHaveInnerText`/`EachHaveProperty`/…): "≥1 match AND all satisfy", so they wait for elements to appear instead of passing vacuously. To assert nothing matches, use `Eventually(sel).Should(b.HaveCount(0))` or `ShouldNot(b.Exist())` — **not** the no-arg `EachHaveInnerText()`/`EachHaveTextContent()`, which assert the property is *defined* on every match (and capture the slice).
 
 ## 6. Network handlers in an `Ordered` container
 
@@ -288,11 +288,11 @@ Eventually(".row").Should(b.HaveCount(3))
 
 (Positive collection assertions are safer: Gomega's `HaveEach` errors on an empty slice, and the `Each*` matchers fail on zero matches.)
 
-**Two vacuous negations Biloba now makes loud** — both were satisfied by an element that wasn't there:
-- `ShouldNot(b.BeChecked())` on the wrapping `<label>`/`<div>` instead of the `<input>`: an element with no `checked` property is now an **error**.
-- `ShouldNot(b.BeInViewport())` and the other geometry matchers on an element that never rendered: a missing element is now an **error** (the pairwise/offset probes name which selector went missing).
+**Two vacuous negations Biloba makes loud** — both would otherwise be satisfied by an element that wasn't there:
+- `ShouldNot(b.BeChecked())` on the wrapping `<label>`/`<div>` instead of the `<input>`: an element with no `checked` property is an **error**.
+- `ShouldNot(b.BeInViewport())` and the other geometry matchers on an element that never rendered: a missing element is an **error** (the pairwise/offset probes name which selector went missing).
 
-**That change costs the wait-for-teardown idiom.** Gomega counts an assertion satisfied only when the matcher gives the desired answer *and* doesn't error, in either direction:
+**That costs the wait-for-teardown idiom.** Gomega counts an assertion satisfied only when the matcher gives the desired answer *and* doesn't error, in either direction:
 
 ```go
 Eventually("#toast").ShouldNot(b.BeInViewport())   // WRONG — now times out
@@ -310,7 +310,7 @@ Don't work around it. Pre-writing baselines blind — a scripted "run with updat
 
 **And a tolerance widened until nothing can fail is the same bug with pixels.** `b.Tolerance(0.05)` on a small element can absorb an entire component; `b.ChannelTolerance(60)` absorbs a color change. Tune the suite-wide default (`BilobaConfigScreenshotTolerance` / `BilobaConfigScreenshotChannelTolerance`) once against real evidence, and treat a per-assertion tolerance that keeps growing as a signal the subject is nondeterministic — mask the region (`b.Mask`) instead of blurring the whole comparison. → `biloba:visual-assertions`
 
-**A capture used to be able to destroy its own subject.** Reaching content outside the viewport means expanding it, and a responsive page observes that — `matchMedia` flips, `resize` fires, and an app that re-renders on its breakpoint unmounts the subtree being captured, taking component-local state with it. The spec then fails on the line *after* the capture, polling for an element that was there a moment ago. Biloba now expands the viewport only when it has to (a subject outside the viewport, or a document bigger than the viewport) and says so when a subject vanishes across a capture: `the element matching X was present before this capture and gone after it`.
+**A capture that expands the viewport can destroy its own subject.** Reaching content outside the viewport means expanding it, and a responsive page observes that — `matchMedia` flips, `resize` fires, and an app that re-renders on its breakpoint unmounts the subtree being captured, taking component-local state with it. The spec then fails on the line *after* the capture, polling for an element that was there a moment ago. Biloba now expands the viewport only when it has to (a subject outside the viewport, or a document bigger than the viewport) and says so when a subject vanishes across a capture: `the element matching X was present before this capture and gone after it`.
 
 If you see that message, or an intermittent "could not find DOM element" on the line following a capture: **capture something already in view**. `b.ScrollIntoView(sel)`, gate on `b.BeInViewport(b.Fully())`, then capture — Biloba touches nothing.
 
@@ -338,6 +338,6 @@ Eventually("#dashboard-root").Should(b.Exist())     // the destination actually 
 Ω(b.GetLocation()).Should(HaveSuffix("/dashboard")) // …now a formality
 ```
 
-`b.GetLocation()`/`b.GetTitle()` (breaking rename — bare `Location`/`Title` are gone) are polling getters honoring all four knobs, and they treat a transient `Inspected target navigated or closed (-32000)` as a retryable miss. So `Eventually(b.GetLocation)` is safe; it's just still the weaker assertion.
+`b.GetLocation()`/`b.GetTitle()` are polling getters honoring all four knobs, and they treat a transient `Inspected target navigated or closed (-32000)` as a retryable miss. So `Eventually(b.GetLocation)` is safe; it's just still the weaker assertion.
 
 **Fast interactions act in place.** `b.Click`/`b.Tap` do **not** `scrollIntoView` and do **not** move focus. If a scroll position changes around a fast click, the cause is app-side. Scroll-into-view comes only from `b.Realistic()` and from focus-bearing ops (`b.Focus`, `b.SetValue`, `b.Type`) whose `.focus()` scrolls its target. If a spec asserts on scroll position, keep focus-bearing ops off the element under test.

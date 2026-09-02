@@ -83,7 +83,7 @@ Eventually("#dashboard-root").Should(b.Exist())     // proves the navigation lan
 Ω(b.GetLocation()).Should(HaveSuffix("/dashboard")) // …so this is a formality
 ```
 
-`b.GetLocation()`/`b.GetTitle()` (**breaking rename** — bare `Location`/`Title` are gone) are polling getters honoring all four knobs, and a transient CDP error mid-navigation (`Inspected target navigated or closed`) is a retryable miss — so `Eventually(b.GetLocation)` is safe, just weaker.
+`b.GetLocation()`/`b.GetTitle()` are polling getters honoring all four knobs, and a transient CDP error mid-navigation (`Inspected target navigated or closed`) is a retryable miss — so `Eventually(b.GetLocation)` is safe, just weaker.
 
 ## Pocket matcher cheat-sheet — reach here before `b.Run`
 
@@ -285,9 +285,7 @@ hold.Release()                 // now let the stale response land
 Ω(hold.Count()).Should(Equal(1))
 ```
 
-**By default a hold freezes *every* matching response**, and a bare `Release()` frees them all and disarms the hold. `.Limit(n)` caps how many are held at once — overflow matches fly straight past, which is how you express "hold save #1 while save #2 lands". `Await()` returns the **oldest response still held**; `hold.Release(r)` releases just that one and `hold.ReleaseNext()` releases the oldest, both keeping the hold **armed** (`ReleaseNext` fails loudly if nothing is held). `Await` has its own 30s deadline (`b.WithTimeout(d).HoldResponse(url)`); holds are force-released at spec end and by `Prepare()`. Matching is **tab-wide and URL-based**, so a hold can catch a response from an earlier page load — scope the flow to a `b.NewTab()` when that matters. Full semantics → `biloba:api`; worked orderings → `biloba:flaky-specs`.
-
-`hold.Held()`/`hold.PassedThrough()` split `Count()` into what the hold actually froze vs. what arrived and flew past (at `Limit`, or after a bare `Release()`) — with `.Limit(1)`, assert `Eventually(hold.PassedThrough).Should(Equal(1))` directly rather than inferring "not held" from `Count()` and the limit. And `Count`/`Release` are facts about the network, not the page — pair them with an app-state barrier (`b.GetJSValue`, or the DOM the response produces) when the assertion is about what the app *did* with the response.
+**By default a hold freezes *every* matching response**, and a bare `Release()` frees them all and disarms the hold. `.Limit(n)` caps how many are held at once — overflow matches fly straight past, which is how you express "hold save #1 while save #2 lands"; `hold.PassedThrough()` asserts that directly, rather than inferring it from `Count()` and the limit. `Await()` returns the **oldest response still held**; `hold.Release(r)` releases just that one and `hold.ReleaseNext()` releases the oldest, both keeping the hold **armed**. `Await` has its own 30s deadline (`b.WithTimeout(d).HoldResponse(url)`); holds are force-released at spec end and by `Prepare()`. Matching is **tab-wide and URL-based**, so a hold can catch a response from an earlier page load — scope the flow to a `b.NewTab()` when that matters. And `Count`/`Release` are facts about the network, not the page — pair them with an app-state barrier (`b.GetJSValue`, or the DOM the response produces) when the assertion is about what the app *did* with the response. Full semantics → `biloba:api`; worked orderings → `biloba:flaky-specs`.
 
 ## Seed state to skip slow flows
 
