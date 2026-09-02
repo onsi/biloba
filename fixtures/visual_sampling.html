@@ -30,19 +30,29 @@
     <div id="adversary"></div>
 
     <script>
-        // Biloba injects <style id="_biloba-freeze"> into the head for the duration of every capture,
-        // so counting those insertions counts captures.  That lets this page react to the captures
-        // themselves, which is what makes the two settle-schedule assertions in visual_test.go
-        // deterministic rather than a question of this machine's capture cadence.  See
-        // screenshotSettleStreak in visual.go for the schedule they are checking.
-        window.captureTimes = []
+        // Biloba injects <style id="_biloba-freeze"> into the head for the duration of every capture
+        // and takes it back out afterwards, so both ends of every capture are visible from the page.
+        // That lets this page react to the captures themselves, which is what makes the two
+        // settle-schedule assertions in visual_test.go deterministic rather than a question of this
+        // machine's capture cadence.  See screenshotSettleStreak in visual.go for the schedule they
+        // are checking.
+        //
+        // Both transitions are timestamped because the two are what separate the wait from the work:
+        // captureTimes[i+1] - releaseTimes[i] is the scheduled wait alone, with the capture round trip
+        // - which costs hundreds of milliseconds and varies by nearly as much under load - left out
+        // of it.
+        window.captureTimes = [] // the freeze going in: the start of each capture
+        window.releaseTimes = [] // the freeze coming out: the end of each capture
         var captures = 0, wasFrozen = false
 
         new MutationObserver(function () {
             var frozen = !!document.getElementById("_biloba-freeze")
-            if (frozen === wasFrozen) return // the freeze coming back out again, or unrelated head churn
+            if (frozen === wasFrozen) return // unrelated head churn
             wasFrozen = frozen
-            if (!frozen) return
+            if (!frozen) {
+                window.releaseTimes.push(Date.now())
+                return
+            }
             captures++
             window.captureTimes.push(Date.now())
             // Two captures out of every three render the same: a settle check that stops at two
