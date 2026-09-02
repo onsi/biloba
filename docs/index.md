@@ -4405,7 +4405,13 @@ await session.expectUrl("/dashboard", {pathname: true});
 await session.expectEvaluation("window.app.ready", true);
 ```
 
-Every one of these takes `{timeoutMs, intervalMs, signal, mode}`.  The default mode is `"eventually"`; `"immediate"` makes one attempt, and `"consistently"` requires the condition to remain true for the timeout.  TypeScript still has no bare-matcher form - the [dual API](#interacting-with-elements) is a Gomega idiom, and TypeScript has no `Eventually` to hand a matcher to.
+Every one of these takes `{timeoutMs, intervalMs, signal, mode}`.  The default mode is `"eventually"`; `"immediate"` makes one attempt, and `"consistently"` requires the condition to remain true for the timeout.  For the action-oriented spelling that mirrors Go's `b.Immediate()`, `{immediate: true}` is shorthand for `{mode: "immediate"}`:
+
+```ts
+await session.getByRole("button", {name: "Save"}).click({immediate: true});
+```
+
+TypeScript still has no bare-matcher form - the [dual API](#interacting-with-elements) is a Gomega idiom, and TypeScript has no `Eventually` to hand a matcher to.
 
 For interactions where browser-faithful input matters, call `realistic()` on the locator:
 

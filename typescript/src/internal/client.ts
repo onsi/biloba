@@ -1852,10 +1852,17 @@ function operationResult(
 }
 
 function pollPolicy(options: WaitOptions): Record<string, number | string> {
+  if (options.immediate && options.mode !== undefined && options.mode !== "immediate") {
+    throw new BilobaError({
+      code: "INVALID_ARGUMENT",
+      message: `immediate: true conflicts with mode: ${JSON.stringify(options.mode)}`,
+    });
+  }
+  const mode = options.immediate ? "IMMEDIATE" : options.mode?.toUpperCase();
   return {
     ...(options.timeoutMs !== undefined && {timeoutMs: options.timeoutMs}),
     ...(options.intervalMs !== undefined && {intervalMs: options.intervalMs}),
-    ...(options.mode !== undefined && {mode: options.mode.toUpperCase()}),
+    ...(mode !== undefined && {mode}),
   };
 }
 

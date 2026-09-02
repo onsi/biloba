@@ -22,7 +22,7 @@ vitest worker 3  ──▶  bilobad  ──┘
 **Polling runs on the daemon, not in your test.** `expectText("ready", {timeoutMs: 1000, intervalMs: 5})` is **one** request — the retry loop runs next to Chrome and answers once with the outcome plus the trajectory it took.
 
 - Never write a client-side retry loop (`await expect.poll(...)` around a Biloba assertion, `waitFor`, a `for` loop with sleeps). You are re-polling a poll; the failure you get is the inner one, and you pay a round trip per attempt.
-- The default mode is `"eventually"`. Use `{mode: "immediate"}` for one attempt or `{mode: "consistently"}` to require the condition to remain true for the timeout.
+- The default mode is `"eventually"`. Use `{mode: "immediate"}` for one attempt or `{mode: "consistently"}` to require the condition to remain true for the timeout. On actions, `{immediate: true}` is the Go-shaped shorthand for `{mode: "immediate"}`.
 - There is no bare matcher form. The Go [dual API](https://onsi.github.io/biloba/#interacting-with-elements) is a Gomega idiom with no TypeScript equivalent.
 - Tune with `{timeoutMs, intervalMs, signal, mode}` on actions and assertions.
 

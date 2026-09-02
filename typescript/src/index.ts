@@ -175,6 +175,8 @@ export interface WaitOptions {
   intervalMs?: number | undefined;
   signal?: AbortSignal | undefined;
   mode?: "eventually" | "immediate" | "consistently" | undefined;
+  /** Shorthand for mode: "immediate". Try exactly once and fail fast. */
+  immediate?: boolean | undefined;
 }
 export type PollOptions = WaitOptions;
 

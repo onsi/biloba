@@ -769,6 +769,19 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     expect(failure.domOutline).toContain("Biloba parity");
   });
 
+  it("can try an action exactly once through the immediate alias", async () => {
+    await session.prepare();
+    await session.navigate(baseUrl);
+
+    const failure = await session.locator("#never").click({immediate: true})
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(BilobaError);
+    const error = failure as BilobaError;
+    expect(error.code).toBe("TIMEOUT");
+    expect(error.trajectory).toHaveLength(1);
+  });
+
   it("runs independent worker daemons concurrently against the shared Chrome", async () => {
     const secondBrowser = await connect({daemonExecutable: daemonExecutable!, chromeWsUrl: sharedBrowser.wsURL});
     const secondSession = await secondBrowser.openSession();

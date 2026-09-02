@@ -16,6 +16,9 @@ vitest worker 3  ──▶  bilobad  ──┘
 
 Polling happens on the daemon.  An assertion with a 1s timeout and a 5ms interval is *one* request, not two hundred - the retry loop runs next to Chrome and answers once with the outcome and the trajectory it took.
 
+Actions poll by default. Pass `{immediate: true}` to try exactly once and fail fast, matching Go's
+`b.Immediate()` behavior; it is shorthand for `{mode: "immediate"}`.
+
 ```ts
 const browser = await connect({chromeWsUrl});
 const session = await browser.openSession();
