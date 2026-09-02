@@ -304,7 +304,11 @@ that's it.
 
 > Wat
 
-Biloba hands Chrome a piece of javascript once per tab, to run at the start of every document that tab creates - so a global `_biloba` object is on `window` before any of the page's own scripts run, in the main frame and in every same-origin child frame.  Chrome maintains that, rather than Biloba noticing after each navigation that the object is gone and putting it back; a page that navigates itself mid-command can't leave a command looking at a document that never had it.  This object provides simple Javascript simulations for a bunch of common actions.  The `click` function does the following:
+Biloba hands Chrome a piece of javascript once per tab, to run at the start of every document that tab creates - so a global `_biloba` object is on `window` before any of the page's own scripts run.  Chrome maintains that, rather than Biloba noticing after each navigation that the object is gone and putting it back; a page that navigates itself mid-command can't leave a command looking at a document that never had it.
+
+That covers the tab's child frames as well as its main document, which is more than Biloba needs: it only ever *uses* the main frame's copy, reaching into a same-origin child frame from there.  A copy in a frame it can't pierce - a `sandbox="allow-scripts"` widget on an opaque origin - is unused, and costs a few hundred microseconds of nothing.  Whether Chrome even puts one there depends on the build: `chrome-headless-shell` injects into an opaque origin, full headless Chrome doesn't.  Neither is worth doing anything about; it's noted because "every document" is otherwise easy to read as a promise about frames.
+
+This object provides simple Javascript simulations for a bunch of common actions.  The `click` function does the following:
 
 - Find the element matching `selector`
 - Validate that it is visible
