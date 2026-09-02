@@ -27,8 +27,17 @@ func (b *Biloba) configureDownloadBehavior() {
 			WithBrowserContextID(b.browserContextID))
 }
 
+// enableCrashReporting turns on the Inspector domain, which is what delivers
+// Inspector.targetCrashed.  chromedp enables Page/Runtime/Network/DOM on its own but not this one, so
+// without it the crash event arrives only by luck: it did on macOS and never did on Linux CI, which
+// meant diagnoseCDPError silently degraded to deadline_exceeded on the platform most suites run on.
+func (b *Biloba) enableCrashReporting() {
+	b.runCDP("enable crash reporting", inspector.Enable())
+}
+
 func (b *Biloba) setUpListeners() {
 	b.configureDownloadBehavior()
+	b.enableCrashReporting()
 
 	chromedp.ListenTarget(b.Context, func(ev any) {
 		switch ev := ev.(type) {
