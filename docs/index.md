@@ -2138,6 +2138,27 @@ b.DragTo("#card", "#column")             // drags #card's center onto #column's 
 Eventually("#card").Should(b.DragTo("#column"))
 ```
 
+**`DragTo` is the whole gesture.**  The press, the moves, and the release all happen inside the one call, so there is no seam to assert in.  That's fine when the thing you're testing is the *drop* - but a spec whose subject is the **mid-drag** state needs the legs by hand: a tree row that auto-expands after a hover dwell, a drop-target highlight, a spring-loaded folder.  Drive those through [chromedp](#codechromedpcode-breaking-the-fourth-wall) on `b.Context`.  `b.GetBoundingBox` already reports in the space CDP mouse events use - viewport CSS pixels - so `CenterX`/`CenterY` are the coordinates to send:
+
+```go
+src, tgt := b.GetBoundingBox("#row"), b.GetBoundingBox("#folder")   // measure BOTH before pressing
+ctx, cancel := context.WithTimeout(b.Context, 10*time.Second)      // b.Context carries no deadline
+defer cancel()
+
+Expect(chromedp.Run(ctx,
+    chromedp.MouseEvent(input.MousePressed, src.CenterX, src.CenterY, chromedp.ButtonType(input.Left), chromedp.ClickCount(1)),
+    chromedp.MouseEvent(input.MouseMoved, tgt.CenterX, tgt.CenterY, chromedp.ButtonType(input.Left)),
+)).To(Succeed())
+
+Eventually("#folder").Should(b.HaveAttribute("aria-expanded", "true"))   // asserted with the button still down
+
+Expect(chromedp.Run(ctx,
+    chromedp.MouseEvent(input.MouseReleased, tgt.CenterX, tgt.CenterY, chromedp.ButtonType(input.Left), chromedp.ClickCount(1)),
+)).To(Succeed())
+```
+
+Measure both endpoints *before* the press, the way `DragTo` does, and for the same reason: a measurement taken between the legs can be taken after something moved.
+
 `DragTo` does **not** drive native HTML5 drag-and-drop (the `draggable` attribute and the `dragstart`/`dragover`/`drop` event family).  Synthesizing the native protocol convincingly requires the real OS-level drag machinery, which is outside Biloba's atomic model.  If you need to test a native HTML5 `draggable` interaction, drop down to chromedp via `b.Context`.
 
 #### Scrolling the Mouse Wheel

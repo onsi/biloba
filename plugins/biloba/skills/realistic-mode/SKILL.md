@@ -91,4 +91,18 @@ var _ = Describe("checkout (realistic smoke)", Label("realistic"), func() {
 - A realistic interaction on an occluded/off-screen element **polls and fails** like a real one — the feature, but it makes these specs timing-sensitive. Bump `rb.WithTimeout(d)` for a slow scroll/settle; don't drop to `Immediate()`.
 - `DragTo` drives **pointer-based** DnD (@dnd-kit, Sortable), **not** native HTML5 `draggable` (a separate drag-event model).
 - **Both drag endpoints have to share a screen.** A realistic drag presses at the source and releases at the target, so both points must be live at one scroll position. Biloba finds that position for you — it tries where things already are, then the pair framed around their midpoint, then each endpoint scrolled in with the other scrolled second — which covers two rows of one `overflow: auto` list and endpoints in two separate panes. When no position shows both (rows further apart than their pane is tall) it fails and names both endpoints rather than pressing and releasing in the same place, which the page would receive as a click on the target. Widen the window with `b.SetWindowSize`, drag to a nearer target, or drive the scroll yourself through `b.Context`.
+- **`DragTo` is the whole gesture — press, moves and release in one call.** There is no seam to assert in, so a spec whose subject is the *mid-drag* state (a tree row that auto-expands on a hover dwell, a drop-target highlight, a spring-loaded folder) drops to the three CDP legs on `b.Context` instead. `b.GetBoundingBox` reports in the space CDP mouse events use, so `CenterX`/`CenterY` are the coordinates to send — measure **both** endpoints before the press, for the same reason `DragTo` does:
+  ```go
+  src, tgt := b.GetBoundingBox("#row"), b.GetBoundingBox("#folder")
+  ctx, cancel := context.WithTimeout(b.Context, 10*time.Second)   // b.Context carries no deadline
+  defer cancel()
+  Expect(chromedp.Run(ctx,
+      chromedp.MouseEvent(input.MousePressed, src.CenterX, src.CenterY, chromedp.ButtonType(input.Left), chromedp.ClickCount(1)),
+      chromedp.MouseEvent(input.MouseMoved, tgt.CenterX, tgt.CenterY, chromedp.ButtonType(input.Left)),
+  )).To(Succeed())
+  Eventually("#folder").Should(b.HaveAttribute("aria-expanded", "true"))   // button still down
+  Expect(chromedp.Run(ctx,
+      chromedp.MouseEvent(input.MouseReleased, tgt.CenterX, tgt.CenterY, chromedp.ButtonType(input.Left), chromedp.ClickCount(1)),
+  )).To(Succeed())
+  ```
 - **A `position: fixed` footer is invisible to the fast track and solid to this one.** `el.click()` does no hit-testing, so the fast track reaches an element the footer sits on top of; real pointer input lands on the footer. A spec that passed for months can fail the moment it switches to `b.Realistic()`, because a row near the bottom of a short list is genuinely underneath the footer. Both tracks are behaving correctly — the realistic one is telling you a user couldn't reach that element either. Scroll it clear (`b.ScrollIntoView(sel, b.AtTopOffset(px))`) instead of suspecting your interaction code.
