@@ -22,6 +22,7 @@ The returned *Biloba shares this tab's Chrome connection and state - it is the s
 What realistic mode does differently:
   - Click: scrolls the element to the viewport center, waits for its box to stop moving, verifies it is enabled and is the topmost element at its centroid (so an occluding overlay or an off-screen element does NOT click through - it polls/fails like a real interaction), moves the real pointer to it, then dispatches a real mousePressed/mouseReleased.  Coordinates inside same-origin >>> iframes are translated to the top-level viewport.
   - ClickEachImmediately: clicks every matching element with real input (scrolling+re-measuring each in turn), skipping any that are hidden/disabled/off-screen/obscured.
+  - DragTo: measures both endpoints at ONE scroll position, then presses at the source, moves, and releases at the target with real CDP mouse input.  A drag between two rows of the same overflow:auto list works; endpoints that no scroll position can show together fail, naming both, instead of pressing and releasing in one place (which the page receives as a click on the target).
   - Hover: scrolls into view and moves the real mouse to the centroid, which activates genuine CSS :hover (Biloba's synthetic Hover does not).
   - SetValue: text inputs are focused with a real click, cleared, and typed with real key events (then blurred to fire change); checkboxes are toggled with a real click. Native pickers - radio groups, <select>, multi-selects - fall back to the fast JS path, since they can't be driven by a real pointer (Playwright's selectOption sets them programmatically too).
   - Type/SendKeysToWindowImmediately: already use real CDP key events; realistic mode additionally scrolls the element into view before typing.
@@ -225,26 +226,69 @@ func (b *Biloba) realisticTap(selector any, cfg pointerConfig) (bool, error) {
 	return true, nil
 }
 
+// dragEndpointStatus describes an endpoint the way the two-endpoint failure needs to read it: why a
+// real pointer press would not land on it, or that it is fine and the other one is the problem.
+// clipper is the scrolling ancestor holding the endpoint outside its own visible band, when there is
+// one - it takes precedence over the hit-test reading, which reports that case as an occlusion and
+// sends the reader looking for an overlay that does not exist.
+func dragEndpointStatus(pt clickPoint, clipper string) string {
+	switch {
+	case !pt.enabled:
+		return "disabled"
+	case clipper != "":
+		return "scrolled out of view inside " + clipper
+	case !pt.inViewport:
+		return "off-screen"
+	case !pt.hittable:
+		return "obscured by another element"
+	}
+	return "in view"
+}
+
+// scrollToStableDragPoints measures both endpoints of a realistic drag at one scroll position - see
+// scrollToStableDragPoints in biloba.js for why they cannot be measured one at a time.  When no scroll
+// position shows both it returns an error rather than points: a drag whose endpoints are not both live
+// is not a drag Biloba can dispatch, and dispatching it anyway presses and releases in the same place,
+// which the page receives as a click on the target.  An error (rather than a soft "not yet") keeps the
+// Eventually polling - a list still settling gets there - while putting the diagnosis in the timeout
+// message instead of leaving the spec to fail on the state a stray click produced.
+func (b *Biloba) scrollToStableDragPoints(source, target any) (clickPoint, clickPoint, error) {
+	encodedTarget, err := encodeSelector(target)
+	if err != nil {
+		return clickPoint{}, clickPoint{}, err
+	}
+	r := b.runBilobaHandlerAsync("scrollToStableDragPoints", source, encodedTarget)
+	if r.Error() != nil {
+		return clickPoint{}, clickPoint{}, r.Error()
+	}
+	m, ok := r.Result.(map[string]any)
+	if !ok {
+		return clickPoint{}, clickPoint{}, fmt.Errorf("unexpected scrollToStableDragPoints result: %v", r.Result)
+	}
+	src, srcOK := pointFromResult(m["source"])
+	tgt, tgtOK := pointFromResult(m["target"])
+	if !srcOK || !tgtOK {
+		return clickPoint{}, clickPoint{}, fmt.Errorf("unexpected scrollToStableDragPoints result: %v", r.Result)
+	}
+	if m["ok"] != true {
+		srcClipper, _ := m["sourceClipper"].(string)
+		tgtClipper, _ := m["targetClipper"].(string)
+		return src, tgt, fmt.Errorf("could not put both drag endpoints on screen at the same time: the source (%v) is %s and the target (%v) is %s.\nA realistic drag presses at the source and releases at the target, so both have to be live at one scroll position.  Biloba tried the current position, the pair framed around their midpoint, and each endpoint scrolled into view with the other scrolled second; none of them showed both.\nIt is failing here rather than dispatching a press and a release in the same place, which the page would receive as a click on the target.\nDrag between endpoints that fit a viewport together, give them more room with b.SetWindowSize, or drive the scroll yourself through b.Context",
+			source, dragEndpointStatus(src, srcClipper), target, dragEndpointStatus(tgt, tgtClipper))
+	}
+	return src, tgt, nil
+}
+
 // realisticDragTo implements DragTo for realistic mode.  It measures stable, actionable points for
-// both source and target (scroll-into-view + stability + occlusion, same as realisticClick), then
-// drives a real CDP pointer drag: press at the source, several interpolated moves toward the target,
-// and a release at the target.  This drives pointer-based drag-and-drop libraries; it does not drive
-// native HTML5 draggable (use chromedp via b.Context for that).  Returns an error if either element
-// is missing/hidden or is not actionable (off-screen, disabled, or obscured).
+// both source and target at a single scroll position, then drives a real CDP pointer drag: press at
+// the source, several interpolated moves toward the target, and a release at the target.  This drives
+// pointer-based drag-and-drop libraries; it does not drive native HTML5 draggable (use chromedp via
+// b.Context for that).  Returns an error if either element is missing/hidden, or if no scroll position
+// puts both endpoints on screen at once.
 func (b *Biloba) realisticDragTo(source any, target any) (bool, error) {
-	src, err := b.scrollToStablePoint(source)
+	src, tgt, err := b.scrollToStableDragPoints(source, target)
 	if err != nil {
 		return false, err
-	}
-	if !src.enabled || !src.inViewport || !src.hittable {
-		return false, nil
-	}
-	tgt, err := b.scrollToStablePoint(target)
-	if err != nil {
-		return false, err
-	}
-	if !tgt.enabled || !tgt.inViewport || !tgt.hittable {
-		return false, nil
 	}
 	actions := []chromedp.Action{
 		chromedp.MouseEvent(input.MouseMoved, src.x, src.y),

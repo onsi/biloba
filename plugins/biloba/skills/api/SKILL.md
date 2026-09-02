@@ -164,7 +164,7 @@ Getters poll until the element is present **AND** laid out (non-degenerate box).
 - `b.DblClick` (dual) — two clicks + `dblclick`. · `b.RightClick` — `mousedown`/`mouseup`/`contextmenu`. · `b.MiddleClick` — `mousedown`/`mouseup`/`auxclick`.
 - `b.Tap(selector)` (dual) — synthetic touch/pointer + `click` (realistic: real CDP `touchStart`/`touchEnd`); accepts `b.At(...)`, ignores modifiers.
 - **Pointer options** — `b.At(x,y)` (offset from top-left; canvas/map/slider) and `b.Shift()`/`b.Ctrl()`/`b.Alt()`/`b.Meta()` (⌘/Win) — accepted by `Click`/`DblClick`/`RightClick`/`MiddleClick`/`Tap`, after the selector or in place of it (matcher form). They compose: `b.Click(sel, b.At(30,40), b.Shift())`. In fast mode any option switches the click off native `el.click()` to a synthetic event carrying coords+flags.
-- `b.DragTo(source, target)` (dual) — pointer-based drag (`pointerdown`/`move`/`up`); drives @dnd-kit-style DnD, **not** native HTML5 `draggable`. Matcher subject is the source.
+- `b.DragTo(source, target)` (dual) — pointer-based drag (`pointerdown`/`move`/`up`); drives @dnd-kit-style DnD, **not** native HTML5 `draggable`. Matcher subject is the source. In realistic mode both endpoints are measured at one scroll position (so a drag between two rows of one scroller works) and it fails, naming both, when no position shows them together.
 - `b.ScrollWheel(selector, deltaX, deltaY)` (dual; matcher form drops the selector) — `wheel` event then scrolls the nearest scrollable ancestor; +deltaY=down, +deltaX=right.
 - `b.ClickEachImmediately(selector)` — click all visible+enabled matches now, no poll (gate presence first).
 - `b.Focus` / `b.Blur` / `b.Hover` (all dual; `Hover` fires pointer/mouse events, **not** CSS `:hover`).

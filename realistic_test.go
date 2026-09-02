@@ -275,3 +275,62 @@ var _ = Describe("BeClickable and realistic interactions", func() {
 		})
 	})
 })
+
+// A realistic drag has to press at one point and release at another, and both points have to be live
+// at the same moment.  Measuring them one at a time cannot do that inside a scroll container:
+// scrolling the target into view moves the source, so the source coordinate names whatever row slid
+// into that spot - and when both endpoints get centered in turn, the two coordinates land on top of
+// each other and the press and release arrive together.  The page receives that as a click on the
+// target, which is a wrong action rather than a failed one, so every spec here asserts WHERE the drag
+// landed rather than that DragTo returned.
+var _ = Describe("realistic DragTo inside a scroll container", func() {
+	BeforeEach(func() {
+		// pinned so the pane's visible band, and therefore which pairs of rows can share it, is the
+		// same on every machine (SetWindowSize registers its own reset)
+		b.SetWindowSize(800, 600)
+		b.Navigate(fixtureServer + "/realistic_dragging.html")
+		Eventually("#row-1").Should(b.Exist())
+	})
+
+	It("drags between two rows that are both already in the pane's band", func() {
+		// #list is scrolled to 80, so its band is 80..320: row-4 (120..160) and row-7 (240..280) are
+		// both in it and nothing needs to scroll at all.  Centering them in turn - the old behaviour -
+		// puts both coordinates at the pane's center, which degrades into a click on row-7.
+		b.Realistic().DragTo("#row-4", "#row-7")
+		Eventually("#drag-result").Should(b.HaveInnerText("row-4 -> row-7"))
+	})
+
+	It("drags to a row the pane has not scrolled to yet", func() {
+		// row-9 (320..360) is below the band, so a scroll is unavoidable - and it has to be ONE scroll
+		// that frames the pair, not one per endpoint
+		b.Realistic().DragTo("#row-4", "#row-9")
+		Eventually("#drag-result").Should(b.HaveInnerText("row-4 -> row-9"))
+	})
+
+	It("drags between two separate scroll containers", func() {
+		// endpoints in different panes share no scroller, so framing them around their midpoint cannot
+		// work: each pane has to be scrolled, and only then are both points measured
+		b.Realistic().DragTo("#row-4", "#other-10")
+		Eventually("#drag-result").Should(b.HaveInnerText("row-4 -> other-10"))
+	})
+
+	It("supports the matcher form", func() {
+		Eventually("#row-4").Should(b.Realistic().DragTo("#row-7"))
+		Eventually("#drag-result").Should(b.HaveInnerText("row-4 -> row-7"))
+	})
+
+	It("fails, naming both endpoints, when no scroll position can show them together", func() {
+		// row-1 and row-20 are 760px apart in a 240px pane: no scroll position shows both, so there is
+		// no correct drag to dispatch.  The point of the failure is that it is a failure - dispatching
+		// the press and release at one point would silently enter row-20 instead.
+		b.Realistic().WithTimeout(300*time.Millisecond).WithPolling(150*time.Millisecond).DragTo("#row-1", "#row-20")
+		ExpectFailures(SatisfyAll(
+			ContainSubstring("could not put both drag endpoints on screen at the same time"),
+			ContainSubstring("#row-1"),
+			ContainSubstring("#row-20"),
+			ContainSubstring("scrolled out of view inside div#list"),
+		))
+		Expect(b.GetProperty("#drag-result", "innerText")).To(Equal("none"))
+		Expect(b.GetProperty("#press-count", "innerText")).To(Equal("0"))
+	})
+})

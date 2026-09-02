@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Realistic Dragging Fixture</title>
+  <style>
+    body { margin: 0; font: 14px sans-serif }
+    /* A reorderable list: one overflow:auto pane, rows taller than a third of it, so most pairs of
+       rows need a scroll and no pair more than 240px apart can ever share the pane's visible band.
+       This is the shape a realistic drag has to handle - measuring the endpoints one at a time
+       scrolls the pane between the two measurements and moves the source out from under its own
+       coordinate. */
+    #list { height: 240px; overflow: auto; background: #eef }
+    .row { height: 40px; box-sizing: border-box; padding: 10px; border-bottom: 1px solid #cdd; background: #f8f8ff }
+    /* A second pane, so a drag can be asked to cross from one scroller to another. */
+    #other-list { height: 120px; overflow: auto; background: #efe }
+  </style>
+</head>
+<body>
+  <h1 id="heading" style="height: 40px; margin: 0; font-size: 20px">Dragging</h1>
+
+  <div id="list"></div>
+  <div id="other-list"></div>
+  <span id="drag-result">none</span>
+  <span id="press-count">0</span>
+  <div style="height: 1200px">spacer</div>
+
+  <script>
+    const set = (id, v) => (document.getElementById(id).textContent = v);
+    const fill = (listID, prefix, count) => {
+      const list = document.getElementById(listID);
+      for (let i = 1; i <= count; i++) {
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.id = prefix + i;
+        row.textContent = prefix + i;
+        list.appendChild(row);
+      }
+    };
+    fill('list', 'row-', 20);
+    fill('other-list', 'other-', 12);
+
+    // Record the drag as "<source> -> <target>": the row the press landed on, and the row the release
+    // landed on.  A spec that only checked "no error was raised" would pass on a gesture whose press
+    // and release both landed on the target, which is what a collapsed pair of coordinates produces.
+    let pressedOn = null;
+    let presses = 0;
+    const rowAt = (e) => (e.target.closest ? e.target.closest('.row') : null);
+    document.addEventListener('pointerdown', (e) => {
+      const row = rowAt(e);
+      pressedOn = row ? row.id : null;
+      if (row) set('press-count', ++presses);
+    });
+    document.addEventListener('pointerup', (e) => {
+      const row = rowAt(e);
+      if (pressedOn && row) set('drag-result', pressedOn + ' -> ' + row.id);
+      pressedOn = null;
+    });
+
+    // Both panes start scrolled, so the visible band is an interior slice of the list rather than its
+    // top - which is what an app looks like by the time a spec gets around to dragging something.
+    document.getElementById('list').scrollTop = 80;
+    document.getElementById('other-list').scrollTop = 0;
+  </script>
+</body>
+</html>

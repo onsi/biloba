@@ -718,26 +718,105 @@ if (!window["_biloba"]) {
         }
         return rRes(true)
     }
+    // whenStable resolves once EVERY node's box has stopped moving - two consecutive animation frames
+    // with the same rects, bounded so a perpetually-animating element can't hang.  Realistic input has
+    // to land where the element will still be when the event arrives, so every scroll below waits here
+    // before anything is measured.
+    let whenStable = (ns) => new Promise(resolve => {
+        let key = () => ns.map(n => { let r = n.getBoundingClientRect(); return [r.left, r.top, r.width, r.height].join(",") }).join("|")
+        let prev = null, frames = 0
+        let check = () => {
+            let k = key()
+            if (k === prev || frames++ > 30) resolve()
+            else { prev = k; requestAnimationFrame(check) }
+        }
+        requestAnimationFrame(check)
+    })
+    // centerIn scrolls an element to the middle of every scrollable ancestor and of the viewport.
+    let centerIn = (n) => n.scrollIntoView({ block: "center", inline: "center" })
+    // scrollableAncestors lists the INNER ancestors that can actually scroll n, nearest first.  Only
+    // ones with somewhere to scroll count: an overflow:auto box whose content fits cannot move
+    // anything, and treating it as the scroller a pair shares would frame them by scrolling nothing.
+    // <html>/<body> are left out the way clipperOf leaves them out - the document scroller is reached
+    // through window, which is where callers fall back when a pair shares no inner scroller.
+    let scrollableAncestors = (n) => {
+        let out = []
+        for (let el = n.parentElement; el && el !== document.body && el !== document.documentElement; el = el.parentElement) {
+            let s = getComputedStyle(el)
+            let scrolls = /auto|scroll|overlay/.test(s.overflowY) || /auto|scroll|overlay/.test(s.overflowX)
+            if (scrolls && (el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth)) out.push(el)
+        }
+        return out
+    }
+    // frameBoth scrolls to ONE position that shows two elements at once: it brings the pair's
+    // neighbourhood into view off the first, then shifts whichever scroller they share so their
+    // midpoint - rather than either endpoint - sits at that scroller's center.  Two rows of the same
+    // list can be centered individually and still never share a frame; their midpoint can.
+    let frameBoth = (a, z) => {
+        centerIn(a)
+        let ofZ = scrollableAncestors(z)
+        let common = scrollableAncestors(a).find(el => ofZ.includes(el))
+        let ra = a.getBoundingClientRect(), rz = z.getBoundingClientRect()
+        let midX = (ra.left + ra.width / 2 + rz.left + rz.width / 2) / 2
+        let midY = (ra.top + ra.height / 2 + rz.top + rz.height / 2) / 2
+        if (common) {
+            let rc = common.getBoundingClientRect()
+            common.scrollBy(midX - (rc.left + rc.width / 2), midY - (rc.top + rc.height / 2))
+        } else {
+            window.scrollBy(midX - window.innerWidth / 2, midY - window.innerHeight / 2)
+        }
+    }
     // scrollToStablePoint backs single-element realistic interactions: it scrolls the element to the
-    // viewport center, waits for its box to stop moving (two consecutive animation frames with the
-    // same rect - bounded so a perpetually-animating element can't hang), then returns measurePoint.
-    // Async (returns a Promise); invoked with awaitPromise on the Go side.
+    // viewport center, waits for its box to stop moving, then returns measurePoint.  Async (returns a
+    // Promise); invoked with awaitPromise on the Go side.
     b.scrollToStablePoint = (s) => {
-        let ann = (typeof s == "string" ? ": " + s.slice(1) : "")
         let n = sel(s)
-        if (!n) return Promise.resolve(rErr("could not find DOM element matching selector" + ann))
-        if (!b.isVisible(n).success) return Promise.resolve(rErr("DOM element is not visible" + ann))
-        n.scrollIntoView({ block: "center", inline: "center" })
-        return new Promise(resolve => {
-            let prev = null, frames = 0
-            let check = () => {
-                let bx = n.getBoundingClientRect()
-                let k = [bx.left, bx.top, bx.width, bx.height].join(",")
-                if (k === prev || frames++ > 30) resolve(rRes(measurePoint(n)))
-                else { prev = k; requestAnimationFrame(check) }
-            }
-            requestAnimationFrame(check)
-        })
+        if (!n) return Promise.resolve(notFound(s))
+        if (!b.isVisible(n).success) return Promise.resolve(rErr("DOM element is not visible" + ann(s)))
+        centerIn(n)
+        return whenStable([n]).then(() => rRes(measurePoint(n)))
+    }
+    // scrollToStableDragPoints measures BOTH endpoints of a realistic drag at a single scroll position.
+    // Measuring them one at a time is the failure it exists to prevent: scrolling the target into view
+    // moves the source, so the coordinate already recorded for the source names whatever slid into that
+    // spot.  For two rows of one scrolling list the two coordinates land on top of each other, and the
+    // press and release then arrive together, so the page receives a click on the target from a spec
+    // that asked for a drag.
+    //
+    // So it walks candidate scroll positions and measures both points together after each, taking the
+    // first position where both are actionable: as they already are (the common case, and it disturbs
+    // nothing), then the pair framed around their midpoint, then each endpoint scrolled into view with
+    // the other scrolled second, which is what endpoints in separate scrollers need.  ok:false means no
+    // candidate showed both, and the Go side reports that instead of dragging with coordinates it knows
+    // are stale.  Async (returns a Promise); invoked with awaitPromise on the Go side.
+    b.scrollToStableDragPoints = (srcSel, tgtSel) => {
+        let src = sel(srcSel), tgt = sel(tgtSel)
+        if (!src) return Promise.resolve(notFound(srcSel, "source "))
+        if (!tgt) return Promise.resolve(notFound(tgtSel, "target "))
+        if (!b.isVisible(src).success) return Promise.resolve(rErr("source DOM element is not visible" + ann(srcSel)))
+        if (!b.isVisible(tgt).success) return Promise.resolve(rErr("target DOM element is not visible" + ann(tgtSel)))
+        let candidates = [
+            () => { },
+            () => frameBoth(src, tgt),
+            () => { centerIn(tgt); centerIn(src) },
+            () => { centerIn(src); centerIn(tgt) },
+        ]
+        let actionable = (p) => p.enabled && p.inViewport && p.hittable
+        let attempt = (i) => {
+            candidates[i]()
+            return whenStable([src, tgt]).then(() => {
+                let s = measurePoint(src), t = measurePoint(tgt)
+                if (actionable(s) && actionable(t)) return rRes({ source: s, target: t, ok: true })
+                if (i + 1 < candidates.length) return attempt(i + 1)
+                // Nothing framed both, so name why.  An endpoint sitting outside its own scroller's
+                // band reads as "something else is on top of it" through a hit test, which points at
+                // the wrong problem - clipperOf names the pane instead, and that is the geometry that
+                // brings a drag here in the first place.
+                let clippedOut = (n) => { let c = clipperOf(n); return (c && c.visibleFraction <= 0) ? c.clipper : "" }
+                return rRes({ source: s, target: t, ok: false, sourceClipper: clippedOut(src), targetClipper: clippedOut(tgt) })
+            })
+        }
+        return attempt(0)
     }
     // measureCorner reports an element's top-left corner in TOP-LEVEL viewport coordinates (where CDP
     // mouse events live), plus whether the element is enabled.  Like measurePoint it walks the
@@ -758,30 +837,21 @@ if (!window["_biloba"]) {
     }
     // scrollToStableCorner backs ClickAt in realistic mode: it scrolls the element to the viewport
     // center, waits for its box to stop moving (same stability wait as scrollToStablePoint), then
-    // returns its top-left corner in top-level viewport coordinates.  Async (returns a Promise).
+    // returns its top-left corner in top-level viewport coordinates.  One element, one scroll, so it
+    // has nothing of scrollToStableDragPoints' two-endpoint problem.  Async (returns a Promise).
     b.scrollToStableCorner = (s) => {
-        let ann = (typeof s == "string" ? ": " + s.slice(1) : "")
         let n = sel(s)
-        if (!n) return Promise.resolve(rErr("could not find DOM element matching selector" + ann))
-        if (!b.isVisible(n).success) return Promise.resolve(rErr("DOM element is not visible" + ann))
-        n.scrollIntoView({ block: "center", inline: "center" })
-        return new Promise(resolve => {
-            let prev = null, frames = 0
-            let check = () => {
-                let bx = n.getBoundingClientRect()
-                let k = [bx.left, bx.top, bx.width, bx.height].join(",")
-                if (k === prev || frames++ > 30) resolve(rRes(measureCorner(n)))
-                else { prev = k; requestAnimationFrame(check) }
-            }
-            requestAnimationFrame(check)
-        })
+        if (!n) return Promise.resolve(notFound(s))
+        if (!b.isVisible(n).success) return Promise.resolve(rErr("DOM element is not visible" + ann(s)))
+        centerIn(n)
+        return whenStable([n]).then(() => rRes(measureCorner(n)))
     }
     // scrollToAndPointAt backs realistic ClickEach: scroll+measure the index-th match (no stability
     // wait), or null when it is missing/hidden so the caller can skip it.
     b.scrollToAndPointAt = each((ns, i) => {
         let n = ns[i]
         if (!n || !b.isVisible(n).success) return rRes(null)
-        n.scrollIntoView({ block: "center", inline: "center" })
+        centerIn(n)
         return rRes(measurePoint(n))
     })
     // inputKind classifies a form control so the realistic track can decide how to drive it.
