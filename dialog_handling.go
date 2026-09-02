@@ -139,6 +139,13 @@ func (b *Biloba) handleEventJavascriptDialogOpening(ev *page.EventJavascriptDial
 	text := ""
 	var handler *DialogHandler
 	b.lock.Lock()
+	if b.state.resetting {
+		// Prepare is unloading the previous spec's page.  Its beforeunload belongs to that spec, not to
+		// the one whose BeforeEach we are in: dismiss it without recording it or warning about it.
+		b.lock.Unlock()
+		b.dismissDialog(response, text)
+		return
+	}
 	for i := len(b.state.dialogHandlers) - 1; i >= 0; i-- {
 		if b.state.dialogHandlers[i].match(d) {
 			handler = b.state.dialogHandlers[i]
@@ -166,6 +173,10 @@ func (b *Biloba) handleEventJavascriptDialogOpening(ev *page.EventJavascriptDial
 	if handler == nil {
 		b.gt.Printf(b.gt.F("Biloba automatically handled an {{red}}unhandled dialog{{/}} - you should add an explicit dialog handler: %s - %s", d.Type, d.Message))
 	}
+	b.dismissDialog(response, text)
+}
+
+func (b *Biloba) dismissDialog(response bool, text string) {
 	go func() {
 		action := page.HandleJavaScriptDialog(response)
 		if text != "" {
@@ -243,7 +254,9 @@ func (b *Biloba) RemoveDialogHandler(handler *DialogHandler) {
 }
 
 /*
-Dialogs() returns all dialogs handled by this Biloba tab in this spec
+Dialogs() returns all dialogs handled by this Biloba tab in this spec.
+
+A beforeunload raised by Prepare's own reset navigation is not included: it belongs to the previous spec.
 
 Read https://onsi.github.io/biloba/#inspecting-handled-dialogs to learn more about inspecting handled dialogs
 */

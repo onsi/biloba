@@ -800,6 +800,11 @@ type tabState struct {
 	dialogHandlers []*DialogHandler
 	dialogs        []*Dialog
 
+	// resetting is true only while Prepare's closing about:blank navigation is unloading the page the
+	// previous spec left behind.  A dialog raised by that navigation (a beforeunload) belongs to the
+	// spec that just ended, so it is accepted silently rather than recorded against the next one.
+	resetting bool
+
 	// consoleErrors accumulates rendered console.error / console.assert messages seen on this tab so
 	// attachFailureArtifactsIfFailed can replay them at the top of the failure block - the originating
 	// error is usually the root cause and is otherwise buried in the streamed timeline.
@@ -1032,6 +1037,19 @@ func (b *Biloba) Prepare() {
 	// persist in the browser context / on the origin) to keep specs independent
 	b.resetBrowsingState()
 
+	// This navigation unloads whatever page the previous spec left behind - which raises that page's
+	// beforeunload dialog, after the state reset above and inside the next spec's BeforeEach.  It would
+	// otherwise show up as the new spec's first recorded dialog and print "you should add an explicit
+	// dialog handler" against a spec that never opened a dialog.  Flag the reset so Prepare's own
+	// dialog is accepted silently; see handleEventJavascriptDialogOpening.
+	b.lock.Lock()
+	b.state.resetting = true
+	b.lock.Unlock()
+	defer func() {
+		b.lock.Lock()
+		b.state.resetting = false
+		b.lock.Unlock()
+	}()
 	b.Navigate("about:blank")
 }
 

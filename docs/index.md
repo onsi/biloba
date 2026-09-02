@@ -2736,6 +2736,8 @@ To make sure your suite doesn't accidentally get blocked by a dialog box Biloba 
 - `confirm` and `prompt` dialogs are automatically cancelled
 - `beforeunload` is automatically accepted
 
+One dialog is exempt from all of this: `b.Prepare()` ends by navigating the reused tab to `about:blank`, and if the previous spec's page registered a `beforeunload` handler that navigation raises its dialog.  Biloba accepts that one silently - it is not recorded in the new spec's `b.Dialogs()` and it does not print the "you should add an explicit dialog handler" warning.  It belongs to the spec that just ended, not the one about to run.
+
 You can override these by registering a series of dialog handlers.  You can have as many handlers as you'd like and more recently registered handlers get first dibs on new dialog boxes.  All handlers are reset by `b.Prepare()` so you'll need to re-register them between specs (which you typically do, anyway, in a `BeforeEach` or `It`).
 
 You register a handler by calling any of the following:

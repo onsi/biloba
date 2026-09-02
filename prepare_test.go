@@ -50,8 +50,25 @@ var _ = Describe("Prepare resets per-spec state so it does not leak between spec
 		b.Run("alert('between-spec dialog')") // recorded and auto-handled
 		Eventually(b.Dialogs).ShouldNot(BeEmpty())
 
-		b.Prepare() // dom.html has no beforeunload, so the about:blank navigation adds no dialog
+		b.Prepare()
 		Expect(b.Dialogs()).To(BeEmpty())
+	})
+
+	It("does not attribute the outgoing page's beforeunload to the next spec", func() {
+		// Prepare ends by navigating to about:blank, which unloads the page the previous spec left
+		// behind - and dialogs.html registers a beforeunload handler.  That dialog is raised after the
+		// state reset, so it used to land in the next spec's Dialogs() and print "you should add an
+		// explicit dialog handler" against a spec that never opened a dialog.  That is what flaked
+		// DialogHandling's `Ω(gt.buffer).ShouldNot(gbytes.Say("unhandled dialog"))` whenever
+		// --randomize-all happened to schedule a dialogs.html spec immediately before it.
+		b.Navigate(fixtureServer + "/dialogs.html")
+		Eventually("#status").Should(b.HaveInnerText("Green Alert!"))
+		gt.reset()
+
+		b.Prepare()
+
+		Expect(b.Dialogs()).To(BeEmpty())
+		Expect(string(gt.buffer.Contents())).NotTo(ContainSubstring("unhandled dialog"))
 	})
 
 	It("resets dialog handlers", func() {

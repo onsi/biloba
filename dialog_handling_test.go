@@ -233,7 +233,7 @@ var _ = Describe("DialogHandling", func() {
 		})
 
 		It("can return a list of all dialogs", func() {
-			Ω(len(b.Dialogs())).Should(Or(Equal(8), Equal(9))) //there is a beforeunload that gets triggered navigating to this page.  but it won't be there if we happen to be the first spec!
+			Ω(b.Dialogs()).Should(HaveLen(8))
 		})
 
 		It("returns nil if there are no most recent dialogs", func() {
