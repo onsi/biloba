@@ -123,10 +123,10 @@ server.Listener = l
 server.Start()
 ```
 
-Then either:
+Then pick one of two shapes deliberately — different trades, not better and worse:
 
-- **one server per parallel process**, started in `SynchronizedBeforeSuite`'s second function with `DeferCleanup`, per-spec state reset in a `BeforeEach` — simplest when the reset is cheap (Biloba's own suite runs one fixture server per process this way), or
-- **a fresh server per spec** on that same port, when rebuilding beats resetting — typically when per-spec isolation *is* a resource the server holds for its lifetime (a `GinkgoT().TempDir()` store), so resetting would mean re-pointing a live server at a new root.
+- **Keep one server up per process and reset its state per spec.** Start in `SynchronizedBeforeSuite`'s second function with `DeferCleanup`, clear state in a `BeforeEach`. Suits a server whose state is handed back cheaply — in-memory store, stub registry, seeded fixtures. (Biloba's own suite runs one fixture server per process; static files, nothing to reset.)
+- **Bounce the server between specs over the same port.** Suits a server whose per-spec isolation *is* a resource it holds for its lifetime (a `GinkgoT().TempDir()` store), where resetting would mean re-pointing a live server at a new root. Also buys a durability check the other shape can't: restart over the *same* directory and make the new process re-read from disk what the old one wrote.
 
 **If you pin a port, give each fixture its own `&http.Transport{}`.** A zero-value `http.Client` uses `http.DefaultTransport`, whose pool is process-global and keyed on `host:port` — so a spec's first request can get a keep-alive socket to the *previous* spec's closed server, surfacing as an `EOF` out of a `BeforeEach` that points at nothing. `CloseIdleConnections()` on teardown. Only the pinned-port shape has this problem.
 

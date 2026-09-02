@@ -258,10 +258,12 @@ server.Listener = l
 server.Start()
 ```
 
-From there, two shapes work, and which one you want depends on whether resetting your server is cheaper than rebuilding it:
+From there, two shapes.  They are different trades rather than better and worse, so pick deliberately:
 
-- **One server per parallel process**, started in `SynchronizedBeforeSuite`'s second function and torn down with `DeferCleanup`; reset whatever per-spec state it holds in a `BeforeEach`.  Simplest when the reset is cheap.  Biloba's own suite runs one fixture server per parallel process like this - its fixtures are static files, so there is nothing to reset.
-- **A fresh server per spec** on that same port, when rebuilding beats resetting - typically because per-spec isolation *is* a fresh resource the server holds for its lifetime (a `GinkgoT().TempDir()` it opens a store in, say), so "reset the state" would mean re-pointing a live server at a new root.
+- **Keep one server up per parallel process and reset its state between specs.**  Start it in `SynchronizedBeforeSuite`'s second function, tear it down with `DeferCleanup`, and clear whatever per-spec state it holds in a `BeforeEach`.  This suits a server whose state is a thing you can hand back - an in-memory store, a stub registry, a seeded fixture set.  Biloba's own suite runs one fixture server per process; its fixtures are static files, so there is nothing to reset at all.
+- **Bounce the server between specs, over the same port.**  A fresh server per spec, which suits a server whose per-spec isolation *is* a resource it holds open for its lifetime - a `GinkgoT().TempDir()` it opens a store in, say, where "reset the state" would mean re-pointing a live server at a new root.  It also buys you something the first shape can't: restarting a server over the *same* backing directory is how you prove durability, by making the new process re-read from disk what the old one wrote.
+
+Either way the origin stays put, which is the part that matters here.
 
 > **If you pin a port, give each spec's HTTP client its own transport.**  A zero-value `http.Client` uses `http.DefaultTransport`, whose connection pool is process-global and keyed on `host:port`.  Reuse a port and a spec's first request can be handed a keep-alive socket to the *previous* spec's already-closed server.  It surfaces as an `EOF` out of a `BeforeEach`, pointing at nothing.  Give each fixture its own `&http.Transport{}` and call `CloseIdleConnections()` on teardown.  This trap belongs to the pinned-port shape alone: a server that stays up for the whole process never has a dead socket to hand out.
 
