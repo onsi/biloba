@@ -304,7 +304,7 @@ that's it.
 
 > Wat
 
-Every time a page loads, Biloba invokes a short piece of javascript to install a global `_biloba` object on `window`.  This object provides simple Javascript simulations for a bunch of common actions.  The `click` function does the following:
+Biloba hands Chrome a piece of javascript once per tab, to run at the start of every document that tab creates - so a global `_biloba` object is on `window` before any of the page's own scripts run, in the main frame and in every same-origin child frame.  Chrome maintains that, rather than Biloba noticing after each navigation that the object is gone and putting it back; a page that navigates itself mid-command can't leave a command looking at a document that never had it.  This object provides simple Javascript simulations for a bunch of common actions.  The `click` function does the following:
 
 - Find the element matching `selector`
 - Validate that it is visible

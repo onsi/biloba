@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <!-- The FIRST thing this document runs.  Recording typeof window._biloba here is the only way a
+       page can testify about what was in it before its own scripts ran: "object" means Chrome
+       installed biloba.js at document start, "undefined" means Biloba has to install it afterwards
+       and there is a window in which a command can find it missing. -->
+  <script>window.__bilobaAtParse = typeof window._biloba</script>
+  <title>Early Biloba Fixture</title>
+</head>
+<body>
+  <div id="ready">ready</div>
+  <!-- a same-origin child frame, which the registration also covers -->
+  <iframe id="frame" src="/early_biloba_frame.html" width="200" height="100"></iframe>
+</body>
+</html>

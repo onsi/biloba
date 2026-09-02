@@ -803,6 +803,13 @@ type tabState struct {
 	// Prepare: it is invalidated by navigation, not by the spec boundary.
 	bilobaIsInstalled bool
 
+	// bilobaAutoInstalled records that Chrome accepted the standing "run biloba.js at the start of
+	// every document" registration (see installBilobaOnEveryDocument), which is what lets a navigation
+	// STOP invalidating bilobaIsInstalled: the next document already has _biloba before its own scripts
+	// run.  False means the registration did not take, and the tab falls back to reinstalling after
+	// each navigation.  Set once per tab, at setup.
+	bilobaAutoInstalled bool
+
 	// targetCrashed records that Chrome told us this tab's renderer died (Inspector.targetCrashed), so
 	// a subsequent command failure can say WHY instead of just "context deadline exceeded".  Cleared
 	// by the next navigation - which gives the target a fresh renderer - and by Prepare.
@@ -1452,7 +1459,12 @@ var bilobaJS string
 func (b *Biloba) handleEventFrameNavigated(_ *page.EventFrameNavigated) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	b.state.bilobaIsInstalled = false
+	// The new document already has _biloba when Chrome is running it at document start for us, so the
+	// install survives the navigation and re-sending the script would be pure waste.  Only a tab whose
+	// registration did not take has to reinstall.
+	if !b.state.bilobaAutoInstalled {
+		b.state.bilobaIsInstalled = false
+	}
 	// A frame navigated, so this target has a live renderer again - whatever crash we recorded is over.
 	b.state.targetCrashed = false
 }
