@@ -110,10 +110,23 @@ Per-process browsers and fresh-tab-per-spec can be combined.
 
 **Serve the app from a stable origin — the same trade, one level out.** The Go reflex is one `httptest.NewServer` per spec, which puts every spec on a new ephemeral port: a new origin, every asset URL changed, the renderer cold on every navigation. Measured on one real suite (1.67 MB bundle): **~31ms extra per `b.Navigate`, ~20s off a 1,558-spec `--procs=6` run.** It is not the HTTP cache — disabling that on a stable origin costs nothing, and the recovered time lands in *script* time. Small static fixtures will see much less.
 
-You give up no isolation to get it: a brand-new server with brand-new state, bound to the **same port**, is as fast as re-navigating the warm one. Nothing but the origin has to be shared. Either:
+You give up no isolation to get it: a brand-new server with brand-new state, bound to the **same port**, is as fast as re-navigating the warm one. Nothing but the origin has to be shared.
 
-- **one server per parallel process**, started in `SynchronizedBeforeSuite`'s second function with `DeferCleanup`, per-spec state reset in a `BeforeEach` (simplest; what Biloba's own suite does), or
-- **a fresh server per spec on a pinned port**, sharded off `GinkgoParallelProcess()` so parallel processes don't collide (→ `ginkgo:parallelism`).
+Get the stable port the way Ginkgo shards any per-process resource — a shared baseline plus the process index, **not** an ephemeral port (→ `ginkgo:parallelism`):
+
+```go
+port := 4000 + GinkgoParallelProcess()   // 4001, 4002, ... one per shard, same every run
+l, _ := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+server := httptest.NewUnstartedServer(handler)
+server.Listener.Close()
+server.Listener = l
+server.Start()
+```
+
+Then either:
+
+- **one server per parallel process**, started in `SynchronizedBeforeSuite`'s second function with `DeferCleanup`, per-spec state reset in a `BeforeEach` — simplest when the reset is cheap (Biloba's own suite runs one fixture server per process this way), or
+- **a fresh server per spec** on that same port, when rebuilding beats resetting — typically when per-spec isolation *is* a resource the server holds for its lifetime (a `GinkgoT().TempDir()` store), so resetting would mean re-pointing a live server at a new root.
 
 **If you pin a port, give each fixture its own `&http.Transport{}`.** A zero-value `http.Client` uses `http.DefaultTransport`, whose pool is process-global and keyed on `host:port` — so a spec's first request can get a keep-alive socket to the *previous* spec's closed server, surfacing as an `EOF` out of a `BeforeEach` that points at nothing. `CloseIdleConnections()` on teardown. Only the pinned-port shape has this problem.
 

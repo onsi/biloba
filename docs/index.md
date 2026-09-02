@@ -239,10 +239,29 @@ The Go reflex is one `httptest.NewServer` per spec.  That hands every spec its o
 
 The cost is measurable.  On one real suite serving a 1.67 MB bundle: **~31ms of extra renderer work on every `b.Navigate`**, and about **20 seconds off a 1,558-spec `--procs=6` run** once the origin stopped changing.  Note what it *isn't*: turning the HTTP cache off on a stable origin costs nothing, so this is not about re-fetching bytes - the recovered time lands in *script* time.  A suite serving a few kilobytes of static fixtures has far less script work to redo and will see far less; a suite serving a real application bundle should measure its own.
 
-The good news is that you give up nothing to get it.  A brand-new server, with brand-new state and a brand-new on-disk fixture, bound to the **same port**, is exactly as fast as re-navigating the warm one.  Nothing but the origin has to be shared, so per-spec isolation is not the thing you're trading.  Two shapes work:
+The good news is that you give up nothing to get it.  A brand-new server, with brand-new state and a brand-new on-disk fixture, bound to the **same port**, is exactly as fast as re-navigating the warm one.  Nothing but the origin has to be shared, so per-spec isolation is not the thing you're trading.
 
-- **One server per parallel process**, started in `SynchronizedBeforeSuite`'s second function and torn down with `DeferCleanup`; reset whatever per-spec state it holds in a `BeforeEach`.  This is the simplest, and it's what Biloba's own suite does (its fixtures are static files, so there's nothing to reset).
-- **A fresh server per spec on a pinned port**, when rebuilding the server is easier than resetting it.  Derive the port from `GinkgoParallelProcess()` so parallel processes don't collide - the same sharding pattern Ginkgo recommends for [any parallel-unsafe resource](https://onsi.github.io/ginkgo/#patterns-for-parallel-integration-specs).
+The way to get a stable origin is the same pattern Ginkgo uses for [any per-process resource](https://onsi.github.io/ginkgo/#patterns-for-parallel-integration-specs): a shared baseline offset by the process index, rather than an ephemeral port.
+
+```go
+port := 4000 + GinkgoParallelProcess()   // 4001, 4002, 4003, ... one per process shard
+```
+
+[`GinkgoParallelProcess()`](https://onsi.github.io/ginkgo/#parallel-suite-setup-and-cleanup-synchronizedbeforesuite-and-synchronizedaftersuite) returns a stable 1-based index for the running process, so each shard gets its own port and no two collide - and the port is the same on every run, which makes a served URL something you can open in a browser while debugging.  `httptest.NewServer` picks a random port instead, which is the thing you're moving away from; bind your own listener and hand it over:
+
+```go
+l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+Expect(err).NotTo(HaveOccurred())
+server := httptest.NewUnstartedServer(handler)
+server.Listener.Close()
+server.Listener = l
+server.Start()
+```
+
+From there, two shapes work, and which one you want depends on whether resetting your server is cheaper than rebuilding it:
+
+- **One server per parallel process**, started in `SynchronizedBeforeSuite`'s second function and torn down with `DeferCleanup`; reset whatever per-spec state it holds in a `BeforeEach`.  Simplest when the reset is cheap.  Biloba's own suite runs one fixture server per parallel process like this - its fixtures are static files, so there is nothing to reset.
+- **A fresh server per spec** on that same port, when rebuilding beats resetting - typically because per-spec isolation *is* a fresh resource the server holds for its lifetime (a `GinkgoT().TempDir()` it opens a store in, say), so "reset the state" would mean re-pointing a live server at a new root.
 
 > **If you pin a port, give each spec's HTTP client its own transport.**  A zero-value `http.Client` uses `http.DefaultTransport`, whose connection pool is process-global and keyed on `host:port`.  Reuse a port and a spec's first request can be handed a keep-alive socket to the *previous* spec's already-closed server.  It surfaces as an `EOF` out of a `BeforeEach`, pointing at nothing.  Give each fixture its own `&http.Transport{}` and call `CloseIdleConnections()` on teardown.  This trap belongs to the pinned-port shape alone: a server that stays up for the whole process never has a dead socket to hand out.
 
