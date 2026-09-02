@@ -272,8 +272,31 @@ func (b *Biloba) GetOffsetLeftWithin(selector, container any) float64 {
 // haveOffsetWithin is the shared substrate behind HaveOffsetTopWithin/HaveOffsetLeftWithin.
 func (b *Biloba) haveOffsetWithin(name, axis string, container any, expected ...any) *ValueMatcher {
 	encodedContainer, encErr := encodeSelector(container)
-	matcher := matcherOrEqual(firstOrNil(expected))
-	data := map[string]any{"Name": name, "Matcher": matcher}
+	data := map[string]any{"Name": name, "Container": fmt.Sprintf("%v", container)}
+	if len(expected) == 0 {
+		// the existence-only form: pass once both selector and container have resolved and selector
+		// is laid out, without asking anything of the offset itself - the mirror of HaveProperty's
+		// zero-arg presence form.
+		return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
+			if encErr != nil {
+				return false, encErr
+			}
+			r := b.runBilobaHandler("offsetWithinP", selector, encodedContainer)
+			if r.Error() != nil {
+				return false, r.Error()
+			}
+			if !r.Success {
+				delete(data, "Result")
+				return false, nil
+			}
+			value := toFloat64(r.Result.(map[string]any)[axis])
+			data["Result"] = value
+			b.recordProbe(probeKey(name, selector), value)
+			return true, nil
+		}).WithTemplate("Expected {{.Actual}} {{.To}} be present and laid out within {{.Data.Container}}", data), data)
+	}
+	matcher := matcherOrEqual(expected[0])
+	data["Matcher"] = matcher
 	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
 		if encErr != nil {
 			return false, encErr
@@ -293,18 +316,26 @@ func (b *Biloba) haveOffsetWithin(name, axis string, container any, expected ...
 }
 
 /*
-HaveOffsetTopWithin(container, expected) is the Gomega matcher counterpart of [Biloba.OffsetTopWithin]:
-it passes once the first element matching selector is laid out within container AND its top offset
-(element.top - container.top) satisfies expected.  expected may be a Gomega matcher or a plain value
-(compared with Equal):
+HaveOffsetTopWithin(container, expected) is a Gomega matcher with two modes of operation.
+
+Called with only container, it passes once the first element matching selector AND container have both
+resolved and selector is laid out within container - a presence check on the offset being computable at
+all, without asserting anything about its value:
+
+	Eventually(".hero .sec").Should(b.HaveOffsetTopWithin(".scroller"))
+
+Called with container and expected, it additionally requires the top offset (element.top - container.top)
+to satisfy expected, which may be a Gomega matcher or a plain value (compared with Equal):
 
 	Eventually(".hero .sec").Should(b.HaveOffsetTopWithin(".scroller", BeNumerically("<", 120)))
 
 Because it returns a matcher you poll, configure the Eventually/Expect that wraps it.
 
-It returns a [ValueMatcher], so you can keep the offset that satisfied the assertion:
+Both forms return a [ValueMatcher], so you can keep the offset that satisfied the assertion - including
+the presence-only form:
 
 	var top float64
+	Eventually(".hero .sec").Should(b.HaveOffsetTopWithin(".scroller").Capture(&top))
 	Eventually(".hero .sec").Should(b.HaveOffsetTopWithin(".scroller", BeNumerically("<", 120)).Capture(&top))
 
 Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
@@ -315,19 +346,13 @@ func (b *Biloba) HaveOffsetTopWithin(container any, expected ...any) *ValueMatch
 
 /*
 HaveOffsetLeftWithin(container, expected) is the horizontal sibling of [Biloba.HaveOffsetTopWithin],
-asserting on (element.left - container.left).
+asserting on (element.left - container.left).  It has the same two modes of operation - called with
+only container it is a presence check; called with container and expected it also asserts on the value.
 
 Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
 */
 func (b *Biloba) HaveOffsetLeftWithin(container any, expected ...any) *ValueMatcher {
 	return b.haveOffsetWithin("HaveOffsetLeftWithin", "left", container, expected...)
-}
-
-func firstOrNil(expected []any) any {
-	if len(expected) == 0 {
-		return nil
-	}
-	return expected[0]
 }
 
 /*
@@ -510,24 +535,49 @@ func (b *Biloba) GetGapBetween(selector, otherSelector any) BoxDelta {
 }
 
 /*
-HaveGapBetween(otherSelector, expected) is the Gomega matcher counterpart of [Biloba.GetGapBetween]: it
-passes once both elements are laid out AND the [BoxDelta] between them satisfies expected, which may be a
-Gomega matcher or a plain value (compared with Equal):
+HaveGapBetween(otherSelector, expected) is a Gomega matcher with two modes of operation.
+
+Called with only otherSelector, it passes once both elements are present and laid out - a presence check
+on the [BoxDelta] being computable at all, without asserting anything about its value:
+
+	Eventually(spanSel).Should(b.HaveGapBetween(cardSel))
+
+Called with otherSelector and expected, it additionally requires the [BoxDelta] between them to satisfy
+expected, which may be a Gomega matcher or a plain value (compared with Equal):
 
 	Eventually(spanSel).Should(b.HaveGapBetween(cardSel, HaveField("CenterX", BeNumerically("~", 0, 1))))
 
 Because it returns a matcher you poll, configure the Eventually/Expect that wraps it.
 
-It returns a [ValueMatcher], so you can keep the [BoxDelta] that satisfied the assertion:
+Both forms return a [ValueMatcher], so you can keep the [BoxDelta] that satisfied the assertion -
+including the presence-only form:
 
 	var delta biloba.BoxDelta
+	Eventually(spanSel).Should(b.HaveGapBetween(cardSel).Capture(&delta))
 	Eventually(spanSel).Should(b.HaveGapBetween(cardSel, HaveField("CenterX", BeNumerically("~", 0, 1))).Capture(&delta))
 
 Read https://onsi.github.io/biloba/#geometry to learn more about geometry getters
 */
 func (b *Biloba) HaveGapBetween(otherSelector any, expected ...any) *ValueMatcher {
-	matcher := matcherOrEqual(firstOrNil(expected))
-	data := map[string]any{"Other": fmt.Sprintf("%v", otherSelector), "Matcher": matcher}
+	data := map[string]any{"Other": fmt.Sprintf("%v", otherSelector)}
+	if len(expected) == 0 {
+		// the existence-only form: pass once both elements have resolved and laid out, without asking
+		// anything of the delta itself - the mirror of HaveProperty's zero-arg presence form.
+		return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
+			ok, err := b.relativeBoxes(selector, otherSelector, func(a, o Box) {
+				delta := newBoxDelta(a, o)
+				data["Result"] = delta
+				b.recordProbe(probeKey("HaveGapBetween", selector), delta)
+			})
+			if !ok {
+				delete(data, "Result")
+				return false, err
+			}
+			return true, nil
+		}).WithTemplate("Expected {{.Actual}} {{.To}} be present and laid out alongside {{.Data.Other}}", data), data)
+	}
+	matcher := matcherOrEqual(expected[0])
+	data["Matcher"] = matcher
 	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
 		pass := false
 		var matchErr error

@@ -96,6 +96,10 @@ var _ = Describe("Geometry getters and matchers", func() {
 			Eventually("#s2").Should(b.HaveOffsetTopWithin(".scroller", BeNumerically("~", 50, 2)))
 		})
 
+		It("with no expected value, passes once both selector and container are laid out (presence only)", func() {
+			Eventually("#s2").Should(b.HaveOffsetTopWithin(".scroller"))
+		})
+
 		It("fails fast under Immediate() when the container is missing, naming the container selector", func() {
 			b.Immediate().GetOffsetTopWithin("#s2", ".nope")
 			ExpectFailures(ContainSubstring("could not find DOM element matching container selector: .nope"))
@@ -110,6 +114,10 @@ var _ = Describe("Geometry getters and matchers", func() {
 	Describe("GetOffsetLeftWithin", func() {
 		It("returns the horizontal offset within the container", func() {
 			Ω(b.GetOffsetLeftWithin("#s0", ".scroller")).Should(BeNumerically("~", 0, 1))
+		})
+
+		It("with no expected value, passes once both selector and container are laid out (presence only)", func() {
+			Eventually("#s0").Should(b.HaveOffsetLeftWithin(".scroller"))
 		})
 	})
 
@@ -161,6 +169,10 @@ var _ = Describe("Geometry getters and matchers", func() {
 
 		It("matches once the delta satisfies the sub-matcher", func() {
 			Eventually("#span").Should(b.HaveGapBetween("#card", HaveField("CenterX", BeNumerically("~", 0, 1))))
+		})
+
+		It("with no expected value, passes once both elements are laid out (presence only)", func() {
+			Eventually("#span").Should(b.HaveGapBetween("#card"))
 		})
 
 		It("reports the delta in its failure message", func() {
@@ -408,6 +420,12 @@ var _ = Describe("Geometry getters and matchers", func() {
 			// ...and a missing CONTAINER says so, rather than blaming the element that is right there
 			expectHonest("#s2", b.HaveOffsetTopWithin("#nope", BeNumerically(">", 0)), missingContainer)
 			expectHonest("#s2", b.HaveOffsetLeftWithin("#nope", BeNumerically(">=", 0)), missingContainer)
+
+			// the presence-only (zero-arg) form is honest the same way - it never degrades to BeNil()
+			expectHonest("#nope", b.HaveOffsetTopWithin(".scroller"), missing)
+			expectHonest("#nope", b.HaveOffsetLeftWithin(".scroller"), missing)
+			expectHonest("#s2", b.HaveOffsetTopWithin("#nope"), missingContainer)
+			expectHonest("#s2", b.HaveOffsetLeftWithin("#nope"), missingContainer)
 		})
 
 		It("the pairwise relational matchers", func() {
@@ -431,6 +449,10 @@ var _ = Describe("Geometry getters and matchers", func() {
 		It("HaveGapBetween", func() {
 			expectHonest("#nope", b.HaveGapBetween("#card", HaveField("Top", BeNumerically(">", 0))), missing)
 			expectHonest("#span", b.HaveGapBetween("#nope", HaveField("Top", BeNumerically(">", 0))), missingOther)
+
+			// the presence-only (zero-arg) form is honest the same way - it never degrades to BeNil()
+			expectHonest("#nope", b.HaveGapBetween("#card"), missing)
+			expectHonest("#span", b.HaveGapBetween("#nope"), missingOther)
 		})
 
 		It("BePrecededBy / BeFollowedBy", func() {
@@ -533,6 +555,18 @@ var _ = Describe("Geometry getters and matchers", func() {
 			Ω(left).Should(BeNumerically("~", 0, 1))
 		})
 
+		It("captures the float64 offset from the presence-only (zero-arg) form of HaveOffsetTopWithin", func() {
+			var top float64
+			Eventually("#s2").Should(b.HaveOffsetTopWithin(".scroller").Capture(&top))
+			Ω(top).Should(BeNumerically("~", 300, 1))
+		})
+
+		It("captures the float64 offset from the presence-only (zero-arg) form of HaveOffsetLeftWithin", func() {
+			left := -999.0
+			Eventually("#s0").Should(b.HaveOffsetLeftWithin(".scroller").Capture(&left))
+			Ω(left).Should(BeNumerically("~", 0, 1))
+		})
+
 		It("refuses to bridge one Biloba struct into a different one rather than silently half-filling", func() {
 			// BoxDelta's fields are a strict SUBSET of Box's, so DisallowUnknownFields cannot catch this
 			// and a JSON bridge would "succeed", leaving ClientWidth/ClientHeight at zero.  Capture names
@@ -551,6 +585,13 @@ var _ = Describe("Geometry getters and matchers", func() {
 		It("captures the BoxDelta that satisfied HaveGapBetween", func() {
 			var delta biloba.BoxDelta
 			Eventually("#span").Should(b.HaveGapBetween("#card", HaveField("CenterX", BeNumerically("~", 0, 1))).Capture(&delta))
+			Ω(delta.Top).Should(BeNumerically("~", 20, 1))
+			Ω(delta.Width).Should(BeNumerically("~", -100, 1))
+		})
+
+		It("captures the BoxDelta from the presence-only (zero-arg) form of HaveGapBetween", func() {
+			var delta biloba.BoxDelta
+			Eventually("#span").Should(b.HaveGapBetween("#card").Capture(&delta))
 			Ω(delta.Top).Should(BeNumerically("~", 20, 1))
 			Ω(delta.Width).Should(BeNumerically("~", -100, 1))
 		})

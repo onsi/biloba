@@ -996,7 +996,7 @@ One poll, one read, and `blockID` holds what the matcher saw when it passed.
 | [Navigation](#navigation) | `HaveURL`, `HaveTitle` |
 | [Cookies & storage](#cookies-and-storage) | `HaveCookie`, `HaveNumCookies`, `HaveLocalStorageItem`, `HaveSessionStorageItem`, `HaveNumLocalStorageItems`, `HaveNumSessionStorageItems` |
 
-`HaveProperty`, `HaveAttribute`, and `EachHaveProperty` capture in **both** their forms - including the existence-only check, which hands you the value it found while it was checking:
+`HaveProperty`, `HaveAttribute`, `EachHaveProperty`, and the geometry matchers `HaveOffsetTopWithin`/`HaveOffsetLeftWithin`/`HaveGapBetween` capture in **both** their forms - including the existence-only check, which hands you the value it found while it was checking:
 
 ```go
 var poster string
@@ -1724,7 +1724,13 @@ Eventually(".scroller").Should(b.HaveScrollOffset(HaveField("Top", BeNumerically
 Eventually(".hero .sec").Should(b.HaveOffsetTopWithin(".scroller", BeNumerically("<", 120)))
 ```
 
-`HaveOffsetTopWithin`/`HaveOffsetLeftWithin` take the container plus an expected matcher (or a plain value, compared with `Equal`).  All of the getters honor `WithTimeout`/`WithPolling`/`WithContext` and `Immediate()`; the matcher forms are configured through the `Eventually`/`Expect` that polls them.
+`HaveOffsetTopWithin`/`HaveOffsetLeftWithin` take the container plus an expected matcher (or a plain value, compared with `Equal`).  Called with just the container, they're existence-only: they pass once both selector and container have resolved and the element is laid out, without asserting anything about the offset's value (and you can still `.Capture` it):
+
+```go
+Eventually(".hero .sec").Should(b.HaveOffsetTopWithin(".scroller"))
+```
+
+All of the getters honor `WithTimeout`/`WithPolling`/`WithContext` and `Immediate()`; the matcher forms are configured through the `Eventually`/`Expect` that polls them.
 
 **A geometry matcher asks *where* an element is, not *whether* it is.**  Every geometry probe treats two similar-looking situations differently.  An element that is present but not laid out yet (a zero-area box) is a quiet "not ready", so the positive direction keeps polling through late layout.  An element that isn't there at all is an **error**.  Gomega never counts an assertion satisfied while its matcher is erroring - in either direction - so a missing element can't satisfy `ShouldNot`.  That's what keeps `Ω("#toast").ShouldNot(b.BeInViewport())` from passing forever against a page that never rendered `#toast`.  It also means a **wait-for-teardown** spec needs a different verb:
 
@@ -1767,6 +1773,12 @@ delta := b.GetGapBetween(spanSel, cardSel)
 Ω(delta.CenterX).Should(BeNumerically("~", 0, 1))
 
 Eventually(spanSel).Should(b.HaveGapBetween(cardSel, HaveField("CenterX", BeNumerically("~", 0, 1))))
+```
+
+Called with just `otherSelector`, `HaveGapBetween` is existence-only: it passes once both elements are laid out, without asserting anything about the delta (and you can still `.Capture` it):
+
+```go
+Eventually(spanSel).Should(b.HaveGapBetween(cardSel))
 ```
 
 #### On-screen-ness and document order
