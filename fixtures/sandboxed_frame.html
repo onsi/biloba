@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Sandboxed Frame Fixture</title>
+</head>
+<body>
+  <div id="ready">ready</div>
+  <!-- allow-scripts WITHOUT allow-same-origin: an OPAQUE origin.  This is how a real app sandboxes
+       untrusted interactive widgets, and Biloba's ">>>" cannot pierce it by design.  Biloba registers
+       biloba.js to run at the start of every document in the target, so this frame is in scope for
+       that injection - and the only way to learn what actually happened inside an opaque origin is to
+       have the frame report on itself through the one channel it is allowed to use. -->
+  <iframe id="sandboxed" sandbox="allow-scripts" width="200" height="100"
+    srcdoc="<!DOCTYPE html><html><body><div id=&quot;inner&quot;>sandboxed</div><script>window.parent.postMessage('biloba:' + (typeof window._biloba), '*')</script></body></html>"></iframe>
+  <div id="widget-report">waiting</div>
+  <script>
+    window.addEventListener('message', (e) => {
+      if (typeof e.data === 'string' && e.data.startsWith('biloba:')) {
+        document.getElementById('widget-report').textContent = e.data.slice('biloba:'.length);
+      }
+    });
+  </script>
+</body>
+</html>

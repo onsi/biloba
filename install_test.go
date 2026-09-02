@@ -45,3 +45,33 @@ var _ = Describe("installing biloba.js at document start", func() {
 		Expect(atParse).To(Equal("object"))
 	})
 })
+
+// An app that sandboxes untrusted widgets gives them an OPAQUE origin - sandbox="allow-scripts"
+// without allow-same-origin - and Biloba's ">>>" cannot pierce that by design.  Registering
+// biloba.js on every document puts it in scope for those frames too, where a copy would be not
+// merely unused but unreachable.  These specs pin what actually happens there, since it is the one
+// place the every-frame trade could cost something for nothing.
+var _ = Describe("biloba.js and an opaque-origin sandboxed frame", func() {
+	BeforeEach(func() {
+		b.Navigate(fixtureServer + "/sandboxed_frame.html")
+		Eventually("#ready").Should(b.Exist())
+	})
+
+	It("leaves the sandboxed frame working, whichever way Chrome resolves it", func() {
+		// The frame posts its own typeof window._biloba out through postMessage - the only channel an
+		// opaque origin has, and the same one a real sandboxed widget uses.  That the message arrives
+		// at all is the guarantee worth having: whatever Chrome does about injection, the frame still
+		// runs its own scripts and still reaches its parent.
+		//
+		// WHICH answer arrives is Chrome's business, and the two lanes disagree: chrome-headless-shell
+		// injects into an opaque origin ("object"), full headless Chrome does not ("undefined").
+		// Biloba needs neither - it can never reach into this frame - so pinning one would be pinning
+		// a Chrome implementation detail that is free to change and that costs us nothing either way.
+		Eventually("#widget-report").Should(SatisfyAny(b.HaveInnerText("object"), b.HaveInnerText("undefined")))
+	})
+
+	It("still cannot be reached through >>>, which is the frame's whole point", func() {
+		// asserted so the trade stays honest: whatever the frame got, Biloba buys nothing by it
+		Expect(b.HasElement("#sandboxed >>> #inner")).To(BeFalse())
+	})
+})
