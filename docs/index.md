@@ -265,7 +265,7 @@ From there, two shapes.  They are different trades rather than better and worse,
 
 Either way the origin stays put, which is the part that matters here.
 
-> **If you pin a port, give each spec's HTTP client its own transport.**  A zero-value `http.Client` uses `http.DefaultTransport`, whose connection pool is process-global and keyed on `host:port`.  Reuse a port and a spec's first request can be handed a keep-alive socket to the *previous* spec's already-closed server.  It surfaces as an `EOF` out of a `BeforeEach`, pointing at nothing.  Give each fixture its own `&http.Transport{}` and call `CloseIdleConnections()` on teardown.  This trap belongs to the pinned-port shape alone: a server that stays up for the whole process never has a dead socket to hand out.
+> **If you pin a port, give each spec's HTTP client its own transport.**  A zero-value `http.Client` uses `http.DefaultTransport`, whose connection pool is process-global and keyed on `host:port`.  Reuse a port and a spec's first request can be handed a keep-alive socket to the *previous* spec's already-closed server.  It surfaces as an `EOF` out of a `BeforeEach`, pointing at nothing.  Give each fixture its own `&http.Transport{}` and call `CloseIdleConnections()` on teardown.  On the suite that hit it, that is the difference between one fire in nine full-suite runs and none in sixty - so the trap is real and the fix is enough.  It belongs to the pinned-port shape alone: a server that stays up for the whole process never has a dead socket to hand out.
 
 #### Pragmatism: How Biloba Interacts with the DOM
 
