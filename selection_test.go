@@ -98,7 +98,7 @@ var _ = Describe("Selecting text", func() {
 		})
 
 		It("times out (poll-by-default) when no element matches", func() {
-			b.WithTimeout(time.Millisecond * 60).SelectText("#non-existing", "cell")
+			b.WithTimeout(time.Millisecond*60).SelectText("#non-existing", "cell")
 			ExpectFailures(SatisfyAll(
 				ContainSubstring("Timed out after"),
 				ContainSubstring("could not find DOM element matching selector: #non-existing"),
@@ -134,7 +134,7 @@ var _ = Describe("Selecting text", func() {
 		})
 
 		It("times out (poll-by-default) when no element matches", func() {
-			b.WithTimeout(time.Millisecond * 60).SelectRange("#non-existing", 0, 1)
+			b.WithTimeout(time.Millisecond*60).SelectRange("#non-existing", 0, 1)
 			ExpectFailures(SatisfyAll(
 				ContainSubstring("Timed out after"),
 				ContainSubstring("could not find DOM element matching selector: #non-existing"),

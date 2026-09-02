@@ -62,12 +62,12 @@ var _ = Describe("Keyboard input", func() {
 		})
 
 		It("polls by default, timing out when the element never appears", func() {
-			b.WithTimeout(100 * time.Millisecond).Type("#non-existing", "abc")
+			b.WithTimeout(100*time.Millisecond).Type("#non-existing", "abc")
 			ExpectFailures(ContainSubstring("Timed out after"))
 		})
 
 		It("polls by default, timing out when the element stays disabled", func() {
-			b.WithTimeout(100 * time.Millisecond).Type("#disabled-input", "abc")
+			b.WithTimeout(100*time.Millisecond).Type("#disabled-input", "abc")
 			ExpectFailures(ContainSubstring("Timed out after"))
 		})
 
