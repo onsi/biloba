@@ -74,13 +74,10 @@ func (b *Biloba) navigateWithStatus(url string, status int) *Biloba {
 		}
 	})
 
-	timeout := navigationTimeout
-	if b.timeout != nil {
-		timeout = *b.timeout
-	}
+	timeout := b.waitingTimeout(navigationTimeout)
 	nctx, ncancel := b.waitingContext(navigationTimeout)
 	defer ncancel()
-	err := chromedp.Run(nctx, chromedp.Navigate(url))
+	err := b.runCDPIn(nctx, timeout, "navigate to "+url, chromedp.Navigate(url))
 	isHTTPError := err != nil && strings.Contains(err.Error(), "ERR_HTTP_RESPONSE_CODE_FAILURE")
 
 	if errors.Is(err, context.DeadlineExceeded) {
@@ -150,7 +147,7 @@ func (b *Biloba) location() (string, error) {
 		}
 	}
 	var location string
-	err := chromedp.Run(b.Context, chromedp.Location(&location))
+	err := b.runCDP("read the tab's location", chromedp.Location(&location))
 	if err != nil {
 		return "", err
 	}
@@ -223,7 +220,7 @@ func (b *Biloba) title() (string, error) {
 		}
 	}
 	var title string
-	err := chromedp.Run(b.Context, chromedp.Title(&title))
+	err := b.runCDP("read the tab's title", chromedp.Title(&title))
 	if err != nil {
 		return "", err
 	}

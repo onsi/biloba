@@ -107,6 +107,20 @@ The run stays green, so this is easy to scroll past — don't. The baseline just
 
 Reported only when a handler **never fired** *and* was shadowed at least once. **Limit:** it's a failure artifact, so it cannot surface shadowing's other presentation — a leftover *stateful* handler claiming the response, passing it through untouched, spec **green**. Only your own `Eventually(hold.Count).Should(Equal(1))` catches that (`biloba:flaky-specs` §6).
 
+### When the failure is Chrome itself
+
+Every command Biloba sends Chrome runs under a deadline, so an unresponsive browser produces a failing spec instead of a hung suite. Three shapes, each naming its cause on the first line:
+
+| First line | Means | Do |
+|---|---|---|
+| `deadline_exceeded: Chrome did not <command> within 30s` | Chrome accepted the command and never answered | Chrome is wedged or the box is badly overloaded — look for a long synchronous script in the page, or too many parallel processes for the machine |
+| `page_crashed: this tab's renderer crashed` | Chrome reported `Inspector.targetCrashed` for this tab | usually the page itself (OOM, a bad WASM/canvas path). Recoverable: navigate the tab to get a fresh renderer, or move to `b.NewTab()` |
+| `browser_gone: the connection to Chrome is closed` | the browser process exited — crashed, OOM-killed, or reaped | not recoverable; the rest of the suite will fail too. Check the machine's memory and whether anything is killing Chrome |
+
+The deadline is generous on purpose (a healthy command answers in milliseconds), so hitting it is a real signal, not a tight-timeout artifact. `WithTimeout` doesn't move it: that knob bounds how long Biloba keeps *retrying*, which is a different question from whether Chrome is alive.
+
+**A suite that ends on Ginkgo's `--timeout` with no failing spec** used to be this class — a command blocked inside a poll's callback, where Gomega can't interrupt it, so the poll deadline never fired. If you still see that shape, it is not this: look for a `chromedp` call of your own on `b.Context` without a deadline.
+
 ### Two failure *messages* that self-explain
 
 - A two-axis getter timing out because the **property** never became defined says the element was present, names the property, and prints the `b.AllowMissing("disabled")` to paste (`biloba:flaky-specs` §5).

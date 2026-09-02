@@ -91,14 +91,14 @@ func (b *Biloba) performSetUpload(selector any, paths []string) (bool, error) {
 
 	var node *runtime.RemoteObject
 	script := b.JSFunc("_biloba.node").Invoke(encoded)
-	if err := chromedp.Run(b.Context, chromedp.Evaluate(script, &node)); err != nil {
+	if err := b.runCDP("resolve the file input element", chromedp.Evaluate(script, &node)); err != nil {
 		return false, err
 	}
 	if node == nil || node.ObjectID == "" {
 		return false, nil
 	}
 
-	if err := chromedp.Run(b.Context, dom.SetFileInputFiles(paths).WithObjectID(node.ObjectID)); err != nil {
+	if err := b.runCDP("set the file input's files", dom.SetFileInputFiles(paths).WithObjectID(node.ObjectID)); err != nil {
 		return false, err
 	}
 	return true, nil

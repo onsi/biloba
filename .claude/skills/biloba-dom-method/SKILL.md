@@ -189,6 +189,23 @@ Fields that stay on `Biloba` itself: identity (`Context`, `targetID`, `root`), s
 
 `go vet` will not catch a mistake here: its copylocks check is what would otherwise flag `nb := *b`, and `lock` is a `*sync.Mutex` so it stays quiet. **`tab_state_internal_test.go` is the guard** — it reflects over `Biloba` and fails on any field a view copies that isn't classified as `reasonIdentity`, `reasonViewFlag`, or `reasonRootOwned`, so adding one forces the decision. The behavioural test is a spec that registers through a *held* view (`rb := b.Realistic()`) and asserts the bare tab sees it — see "registering through a view of the tab" in `network_test.go` and `dialog_handling_test.go`.
 
+### Every command to Chrome goes through `b.runCDP` (`cdp.go`)
+
+`b.Context` carries no deadline, so `chromedp.Run(b.Context, ...)` waits on a wedged Chrome forever — and because a blocked call sits *inside* the poll's callback, Gomega can't preempt it and the `Eventually` deadline never fires. The suite then dies on Ginkgo's own `--timeout` with no failing spec (issue #9). So:
+
+```go
+if err := b.runCDP("dispatch keyboard input", chromedp.KeyEvent(keys, opts...)); err != nil { ... }
+```
+
+`what` reads as the tail of "Chrome did not ___". `runCDP` applies the backstop deadline (`cdpTimeout`, 30s; `runCDPWithin(cdpAwaitTimeout, ...)` for an awaited promise, where the page's JS sets the duration) and diagnoses the failure as `page_crashed` / `browser_gone` / `deadline_exceeded`, wrapping the original error so `errors.Is` still works.
+
+The backstop is **not** a fifth knob: it deliberately ignores `WithTimeout` (which bounds retries, not liveness) and applies in every bucket, including the two that reject every knob. A Cat 5a waiting command is the exception — there the bound *is* the user's wait, so it builds its context with `waitingContext(default)` (which is `cdpContext` plus the `WithTimeout` override) and runs it with `runCDPIn`.
+
+**`cdp_internal_test.go` is the guard**: it greps the package source and fails on any `chromedp.Run(b.Context, ...)`. Two traps worth knowing before you work around it:
+
+- **Never bound a context chromedp will allocate on.** The first `chromedp.Run` on a context is where chromedp starts the browser and the target's event loop, tying both to *that* context — so a deadline there kills Chrome rather than bounding a hang. That's why `cdpContext` calls `ensureChromedpAllocated` first, and why the connect-time probes in `SpinUpChrome`/`bootstrapIsolatedTab` are deliberately left unbounded.
+- **Parent on `b.Context`**, never `context.Background()`, or chromedp's executor for the tab drops out of the chain.
+
 ### The four-bucket model and `guardConfig`
 
 Not every method polls. `guardConfig(name, allowed...)` enforces which config knobs (`knobTimeout`/`knobPolling`/`knobContext`/`knobImmediate`) a method accepts:

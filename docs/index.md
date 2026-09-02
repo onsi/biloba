@@ -398,7 +398,40 @@ Of course you can mix and match both of these approaches and have the combinatio
 
 > Wait a minute.  How does `ConnectToChrome` now how to connect to the browser that `SpinUpChrome` starts?  You aren't passing anything from one function to the other!
 
-Good catch.  `SpinUpChrome` writes the connection information to a known file-location on disk that `ConnectToChrome` reads from.  This avoids us having to write some boilerplate code to connect the two `SynchronizedBeforeSuite` functions and is an example of how Biloba tries to integrate deeply with Ginkgo and Gomega to help your tests be concise and focused on... well... _testing_.  Let's dive into that topic next.
+Good catch.  `SpinUpChrome` writes the connection information to a known file-location on disk that `ConnectToChrome` reads from.  This avoids us having to write some boilerplate code to connect the two `SynchronizedBeforeSuite` functions and is an example of how Biloba tries to integrate deeply with Ginkgo and Gomega to help your tests be concise and focused on... well... _testing_.
+
+#### When Chrome stops responding
+
+All of the above assumes Chrome answers.  Sometimes it doesn't: a renderer crashes, the browser process gets killed, or a tab wedges under load and never replies to a command.
+
+Biloba puts a **backstop deadline** on every command it sends to Chrome, so that case fails your spec rather than hanging your suite.  The polling knobs don't cover it: `WithTimeout` bounds the `Eventually` loop Biloba polls in, but a command that never returns blocks *inside* the poll's callback, and Gomega can't interrupt a call that is already blocked.  Without a deadline on the command itself the poll deadline never gets a chance to fire, and a suite that hits this ends on Ginkgo's own `--timeout` with no failing spec to point at.
+
+The backstop is generous on purpose — 30 seconds for a command, two minutes for `b.RunAsync`, whose duration is set by the promise your page awaits rather than by Chrome.  A healthy command comes back in milliseconds, so nothing normal gets near it.  It's a liveness check, not a wait you tune.
+
+When it fires — or when Biloba can tell *why* Chrome went away — the failure says which:
+
+```
+deadline_exceeded: Chrome did not evaluate JavaScript in the page within 30s.
+Biloba bounds every browser command so an unresponsive Chrome fails the spec instead of hanging the suite.
+Chrome is wedged, badly overloaded, or the page is stuck in a long-running synchronous script.
+```
+
+```
+page_crashed: this tab's renderer crashed, so Chrome could not evaluate JavaScript in the page.
+Chrome reported Inspector.targetCrashed for this target - everything the page held is gone.
+Navigate the tab again to get a fresh renderer, or run the rest of the spec on a new tab.
+```
+
+```
+browser_gone: the connection to Chrome is closed, so Chrome could not capture the accessibility tree.
+The browser process is no longer there - it crashed, ran out of memory, or was killed.
+```
+
+A crashed renderer is recoverable — navigating the tab gives it a fresh one, and Biloba clears the crash when that happens.  A gone browser is not.
+
+You don't configure the backstop and it isn't one of the four poll-config knobs below.  `WithTimeout` still means "how long to keep retrying", which is a different question from "is Chrome still alive": a command that outruns a tight `WithTimeout` on a loaded machine still gets to finish, exactly as it did before.  The one place the two coincide is a [waiting command](#which-methods-honor-which-knobs) like `Navigate`, where the bounded wait *is* your wait — and there `WithTimeout` overrides the deadline, as it always has.
+
+Let's dive into Ginkgo and Gomega integration next.
 
 ### Ginkgo and Gomega Integration
 
@@ -477,6 +510,16 @@ chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
 ```
 
 When a capability is common enough Biloba grows native support for it (see, for example, [Cookies and Storage](#cookies-and-storage)).  Until then, `b.Context` is always there as an escape hatch.
+
+One thing to know when you use it: `b.Context` carries **no deadline**.  Biloba's own commands run under a [backstop deadline](#when-chrome-stops-responding), but a `chromedp.Run(b.Context, ...)` of yours does not — if Chrome stops answering, that call waits forever and takes the suite with it.  Give it one:
+
+```go
+ctx, cancel := context.WithTimeout(b.Context, 30*time.Second)
+defer cancel()
+chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error { /* ... */ }))
+```
+
+Derive it from `b.Context` (not `context.Background()`) so chromedp's executor for this tab stays in the chain.
 
 #### Emulation and device conveniences (drop to chromedp)
 

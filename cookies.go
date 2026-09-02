@@ -213,7 +213,7 @@ func (b *Biloba) resetBrowsingState() {
 // target/tab executor). The storage cookie commands are browser-scoped and take a
 // BrowserContextID, so they must be dispatched on the Browser connection.
 func (b *Biloba) runWithBrowserExecutor(f func(ctx context.Context) error) error {
-	return chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
+	return b.runCDP("run a browser-level command", chromedp.ActionFunc(func(ctx context.Context) error {
 		c := chromedp.FromContext(ctx)
 		return f(cdp.WithExecutor(ctx, c.Browser))
 	}))

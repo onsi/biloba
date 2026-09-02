@@ -364,4 +364,4 @@ A DOM method always operates on the tab it's invoked on (`tab.Click`, not `b.Cli
 
 ## When Biloba can't express it
 
-Realism (occlusion, scroll-into-view, real CSS `:hover`) → `b.Realistic()`. Real keystrokes → `b.Type`, not `SetValue`. Everything else — cross-origin frames, geolocation, any CDP feature without a wrapper — drop to chromedp via `b.Context` (`biloba:overview`). Propose an issue if a common pattern is missing.
+Realism (occlusion, scroll-into-view, real CSS `:hover`) → `b.Realistic()`. Real keystrokes → `b.Type`, not `SetValue`. Everything else — cross-origin frames, geolocation, any CDP feature without a wrapper — drop to chromedp via `b.Context` (`biloba:overview`). When you do, wrap it: `b.Context` carries no deadline, and Biloba's backstop covers only its own commands, so `ctx, cancel := context.WithTimeout(b.Context, 30*time.Second)` is what keeps a wedged Chrome from hanging the suite (derive from `b.Context`, not `context.Background()`, so the tab's executor stays in the chain). Propose an issue if a common pattern is missing.

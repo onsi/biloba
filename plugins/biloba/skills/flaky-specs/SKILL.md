@@ -26,6 +26,7 @@ Failure *artifacts* (outlines, screenshots, poll trajectory) → `biloba:debug-f
 | Click appears to do nothing | Overlay swallowed it (fast `Click` is occlusion-blind) | `b.BeClickable()` gate, or `b.Realistic()` | [2](#2-actions-that-dont-poll) |
 | Intermittent "could not find DOM element" on the line *after* a capture | The capture expanded the viewport; the page re-rendered on its breakpoint and unmounted the subject | capture something already in view (scroll, gate on `b.BeInViewport(b.Fully())`) | [7](#7-assertions-that-cannot-fail) |
 | Assertion passes but asserts the opposite of your intent | Inverted `BePrecededBy`/`BeFollowedBy` | also assert the inverse doesn't hold | [4](#4-layout-geometry-and-document-order) |
+| Suite ends on Ginkgo's `--timeout` with **no** failing spec | A CDP call blocked with no deadline — Gomega can't preempt a blocked callback, so no poll deadline fires | Biloba's own commands are bounded and now fail with `deadline_exceeded`/`page_crashed`/`browser_gone`; if you still hang, it's your own `chromedp` call on `b.Context` — give it a `context.WithTimeout` | `biloba:debug-failures` |
 
 ## 1. Reads you take yourself
 

@@ -90,6 +90,27 @@ func SetNavigationTimeoutForTest(d time.Duration) func() {
 	return func() { navigationTimeout = prev }
 }
 
+// SetCDPTimeoutsForTest shrinks the CDP backstop deadlines (see cdp.go) so cdp_test.go can exercise
+// the wedged-Chrome path in milliseconds instead of waiting out the production bounds.  Returns a
+// restore func.
+func SetCDPTimeoutsForTest(command time.Duration, await time.Duration) func() {
+	prevCommand, prevAwait := cdpTimeout, cdpAwaitTimeout
+	cdpTimeout, cdpAwaitTimeout = command, await
+	return func() { cdpTimeout, cdpAwaitTimeout = prevCommand, prevAwait }
+}
+
+// SetWedgedCDPForTest overrides the wedge-injection seam so cdp_test.go can simulate a Chrome that
+// accepts a command and never answers - without actually wedging a renderer, which would peg a CPU
+// for the rest of the run.  Returns a restore func.
+func SetWedgedCDPForTest(fn func() bool) func() {
+	prev := simulateWedgedCDP
+	simulateWedgedCDP = fn
+	return func() { simulateWedgedCDP = prev }
+}
+
+// PageCrashedForTest exposes this tab's Inspector.targetCrashed flag for cdp_test.go.
+func (b *Biloba) PageCrashedForTest() bool { return b.pageCrashed() }
+
 // SetTransientReadErrorForTest overrides the location()/title() read-error injection seam so
 // navigation_test.go can simulate the transient CDP error a live navigation can legitimately throw
 // (e.g. a target swapped mid-navigation) without reproducing the underlying race.  Returns a restore

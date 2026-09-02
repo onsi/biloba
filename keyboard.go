@@ -166,7 +166,7 @@ func (b *Biloba) dispatchKeys(keys string, mods []clickModifier) error {
 	if len(mods) > 0 {
 		opts = append(opts, chromedp.KeyModifiers(modifierMask(mods)))
 	}
-	return chromedp.Run(b.Context, chromedp.KeyEvent(keys, opts...))
+	return b.runCDP("dispatch keyboard input", chromedp.KeyEvent(keys, opts...))
 }
 
 // focusAndSendKeys focuses the element matching selector (failing if it is missing, hidden, or

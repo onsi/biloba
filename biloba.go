@@ -31,6 +31,7 @@ import (
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/fetch"
+	"github.com/chromedp/cdproto/inspector"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/target"
@@ -230,7 +231,7 @@ func (b *Biloba) applyHighFidelityViewport() error {
 		return nil
 	}
 	return retryTransientCDP(func() error {
-		return chromedp.Run(b.Context, chromedp.EmulateViewport(
+		return b.runCDP("apply the high-fidelity viewport emulation", chromedp.EmulateViewport(
 			int64(b.ChromeConnection.WindowWidth),
 			int64(b.ChromeConnection.WindowHeight),
 			emulateViewportMatchingScreen,
@@ -250,10 +251,10 @@ func (b *Biloba) reassertViewportForCompositor() {
 		return
 	}
 	var dims []int64
-	if err := chromedp.Run(b.Context, chromedp.Evaluate("[window.innerWidth, window.innerHeight]", &dims)); err != nil || len(dims) != 2 || dims[0] <= 0 || dims[1] <= 0 {
+	if err := b.runCDP("measure the viewport", chromedp.Evaluate("[window.innerWidth, window.innerHeight]", &dims)); err != nil || len(dims) != 2 || dims[0] <= 0 || dims[1] <= 0 {
 		return
 	}
-	_ = chromedp.Run(b.Context, chromedp.EmulateViewport(dims[0], dims[1], emulateViewportMatchingScreen))
+	_ = b.runCDP("re-apply the viewport emulation", chromedp.EmulateViewport(dims[0], dims[1], emulateViewportMatchingScreen))
 }
 
 // applyFocusEmulation makes this tab behave as though its page always holds the system focus.  An
@@ -266,7 +267,7 @@ func (b *Biloba) reassertViewportForCompositor() {
 // page as focused.
 func (b *Biloba) applyFocusEmulation() error {
 	return retryTransientCDP(func() error {
-		return chromedp.Run(b.Context, emulation.SetFocusEmulationEnabled(true))
+		return b.runCDP("enable focus emulation", emulation.SetFocusEmulationEnabled(true))
 	})
 }
 
@@ -327,6 +328,11 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...SpinUpOption) ChromeConne
 
 	cc := ChromeConnection{HighFidelity: cfg.highFidelity}
 
+	// NOTE: the first-contact probes below deliberately run UNBOUNDED, unlike every command in cdp.go.
+	// chromedp allocates the browser (and its target) lazily, inside the first chromedp.Run on a
+	// context - so that Run's context OWNS the Chrome process, and cancelling it kills the browser.
+	// Putting a deadline here does not bound a hang, it tears Chrome down mid-suite.  Browser start-up
+	// has its own bound: chromedp.WSURLReadTimeout, set above.
 	if cfg.highFidelity {
 		// Full ("new") headless renders into a small virtual screen (default 800x600) regardless of
 		// --window-size, so an un-emulated tab reports window.innerHeight well below the requested
@@ -705,6 +711,9 @@ func (b *Biloba) bootstrapIsolatedTab(allocatorContext context.Context, bootstra
 		}
 
 		bootstrapCtx, cancelBootstrap := chromedp.NewContext(allocatorContext, bootstrapOpts...)
+		// Unbounded on purpose: this Run is what allocates the browser and its target on bootstrapCtx,
+		// so a deadline here would own - and then kill - the Chrome connection.  See the note in
+		// SpinUpChrome.
 		if err := chromedp.Run(bootstrapCtx, chromedp.Evaluate("1", nil)); err != nil {
 			cancelBootstrap()
 			lastErr = err
@@ -793,6 +802,11 @@ type tabState struct {
 	// bilobaIsInstalled tracks whether window._biloba survives in the current page.  Not reset by
 	// Prepare: it is invalidated by navigation, not by the spec boundary.
 	bilobaIsInstalled bool
+
+	// targetCrashed records that Chrome told us this tab's renderer died (Inspector.targetCrashed), so
+	// a subsequent command failure can say WHY instead of just "context deadline exceeded".  Cleared
+	// by the next navigation - which gives the target a fresh renderer - and by Prepare.
+	targetCrashed bool
 
 	downloads       map[string]*Download
 	downloadHistory map[string]time.Time
@@ -1006,7 +1020,7 @@ func (b *Biloba) Prepare() {
 	// ensureFetchEnabled turned off (a cached response raises no Fetch event, so interception
 	// would silently miss it)
 	if wasFetchEnabled {
-		chromedp.Run(b.Context, fetch.Disable(), network.SetCacheDisabled(false))
+		b.runCDP("disable network interception", fetch.Disable(), network.SetCacheDisabled(false))
 	}
 
 	// attachFailureArtifactsIfFailed clears the per-spec poll diagnostics on its way out, but it is
@@ -1438,6 +1452,18 @@ var bilobaJS string
 func (b *Biloba) handleEventFrameNavigated(_ *page.EventFrameNavigated) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
+	b.state.bilobaIsInstalled = false
+	// A frame navigated, so this target has a live renderer again - whatever crash we recorded is over.
+	b.state.targetCrashed = false
+}
+
+// handleEventTargetCrashed records that this tab's renderer died so the next command that fails can
+// name the cause (see diagnoseCDPError).  window._biloba died with the page, so the install flag goes
+// with it.
+func (b *Biloba) handleEventTargetCrashed(_ *inspector.EventTargetCrashed) {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	b.state.targetCrashed = true
 	b.state.bilobaIsInstalled = false
 }
 

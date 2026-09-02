@@ -35,7 +35,7 @@ func (b *Biloba) A11yOutline() string {
 
 func (b *Biloba) a11yOutline() (string, error) {
 	var nodes []*accessibility.Node
-	err := chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
+	err := b.runCDP("capture the accessibility tree", chromedp.ActionFunc(func(ctx context.Context) error {
 		var err error
 		nodes, err = accessibility.GetFullAXTree().Do(ctx)
 		return err

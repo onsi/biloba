@@ -65,13 +65,29 @@ func (b *Biloba) runErr(script string, awaitPromise bool, args ...any) (any, err
 		}
 		return p
 	}
-	err := chromedp.Run(b.Context, chromedp.EvaluateAsDevTools(script, &encodedResult, options))
+	// The backstop deadline (see cdp.go).  runErr is the single funnel for every JS evaluation -
+	// Run/RunAsync AND every DOM method, since runBilobaHandler goes through it - so this one bound
+	// covers the hot path the hang report landed on.  An awaited promise gets the longer bound
+	// because the page's own JS, not Chrome's responsiveness, sets how long it takes.
+	timeout := cdpTimeout
+	what := "evaluate JavaScript in the page"
+	if awaitPromise {
+		timeout, what = cdpAwaitTimeout, "settle the promise the script awaited"
+	}
+	ctx, cancel := b.cdpContext(timeout)
+	defer cancel()
+	// The _biloba-is-gone retry re-runs inside THIS context rather than opening a fresh deadline, and
+	// it retries once rather than recursing - so the reload path stays bounded (one reload command,
+	// then whatever is left of this deadline) instead of being able to loop forever.
+	err := b.runCDPIn(ctx, timeout, what, chromedp.EvaluateAsDevTools(script, &encodedResult, options))
 	if err != nil {
 		if strings.Contains(err.Error(), "_biloba is not defined") {
 			b.reloadBiloba()
-			return b.runErr(script, awaitPromise, args...)
+			err = b.runCDPIn(ctx, timeout, what, chromedp.EvaluateAsDevTools(script, &encodedResult, options))
 		}
-		return nil, err
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// A nil decode target means "discard the result" - decode into a throwaway any
@@ -175,6 +191,8 @@ As with Run you can pass a single pointer argument to decode the result into a s
 # If the script throws or the awaited promise rejects RunAsync will fail the spec
 
 Like [Biloba.Run], RunAsync does not poll and configuring it (WithTimeout/WithPolling/WithContext/Immediate) is a hard error; for a polling path use [Biloba.RunErrAsync] + Eventually.
+
+A promise that never settles would otherwise hang your suite, so RunAsync carries a backstop deadline of two minutes - generous, since the page's own JavaScript sets how long the await takes.  See https://onsi.github.io/biloba/#when-chrome-stops-responding
 
 Read https://onsi.github.io/biloba/#running-arbitrary-javascript to learn more about running JavaScript in Biloba
 */

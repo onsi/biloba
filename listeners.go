@@ -4,6 +4,7 @@ import (
 	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
+	"github.com/chromedp/cdproto/inspector"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
@@ -19,10 +20,11 @@ func (b *Biloba) configureDownloadBehaviorForAllTabsWithBrowserContextID(browser
 }
 
 func (b *Biloba) configureDownloadBehavior() {
-	chromedp.Run(b.Context, browser.SetDownloadBehavior(browser.SetDownloadBehaviorBehaviorAllowAndName).
-		WithDownloadPath(b.root.downloadDir).
-		WithEventsEnabled(true).
-		WithBrowserContextID(b.browserContextID))
+	b.runCDP("configure the download behavior",
+		browser.SetDownloadBehavior(browser.SetDownloadBehaviorBehaviorAllowAndName).
+			WithDownloadPath(b.root.downloadDir).
+			WithEventsEnabled(true).
+			WithBrowserContextID(b.browserContextID))
 }
 
 func (b *Biloba) setUpListeners() {
@@ -48,6 +50,8 @@ func (b *Biloba) setUpListeners() {
 			b.handleEventLoadingFailed(ev)
 		case *fetch.EventRequestPaused:
 			b.handleEventRequestPaused(ev)
+		case *inspector.EventTargetCrashed:
+			b.handleEventTargetCrashed(ev)
 		}
 	})
 }

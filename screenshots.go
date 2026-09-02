@@ -136,7 +136,7 @@ func (b *Biloba) captureScreenshot() []byte {
 	ctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
 	var img []byte
-	err := chromedp.Run(ctx, capturePageAction(&img, nil))
+	err := b.runCDPIn(ctx, b.waitingTimeout(screenshotCaptureTimeout), "capture a screenshot of the page", capturePageAction(&img, nil))
 	if err != nil {
 		b.gt.Fatalf("Failed to capture screenshot:\n%s", err.Error())
 	}
@@ -363,7 +363,7 @@ func (b *Biloba) elementScreenshot(selector any) ([]byte, *page.Viewport, captur
 	cctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
 	var img []byte
-	err := chromedp.Run(cctx, chromedp.ActionFunc(func(ctx context.Context) error {
+	err := b.runCDPIn(cctx, b.waitingTimeout(screenshotCaptureTimeout), "capture a screenshot of the element", chromedp.ActionFunc(func(ctx context.Context) error {
 		var captureErr error
 		img, captureErr = page.CaptureScreenshot().
 			WithClip(clip).

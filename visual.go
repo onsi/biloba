@@ -15,7 +15,6 @@ import (
 
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
-	"github.com/chromedp/chromedp"
 	"github.com/onsi/gomega"
 	"github.com/onsi/gomega/format"
 	"github.com/onsi/gomega/gcustom"
@@ -656,7 +655,7 @@ func (b *Biloba) emulateColorScheme(scheme string) error {
 		params = params.WithFeatures([]*emulation.MediaFeature{{Name: "prefers-color-scheme", Value: scheme}})
 		b.setColorSchemeEmulated(true)
 	}
-	err := chromedp.Run(ctx, params)
+	err := b.runCDPIn(ctx, b.waitingTimeout(screenshotCaptureTimeout), "emulate the color scheme", params)
 	if scheme == "" && err == nil {
 		b.setColorSchemeEmulated(false)
 	}
@@ -698,7 +697,7 @@ func (b *Biloba) fullPageScreenshot() ([]byte, float64, error) {
 	defer cancel()
 	var img []byte
 	var cssWidth float64
-	err := chromedp.Run(ctx, capturePageAction(&img, &cssWidth))
+	err := b.runCDPIn(ctx, b.waitingTimeout(screenshotCaptureTimeout), "capture a screenshot of the page", capturePageAction(&img, &cssWidth))
 	return img, cssWidth, err
 }
 

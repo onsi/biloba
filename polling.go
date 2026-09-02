@@ -30,6 +30,11 @@ model:
 So WithTimeout applies to the polling methods and the waiting commands; setting it on a snapshot, a
 one-shot mutation, or a bare matcher is a hard error.
 
+Separately from all of this, every command Biloba sends Chrome carries a backstop deadline so an
+unresponsive browser fails the spec instead of hanging the suite.  That is a liveness bound, not a
+wait: it is not configurable, and WithTimeout - which bounds how long Biloba keeps retrying - does
+not shorten it.  See https://onsi.github.io/biloba/#when-chrome-stops-responding
+
 Read https://onsi.github.io/biloba/#interacting-with-elements to learn more about interacting with elements
 */
 func (b *Biloba) WithTimeout(d time.Duration) *Biloba {
@@ -127,20 +132,22 @@ func (b *Biloba) pollOrImmediate(selector any, matcher types.GomegaMatcher) bool
 // the wait when the supplied context is cancelled.  WithPolling/Immediate are rejected upstream by
 // guardConfig.
 //
-// The returned context is always parented on b.Context so chromedp's executor stays in the chain (a
-// user's WithContext is typically a plain context.Background-derived context with no executor);
-// WithContext is honored for cancellation by tying it to the returned context via context.AfterFunc.
+// It is [Biloba.cdpContext] - the backstop deadline every low-level CDP command runs under (see
+// cdp.go) - plus the WithTimeout override this one bucket allows.  Waiting commands are the only
+// bucket where the bounded context IS the user's wait rather than a liveness backstop, which is
+// exactly why they are the only bucket that gets to move it.
 func (b *Biloba) waitingContext(defaultTimeout time.Duration) (context.Context, context.CancelFunc) {
-	timeout := defaultTimeout
+	return b.cdpContext(b.waitingTimeout(defaultTimeout))
+}
+
+// waitingTimeout is the deadline waitingContext will actually use - the caller's WithTimeout if it
+// set one, otherwise the command's own default.  Callers need it separately so a timeout failure can
+// report the duration that really elapsed rather than the default it overrode.
+func (b *Biloba) waitingTimeout(defaultTimeout time.Duration) time.Duration {
 	if b.timeout != nil {
-		timeout = *b.timeout
+		return *b.timeout
 	}
-	ctx, cancel := context.WithTimeout(b.Context, timeout)
-	if b.pollingCtx != nil {
-		stop := context.AfterFunc(b.pollingCtx, cancel)
-		return ctx, func() { stop(); cancel() }
-	}
-	return ctx, cancel
+	return defaultTimeout
 }
 
 // configKnob names one of the four poll-config knobs so guardConfig can report exactly which

@@ -875,11 +875,8 @@ Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn 
 func (h *ResponseHold) Await() InterceptedResponse {
 	h.b.gt.Helper()
 	h.b.guardConfig("Await", knobTimeout, knobContext)
-	timeout := holdResponseTimeout
-	if h.b.timeout != nil {
-		timeout = *h.b.timeout
-	}
-	ctx, cancel := h.b.waitingContext(timeout)
+	timeout := h.b.waitingTimeout(holdResponseTimeout)
+	ctx, cancel := h.b.waitingContext(holdResponseTimeout)
 	defer cancel()
 
 	for {
@@ -1159,7 +1156,7 @@ func (b *Biloba) ensureFetchEnabled() {
 
 	// cache first, then Fetch: that way there is no window in which requests are being intercepted
 	// but could still be answered from cache.
-	if err := chromedp.Run(b.Context,
+	if err := b.runCDP("enable network interception",
 		network.SetCacheDisabled(true),
 		fetch.Enable().WithPatterns([]*fetch.RequestPattern{{URLPattern: "*"}}),
 	); err != nil {
@@ -1325,7 +1322,7 @@ func (b *Biloba) handleRequestStagePause(ev *fetch.EventRequestPaused) {
 		default:
 			action = fetch.ContinueRequest(ev.RequestID)
 		}
-		chromedp.Run(b.Context, action)
+		b.runCDP("answer the intercepted request", action)
 	}()
 }
 
@@ -1334,7 +1331,7 @@ func (b *Biloba) handleResponseStagePause(ev *fetch.EventRequestPaused) {
 	go func() {
 		if handler == nil {
 			// Not ours to modify: hand the real response straight back to the page.
-			chromedp.Run(b.Context, fetch.ContinueResponse(ev.RequestID))
+			b.runCDP("continue the intercepted response", fetch.ContinueResponse(ev.RequestID))
 			return
 		}
 
@@ -1348,7 +1345,7 @@ func (b *Biloba) handleResponseStagePause(ev *fetch.EventRequestPaused) {
 		// GetResponseBody is only valid at the response stage; chromedp decodes base64 for us.  It
 		// must run through chromedp.Run so it picks up the target's CDP executor from the context.
 		var body []byte
-		chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
+		b.runCDP("read the intercepted response body", chromedp.ActionFunc(func(ctx context.Context) error {
 			var err error
 			body, err = fetch.GetResponseBody(ev.RequestID).Do(ctx)
 			return err
@@ -1364,7 +1361,7 @@ func (b *Biloba) handleResponseStagePause(ev *fetch.EventRequestPaused) {
 		if headers := response.headerEntries(); len(headers) > 0 {
 			params = params.WithResponseHeaders(headers)
 		}
-		chromedp.Run(b.Context, params)
+		b.runCDP("fulfil the intercepted response", params)
 	}()
 }
 
