@@ -1,10 +1,15 @@
 package biloba
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	ginkgo "github.com/onsi/ginkgo/v2"
 	gomega "github.com/onsi/gomega"
@@ -58,5 +63,61 @@ var _ = ginkgo.Describe("how Biloba's own source talks to Chrome", ginkgo.Label(
 				"deadline and names the cause (page_crashed / browser_gone / deadline_exceeded).  A command\n"+
 				"whose wait IS the user's wait - a Cat 5a waiting command - uses b.waitingContext(default)\n"+
 				"and b.runCDPIn.  See cdp.go.  Offending lines:\n  %s", strings.Join(offenders, "\n  "))
+	})
+})
+
+// diagnoseCDPError is what turns a bounded failure into an actionable one, and its three verdicts are
+// asserted here rather than against real Chrome on purpose.
+//
+// page_crashed depends on Chrome announcing the crash, and Chrome does not do that dependably: with
+// the Inspector domain enabled, neither Page.crash nor a chrome://crash navigation produces
+// inspector.targetCrashed or target.targetCrashed on Linux, on either the page session or the browser
+// connection, while both arrive on macOS.  A spec that crashed a real renderer and demanded the
+// wording would therefore assert a Chrome behaviour rather than a Biloba one, and would fail on the
+// platform most suites run on.  So the trigger is tested against real Chrome (cdp_test.go) and the
+// vocabulary is tested here, where setting the flag is deterministic everywhere.
+var _ = ginkgo.Describe("diagnosing why a command failed", ginkgo.Label("no-browser"), func() {
+	var b *Biloba
+	underlying := errors.New("some underlying failure")
+
+	ginkgo.BeforeEach(func() {
+		b = &Biloba{lock: &sync.Mutex{}, state: newTabState()}
+	})
+
+	ginkgo.It("passes a healthy call through as nil", func() {
+		gomega.Expect(b.diagnoseCDPError("evaluate JavaScript in the page", time.Second, nil)).To(gomega.Succeed())
+	})
+
+	ginkgo.It("names a crashed renderer, and says how to recover", func() {
+		b.state.targetCrashed = true
+		err := b.diagnoseCDPError("evaluate JavaScript in the page", time.Second, underlying)
+		gomega.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("page_crashed: this tab's renderer crashed, so Chrome could not evaluate JavaScript in the page")))
+		gomega.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("Navigate the tab again to get a fresh renderer")))
+		gomega.Expect(errors.Is(err, underlying)).To(gomega.BeTrue(), "the underlying error stays wrapped, so callers can still match on it")
+	})
+
+	ginkgo.It("names a deadline, with the bound it exceeded", func() {
+		err := b.diagnoseCDPError("dispatch keyboard input", 250*time.Millisecond, context.DeadlineExceeded)
+		gomega.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("deadline_exceeded: Chrome did not dispatch keyboard input within 250ms")))
+		gomega.Expect(errors.Is(err, context.DeadlineExceeded)).To(gomega.BeTrue())
+	})
+
+	ginkgo.It("prefers the crash to the deadline, since the crash is the reason for the deadline", func() {
+		b.state.targetCrashed = true
+		err := b.diagnoseCDPError("evaluate JavaScript in the page", time.Second, context.DeadlineExceeded)
+		gomega.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("page_crashed")))
+		gomega.Expect(err).NotTo(gomega.MatchError(gomega.ContainSubstring("deadline_exceeded")))
+	})
+
+	ginkgo.It("leaves an ordinary error alone rather than dressing it in wedge language", func() {
+		thrown := fmt.Errorf("encountered exception: ReferenceError: nope is not defined")
+		gomega.Expect(b.diagnoseCDPError("evaluate JavaScript in the page", time.Second, thrown)).To(gomega.MatchError(thrown))
+	})
+
+	ginkgo.It("treats the caller's own cancelled context as theirs, not as a wedge", func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		b.pollingCtx = ctx
+		gomega.Expect(b.diagnoseCDPError("evaluate JavaScript in the page", time.Second, context.DeadlineExceeded)).To(gomega.MatchError(context.DeadlineExceeded))
 	})
 })
