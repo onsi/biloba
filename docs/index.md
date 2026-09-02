@@ -231,6 +231,21 @@ This clearing-of-the-decks between specs allows Biloba to naturally conform to G
 
 Consider Biloba's own test suite: at the time of writing it consists of 185 specs.  These take about 10 seconds to run in series on an M1 Max Macbook Pro.  But only about 2 seconds when run with `ginkgo -p`!  We get performance from parallelization and careful resource reuse; and stability from Chrome's per-tab isolation.
 
+#### Serve your app from a stable origin
+
+Biloba's performance story is reuse across specs - one Chrome process, one reused Root Tab.  There's one more thing worth reusing that isn't Biloba's to reuse for you: **the origin your app is served from.**
+
+The Go reflex is one `httptest.NewServer` per spec.  That hands every spec its own server on an ephemeral port, so **every spec serves the app from a new origin and every asset URL changes** - and the renderer starts cold on each navigation.
+
+The cost is measurable.  On one real suite serving a 1.67 MB bundle: **~31ms of extra renderer work on every `b.Navigate`**, and about **20 seconds off a 1,558-spec `--procs=6` run** once the origin stopped changing.  Note what it *isn't*: turning the HTTP cache off on a stable origin costs nothing, so this is not about re-fetching bytes - the recovered time lands in *script* time.  A suite serving a few kilobytes of static fixtures has far less script work to redo and will see far less; a suite serving a real application bundle should measure its own.
+
+The good news is that you give up nothing to get it.  A brand-new server, with brand-new state and a brand-new on-disk fixture, bound to the **same port**, is exactly as fast as re-navigating the warm one.  Nothing but the origin has to be shared, so per-spec isolation is not the thing you're trading.  Two shapes work:
+
+- **One server per parallel process**, started in `SynchronizedBeforeSuite`'s second function and torn down with `DeferCleanup`; reset whatever per-spec state it holds in a `BeforeEach`.  This is the simplest, and it's what Biloba's own suite does (its fixtures are static files, so there's nothing to reset).
+- **A fresh server per spec on a pinned port**, when rebuilding the server is easier than resetting it.  Derive the port from `GinkgoParallelProcess()` so parallel processes don't collide - the same sharding pattern Ginkgo recommends for [any parallel-unsafe resource](https://onsi.github.io/ginkgo/#patterns-for-parallel-integration-specs).
+
+> **If you pin a port, give each spec's HTTP client its own transport.**  A zero-value `http.Client` uses `http.DefaultTransport`, whose connection pool is process-global and keyed on `host:port`.  Reuse a port and a spec's first request can be handed a keep-alive socket to the *previous* spec's already-closed server.  It surfaces as an `EOF` out of a `BeforeEach`, pointing at nothing.  Give each fixture its own `&http.Transport{}` and call `CloseIdleConnections()` on teardown.  This trap belongs to the pinned-port shape alone: a server that stays up for the whole process never has a dead socket to hand out.
+
 #### Pragmatism: How Biloba Interacts with the DOM
 
 There's an additional approach Biloba takes to optimize for stability and performance.  When it comes to interacting with the DOM, Biloba favors pragmatism over realism.  
