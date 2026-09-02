@@ -1812,7 +1812,7 @@ var _ = Describe("DOM manipulators and matchers", func() {
 			b.WithTimeout(time.Millisecond*60).DragTo("#drag-src", "#non-existing")
 			ExpectFailures(SatisfyAll(
 				ContainSubstring("Timed out after"),
-				ContainSubstring("could not find DOM element matching target selector: #drag-src"),
+				ContainSubstring("could not find DOM element matching target selector: #non-existing; source: #drag-src"),
 			))
 		})
 
@@ -1823,7 +1823,7 @@ var _ = Describe("DOM manipulators and matchers", func() {
 
 		It("fails fast under Immediate() if the target element does not exist", func() {
 			b.Immediate().DragTo("#drag-src", "#non-existing")
-			ExpectFailures(ContainSubstring("could not find DOM element matching target selector: #drag-src"))
+			ExpectFailures(ContainSubstring("could not find DOM element matching target selector: #non-existing; source: #drag-src"))
 		})
 
 		It("is a hard error to configure the bare-matcher form", func() {

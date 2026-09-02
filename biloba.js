@@ -384,7 +384,12 @@ if (!window["_biloba"]) {
     })
     b.dragTo = one(b.isVisible, (src, targetSel) => {
         let tgt = sel(targetSel)
-        if (!tgt) return rErr("could not find DOM element matching target selector")
+        // dragTo is a one() handler keyed on the SOURCE selector, so whatever error this callback
+        // returns gets the source selector's annotation appended by one() (see one()'s comment above).
+        // notFound(targetSel, "target ") supplies the target's own annotation up front, and "; source"
+        // primes a label for the one()-appended trailing annotation, so the two selectors read as two
+        // distinct, clearly-labeled clauses instead of one selector silently overwriting the other.
+        if (!tgt) { let e = notFound(targetSel, "target "); e.error += "; source"; return e }
         let center = (el) => { let b = el.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2] }
         let [sx, sy] = center(src), [tx, ty] = center(tgt)
         let fire = (el, type, x, y, buttons) => {
