@@ -160,6 +160,10 @@ Eventually(".figure").Should(b.HaveScreenshot("figure"))
 
 A *partly* clipped subject warns and still compares — capturing something that straddles a pane edge is occasionally deliberate. An `overflow: hidden` ancestor that isn't cutting the subject off (a card clipping its own rounded corners) is not reported.
 
+**Triaging that partial-clip warning.** It reports how much was painted, not whether the rest could ever have been — and that's the difference between a fact about the design and a bug. Compare the subject's height against the pane's visible band (`b.GetBoundingBox` on each; `b.GetScrollOffset` on the pane says where it currently sits):
+- **Subject taller than the band** → no scroll position paints all of it. The warning is permanent and descriptive; capture a smaller subject, or accept the crop knowing what the baseline covers.
+- **Subject fits the band** → the missing part is reachable and the pane is just scrolled elsewhere. Fix it: `b.ScrollIntoView(subject, b.WithinScroller(pane))`, gate on `b.BeInViewport(b.Fully())`, and the warning goes away.
+
 **The poll protects the comparison, not the write.** An assertion re-captures every attempt and rides out a late change; a baseline write passes on the first settled capture and has no second chance. The settle defeats anything *periodic* but cannot see a one-shot change that hasn't started — three captures agree because nothing has happened yet. Fonts are handled (`document.fonts.ready` is awaited before every capture, on both paths); anything else that lands late is yours to gate before generating.
 
 **Scrollbars (not solved).** Overlay vs classic scrollbars change layout width, and that varies by platform, by OS setting, and on macOS by whether a mouse is attached. Prefer **element** captures over whole-page ones. If you need the page, hide them yourself: `::-webkit-scrollbar { display: none }` in the page, or `emulation.SetScrollbarsHidden(true)` via `b.Context`.

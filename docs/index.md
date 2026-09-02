@@ -3930,6 +3930,13 @@ Do what it says.  `b.ScrollIntoView` with `b.WithinScroller` scrolls the pane ra
 
 An `overflow: hidden` ancestor that isn't actually cutting the subject off — a card clipping its own rounded corners — is not reported.  The check is about what got painted, not about what could clip in principle.
 
+**Triaging a partial clip.**  The warning tells you *how much* was painted; it can't tell you whether the rest could ever have been, and that's the difference between a fact about your design and a bug.  Compare two numbers — the subject's own height, and the pane's visible band:
+
+- **Subject taller than the band.**  No scroll position paints all of it.  The warning will fire on every run forever, and it is describing the design rather than reporting a fault: capture a smaller subject, or accept the crop and know what the baseline covers.
+- **Subject fits in the band.**  The missing part *is* reachable — the pane is simply scrolled somewhere else.  That's the fixable case: `b.ScrollIntoView(subject, b.WithinScroller(pane))` before the capture, gate on `b.BeInViewport(b.Fully())`, and the warning goes away.
+
+`b.GetBoundingBox` on the subject and on the ancestor the warning names gives you both numbers, and `b.GetScrollOffset` on the ancestor tells you where the pane currently sits.
+
 #### Determinism
 
 A baseline is only as good as the page's ability to render the same pixels twice.  Biloba handles some of the usual obstacles for you; others it doesn't, and it's better to know which is which.
