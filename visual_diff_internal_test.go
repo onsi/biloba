@@ -421,11 +421,14 @@ var _ = ginkgo.Describe("the visual regression diff engine", ginkgo.Label("no-br
 			// and the dimensions survive the round trip exactly
 			gomega.Expect(d.ActualBounds).To(gomega.Equal(image.Rect(0, 0, 60, 40)))
 
-			// the mask really is maskFillColor, not just "something equal on both sides"
+			// the mask really is opaque mid-grey, not just "something equal on both sides".  The
+			// literal is spelled out rather than compared against maskFillColor: both sides would
+			// move together, so changing the constant - to a transparent colour, say - would leave
+			// this passing while claiming to have checked exactly that.
 			decoded, err := png.Decode(bytes.NewReader(maskedAct))
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
 			r, gr, b, a := decoded.At(15, 15).RGBA()
-			gomega.Expect([4]uint8{uint8(r >> 8), uint8(gr >> 8), uint8(b >> 8), uint8(a >> 8)}).To(gomega.Equal(maskFillColor))
+			gomega.Expect([4]uint8{uint8(r >> 8), uint8(gr >> 8), uint8(b >> 8), uint8(a >> 8)}).To(gomega.Equal([4]uint8{0x80, 0x80, 0x80, 0xff}))
 		})
 
 		ginkgo.It("treats an out-of-bounds mask rect as a no-op and clips a straddling one", func() {
