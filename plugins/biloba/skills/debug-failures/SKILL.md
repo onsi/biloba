@@ -108,7 +108,7 @@ Every command Biloba sends Chrome runs under a deadline, so an unresponsive brow
 | First line | Means | Do |
 |---|---|---|
 | `deadline_exceeded: Chrome did not <command> within 30s` | Chrome accepted the command and never answered | Chrome is wedged or the box is badly overloaded — look for a long synchronous script in the page, or too many parallel processes for the machine |
-| `page_crashed: this tab's renderer crashed` | Chrome reported the crash — it does so on macOS but not on Linux, where the same crash reads as `deadline_exceeded` against a tab that stopped answering | usually the page itself (OOM, a bad WASM/canvas path). Recoverable: navigate the tab to get a fresh renderer, or move to `b.NewTab()` |
+| `page_crashed: this tab's renderer crashed` | Chrome reported the crash (promptly on macOS, several seconds later on Linux — a command in between reports `deadline_exceeded` instead) | usually the page itself (OOM, a bad WASM/canvas path). Navigating clears the crash and gets a fresh renderer on macOS; on Linux the tab has stayed dead in our testing, so continue on `b.NewTab()` rather than trusting the crashed one |
 | `browser_gone: the connection to Chrome is closed` | the browser process exited — crashed, OOM-killed, or reaped | not recoverable; the rest of the suite will fail too. Check the machine's memory and whether anything is killing Chrome |
 
 The deadline is generous on purpose (a healthy command answers in milliseconds), so hitting it is a real signal, not a tight-timeout artifact. `WithTimeout` doesn't move it: that knob bounds how long Biloba keeps *retrying*, which is a different question from whether Chrome is alive.

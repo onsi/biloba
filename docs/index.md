@@ -427,9 +427,9 @@ browser_gone: the connection to Chrome is closed, so Chrome could not capture th
 The browser process is no longer there - it crashed, ran out of memory, or was killed.
 ```
 
-A crashed renderer is recoverable — navigating the tab gives it a fresh one, and Biloba clears the crash when that happens.  A gone browser is not.
+Biloba clears the crash when the tab navigates again, on the assumption that the navigation gets a fresh renderer.  Whether it actually does is up to Chrome, and it varies: on macOS the tab comes back, while on Linux the crashed tab has stayed dead in our testing — later commands on it keep failing.  So treat a crashed tab as probably lost rather than reliably recoverable: run the rest of the spec on a new tab (`b.NewTab()`), which is always sound.  A gone browser is not recoverable at all.
 
-`page_crashed` depends on Chrome announcing the crash, and Chrome is not consistent about that: the announcement arrives on macOS and does not on Linux, whether the renderer is killed through CDP or by navigating to `chrome://crash`.  So treat `page_crashed` as the better message when you get it, not as the message you will always get — on Linux the same crash surfaces as `deadline_exceeded` against a tab that has stopped answering.  Either way the spec fails in bounded time and the tab recovers on the next navigation, which is the part Biloba can promise.
+The timing of the announcement varies too — prompt on macOS, several seconds later on Linux — so a command issued immediately after the crash may report `deadline_exceeded` before Chrome has said `page_crashed`.  Both are bounded and both name a cause, which is the part Biloba guarantees; which one you see is Chrome's call.
 
 You don't configure the backstop and it isn't one of the four poll-config knobs below.  `WithTimeout` still means "how long to keep retrying", which is a different question from "is Chrome still alive": a command that outruns a tight `WithTimeout` on a loaded machine still gets to finish, exactly as it did before.  The one place the two coincide is a [waiting command](#which-methods-honor-which-knobs) like `Navigate`, where the bounded wait *is* your wait — and there `WithTimeout` overrides the deadline, as it always has.
 

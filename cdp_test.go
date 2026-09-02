@@ -1,11 +1,8 @@
 package biloba_test
 
 import (
-	"context"
 	"time"
 
-	"github.com/chromedp/cdproto/page"
-	"github.com/chromedp/chromedp"
 	"github.com/onsi/biloba"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -74,46 +71,19 @@ var _ = Describe("bounding the commands Biloba sends to Chrome", func() {
 		})
 	})
 
-	// What this asserts, and what it deliberately does not.
+	// There is deliberately no spec here that crashes a real renderer, and the reason is worth keeping.
 	//
-	// A dead renderer must fail the spec in bounded time with an error that says what to do - that is
-	// Biloba's job, and it holds on every platform.  WHICH diagnosis comes back is Chrome's call:
-	// page_crashed needs Chrome to announce the crash, and it does so on macOS but not on Linux, where
-	// neither Page.crash nor a chrome://crash navigation produces inspector.targetCrashed or
-	// target.targetCrashed on either the page session or the browser connection, with the Inspector
-	// domain enabled.  Demanding the crash wording here would pin a Chrome behaviour that does not
-	// exist on the platform most suites run on.  The vocabulary is asserted in cdp_internal_test.go,
-	// where the flag can be set directly and the verdict is deterministic everywhere.
-	Describe("when a tab's renderer crashes", func() {
-		It("fails in bounded time with something actionable, and recovers on the next navigation", func() {
-			tab := b.NewTab()
-			tab.Navigate(fixtureServer + "/dom.html")
-			Eventually("#hello").Should(tab.Exist())
-
-			// Keep the fallback bound short: if a command on a crashed renderer blocks rather than
-			// erroring, this spec should still finish in milliseconds.
-			DeferCleanup(biloba.SetCDPTimeoutsForTest(500*time.Millisecond, 500*time.Millisecond))
-
-			// Page.crash never answers - the renderer dies before it can reply - so it goes out on a
-			// context we throw away rather than one we wait on.  The tab lives in its own browser
-			// context, so no other tab (or parallel process) shares the renderer being killed.
-			crashCtx, cancel := context.WithTimeout(tab.Context, 500*time.Millisecond)
-			defer cancel()
-			chromedp.Run(crashCtx, page.Crash())
-
-			start := time.Now()
-			_, err := tab.RunErr("1")
-			Expect(err).To(HaveOccurred(), "a command against a dead renderer must fail rather than hang")
-			Expect(time.Since(start)).To(BeNumerically("<", 5*time.Second), "and it must fail at the backstop, not wait out the suite")
-			Expect(err).To(MatchError(SatisfyAny(
-				ContainSubstring("page_crashed: this tab's renderer crashed"),
-				ContainSubstring("deadline_exceeded: Chrome did not"),
-			)), "whichever it is, it names a cause rather than surfacing a bare context error")
-
-			By("a navigation gives the target a fresh renderer, and the tab is usable again")
-			tab.Navigate(fixtureServer + "/dom.html")
-			Expect(tab.PageCrashedForTest()).To(BeFalse(), "any crash Chrome did report is cleared by the navigation")
-			Eventually("#hello").Should(tab.Exist())
-		})
-	})
+	// Two things about a crashed tab turn out to be Chrome's behaviour rather than Biloba's, and they
+	// differ by platform.  Chrome announces the crash late on Linux and promptly on macOS - late enough
+	// that a three-second sample sees nothing.  And the tab does not come back: on Linux a navigation
+	// after the crash does not get a fresh renderer, so every later command on that tab fails, including
+	// the ones Prepare issues during teardown.  That last part is what rules the spec out.  A tab that
+	// cannot be recovered poisons the harness it was created in - gt.failures picks up the teardown
+	// failures and the next spec inherits them - which is precisely the class of suite-wide flake the
+	// rest of this session went to fix.
+	//
+	// So the crash path is covered where it can be covered honestly and cheaply: diagnoseCDPError's
+	// vocabulary in cdp_internal_test.go, where the flag is set directly and the verdict is identical on
+	// every platform, and the bounded-failure behaviour by the injected wedge above, which exercises the
+	// same runCDP deadline end-to-end against real Chrome without leaving a corpse behind.
 })
