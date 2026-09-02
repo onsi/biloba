@@ -121,20 +121,34 @@
             }, 40)
         }
 
-        var periodicTimer = null
+        var periodicObserver = null
 
-        // startPeriodicChurn() cycles #periodic through four shades every 40ms, so it repeats exactly
-        // every 160ms and never stops - which is roughly what a fixed 100ms capture interval samples
-        // at once the capture round trip is counted (see screenshotSettleStreak in visual.go for why
-        // the real schedule grows instead).  This is the page that has to keep failing to settle.
+        // startPeriodicChurn() makes #periodic repeat with a period of exactly two captures: it holds
+        // one shade for two captures, the other for the next two, forever.  That is the worst case a
+        // repeating page can present to the settle loop - every other adjacent pair of captures
+        // matches, and a check that stopped at two matching captures would call this settled - while
+        // never producing three in a row.  This is the page that has to keep failing to settle.
+        //
+        // The cycle advances on the captures rather than on a timer.  A wall-clock period only aliases
+        // with the captures if the capture round trip is the length it was when the period was picked,
+        // so a real-time cycle here would make the assertion a question of this machine's cadence; the
+        // capture round trip costs hundreds of milliseconds and varies by nearly as much.  Counting the
+        // <style id="_biloba-freeze"> Biloba injects for the duration of every capture counts captures
+        // instead, which is deterministic - see visual_sampling.html, which uses the same trick.
         // Started on demand - nothing else needs it running.
         function startPeriodicChurn() {
-            if (periodicTimer) return
-            var el = document.getElementById("periodic"), i = 0
-            var shades = ["#000000", "#444444", "#888888", "#cccccc"]
-            periodicTimer = setInterval(function () {
-                el.style.backgroundColor = shades[(i++) % shades.length]
-            }, 40)
+            if (periodicObserver) return
+            var el = document.getElementById("periodic"), captures = 0, wasFrozen = false
+            var shades = ["#000000", "#cccccc"]
+            periodicObserver = new MutationObserver(function () {
+                var frozen = !!document.getElementById("_biloba-freeze")
+                if (frozen === wasFrozen) return // the freeze coming back out again, or unrelated head churn
+                wasFrozen = frozen
+                if (!frozen) return
+                captures++
+                el.style.backgroundColor = shades[Math.floor((captures - 1) / 2) % shades.length]
+            })
+            periodicObserver.observe(document.head, { childList: true })
         }
 
         var ticks = 0

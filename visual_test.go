@@ -215,11 +215,12 @@ var _ = Describe("Visual assertions", func() {
 		})
 
 		It("is not fooled by a page that repeats on a period", func() {
-			// #periodic repeats every 160ms, which is what a fixed 100ms capture interval samples at
-			// once the capture round trip is counted: every pair of captures matches and the element
-			// reads as settled.  The gaps between captures grow by a different amount each time, and
-			// each of those amounts is less than a full period, so no two captures in a row can land on
-			// the same shade - never mind three.
+			// #periodic repeats with a period of two captures - it holds a shade for two captures and
+			// then swaps - so every other adjacent pair matches and a settle check that stopped at two
+			// would write this baseline.  Three in a row never happens, so the streak of three does not
+			// fall for it.  The cycle advances on the captures rather than on a wall-clock timer, which
+			// is what keeps this deterministic rather than a question of whether this machine's capture
+			// round trip happens to alias with the fixture's period.
 			b.Run("startPeriodicChurn()")
 			generate("#periodic", "periodic")
 			Ω(printed()).Should(ContainSubstring("The screenshot for periodic never settled"))
