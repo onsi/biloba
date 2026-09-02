@@ -112,6 +112,12 @@ func (b *Biloba) DetachedNodeNoteForTest() string {
 	return b.probes.renderDetachedNode()
 }
 
+// PollTrajectoryForTest exposes the poll-trajectory recorder's rendered value series - exactly what
+// attachFailureArtifactsIfFailed would put under "Poll trajectory" - for probe_trajectory_test.go.
+func (b *Biloba) PollTrajectoryForTest() string {
+	return b.probes.render()
+}
+
 // OccludedClicksNoteForTest exposes this tab's recorded occluded-click notes for interactions_test.go.
 func (b *Biloba) OccludedClicksNoteForTest() string {
 	return b.occlusions.render()

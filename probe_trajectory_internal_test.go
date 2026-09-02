@@ -22,6 +22,8 @@ func TestProbeRecorder(t *testing.T) {
 	for i := range 18 {
 		p.record("Run x", 587.0, at(float64(i)*0.11))
 	}
+	g.Expect(p.render()).To(BeEmpty(), "an unblamed series is never rendered")
+	p.blame("Run x")
 	out := p.render()
 	g.Expect(out).To(ContainSubstring("Probe: Run x"))
 	g.Expect(out).To(ContainSubstring("18 samples"))
@@ -33,6 +35,7 @@ func TestProbeRecorder(t *testing.T) {
 	p.record("Run a", 1.0, at(0))
 	p.record("Run a", 1.0, at(0.1))
 	p.record("Run b", 42.0, at(0.2))
+	p.blame("Run b")
 	out = p.render()
 	g.Expect(out).To(ContainSubstring("Probe: Run b"))
 	g.Expect(out).NotTo(ContainSubstring("Run a"))
@@ -43,6 +46,7 @@ func TestProbeRecorder(t *testing.T) {
 	for i, v := range []float64{587, 540, 300, 130} {
 		p.record("Run x", v, at(float64(i)*0.5))
 	}
+	p.blame("Run x")
 	g.Expect(p.render()).To(ContainSubstring("monotone"))
 	g.Expect(p.render()).NotTo(ContainSubstring("non-monotone"))
 
@@ -51,12 +55,14 @@ func TestProbeRecorder(t *testing.T) {
 	for i, v := range []float64{587, 130, 24, 300} {
 		p.record("Run x", v, at(float64(i)*0.5))
 	}
+	p.blame("Run x")
 	g.Expect(p.render()).To(ContainSubstring("non-monotone"))
 
 	// non-numeric series: no direction
 	p = &probeRecorder{}
 	p.record("Run x", "loading", at(0))
 	p.record("Run x", "ready", at(0.5))
+	p.blame("Run x")
 	out = p.render()
 	g.Expect(out).NotTo(ContainSubstring("monotone"))
 	g.Expect(out).NotTo(ContainSubstring("flat"))
@@ -66,9 +72,25 @@ func TestProbeRecorder(t *testing.T) {
 	for i := range maxProbeSegments + 10 {
 		p.record("Run x", float64(i), at(float64(i)*0.01))
 	}
+	p.blame("Run x")
 	out = p.render()
 	g.Expect(out).To(ContainSubstring("earlier value-changes elided"))
 	g.Expect(out).To(ContainSubstring(renderProbeValue(float64(maxProbeSegments + 9))))
+
+	// blame names ONE series: a series that is not the blamed one renders nothing, and a single sample
+	// never claims the "value never changed" diagnosis - it cannot tell that from "only read once"
+	p = &probeRecorder{}
+	p.record("GetJSValue window.ready", true, at(0))
+	p.blame("HaveProperty:innerText s#x") // some other read is the one that failed
+	g.Expect(p.render()).To(BeEmpty())
+	p.blame("GetJSValue window.ready")
+	out = p.render()
+	g.Expect(out).To(ContainSubstring("1 samples"))
+	g.Expect(out).NotTo(ContainSubstring("flat"))
+
+	// reset drops the series and the blame so neither leaks into the next spec
+	p.reset()
+	g.Expect(p.render()).To(BeEmpty())
 }
 
 func TestMatchTrail(t *testing.T) {
@@ -117,11 +139,12 @@ func TestMatchTrail(t *testing.T) {
 	p.recordMatch("s#a", "#a", true, at(0))
 	p.record("GetBoundingBox s#a", 3.0, at(0))
 	p.recordMatch("s#a", "#a", false, at(0.2))
+	p.blame("GetBoundingBox s#a")
 	g.Expect(p.renderDetachedNode()).To(ContainSubstring(`Selector "#a" matched 1×`))
 	g.Expect(p.render()).To(ContainSubstring("Probe: GetBoundingBox s#a"))
 
 	// reset drops the diagnosis so it can't leak into the next spec
-	p.resetMatch()
+	p.reset()
 	g.Expect(p.renderDetachedNode()).To(BeEmpty())
 }
 
@@ -157,12 +180,15 @@ func TestRecordProbeGating(t *testing.T) {
 
 	off := &Biloba{pollTrajectory: false, probes: &probeRecorder{}}
 	off.recordProbe("Run x", 1.0)
+	off.blameProbe("Run x")
 	g.Expect(off.probes.render()).To(BeEmpty())
 
 	on := &Biloba{pollTrajectory: true, probes: &probeRecorder{}}
 	on.recordProbe("Run x", 1.0)
+	on.blameProbe("Run x")
 	g.Expect(on.probes.render()).To(ContainSubstring("Probe: Run x"))
 
 	nilRec := &Biloba{pollTrajectory: true, probes: nil}
 	g.Expect(func() { nilRec.recordProbe("Run x", 1.0) }).NotTo(Panic())
+	g.Expect(func() { nilRec.blameProbe("Run x") }).NotTo(Panic())
 }

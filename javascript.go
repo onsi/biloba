@@ -33,14 +33,15 @@ func (b *Biloba) EvaluateTo(expected any) *ValueMatcher {
 	var data = map[string]any{}
 	var matcher = matcherOrEqual(expected)
 	data["Matcher"] = matcher
-	return capturableResult(gcustom.MakeMatcher(func(script string) (bool, error) {
+	return capturableResult(b.probing("EvaluateTo", gcustom.MakeMatcher(func(script string) (bool, error) {
 		r, err := b.RunErr(script)
 		if err != nil {
 			return false, fmt.Errorf("Failed to run script:\n%s\n\n%w", script, err)
 		}
 		data["Result"] = r
+		b.recordProbe(probeKey("EvaluateTo", script), r)
 		return matcher.Match(data["Result"])
-	}).WithTemplate("Return value for script:\n{{.Actual}}\nFailed with:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
+	}).WithTemplate("Return value for script:\n{{.Actual}}\nFailed with:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)), data)
 }
 
 /*
@@ -131,9 +132,7 @@ Read https://onsi.github.io/biloba/#running-arbitrary-javascript to learn more a
 func (b *Biloba) Run(script string, args ...any) any {
 	b.gt.Helper()
 	b.guardConfig("Run")
-	res := b.run(script, args...)
-	b.recordProbe("Run "+script, res)
-	return res
+	return b.run(script, args...)
 }
 
 // run is the unguarded substrate behind Run.  Internal callers (e.g. reloadBiloba on the polling hot
@@ -186,7 +185,6 @@ func (b *Biloba) RunAsync(script string, args ...any) any {
 	if err != nil {
 		b.gt.Fatalf("Failed to run async script:\n%s\n\n%s", script, err.Error())
 	}
-	b.recordProbe("RunAsync "+script, res)
 	return res
 }
 
@@ -260,7 +258,7 @@ func (b *Biloba) GetJSValue(expression string, args ...any) any {
 		b.recordProbe(probeKey("GetJSValue", expr), result)
 		return true, nil
 	}).WithMessage(fmt.Sprintf("evaluate %q to a defined value", expression))
-	b.pollOrImmediate(expression, matcher)
+	b.pollOrImmediate(expression, b.probing("GetJSValue", matcher))
 	return result
 }
 

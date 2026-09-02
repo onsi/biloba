@@ -162,14 +162,15 @@ func (b *Biloba) HaveCount(expected any) *ValueMatcher {
 	var data = map[string]any{}
 	var matcher = matcherOrEqual(expected)
 	data["Matcher"] = matcher
-	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(b.probing("HaveCount", gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("count", selector)
 		if r.Error() != nil {
 			return false, r.Error()
 		}
 		data["Result"] = r.ResultInt()
+		b.recordProbe(probeKey("HaveCount", selector), data["Result"])
 		return matcher.Match(data["Result"])
-	}).WithTemplate("HaveCount for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
+	}).WithTemplate("HaveCount for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)), data)
 }
 
 /*
@@ -188,14 +189,15 @@ func (b *Biloba) HaveDistinctCount(attribute string, expected any) *ValueMatcher
 	var data = map[string]any{"Attribute": attribute}
 	var matcher = matcherOrEqual(expected)
 	data["Matcher"] = matcher
-	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(b.probing("HaveDistinctCount:"+attribute, gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("distinctCountByAttr", selector, attribute)
 		if r.Error() != nil {
 			return false, r.Error()
 		}
 		data["Result"] = r.ResultInt()
+		b.recordProbe(probeKey("HaveDistinctCount:"+attribute, selector), data["Result"])
 		return matcher.Match(data["Result"])
-	}).WithTemplate("HaveDistinctCount \"{{.Data.Attribute}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
+	}).WithTemplate("HaveDistinctCount \"{{.Data.Attribute}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)), data)
 }
 
 /*
@@ -605,7 +607,7 @@ Read https://onsi.github.io/biloba/#properties to learn more about working with 
 */
 func (b *Biloba) HaveJSONAttribute(attribute string, matcher types.GomegaMatcher) *ValueMatcher {
 	data := map[string]any{"Attribute": attribute, "Matcher": matcher}
-	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(b.probing("HaveJSONAttribute:"+attribute, gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("getAttribute", selector, attribute)
 		if r.Error() != nil {
 			return false, r.Error()
@@ -619,8 +621,9 @@ func (b *Biloba) HaveJSONAttribute(attribute string, matcher types.GomegaMatcher
 			return false, fmt.Errorf("attribute %q is not valid JSON: %w", attribute, err)
 		}
 		data["Result"] = decoded
+		b.recordProbe(probeKey("HaveJSONAttribute:"+attribute, selector), decoded)
 		return matcher.Match(decoded)
-	}).WithTemplate("HaveJSONAttribute \"{{.Data.Attribute}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
+	}).WithTemplate("HaveJSONAttribute \"{{.Data.Attribute}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)), data)
 }
 
 /*
@@ -701,14 +704,15 @@ func (b *Biloba) HaveProperty(property string, expected ...any) *ValueMatcher {
 	} else {
 		var matcher = matcherOrEqual(expected[0])
 		data["Matcher"] = matcher
-		return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return capturableResult(b.probing("HaveProperty:"+property, gcustom.MakeMatcher(func(selector any) (bool, error) {
 			r := b.runBilobaHandler("getProperty", selector, property)
 			if r.Error() != nil {
 				return false, r.Error()
 			}
 			data["Result"] = r.Result
+			b.recordProbe(probeKey("HaveProperty:"+property, selector), r.Result)
 			return matcher.Match(data["Result"])
-		}).WithTemplate("HaveProperty \"{{.Data.Property}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
+		}).WithTemplate("HaveProperty \"{{.Data.Property}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)), data)
 	}
 }
 
@@ -784,12 +788,13 @@ func (b *Biloba) eachHaveProperty(label string, property string, convert func(an
 		}
 
 		data["Matcher"] = matcher
-		return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
+		return capturableResult(b.probing(label, gcustom.MakeMatcher(func(selector any) (bool, error) {
 			r := b.runBilobaHandler("getPropertyForEach", selector, property)
 			if r.Error() != nil {
 				return false, r.Error()
 			}
 			data["Result"] = decode(r.Result)
+			b.recordProbe(probeKey(label, selector), data["Result"])
 			// Fail (with a clear message) on zero matches before handing the empty slice to the
 			// value matcher - otherwise a matcher like BeEmpty() would vacuously pass, and the rest
 			// would report a confusing slice-length mismatch instead of "no elements matched".
@@ -799,7 +804,7 @@ func (b *Biloba) eachHaveProperty(label string, property string, convert func(an
 			}
 			data["Empty"] = false
 			return matcher.Match(data["Result"])
-		}).WithTemplate("{{if .Data.Empty}}"+eachEmptyTemplate+"{{else}}{{.Data.Label}} for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}{{end}}", data), data)
+		}).WithTemplate("{{if .Data.Empty}}"+eachEmptyTemplate+"{{else}}{{.Data.Label}} for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}{{end}}", data)), data)
 	}
 }
 
@@ -1087,14 +1092,15 @@ func (b *Biloba) HaveValue(expected any) *ValueMatcher {
 	var data = map[string]any{}
 	var matcher = matcherOrEqual(expected)
 	data["Matcher"] = matcher
-	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(b.probing("HaveValue", gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("getValue", selector)
 		if r.Error() != nil {
 			return false, r.Error()
 		}
 		data["Result"] = r.Result
+		b.recordProbe(probeKey("HaveValue", selector), r.Result)
 		return matcher.Match(data["Result"])
-	}).WithTemplate("HaveValue for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
+	}).WithTemplate("HaveValue for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)), data)
 }
 
 /*
@@ -1274,14 +1280,15 @@ func (b *Biloba) HaveClass(expected string) *ValueMatcher {
 	var data = map[string]any{}
 	var matcher = gomega.ContainElement(expected)
 	data["Matcher"] = matcher
-	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(b.probing("HaveClass", gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("getProperty", selector, "classList")
 		if r.Error() != nil {
 			return false, r.Error()
 		}
 		data["Result"] = r.ResultStringSlice()
+		b.recordProbe(probeKey("HaveClass", selector), data["Result"])
 		return matcher.Match(data["Result"])
-	}).WithTemplate("HaveClass for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
+	}).WithTemplate("HaveClass for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)), data)
 }
 
 /*
@@ -1295,19 +1302,20 @@ func (b *Biloba) EachHaveClass(expected string) *ValueMatcher {
 	var data = map[string]any{}
 	var matcher = gomega.HaveEach(gomega.ContainElement(expected))
 	data["Matcher"] = matcher
-	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(b.probing("EachHaveClass", gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("getPropertyForEach", selector, "classList")
 		if r.Error() != nil {
 			return false, r.Error()
 		}
 		data["Result"] = r.Result
+		b.recordProbe(probeKey("EachHaveClass", selector), r.Result)
 		if classLists, ok := r.Result.([]any); ok && len(classLists) == 0 {
 			data["Empty"] = true
 			return false, nil // fail (not vacuously pass) when no elements match
 		}
 		data["Empty"] = false
 		return matcher.Match(data["Result"])
-	}).WithTemplate("{{if .Data.Empty}}"+eachEmptyTemplate+"{{else}}EachHaveClass for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}{{end}}", data), data)
+	}).WithTemplate("{{if .Data.Empty}}"+eachEmptyTemplate+"{{else}}EachHaveClass for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}{{end}}", data)), data)
 }
 
 /*
@@ -1328,14 +1336,15 @@ func (b *Biloba) HaveText(expected any) *ValueMatcher {
 	var data = map[string]any{}
 	var matcher = matcherOrEqual(expected)
 	data["Matcher"] = matcher
-	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(b.probing("HaveText", gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("getProperty", selector, "innerText")
 		if r.Error() != nil {
 			return false, r.Error()
 		}
 		data["Result"] = normalizeWhitespace(r.ResultString())
+		b.recordProbe(probeKey("HaveText", selector), data["Result"])
 		return matcher.Match(data["Result"])
-	}).WithTemplate("HaveText for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
+	}).WithTemplate("HaveText for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)), data)
 }
 
 /*
@@ -1380,14 +1389,15 @@ func (b *Biloba) HaveAttribute(name string, expected ...any) *ValueMatcher {
 	}
 	var matcher = matcherOrEqual(expected[0])
 	data["Matcher"] = matcher
-	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(b.probing("HaveAttribute:"+name, gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("getAttribute", selector, name)
 		if r.Error() != nil {
 			return false, r.Error()
 		}
 		data["Result"] = r.Result
+		b.recordProbe(probeKey("HaveAttribute:"+name, selector), r.Result)
 		return matcher.Match(data["Result"])
-	}).WithTemplate("HaveAttribute \"{{.Data.Name}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
+	}).WithTemplate("HaveAttribute \"{{.Data.Name}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)), data)
 }
 
 /*
@@ -1444,14 +1454,15 @@ func (b *Biloba) HaveComputedStyle(property string, expected any) *ValueMatcher 
 	data["Property"] = property
 	var matcher = matcherOrEqual(expected)
 	data["Matcher"] = matcher
-	return capturableResult(gcustom.MakeMatcher(func(selector any) (bool, error) {
+	return capturableResult(b.probing("HaveComputedStyle:"+property, gcustom.MakeMatcher(func(selector any) (bool, error) {
 		r := b.runBilobaHandler("getComputedStyle", selector, property)
 		if r.Error() != nil {
 			return false, r.Error()
 		}
 		data["Result"] = r.Result
+		b.recordProbe(probeKey("HaveComputedStyle:"+property, selector), r.Result)
 		return matcher.Match(data["Result"])
-	}).WithTemplate("HaveComputedStyle \"{{.Data.Property}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data), data)
+	}).WithTemplate("HaveComputedStyle \"{{.Data.Property}}\" for {{.Actual}}:\n{{if .Failure}}{{.Data.Matcher.FailureMessage .Data.Result}}{{else}}{{.Data.Matcher.NegatedFailureMessage .Data.Result}}{{end}}", data)), data)
 }
 
 /*

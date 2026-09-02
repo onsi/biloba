@@ -23,20 +23,22 @@ So an agent or CI run needs nothing: `ginkgo -r -p`, then read the outline and t
 
 1. **Console errors** — any `console.error`/`console.assert` before the failure, replayed under "Console errors logged before this failure" at the **top** of the failure block. On a JS crash (a React error boundary) this is the root cause.
 2. **`⚠` diagnostic notes** — they name the cause outright.
-3. **Poll trajectory** — what the timed-out read did over the whole deadline.
+3. **Poll trajectory** — what the read you failed on did over its whole deadline (absent when the failure had no value read behind it).
 4. **Visual diagnosis** — only on a failed `b.HaveScreenshot`: pixel counts plus the *shape* of the change, in words, before you open any image.
 5. **Screenshot** — `Read` the printed PNG path.
 6. **DOM outline** — "DOM Outline for: '<title>'": indented DOM, `<script>/<style>/<svg>` bodies pruned, whitespace collapsed, capped at 32 KB. Past `... [truncated]`? Raise the cap with **`BILOBA_OUTLINE_MAX`** — a byte count (`=131072`), or `0`/`off` for the whole DOM.
 
 ### Poll trajectory
 
-When an `Eventually` over a polled read (`b.Run`/`b.RunAsync`, a value getter, a geometry getter) times out, Biloba attaches the `(elapsed, value)` series. Gomega's `Timed out … Expected <120>` shows only the final value; the shape is the diagnosis:
+When an `Eventually` over a read that observes and compares a value (`b.HaveInnerText`/`b.HaveCount`/any value matcher, a geometry matcher, `b.EvaluateTo`, `b.GetJSValue`) times out, Biloba attaches the `(elapsed, value)` series **of that assertion**. Gomega's `Timed out … Expected <120>` shows only the final value; the shape is the diagnosis:
 
 | Shape | Means | Do |
 |---|---|---|
 | **flat** (one row, `held ×N`) | the product computed the value once and never reconciled | fix the product (`biloba:flaky-specs` §4) — a wider timeout won't help |
 | **monotone staircase** | latency; it nearly made it | widen the timeout |
 | **dip-then-rebound** | a late reflow shoved it back | settle layout before asserting |
+
+**No entry is a normal outcome, not a bug.** The series is claimed by the matcher Gomega asked for a failure message, so an entry always describes the read you failed on. Reads that passed, `b.Run` setup lines, and failures with no value read underneath (a `b.Click` whose selector never matched, a getter whose value was never there — that one gets the `AllowMissing` enrichment instead) simply produce nothing. Don't read a missing trajectory as a signal; go to the outline and the screenshot. To get a trajectory for an arbitrary expression, poll it with `b.EvaluateTo`/`b.GetJSValue` rather than wrapping `b.Run` in your own `Eventually` — Biloba only records reads it owns.
 
 On by default; `BilobaConfigPollTrajectory(false)` disables it (and the detached-node signal).
 

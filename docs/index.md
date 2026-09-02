@@ -3995,16 +3995,18 @@ When you're debugging a failure whose interesting DOM lands past the cap, overri
 | `587 → 540 → … → 130`, didn't quite land | latency — it nearly made it | widen the timeout |
 | reached `~24`, then rebounded to `300` | a late reflow shoved it back | bounded `ResizeObserver` |
 
-The *trajectory* is the diagnosis, so Biloba records it.  Every polled read — a [`b.Run`](#running-arbitrary-javascript)/`b.RunAsync` evaluation, a value getter like [`b.GetProperty`](#properties), or a [geometry getter](#geometry) — appends its `(elapsed, value)` to a small per-tab recorder keyed by the probe.  Biloba tracks the **most recently polled entity** (when the probe changes, the prior series resolved and moved on), and on failure attaches that series, run-length-collapsed so a string of identical values folds into one row:
+The *trajectory* is the diagnosis, so Biloba records it.  Every read that observes a value and compares it — a value matcher like [`b.HaveInnerText`](#working-with-the-dom) or [`b.HaveCount`](#working-with-the-dom), a [geometry matcher](#geometry), [`b.EvaluateTo`](#running-arbitrary-javascript), [`b.GetJSValue`](#running-arbitrary-javascript) — appends its `(elapsed, value)` to a small per-tab recorder keyed by the probe.  On failure Biloba attaches the series, run-length-collapsed so a string of identical values folds into one row:
 
 ```
 Poll trajectory
-Probe: Run document.querySelector("#card").getBoundingClientRect().top
+Probe: EvaluateTo document.querySelector("#card").getBoundingClientRect().top
 18 samples over 2.00s, 1 distinct values — flat (value never changed: the page is not re-evaluating this probe):
   +0.00s  587   (held ×18 through +2.00s)
 ```
 
 A flat line points straight at "compute-once product bug, no source-reading required"; a monotone staircase reads as latency; a dip-then-climb reveals the late reflow.  This is **on by default** and rides the same failure-artifact hook as the outline and screenshot (so a passing spec pays only a few nanoseconds per poll to record, and emits nothing).  Turn it off with `BilobaConfigPollTrajectory(false)`.
+
+**The entry always belongs to the assertion that failed.**  Biloba claims the series at the moment Gomega asks the failing matcher for its message, so what you read is what *that* read did over its own deadline — never a leftover from an earlier one.  The corollary is that plenty of failures get no `Poll trajectory` entry at all: a read that passed leaves nothing behind, and neither does a failure with no polled value read underneath it — a `b.Click` that timed out because the selector never matched, a [`b.Run`](#running-arbitrary-javascript) setup line, a getter that timed out because the value was never there to read (the [`AllowMissing` enrichment](#outline) covers that one).  A missing entry means there was no value trajectory to show, not that something went wrong; an entry describing a read you did not fail on would be worse than silence, so Biloba does not print one.  To watch an arbitrary expression over a deadline and get a trajectory when it times out, poll it with `b.EvaluateTo` (or `b.GetJSValue`) rather than hand-rolling an `Eventually` around `b.Run`.
 
 **Detached-node signal.**  "The selector never matched" and "the selector matched, and then the node was yanked out from under it" produce the *same* timeout - and they have completely different fixes.  So when a poll's selector matched at least once and then stopped, Biloba says so:
 

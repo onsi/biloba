@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/onsi/gomega/types"
 )
 
 // maxProbeSegments bounds the number of distinct-value segments kept for the current series.  Equal
@@ -25,16 +27,22 @@ type probeSegment struct {
 }
 
 // probeRecorder records the (elapsed, value) trajectory of the most recently polled entity for one tab.
-// It deliberately tracks a SINGLE series keyed by the probe (a Run script, or a getter's method+selector):
-// when the key changes, the prior series is one that already resolved and moved on, so it is superseded.
-// On failure attachFailureArtifactsIfFailed renders whatever series is current - almost always the
-// Eventually that actually timed out.  Shared across a tab's clone-with-a-flag views via a pointer.
+// It deliberately tracks a SINGLE series keyed by the probe (a getter/matcher's method+selector): when
+// the key changes, the prior series is one that already resolved and moved on, so it is superseded.
+//
+// A current series is not the same thing as the series that FAILED, though, and rendering the former as
+// the latter is worse than rendering nothing: a read that passed, attached to an unrelated failure with
+// the "value never changed" diagnosis over it, is a confident wrong answer.  So a series is rendered
+// only once it has been BLAMED - see probingMatcher, which stamps blame at the one moment Gomega tells
+// Biloba an assertion failed.  No blame, no entry.  Shared across a tab's clone-with-a-flag views via a
+// pointer.
 type probeRecorder struct {
 	mu       sync.Mutex
 	key      string
 	start    time.Time
 	segments []probeSegment
 	dropped  int
+	blamed   string // the key of the read whose assertion failed; only that series is ever rendered
 	match    matchTrail
 }
 
@@ -56,11 +64,61 @@ type matchTrail struct {
 
 // recordProbe appends value to this tab's trajectory under key, when the suite has opted into
 // trajectory recording (BilobaConfigPollTrajectory).  It is a cheap no-op otherwise.
+//
+// Recording alone never surfaces anything: the series is rendered only if the assertion polling this
+// same key goes on to fail, which is what [Biloba.probing] arranges.  So every read that records must
+// also be wrapped in b.probing(<the same method name>, ...) - otherwise its trajectory is dead weight.
 func (b *Biloba) recordProbe(key string, value any) {
 	if !b.pollTrajectory || b.probes == nil {
 		return
 	}
 	b.probes.record(key, value, time.Now())
+}
+
+// probingMatcher wraps a matcher that records a trajectory and stamps the recorder with blame when
+// Gomega asks it for a failure message.  Gomega asks exactly once, at the moment an assertion fails
+// (FailureMessage for a failed Should, NegatedFailureMessage for a failed ShouldNot) and never when one
+// passes - which is the only signal Biloba gets that THIS read is the one the spec died on.  Without it
+// the recorder could only offer "the most recent series", and a read that resolved and moved on would be
+// attributed to whatever failed next.
+type probingMatcher struct {
+	types.GomegaMatcher
+	b      *Biloba
+	method string
+}
+
+func (p probingMatcher) FailureMessage(actual any) string {
+	p.b.blameProbe(probeKey(p.method, actual))
+	return p.GomegaMatcher.FailureMessage(actual)
+}
+
+func (p probingMatcher) NegatedFailureMessage(actual any) string {
+	p.b.blameProbe(probeKey(p.method, actual))
+	return p.GomegaMatcher.NegatedFailureMessage(actual)
+}
+
+// probing wraps matcher so that a failed assertion over it claims this tab's trajectory for method +
+// the selector it was polled with - the same key the matcher records under.  It is the identity when
+// trajectory recording is off, so a suite that opted out pays nothing.
+func (b *Biloba) probing(method string, matcher types.GomegaMatcher) types.GomegaMatcher {
+	if !b.pollTrajectory || b.probes == nil {
+		return matcher
+	}
+	return probingMatcher{GomegaMatcher: matcher, b: b, method: method}
+}
+
+// blameProbe marks key as the read whose assertion failed.
+func (b *Biloba) blameProbe(key string) {
+	if !b.pollTrajectory || b.probes == nil {
+		return
+	}
+	b.probes.blame(key)
+}
+
+func (p *probeRecorder) blame(key string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.blamed = key
 }
 
 func (p *probeRecorder) record(key string, value any, now time.Time) {
@@ -130,18 +188,21 @@ func (p *probeRecorder) renderDetachedNode() string {
 		p.match.display, p.match.matched, roundDuration(p.match.firstAt), roundDuration(p.match.lastAt))
 }
 
-// resetMatch drops the match trail so a diagnosis can't leak from one spec into the next.
-func (p *probeRecorder) resetMatch() {
+// reset drops both series - the value trajectory and the match trail - along with the blame stamp, so a
+// diagnosis can't leak from one spec into the next.
+func (p *probeRecorder) reset() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.key, p.start, p.segments, p.dropped, p.blamed = "", time.Time{}, nil, 0, ""
 	p.match = matchTrail{}
 }
 
-// render returns the human-readable trajectory for the current series, or "" when nothing was recorded.
+// render returns the human-readable trajectory for the current series, or "" when nothing was recorded
+// or when the current series is not the one that failed (see probeRecorder's blame stamp).
 func (p *probeRecorder) render() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if len(p.segments) == 0 {
+	if len(p.segments) == 0 || p.blamed == "" || p.blamed != p.key {
 		return ""
 	}
 
@@ -153,7 +214,7 @@ func (p *probeRecorder) render() string {
 
 	out := &strings.Builder{}
 	fmt.Fprintf(out, "Probe: %s\n", p.key)
-	fmt.Fprintf(out, "%d samples over %ss, %d distinct values%s:\n", total, roundDuration(last.lastAt), len(p.segments)+p.dropped, probeShape(p.segments))
+	fmt.Fprintf(out, "%d samples over %ss, %d distinct values%s:\n", total, roundDuration(last.lastAt), len(p.segments)+p.dropped, probeShape(p.segments, total))
 	if p.dropped > 0 {
 		fmt.Fprintf(out, "  (%d earlier value-changes elided)\n", p.dropped)
 	}
@@ -171,8 +232,12 @@ func (p *probeRecorder) render() string {
 // segment that never changed = the product computed once and never reconciled; a monotone approach =
 // latency (it was getting there); a non-monotone series = a late reflow/rebound shoved it back.  Only
 // emitted for numeric series (where direction is meaningful).
-func probeShape(segments []probeSegment) string {
+func probeShape(segments []probeSegment, total int) string {
 	if len(segments) == 1 {
+		if total < 2 {
+			// one sample is not a trajectory: it cannot tell "never changed" from "only read once"
+			return ""
+		}
 		return " — flat (value never changed: the page is not re-evaluating this probe)"
 	}
 	nums := make([]float64, 0, len(segments))
@@ -224,8 +289,9 @@ func roundDuration(d time.Duration) string {
 	return strconv.FormatFloat(d.Seconds(), 'f', 2, 64)
 }
 
-// resetPollDiagnostics clears the per-spec poll diagnostics - the match trail behind the
-// detached-node signal, and the occluded-click ring - across the root tab and every registered tab.
+// resetPollDiagnostics clears the per-spec poll diagnostics - the value trajectory and the match trail
+// behind the detached-node signal, and the occluded-click ring - across the root tab and every
+// registered tab.
 // attachFailureArtifactsIfFailed calls it on the way out of every spec (pass or fail).  It walks the
 // registered-tab map rather than AllTabs() deliberately: AllTabs costs a CDP round-trip, and this
 // runs on the happy path too.
@@ -243,7 +309,7 @@ func (b *Biloba) resetPollDiagnostics() {
 	root.lock.Unlock()
 	for _, tab := range tabs {
 		if tab.probes != nil {
-			tab.probes.resetMatch()
+			tab.probes.reset()
 		}
 		if tab.occlusions != nil {
 			tab.occlusions.reset()

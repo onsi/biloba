@@ -447,9 +447,9 @@ func BilobaConfigFailureOutlines(enabled ...bool) func(*Biloba) {
 }
 
 /*
-Pass BilobaConfigPollTrajectory to [ConnectToChrome] to control whether Biloba records the (elapsed, value) trajectory of polled reads and attaches the most-recent series to the failure block.
+Pass BilobaConfigPollTrajectory to [ConnectToChrome] to control whether Biloba records the (elapsed, value) trajectory of polled reads and attaches the failing read's series to the failure block.
 
-When an Eventually(...) over a polled read times out, the trajectory is the diagnosis: a flat line means the product computed a value once and never reconciled (a product bug, not a short timeout); a monotone approach means latency (it nearly made it); a dip-then-rebound means a late reflow shoved it back.  Biloba records the trajectory of the most-recently-polled entity (a [Biloba.Run]/[Biloba.RunAsync] script, or a value/geometry getter) and, on failure, attaches it run-length-collapsed so equal values fold into one row.
+When an Eventually(...) over a polled read times out, the trajectory is the diagnosis: a flat line means the product computed a value once and never reconciled (a product bug, not a short timeout); a monotone approach means latency (it nearly made it); a dip-then-rebound means a late reflow shoved it back.  Biloba records the trajectory of every read that observes a value and compares it (a value matcher like [Biloba.HaveInnerText], a geometry matcher, [Biloba.EvaluateTo], [Biloba.GetJSValue]) and attaches the series belonging to the assertion that actually failed, run-length-collapsed so equal values fold into one row.  A read that passed - or a failure with no polled read behind it - gets no entry at all: an unrelated trajectory would be worse than none.
 
 It is on by default; BilobaConfigPollTrajectory(false) turns it off.
 
@@ -894,7 +894,7 @@ type Biloba struct {
 	colorSchemeEmulated *bool
 
 	// pollTrajectory opts a suite into recording the (elapsed, value) trajectory of polled reads and
-	// attaching the most-recent series on failure (see BilobaConfigPollTrajectory).  Off by default.
+	// attaching the failing read's series on failure (see BilobaConfigPollTrajectory).  On by default.
 	pollTrajectory bool
 	probes         *probeRecorder // the most-recent-polled-entity trajectory recorder for this tab
 
