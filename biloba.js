@@ -234,7 +234,10 @@ if (!window["_biloba"]) {
     // found rides along on every one()/poll() response: it reports whether the selector resolved on
     // THIS attempt, independent of whether the operation then succeeded.  The Go side folds it into the
     // poll-trajectory recorder so a failure can distinguish "never matched" from "matched, then stopped
-    // matching" (the detached-node signature).  Purely diagnostic - nothing branches on it.
+    // matching" (the detached-node signature), and HaveProperty's presence-only form branches on it to
+    // rebuild the missing-selector error a poll()-based response would otherwise swallow.  Dropping
+    // `found` from a poll() handler's response changes which selector-not-found errors surface on the
+    // Go side, not just diagnostics.
     let withFound = (result, found) => { result.found = found; return result }
     // ann renders a selector the way a failure message should show it: the "s"/"x"/"a" encoding prefix
     // dropped, introduced by a colon so it reads as a trailing clause.

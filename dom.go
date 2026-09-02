@@ -18,8 +18,10 @@ type bilobaJSResponse struct {
 	Result  any    `json:"result"`
 	// Found is the presence axis biloba.js's one()/poll() combinators report: did the selector resolve
 	// on this attempt, regardless of whether the operation then succeeded?  nil means the handler
-	// doesn't report it (the each()/snapshot family).  Purely diagnostic - it feeds the poll-trajectory
-	// recorder's detached-node signal; nothing branches on it.
+	// doesn't report it (the each()/snapshot family).  It feeds the poll-trajectory recorder's
+	// detached-node signal, and HaveProperty's presence-only form (no expected args) branches on it
+	// directly to reconstruct the missing-selector error poll() would otherwise swallow - see
+	// notFoundSelectorError.
 	Found *bool `json:"found"`
 }
 
@@ -687,6 +689,8 @@ func (b *Biloba) HaveProperty(property string, expected ...any) *ValueMatcher {
 			if !r.Success {
 				delete(data, "Result")
 				if r.Found != nil && !*r.Found {
+					// See notFoundSelectorError: poll() reports a missing element as a silent
+					// retry, so this reconstructs the error one()'s boolean handlers used to raise.
 					return false, notFoundSelectorError(selector)
 				}
 				return false, nil
