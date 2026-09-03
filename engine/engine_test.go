@@ -2,14 +2,18 @@ package engine_test
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +28,11 @@ func TestEngine(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Engine Suite")
 }
+
+var (
+	cacheRequests         atomic.Int64
+	cancelledDownloadHTTP atomic.Int64
+)
 
 var _ = Describe("runner-neutral engine primitives", func() {
 	It("embeds the canonical Biloba browser runtime without drift", func() {
@@ -302,6 +311,81 @@ func chromePath() string {
 
 var _ = BeforeSuite(func() {
 	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/socket" {
+			connection, readWriter, err := response.(http.Hijacker).Hijack()
+			if err != nil {
+				return
+			}
+			key := request.Header.Get("Sec-WebSocket-Key")
+			digest := sha1.Sum([]byte(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+			fmt.Fprintf(readWriter, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", base64.StdEncoding.EncodeToString(digest[:]))
+			_ = readWriter.Flush()
+			_ = connection.SetReadDeadline(time.Now().Add(5 * time.Second))
+			_, _ = connection.Read(make([]byte, 32))
+			_ = connection.Close()
+			return
+		}
+		if request.URL.Path == "/redirect" {
+			http.Redirect(response, request, "/slow", http.StatusFound)
+			return
+		}
+		if request.URL.Path == "/cacheable" {
+			cacheRequests.Add(1)
+			response.Header().Set("Cache-Control", "public, max-age=3600")
+			fmt.Fprint(response, "cacheable")
+			return
+		}
+		if request.URL.Path == "/slow-download" {
+			response.Header().Set("Content-Disposition", `attachment; filename="slow.bin"`)
+			response.Header().Set("Content-Type", "application/octet-stream")
+			flusher, _ := response.(http.Flusher)
+			chunk := make([]byte, 8192)
+			for range 100 {
+				select {
+				case <-request.Context().Done():
+					cancelledDownloadHTTP.Add(1)
+					return
+				default:
+				}
+				if _, err := response.Write(chunk); err != nil {
+					cancelledDownloadHTTP.Add(1)
+					return
+				}
+				flusher.Flush()
+				time.Sleep(10 * time.Millisecond)
+			}
+			return
+		}
+		if request.URL.Path == "/download" {
+			response.Header().Set("Content-Disposition", `attachment; filename="report.txt"`)
+			response.Header().Set("Content-Type", "text/plain")
+			fmt.Fprint(response, "downloaded report")
+			return
+		}
+		if request.URL.Path == "/echo" {
+			body, _ := io.ReadAll(request.Body)
+			response.Header().Set("X-Echo-Method", request.Method)
+			response.Header().Set("X-Echo-Header", request.Header.Get("X-Changed"))
+			fmt.Fprintf(response, "%s:%s", request.Method, body)
+			return
+		}
+		if request.URL.Path == "/modifiable" {
+			response.Header().Set("X-Original", "yes")
+			response.WriteHeader(http.StatusCreated)
+			fmt.Fprint(response, "original body")
+			return
+		}
+		if request.URL.Path == "/transformed" || request.URL.Path == "/replaced" {
+			response.Header().Add("X-Duplicate", "first")
+			response.Header().Add("X-Duplicate", "second")
+			fmt.Fprint(response, "original body")
+			return
+		}
+		if request.URL.Path == "/slow" {
+			time.Sleep(150 * time.Millisecond)
+			fmt.Fprint(response, "slow")
+			return
+		}
 		if request.URL.Path == "/not-found" {
 			response.WriteHeader(http.StatusNotFound)
 			return

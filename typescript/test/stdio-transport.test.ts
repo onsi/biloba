@@ -3,7 +3,7 @@ import {PassThrough} from "node:stream";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 
 import type {Request} from "../src/generated/protocol.js";
-import {encodeFrame, FrameDecoder} from "../src/internal/framing.js";
+import {encodeFrame, FrameDecoder, MAX_FRAME_SIZE} from "../src/internal/framing.js";
 import {StdioTransport} from "../src/internal/stdio-transport.js";
 
 describe("stdio transport", () => {
@@ -118,6 +118,23 @@ describe("stdio transport", () => {
     } finally {
       process.off("unhandledRejection", record);
     }
+  });
+
+  it("returns callback errors and substitutes an oversize callback result without desynchronizing", async () => {
+    transport.registerResponseCallback("throws", () => { throw new Error("transform exploded"); });
+    toClient.write(encodeFrame({event: "responseIntercepted", invocationId: "throw-1", callbackId: "throws", payload: {}}));
+    expect(await nextRequest(requests)).toEqual({id: 0, method: "callbackResult", params: {invocationId: "throw-1", error: "transform exploded"}});
+
+    transport.registerResponseCallback("oversize", () => ({bodyBase64: "x".repeat(MAX_FRAME_SIZE)}));
+    toClient.write(encodeFrame({event: "responseIntercepted", invocationId: "large-1", callbackId: "oversize", payload: {}}));
+    const fallback = await nextRequest(requests);
+    expect(fallback).toMatchObject({id: 0, method: "callbackResult", params: {invocationId: "large-1"}});
+    expect((fallback.params as {error?: string}).error).toContain("maximum");
+
+    const handshake = transport.handshake({protocolVersion: "1"});
+    const request = await nextRequest(requests);
+    toClient.write(encodeFrame({id: request.id, result: {protocolVersion: "1", capabilities: []}}));
+    await expect(handshake).resolves.toMatchObject({protocolVersion: "1"});
   });
 });
 

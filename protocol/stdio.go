@@ -2,10 +2,12 @@ package protocol
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -15,6 +17,8 @@ import (
 func ServeStdio(ctx context.Context, server *Server, input io.Reader, output io.Writer) error {
 	reader := NewFramedReader(input)
 	writer := NewFramedWriter(output)
+	callbacks := newStdioCallbackBroker(writer)
+	server.SetCallbackInvoker(callbacks)
 	ctx, cancelAll := context.WithCancel(ctx)
 	defer cancelAll()
 	type readResult struct {
@@ -46,6 +50,7 @@ func ServeStdio(ctx context.Context, server *Server, input io.Reader, output io.
 	active := map[uint64]context.CancelFunc{}
 	var requests sync.WaitGroup
 	defer func() {
+		callbacks.close()
 		activeMu.Lock()
 		for _, cancel := range active {
 			cancel()
@@ -94,6 +99,13 @@ func ServeStdio(ctx context.Context, server *Server, input io.Reader, output io.
 				if cancel != nil {
 					cancel()
 				}
+			}
+			continue
+		}
+		if request.Method == "callbackResult" && request.ID == 0 {
+			var result CallbackResultRequest
+			if decodeErr := decodeParams(request.Params, &result); decodeErr == nil {
+				callbacks.resolve(result)
 			}
 			continue
 		}
@@ -147,6 +159,88 @@ func ServeStdio(ctx context.Context, server *Server, input io.Reader, output io.
 				}
 			}
 		}(request)
+	}
+}
+
+type callbackAnswer struct {
+	result WireNetworkOverride
+	err    error
+}
+
+type stdioCallbackBroker struct {
+	writer  *FramedWriter
+	next    atomic.Uint64
+	mu      sync.Mutex
+	pending map[string]chan callbackAnswer
+	closed  bool
+}
+
+func newStdioCallbackBroker(writer *FramedWriter) *stdioCallbackBroker {
+	return &stdioCallbackBroker{writer: writer, pending: map[string]chan callbackAnswer{}}
+}
+
+func (b *stdioCallbackBroker) Invoke(ctx context.Context, invocation CallbackInvocation) (WireNetworkOverride, error) {
+	id := fmt.Sprintf("callback-%d", b.next.Add(1))
+	answer := make(chan callbackAnswer, 1)
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return WireNetworkOverride{}, errors.New("callback transport disconnected")
+	}
+	b.pending[id] = answer
+	b.mu.Unlock()
+	if err := b.writer.Write(EventFrame{Event: "responseIntercepted", InvocationID: id, CallbackID: invocation.CallbackID, Payload: invocation.Payload}); err != nil {
+		b.remove(id)
+		return WireNetworkOverride{}, fmt.Errorf("write callback invocation: %w", err)
+	}
+	select {
+	case value := <-answer:
+		return value.result, value.err
+	case <-ctx.Done():
+		if b.remove(id) {
+			return WireNetworkOverride{}, errors.New("callback transport disconnected")
+		}
+		return WireNetworkOverride{}, ctx.Err()
+	}
+}
+
+func (b *stdioCallbackBroker) resolve(result CallbackResultRequest) {
+	b.mu.Lock()
+	answer := b.pending[result.InvocationID]
+	delete(b.pending, result.InvocationID)
+	b.mu.Unlock()
+	if answer == nil {
+		return
+	}
+	if result.Error != "" {
+		answer <- callbackAnswer{err: errors.New(result.Error)}
+		return
+	}
+	var value WireNetworkOverride
+	if len(result.Result) > 0 {
+		if err := json.Unmarshal(result.Result, &value); err != nil {
+			answer <- callbackAnswer{err: fmt.Errorf("decode callback result: %w", err)}
+			return
+		}
+	}
+	answer <- callbackAnswer{result: value}
+}
+
+func (b *stdioCallbackBroker) remove(id string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.pending, id)
+	return b.closed
+}
+
+func (b *stdioCallbackBroker) close() {
+	b.mu.Lock()
+	b.closed = true
+	pending := b.pending
+	b.pending = map[string]chan callbackAnswer{}
+	b.mu.Unlock()
+	for _, answer := range pending {
+		answer <- callbackAnswer{err: errors.New("callback transport disconnected")}
 	}
 }
 

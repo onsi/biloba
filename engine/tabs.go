@@ -78,7 +78,7 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 		browser: b, ctx: tabCtx, cancel: cancelTab, browserContextID: root.browserContextID,
 		targetID: targetID, openerID: openerID, root: root, artifactDir: b.artifactDir,
 		initialWidth: b.windowWidth, initialHeight: b.windowHeight,
-		highFidelity: b.mode == ChromeModeHeadless,
+		highFidelity: b.mode == ChromeModeHeadless, cacheEnabled: true,
 	}
 	if session.initialWidth <= 0 || session.initialHeight <= 0 {
 		width, height, sizeErr := ViewportDimensionsContext(tabCtx)
@@ -92,7 +92,12 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 		cancelTab()
 		return nil, contextError("apply initial viewport", err)
 	}
+	session.eventsEnabled.Store(true)
 	b.listenToSession(session)
+	if err := session.setupDownloads(tabCtx); err != nil {
+		cancelTab()
+		return nil, contextError("configure downloads", err)
+	}
 	b.sessions[session] = struct{}{}
 	return session, nil
 }

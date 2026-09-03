@@ -7,14 +7,17 @@ import type {
   DragToRequest,
   DOMRequest,
   EvaluateRequest,
+  EventfulRequest,
+  EventFrame,
+  NetworkOverride as WireNetworkOverride,
   HandshakeRequest,
   HandshakeResponse,
-	HandleListResponse,
-	InvalidationResponse,
-	LifecycleRequest,
-	CookieListResponse,
-	ListHandlesRequest,
-	WaitForTabRequest,
+  HandleListResponse,
+  InvalidationResponse,
+  LifecycleRequest,
+  CookieListResponse,
+  ListHandlesRequest,
+  WaitForTabRequest,
   HoldResponseRequest,
   LocatorRequest,
   NavigateRequest,
@@ -56,11 +59,14 @@ interface PendingRequest {
   cleanup(): void;
 }
 
+type ResponseCallback = (payload: unknown) => WireNetworkOverride | Promise<WireNetworkOverride>;
+
 export class StdioTransport {
   readonly #input: Readable;
   readonly #output: Writable;
   readonly #decoder = new FrameDecoder();
   readonly #pending = new Map<number, PendingRequest>();
+  readonly #callbacks = new Map<string, ResponseCallback>();
   #nextID = 1;
   #closed = false;
   #writeChain = Promise.resolve();
@@ -69,7 +75,10 @@ export class StdioTransport {
     this.#input = input;
     this.#output = output;
     input.pipe(this.#decoder);
-    this.#decoder.on("data", (response: Response) => this.#receive(response));
+    this.#decoder.on("data", (frame: Response | EventFrame) => {
+      if ("event" in frame) void this.#receiveEvent(frame);
+      else this.#receive(frame);
+    });
     this.#decoder.on("error", (error: Error) => this.fail(error));
     input.on("error", (error: Error) => this.fail(error));
     output.on("error", (error: Error) => this.fail(error));
@@ -96,6 +105,7 @@ export class StdioTransport {
       request.reject(failure);
     }
     this.#pending.clear();
+    this.#callbacks.clear();
   }
 
   handshake(request: HandshakeRequest, options: TransportOptions = {}): Promise<HandshakeResponse> {
@@ -113,7 +123,7 @@ export class StdioTransport {
   activate(request: SessionRequest, options: TransportOptions = {}): Promise<OperationResult> {
     return this.#request("activate", request, withDefaultDeadline(options));
   }
-	prepareSession(request: SessionRequest, options: TransportOptions = {}): Promise<InvalidationResponse> {
+  prepareSession(request: SessionRequest, options: TransportOptions = {}): Promise<InvalidationResponse> {
     return this.#request("prepareSession", request, withDefaultDeadline(options));
   }
   closeSession(request: SessionRequest, options: TransportOptions = {}): Promise<InvalidationResponse> {
@@ -125,27 +135,27 @@ export class StdioTransport {
   setCookies(request: SetCookiesRequest, options: TransportOptions = {}): Promise<OperationResult> {
     return this.#request("setCookies", request, withDefaultDeadline(options));
   }
-	getCookies(request: SessionRequest, options: TransportOptions = {}): Promise<CookieListResponse> {
-		return this.#request("getCookies", request, withDefaultDeadline(options));
-	}
-	clearCookies(request: SessionRequest, options: TransportOptions = {}): Promise<OperationResult> {
-		return this.#request("clearCookies", request, withDefaultDeadline(options));
-	}
-	listTabs(request: ListHandlesRequest, options: TransportOptions = {}): Promise<HandleListResponse> {
-		return this.#request("listTabs", request, withDefaultDeadline(options));
-	}
-	listFrames(request: ListHandlesRequest, options: TransportOptions = {}): Promise<HandleListResponse> {
-		return this.#request("listFrames", request, withDefaultDeadline(options));
-	}
-	waitForTab(request: WaitForTabRequest, options: TransportOptions = {}): Promise<OpenSessionResponse> {
-		return this.#request("waitForTab", request, options);
-	}
-	waitForFrame(request: WaitForTabRequest, options: TransportOptions = {}): Promise<OpenSessionResponse> {
-		return this.#request("waitForFrame", request, options);
-	}
-	lifecycle(request: LifecycleRequest, options: TransportOptions = {}): Promise<OperationResult> {
-		return this.#request("lifecycle", request, options);
-	}
+  getCookies(request: SessionRequest, options: TransportOptions = {}): Promise<CookieListResponse> {
+    return this.#request("getCookies", request, withDefaultDeadline(options));
+  }
+  clearCookies(request: SessionRequest, options: TransportOptions = {}): Promise<OperationResult> {
+    return this.#request("clearCookies", request, withDefaultDeadline(options));
+  }
+  listTabs(request: ListHandlesRequest, options: TransportOptions = {}): Promise<HandleListResponse> {
+    return this.#request("listTabs", request, withDefaultDeadline(options));
+  }
+  listFrames(request: ListHandlesRequest, options: TransportOptions = {}): Promise<HandleListResponse> {
+    return this.#request("listFrames", request, withDefaultDeadline(options));
+  }
+  waitForTab(request: WaitForTabRequest, options: TransportOptions = {}): Promise<OpenSessionResponse> {
+    return this.#request("waitForTab", request, options);
+  }
+  waitForFrame(request: WaitForTabRequest, options: TransportOptions = {}): Promise<OpenSessionResponse> {
+    return this.#request("waitForFrame", request, options);
+  }
+  lifecycle(request: LifecycleRequest, options: TransportOptions = {}): Promise<OperationResult> {
+    return this.#request("lifecycle", request, options);
+  }
   click(request: LocatorRequest, options: TransportOptions = {}): Promise<OperationResult> {
     return this.#request("click", request, options);
   }
@@ -185,6 +195,12 @@ export class StdioTransport {
   dom(request: DOMRequest, options: TransportOptions = {}): Promise<OperationResult> {
     return this.#request("dom", request, options);
   }
+  eventful<Result = unknown>(request: EventfulRequest, options: TransportOptions = {}): Promise<Result> {
+    return this.#request("eventful", request, options);
+  }
+  registerResponseCallback(id: string, callback: ResponseCallback): void { this.#callbacks.set(id, callback); }
+  removeResponseCallback(id: string): void { this.#callbacks.delete(id); }
+  registeredCallbackCount(): number { return this.#callbacks.size; }
 
   async #request<Result>(method: string, params: object, options: TransportOptions): Promise<Result> {
     if (this.#closed) throw new BilobaError({code: "DRIVER_CLOSED", message: "Biloba transport is closed"});
@@ -247,6 +263,29 @@ export class StdioTransport {
     if (response.error) pending.reject(protocolError(response.error));
     else if (response.result === undefined) pending.reject(new BilobaError({code: "DRIVER_ERROR", message: "Biloba response contained no result"}));
     else pending.resolve(response.result);
+  }
+
+  async #receiveEvent(frame: EventFrame): Promise<void> {
+    if (frame.event !== "responseIntercepted" || !frame.invocationId || !frame.callbackId) return;
+    const callback = this.#callbacks.get(frame.callbackId);
+    if (!callback) {
+      await this.#callbackResult({invocationId: frame.invocationId, error: "response callback is no longer registered"});
+      return;
+    }
+    try {
+      const result = await callback(frame.payload);
+      await this.#callbackResult({invocationId: frame.invocationId, result});
+    } catch (error) {
+      await this.#callbackResult({invocationId: frame.invocationId, error: error instanceof Error ? error.message : String(error)});
+    }
+  }
+
+  async #callbackResult(params: {invocationId: string; result?: WireNetworkOverride; error?: string}): Promise<void> {
+    try { await this.#write({id: 0, method: "callbackResult", params}); }
+    catch (error) {
+      if (params.error !== undefined) return;
+      await this.#write({id: 0, method: "callbackResult", params: {invocationId: params.invocationId, error: error instanceof Error ? error.message : String(error)}}).catch(() => undefined);
+    }
   }
 
   #write(value: unknown): Promise<void> {

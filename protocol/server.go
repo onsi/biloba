@@ -19,9 +19,11 @@ var Capabilities = []string{
 	"locator.css", "locator.xpath", "locator.test_id", "locator.text", "locator.role", "locator.label", "locator.placeholder", "locator.alt_text", "locator.title", "locator.refinements", "locator.first",
 	"session.prepare", "session.new_tab", "session.add_init_script", "session.activate", "navigation", "cookies", "action.click", "action.set_value", "action.realistic", "action.type", "action.send_keys", "action.drag_to",
 	"action.set_upload", "viewport.set", "evaluate", "evaluate.async", "assert.visible", "assert.text", "assert.count", "assert.attribute",
-	"assert.value", "assert.url", "assert.evaluate", "poll.server_side", "diagnostics.structured",
+	"assert.value", "assert.url", "assert.evaluate", "assert.exists", "assert.enabled", "assert.clickable", "assert.property", "assert.all_text", "assert.request", "poll.server_side", "diagnostics.structured",
 	"dom.typed", "dom.collections", "dom.geometry", "dom.style", "dom.selection", "action.pointer_options", "action.scroll", "action.element_javascript", "keyboard.modifiers",
 	"lifecycle.tabs", "lifecycle.context_identity", "lifecycle.cookies", "lifecycle.storage", "lifecycle.javascript", "lifecycle.page_state", "lifecycle.console", "lifecycle.emulation", "lifecycle.frames",
+	"dialogs.handlers", "dialogs.history", "dialogs.warnings", "downloads.history", "downloads.content", "downloads.cancel",
+	"network.history", "network.idle.http", "network.handlers", "network.response_callbacks", "network.holds", "network.emulation", "network.cache",
 }
 
 type ErrorCode string
@@ -851,9 +853,10 @@ type Timings struct {
 }
 
 type Server struct {
-	backend  Backend
-	mu       sync.Mutex
-	sessions map[string]*sessionEntry
+	backend   Backend
+	mu        sync.Mutex
+	sessions  map[string]*sessionEntry
+	callbacks CallbackInvoker
 }
 
 type sessionEntry struct {
@@ -864,6 +867,8 @@ type sessionEntry struct {
 func NewServer(backend Backend) *Server {
 	return &Server{backend: backend, sessions: map[string]*sessionEntry{}}
 }
+
+func (s *Server) SetCallbackInvoker(invoker CallbackInvoker) { s.callbacks = invoker }
 
 func (s *Server) Dispatch(ctx context.Context, method string, params json.RawMessage) (any, *ProtocolError) {
 	switch method {
@@ -1059,6 +1064,40 @@ func (s *Server) Dispatch(ctx context.Context, method string, params json.RawMes
 			return nil, err
 		}
 		return s.execute(ctx, request.SessionID, Operation{Kind: OperationLifecycle, Lifecycle: LifecycleOperation{Kind: LifecycleClearCookies}})
+	case "eventful":
+		var request EventfulRequest
+		if err := decodeParams(params, &request); err != nil {
+			return nil, err
+		}
+		if request.Operation == nil {
+			return nil, NewError(CodeInvalidArgument, "operation is required")
+		}
+		entry, err := s.session(request.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		eventful, ok := entry.session.(EventfulSession)
+		if !ok {
+			return nil, NewError(CodeDriver, "session backend does not support eventful operations")
+		}
+		operation, operationErr := eventfulOperationFromWire(request.Operation, request.Poll)
+		if operationErr != nil {
+			return nil, operationErr
+		}
+		if operation.CallbackID != "" {
+			if s.callbacks == nil {
+				return nil, NewError(CodeDriver, "callback transport is unavailable")
+			}
+			operation.InvokeCallback = s.callbacks.Invoke
+		}
+		result, executeErr := eventful.ExecuteEventful(ctx, operation)
+		if executeErr != nil {
+			return nil, normalizeError(executeErr)
+		}
+		if result == nil {
+			result = struct{}{}
+		}
+		return result, nil
 	case "lifecycle":
 		var request LifecycleRequest
 		if err := decodeParams(params, &request); err != nil {
@@ -1448,18 +1487,26 @@ func (s *Server) closeSession(id string) (any, *ProtocolError) {
 	}
 	s.mu.Lock()
 	entry, exists := s.sessions[id]
-	if exists {
-		delete(s.sessions, id)
-	}
 	s.mu.Unlock()
 	if !exists {
 		return nil, NewError(CodeTargetNotFound, "session not found")
 	}
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
+	s.mu.Lock()
+	current, stillRegistered := s.sessions[id]
+	s.mu.Unlock()
+	if !stillRegistered || current != entry {
+		return nil, NewError(CodeTargetNotFound, "session not found")
+	}
 	if err := entry.session.Close(); err != nil {
 		return nil, normalizeError(err)
 	}
+	s.mu.Lock()
+	if s.sessions[id] == entry {
+		delete(s.sessions, id)
+	}
+	s.mu.Unlock()
 	invalidated := []string{}
 	if discoverable, ok := entry.session.(DiscoverableSession); ok && discoverable.Metadata().OwnsContext {
 		invalidated = s.invalidateContext(entry.session, id, false)
@@ -1547,6 +1594,65 @@ func pollFromWire(poll PollOptions) (PollPolicy, *ProtocolError) {
 		return PollPolicy{}, NewError(CodeInvalidArgument, "unsupported poll mode")
 	}
 	return PollPolicy{Timeout: time.Duration(poll.TimeoutMS) * time.Millisecond, Interval: time.Duration(poll.IntervalMS) * time.Millisecond, Mode: mode}, nil
+}
+
+func eventfulOperationFromWire(wire *WireEventfulOperation, pollWire PollOptions) (EventfulOperation, *ProtocolError) {
+	kinds := map[string]EventfulOperationKind{
+		"REGISTER_DIALOG_HANDLER": EventfulRegisterDialogHandler, "REMOVE_DIALOG_HANDLER": EventfulRemoveDialogHandler,
+		"DIALOGS": EventfulDialogs, "WARNINGS": EventfulWarnings, "DOWNLOADS": EventfulDownloads,
+		"WAIT_FOR_DOWNLOAD": EventfulWaitForDownload, "DOWNLOAD_CONTENT": EventfulDownloadContent,
+		"CANCEL_DOWNLOAD": EventfulCancelDownload, "REQUESTS": EventfulRequests, "WAIT_FOR_REQUEST": EventfulWaitForRequest,
+		"RESPONSES": EventfulResponses, "WAIT_FOR_NETWORK_IDLE": EventfulWaitForNetworkIdle,
+		"REGISTER_NETWORK_HANDLER": EventfulRegisterNetworkHandler, "REMOVE_NETWORK_HANDLER": EventfulRemoveNetworkHandler,
+		"NETWORK_HANDLER_STATS": EventfulNetworkHandlerStats, "NETWORK_SHADOWS": EventfulNetworkShadows,
+		"HOLD_RESPONSE": EventfulHoldResponse, "AWAIT_RESPONSE_HOLD": EventfulAwaitResponseHold,
+		"RELEASE_RESPONSE_HOLD": EventfulReleaseResponseHold, "RELEASE_HELD_RESPONSE": EventfulReleaseHeldResponse,
+		"RELEASE_NEXT_RESPONSE": EventfulReleaseNextResponse, "RESPONSE_HOLD_STATS": EventfulResponseHoldStats,
+		"SET_NETWORK_STATE": EventfulSetNetworkState, "NETWORK_STATE": EventfulNetworkState,
+		"SET_CACHE_ENABLED": EventfulSetCacheEnabled,
+	}
+	kind, ok := kinds[wire.Kind]
+	if !ok {
+		return EventfulOperation{}, NewError(CodeInvalidArgument, "unsupported eventful operation")
+	}
+	poll, err := pollFromWire(pollWire)
+	if err != nil {
+		return EventfulOperation{}, err
+	}
+	operation := EventfulOperation{Kind: kind, ID: wire.ID, ResponseID: wire.ResponseID, DialogType: wire.DialogType,
+		Accept: wire.Accept, PromptText: wire.PromptText, Limit: wire.Limit, MaxBodyBytes: wire.MaxBodyBytes,
+		Callsite: wire.Callsite, Action: wire.Action, CallbackID: wire.CallbackID, TransformTimeoutMS: wire.TransformTimeoutMS,
+		CacheEnabled: wire.CacheEnabled != nil && *wire.CacheEnabled, Poll: poll, ContentBase64: wire.ContentBase64}
+	if operation.MaxBodyBytes < 0 || operation.MaxBodyBytes > MaxDecodedBodySize {
+		return EventfulOperation{}, NewError(CodeInvalidArgument, fmt.Sprintf("maxBodyBytes must be between 0 and %d", MaxDecodedBodySize))
+	}
+	for source, destination := range map[*WireExpectation]**Expectation{wire.Message: &operation.Message, wire.URL: &operation.URL,
+		wire.Method: &operation.Method, wire.ResourceType: &operation.ResourceType, wire.Filename: &operation.Filename, wire.State: &operation.State, wire.ContentText: &operation.ContentText} {
+		if source == nil {
+			continue
+		}
+		value, decodeErr := expectationFromWire(source, 0)
+		if decodeErr != nil {
+			return EventfulOperation{}, decodeErr
+		}
+		*destination = &value
+	}
+	if wire.Override != nil {
+		operation.Override = *wire.Override
+	}
+	if wire.Network != nil {
+		operation.Network = *wire.Network
+	}
+	if kind == EventfulRegisterNetworkHandler {
+		actions := map[string]bool{"fulfill": true, "abort": true, "request": true, "response": true, "callback": true}
+		if !actions[operation.Action] {
+			return EventfulOperation{}, NewError(CodeInvalidArgument, "unsupported network handler action")
+		}
+		if operation.Action == "callback" && operation.CallbackID == "" {
+			return EventfulOperation{}, NewError(CodeInvalidArgument, "callbackId is required")
+		}
+	}
+	return operation, nil
 }
 
 func tabQueryFromWire(query TabQueryRequest) (TabQuery, *ProtocolError) {

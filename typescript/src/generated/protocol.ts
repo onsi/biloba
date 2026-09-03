@@ -255,6 +255,72 @@ export interface CookieListResponse {
   cookies: Cookie[];
 }
 
+export interface NetworkOverride {
+  url?: string;
+  method?: string;
+  status?: number;
+  headers?: HeaderEntry[];
+  bodyBase64?: string;
+}
+
+export interface HeaderEntry {
+  name: string;
+  value: string;
+}
+
+export interface NetworkState {
+  offline?: boolean;
+  latencyMs?: number;
+  downloadThroughput?: number;
+  uploadThroughput?: number;
+  connectionType?: string;
+}
+
+export interface EventfulOperation {
+  kind: string;
+  id?: string;
+  responseId?: string;
+  dialogType?: string;
+  message?: Expectation;
+  url?: Expectation;
+  method?: Expectation;
+  resourceType?: Expectation;
+  filename?: Expectation;
+  state?: Expectation;
+  contentText?: Expectation;
+  contentBase64?: string;
+  accept?: boolean;
+  promptText?: string;
+  limit?: number;
+  maxBodyBytes?: number;
+  callsite?: string;
+  action?: string;
+  override?: NetworkOverride;
+  callbackId?: string;
+  transformTimeoutMs?: number;
+  network?: NetworkState;
+  cacheEnabled?: boolean;
+}
+
+export interface EventfulRequest {
+  sessionId: string;
+  operation?: EventfulOperation;
+  poll?: PollOptions;
+}
+
+export interface CallbackResultRequest {
+  invocationId: string;
+  result?: unknown;
+  error?: string;
+}
+
+export interface EventFrame {
+  event: string;
+  invocationId?: string;
+  callbackId?: string;
+  payload?: unknown;
+}
+
 export interface LocatorRequest {
   sessionId: string;
   locator?: Locator;

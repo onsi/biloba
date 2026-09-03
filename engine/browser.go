@@ -11,10 +11,12 @@ import (
 	"sync"
 	"time"
 
+	cdpbrowser "github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/inspector"
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
@@ -329,7 +331,7 @@ func (b *Browser) openTabLocked(ctx context.Context, browserContextID cdp.Browse
 		browser: b, ctx: tabCtx, cancel: cancelTab, browserContextID: browserContextID,
 		targetID: targetID, ownsContext: ownsContext, artifactDir: b.artifactDir, root: root,
 		initialWidth: b.windowWidth, initialHeight: b.windowHeight,
-		highFidelity: b.mode == ChromeModeHeadless,
+		highFidelity: b.mode == ChromeModeHeadless, cacheEnabled: true,
 	}
 	if session.initialWidth <= 0 || session.initialHeight <= 0 {
 		width, height, sizeErr := ViewportDimensionsContext(tabCtx)
@@ -346,7 +348,15 @@ func (b *Browser) openTabLocked(ctx context.Context, browserContextID cdp.Browse
 	if ownsContext {
 		session.root = session
 	}
+	session.eventsEnabled.Store(true)
 	b.listenToSession(session)
+	if err := session.setupDownloads(tabCtx); err != nil {
+		cancelTab()
+		if ownsContext {
+			_ = os.RemoveAll(session.downloadDir)
+		}
+		return nil, contextError("configure downloads", err)
+	}
 	b.sessions[session] = struct{}{}
 	return session, nil
 }
@@ -360,13 +370,40 @@ func (b *Browser) listenToSession(session *Session) {
 			session.markCrashed()
 		}
 		if request, ok := event.(*network.EventRequestWillBeSent); ok {
-			session.recordRequest(request)
+			if session.eventsEnabled.Load() {
+				session.recordRequest(request)
+				if request.Type != network.ResourceTypeWebSocket {
+					session.trackRequest(request.RequestID)
+				}
+			}
+		}
+		if response, ok := event.(*network.EventResponseReceived); ok {
+			if session.eventsEnabled.Load() {
+				session.recordResponse(response)
+			}
+		}
+		if finished, ok := event.(*network.EventLoadingFinished); ok {
+			session.finishRequest(finished.RequestID)
+		}
+		if failed, ok := event.(*network.EventLoadingFailed); ok {
+			session.finishRequest(failed.RequestID)
 		}
 		if paused, ok := event.(*fetch.EventRequestPaused); ok {
-			session.handlePausedResponse(paused)
+			session.handlePausedEvent(paused)
 		}
 		if console, ok := event.(*runtime.EventConsoleAPICalled); ok {
-			session.recordConsoleMessage(console)
+			if session.eventsEnabled.Load() {
+				session.recordConsoleMessage(console)
+			}
+		}
+		if dialog, ok := event.(*page.EventJavascriptDialogOpening); ok {
+			session.handleDialog(dialog)
+		}
+		if download, ok := event.(*cdpbrowser.EventDownloadWillBegin); ok {
+			session.handleDownloadBegin(download)
+		}
+		if progress, ok := event.(*cdpbrowser.EventDownloadProgress); ok {
+			session.handleDownloadProgress(progress)
 		}
 	})
 }
@@ -427,6 +464,25 @@ func (b *Browser) removeSession(session *Session) {
 	b.mu.Lock()
 	delete(b.sessions, session)
 	b.mu.Unlock()
+}
+
+func (b *Browser) contextHasActiveDownloads(browserContextID cdp.BrowserContextID) bool {
+	for _, session := range b.Sessions() {
+		if session.browserContextID == browserContextID && session.hasActiveDownloads() {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *Browser) contextDownloadCount(browserContextID cdp.BrowserContextID, now time.Time) int {
+	count := 0
+	for _, session := range b.Sessions() {
+		if session.browserContextID == browserContextID {
+			count += session.activeOrRecentDownloadCount(now)
+		}
+	}
+	return count
 }
 
 func executorContext(executorCtx, requestCtx context.Context) (context.Context, context.CancelFunc) {

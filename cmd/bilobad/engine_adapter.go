@@ -2,16 +2,363 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/onsi/biloba/engine"
 	"github.com/onsi/biloba/protocol"
 )
+
+func (s *engineSession) ExecuteEventful(ctx context.Context, operation protocol.EventfulOperation) (any, error) {
+	switch operation.Kind {
+	case protocol.EventfulRegisterDialogHandler:
+		options := engine.DialogHandlerOptions{Type: engine.DialogType(operation.DialogType), Accept: operation.Accept, PromptText: operation.PromptText}
+		if operation.Message != nil {
+			value, err := expectationFromProtocol(*operation.Message)
+			if err != nil {
+				return nil, err
+			}
+			options.Message = &value
+		}
+		handler, err := s.session.RegisterDialogHandler(ctx, options)
+		return map[string]any{"id": handler.ID}, engineRPCError(err)
+	case protocol.EventfulRemoveDialogHandler:
+		return nil, engineRPCError(s.session.RemoveDialogHandler(ctx, operation.ID))
+	case protocol.EventfulDialogs:
+		query, err := dialogQueryFromProtocol(operation)
+		if err != nil {
+			return nil, err
+		}
+		return dialogsToWire(s.session.DialogsMatching(query)), nil
+	case protocol.EventfulWarnings:
+		return warningsToWire(s.session.Warnings()), nil
+	case protocol.EventfulDownloads:
+		query, err := downloadQueryFromProtocol(operation)
+		if err != nil {
+			return nil, err
+		}
+		return downloadsToWire(s.session.Downloads(query)), nil
+	case protocol.EventfulWaitForDownload:
+		query, err := downloadQueryFromProtocol(operation)
+		if err != nil {
+			return nil, err
+		}
+		value, waitErr := s.session.WaitForDownload(ctx, query, pollPolicyFromProtocol(operation.Poll))
+		return downloadToWire(value), engineRPCError(waitErr)
+	case protocol.EventfulDownloadContent:
+		body, err := s.session.DownloadContent(ctx, operation.ID, operation.MaxBodyBytes)
+		if err != nil {
+			return nil, engineRPCError(err)
+		}
+		return map[string]any{"bodyBase64": base64.StdEncoding.EncodeToString(body)}, nil
+	case protocol.EventfulCancelDownload:
+		return nil, engineRPCError(s.session.CancelDownload(ctx, operation.ID))
+	case protocol.EventfulRequests:
+		query, err := requestQueryFromProtocol(operation)
+		if err != nil {
+			return nil, err
+		}
+		return requestsToWire(s.session.RequestsMatching(query)), nil
+	case protocol.EventfulWaitForRequest:
+		query, err := requestQueryFromProtocol(operation)
+		if err != nil {
+			return nil, err
+		}
+		value, waitErr := s.session.WaitForRequest(ctx, query, pollPolicyFromProtocol(operation.Poll))
+		return requestToWire(value), engineRPCError(waitErr)
+	case protocol.EventfulResponses:
+		query, err := responseQueryFromProtocol(operation)
+		if err != nil {
+			return nil, err
+		}
+		return responsesToWire(s.session.Responses(query)), nil
+	case protocol.EventfulWaitForNetworkIdle:
+		result, err := s.session.WaitForNetworkIdle(ctx, pollPolicyFromProtocol(operation.Poll))
+		return eventfulAssertionResult(result), engineRPCError(err)
+	case protocol.EventfulRegisterNetworkHandler:
+		options, err := networkHandlerOptionsFromProtocol(operation)
+		if err != nil {
+			return nil, err
+		}
+		handler, registerErr := s.session.RegisterNetworkHandler(ctx, options)
+		return map[string]any{"id": handler.ID}, engineRPCError(registerErr)
+	case protocol.EventfulRemoveNetworkHandler:
+		return nil, engineRPCError(s.session.RemoveNetworkHandler(ctx, operation.ID))
+	case protocol.EventfulNetworkHandlerStats:
+		value, err := s.session.NetworkHandlerStats(operation.ID)
+		return map[string]any{"id": value.ID, "callsite": value.Callsite, "count": value.Count, "shadowed": value.Shadowed, "lastError": value.LastError}, engineRPCError(err)
+	case protocol.EventfulNetworkShadows:
+		return shadowsToWire(s.session.NetworkShadowDiagnostics()), nil
+	case protocol.EventfulHoldResponse:
+		if operation.URL == nil {
+			return nil, protocol.NewError(protocol.CodeInvalidArgument, "url expectation is required")
+		}
+		expected, err := expectationFromProtocol(*operation.URL)
+		if err != nil {
+			return nil, err
+		}
+		id, holdErr := s.session.HoldResponseWithOptions(ctx, expected, engine.ResponseHoldOptions{Limit: operation.Limit, MaxBodyBytes: operation.MaxBodyBytes, Callsite: operation.Callsite})
+		return map[string]any{"id": id}, engineRPCError(holdErr)
+	case protocol.EventfulAwaitResponseHold:
+		value, err := s.session.AwaitResponseHold(ctx, operation.ID)
+		return heldResponseToWire(value), engineRPCError(err)
+	case protocol.EventfulReleaseResponseHold:
+		return nil, engineRPCError(s.session.ReleaseResponseHold(ctx, operation.ID))
+	case protocol.EventfulReleaseHeldResponse:
+		return nil, engineRPCError(s.session.ReleaseHeldResponse(ctx, operation.ID, operation.ResponseID))
+	case protocol.EventfulReleaseNextResponse:
+		return nil, engineRPCError(s.session.ReleaseNextResponseHold(ctx, operation.ID))
+	case protocol.EventfulResponseHoldStats:
+		value, err := s.session.ResponseHoldStats(operation.ID)
+		return map[string]any{"count": value.Count, "held": value.Held, "passedThrough": value.PassedThrough, "holding": value.Holding, "lastError": value.LastError}, engineRPCError(err)
+	case protocol.EventfulSetNetworkState:
+		return nil, engineRPCError(s.session.SetNetworkState(ctx, networkStateFromWire(operation.Network)))
+	case protocol.EventfulNetworkState:
+		return networkStateToWire(s.session.CurrentNetworkState()), nil
+	case protocol.EventfulSetCacheEnabled:
+		return nil, engineRPCError(s.session.SetCacheEnabled(ctx, operation.CacheEnabled))
+	default:
+		return nil, protocol.NewError(protocol.CodeInvalidArgument, "unsupported eventful operation")
+	}
+}
+
+func protocolExpectation(value *protocol.Expectation) (*engine.Expectation, error) {
+	if value == nil {
+		return nil, nil
+	}
+	converted, err := expectationFromProtocol(*value)
+	return &converted, err
+}
+func dialogQueryFromProtocol(o protocol.EventfulOperation) (engine.DialogQuery, error) {
+	message, err := protocolExpectation(o.Message)
+	return engine.DialogQuery{Type: engine.DialogType(o.DialogType), Message: message}, err
+}
+func downloadQueryFromProtocol(o protocol.EventfulOperation) (engine.DownloadQuery, error) {
+	filename, err := protocolExpectation(o.Filename)
+	if err != nil {
+		return engine.DownloadQuery{}, err
+	}
+	url, err := protocolExpectation(o.URL)
+	if err != nil {
+		return engine.DownloadQuery{}, err
+	}
+	state, err := protocolExpectation(o.State)
+	if err != nil {
+		return engine.DownloadQuery{}, err
+	}
+	query := engine.DownloadQuery{Filename: filename, URL: url}
+	content, err := protocolExpectation(o.ContentText)
+	if err != nil {
+		return engine.DownloadQuery{}, err
+	}
+	query.Content = content
+	if o.ContentBase64 != nil {
+		body, decodeErr := decodeBoundedBody(*o.ContentBase64)
+		if decodeErr != nil {
+			return engine.DownloadQuery{}, decodeErr
+		}
+		query.ContentBytes = body
+	}
+	if state != nil && state.Kind == engine.ExpectEqual {
+		if text, ok := state.Expected.(string); ok {
+			query.State = engine.DownloadState(text)
+		}
+	}
+	return query, nil
+}
+func requestQueryFromProtocol(o protocol.EventfulOperation) (engine.RequestQuery, error) {
+	url, err := protocolExpectation(o.URL)
+	if err != nil {
+		return engine.RequestQuery{}, err
+	}
+	method, err := protocolExpectation(o.Method)
+	if err != nil {
+		return engine.RequestQuery{}, err
+	}
+	resource, err := protocolExpectation(o.ResourceType)
+	return engine.RequestQuery{URL: url, Method: method, ResourceType: resource}, err
+}
+func responseQueryFromProtocol(o protocol.EventfulOperation) (engine.ResponseQuery, error) {
+	url, err := protocolExpectation(o.URL)
+	if err != nil {
+		return engine.ResponseQuery{}, err
+	}
+	status, err := protocolExpectation(o.State)
+	return engine.ResponseQuery{URL: url, Status: status}, err
+}
+
+func decodeOverride(w protocol.WireNetworkOverride) (engine.RequestOverride, engine.ResponseOverride, error) {
+	headers := map[string]string{}
+	for _, header := range w.Headers {
+		headers[header.Name] = header.Value
+	}
+	request := engine.RequestOverride{URL: w.URL, Method: w.Method, Headers: headers}
+	entries := make([]engine.HeaderEntry, len(w.Headers))
+	for index, header := range w.Headers {
+		entries[index] = engine.HeaderEntry{Name: header.Name, Value: header.Value}
+	}
+	response := engine.ResponseOverride{Status: w.Status, HeaderEntries: entries}
+	if w.BodyBase64 != nil {
+		body, err := decodeBoundedBody(*w.BodyBase64)
+		if err != nil {
+			return request, response, err
+		}
+		request.Body = &body
+		response.Body = &body
+	}
+	return request, response, nil
+}
+
+func decodeBoundedBody(value string) ([]byte, error) {
+	if len(value) > base64.StdEncoding.EncodedLen(int(protocol.MaxDecodedBodySize)) {
+		return nil, protocol.NewError(protocol.CodeInvalidArgument, fmt.Sprintf("decoded body exceeds limit %d", protocol.MaxDecodedBodySize))
+	}
+	body, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, protocol.NewError(protocol.CodeInvalidArgument, "bodyBase64 must be valid base64")
+	}
+	if int64(len(body)) > protocol.MaxDecodedBodySize {
+		return nil, protocol.NewError(protocol.CodeInvalidArgument, fmt.Sprintf("decoded body size %d exceeds limit %d", len(body), protocol.MaxDecodedBodySize))
+	}
+	return body, nil
+}
+func networkHandlerOptionsFromProtocol(o protocol.EventfulOperation) (engine.NetworkHandlerOptions, error) {
+	if o.URL == nil {
+		return engine.NetworkHandlerOptions{}, protocol.NewError(protocol.CodeInvalidArgument, "url expectation is required")
+	}
+	url, err := expectationFromProtocol(*o.URL)
+	if err != nil {
+		return engine.NetworkHandlerOptions{}, err
+	}
+	request, response, err := decodeOverride(o.Override)
+	if err != nil {
+		return engine.NetworkHandlerOptions{}, err
+	}
+	options := engine.NetworkHandlerOptions{URL: url, Callsite: o.Callsite, ResponseBodyLimit: o.MaxBodyBytes, TransformTimeout: time.Duration(o.TransformTimeoutMS) * time.Millisecond}
+	switch o.Action {
+	case "fulfill":
+		options.Fulfill = &response
+	case "abort":
+		options.Abort = true
+	case "request":
+		options.Request = &request
+	case "response":
+		options.Response = &response
+	case "callback":
+		options.Transform = func(ctx context.Context, intercepted engine.InterceptedResponse) (engine.ResponseOverride, error) {
+			payload := map[string]any{"url": intercepted.URL, "status": intercepted.Status, "headers": engineHeaderEntriesToWire(intercepted.HeaderEntries, intercepted.Headers), "bodyBase64": base64.StdEncoding.EncodeToString(intercepted.Body)}
+			wire, invokeErr := o.InvokeCallback(ctx, protocol.CallbackInvocation{CallbackID: o.CallbackID, Payload: payload})
+			if invokeErr != nil {
+				return engine.ResponseOverride{}, invokeErr
+			}
+			_, result, decodeErr := decodeOverride(wire)
+			return result, decodeErr
+		}
+	default:
+		return engine.NetworkHandlerOptions{}, protocol.NewError(protocol.CodeInvalidArgument, "unsupported network handler action")
+	}
+	return options, nil
+}
+
+func dialogToWire(v engine.Dialog) map[string]any {
+	return map[string]any{"type": v.Type, "message": v.Message, "defaultPrompt": v.DefaultPrompt, "accepted": v.Accepted, "promptText": v.PromptText, "autoHandled": v.AutoHandled}
+}
+func dialogsToWire(values []engine.Dialog) []map[string]any {
+	result := make([]map[string]any, len(values))
+	for i, value := range values {
+		result[i] = dialogToWire(value)
+	}
+	return result
+}
+func warningsToWire(values []engine.Warning) []map[string]any {
+	result := make([]map[string]any, len(values))
+	for i, value := range values {
+		result[i] = map[string]any{"code": value.Code, "message": value.Message, "dialog": dialogToWire(value.Dialog)}
+	}
+	return result
+}
+func downloadToWire(v engine.Download) map[string]any {
+	result := map[string]any{"id": v.ID, "url": v.URL, "filename": v.Filename, "state": v.State, "receivedBytes": v.ReceivedBytes, "totalBytes": v.TotalBytes, "startedAt": v.StartedAt.UnixMilli()}
+	if !v.CompletedAt.IsZero() {
+		result["completedAt"] = v.CompletedAt.UnixMilli()
+	}
+	return result
+}
+func downloadsToWire(values []engine.Download) []map[string]any {
+	result := make([]map[string]any, len(values))
+	for i, value := range values {
+		result[i] = downloadToWire(value)
+	}
+	return result
+}
+func requestToWire(v engine.Request) map[string]any {
+	return map[string]any{"url": v.URL, "method": v.Method, "headers": headerEntriesToWire(v.Headers), "resourceType": v.ResourceType}
+}
+func requestsToWire(values []engine.Request) []map[string]any {
+	result := make([]map[string]any, len(values))
+	for i, value := range values {
+		result[i] = requestToWire(value)
+	}
+	return result
+}
+func responsesToWire(values []engine.Response) []map[string]any {
+	result := make([]map[string]any, len(values))
+	for i, v := range values {
+		result[i] = map[string]any{"url": v.URL, "status": v.Status, "headers": headerEntriesToWire(v.Headers), "resourceType": v.ResourceType}
+	}
+	return result
+}
+func heldResponseToWire(v engine.HeldResponse) map[string]any {
+	return map[string]any{"id": v.ID, "url": v.URL, "status": v.Status, "headers": engineHeaderEntriesToWire(v.HeaderEntries, v.Headers), "bodyBase64": base64.StdEncoding.EncodeToString(v.Body)}
+}
+func engineHeaderEntriesToWire(entries []engine.HeaderEntry, fallback map[string]string) []protocol.WireHeaderEntry {
+	if len(entries) == 0 {
+		return headerEntriesToWire(fallback)
+	}
+	result := make([]protocol.WireHeaderEntry, len(entries))
+	for index, entry := range entries {
+		result[index] = protocol.WireHeaderEntry{Name: entry.Name, Value: entry.Value}
+	}
+	return result
+}
+func headerEntriesToWire(headers map[string]string) []protocol.WireHeaderEntry {
+	names := make([]string, 0, len(headers))
+	for name := range headers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	result := make([]protocol.WireHeaderEntry, 0, len(headers))
+	for _, name := range names {
+		result = append(result, protocol.WireHeaderEntry{Name: name, Value: headers[name]})
+	}
+	return result
+}
+func networkStateFromWire(v protocol.WireNetworkState) engine.NetworkState {
+	return engine.NetworkState{Offline: v.Offline, Latency: time.Duration(v.LatencyMS) * time.Millisecond, DownloadThroughput: v.DownloadThroughput, UploadThroughput: v.UploadThroughput, ConnectionType: engine.NetworkConnectionType(v.ConnectionType)}
+}
+func networkStateToWire(v engine.NetworkState) map[string]any {
+	return map[string]any{"offline": v.Offline, "latencyMs": v.Latency.Milliseconds(), "downloadThroughput": v.DownloadThroughput, "uploadThroughput": v.UploadThroughput, "connectionType": v.ConnectionType}
+}
+func ownerToWire(v engine.NetworkOwnerProvenance) map[string]any {
+	return map[string]any{"kind": v.Kind, "id": v.ID, "callsite": v.Callsite, "count": v.Count, "shadowed": v.Shadowed}
+}
+func shadowsToWire(values []engine.NetworkShadowDiagnostic) []map[string]any {
+	result := make([]map[string]any, len(values))
+	for i, v := range values {
+		shadowed := make([]map[string]any, len(v.Shadowed))
+		for j, owner := range v.Shadowed {
+			shadowed[j] = ownerToWire(owner)
+		}
+		result[i] = map[string]any{"url": v.URL, "stage": v.Stage, "winner": ownerToWire(v.Winner), "shadowed": shadowed}
+	}
+	return result
+}
 
 type engineBackend struct{ browser *engine.Browser }
 
@@ -1352,6 +1699,9 @@ var engineProtocolCodes = map[engine.ErrorCode]protocol.ErrorCode{
 }
 
 func engineRPCError(err error) error {
+	if err == nil {
+		return nil
+	}
 	// A ProtocolError that travelled out through the engine (an engine.Fatal wrapping one, say)
 	// already knows its own code - do not flatten it to DRIVER_ERROR on the way past.
 	var protocolErr *protocol.ProtocolError
@@ -1407,4 +1757,28 @@ func clearedReadError(matched bool, err error) error {
 		return nil
 	}
 	return err
+}
+
+// eventfulAssertionResult shapes a server-side poll the way the client's AssertionResult expects.
+// The trajectory is the poll's own attempts: hard-coding it empty made expectNetworkIdle report a
+// typed result whose diagnostic half was a fiction, so "the network never went idle" said nothing
+// about what the in-flight count had been doing.  rpcRequestCount stays 1 because that is the truth
+// of a server-side poll - one request owns the whole retry loop.
+func eventfulAssertionResult(result engine.PollResult) map[string]any {
+	trajectory := make([]any, len(result.Attempts))
+	for index, attempt := range result.Attempts {
+		entry := map[string]any{
+			"attempt":   attempt.Number,
+			"elapsedMs": attempt.StartedAt.Sub(result.StartedAt).Milliseconds(),
+			"observed":  attempt.Observation.Value,
+		}
+		if attempt.Error != "" {
+			entry["retryReason"] = attempt.Error
+		}
+		trajectory[index] = entry
+	}
+	return map[string]any{
+		"observed": result.Final.Value, "attemptCount": result.AttemptCount, "trajectory": trajectory,
+		"rpcRequestCount": 1, "rpcResponseCount": 1, "elapsedMs": result.Duration.Milliseconds(),
+	}
 }
