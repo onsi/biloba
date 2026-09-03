@@ -59,3 +59,35 @@ jobs:
     # ConnectToChrome's retry/backoff; the one-time full google-chrome launch gets a roomier
     # WSURLReadTimeout (see SpinUpChrome) since a cold runner can take >20s to expose DevTools.
     - run: go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --fail-on-pending --keep-going --race -procs=2 --poll-progress-after=30s --timeout=8m
+
+  driver:
+    runs-on: ubuntu-latest
+    name: Test (TypeScript driver + daemon)
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/setup-go@v6
+      with:
+        go-version-file: 'go.mod'
+    - uses: pnpm/action-setup@v4
+      with:
+        package_json_file: typescript/package.json
+    - uses: actions/setup-node@v5
+      with:
+        node-version: 22
+        cache: pnpm
+        cache-dependency-path: typescript/pnpm-lock.yaml
+    # See the note in the build job: Chrome's sandbox needs unprivileged user namespaces.
+    - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+    # bilobad and the engine suite resolve Chrome through engine.LocateChrome, which searches the
+    # puppeteer cache this populates.  Installing it explicitly (rather than relying on the Go
+    # suite's auto-install side effect) keeps this job independent of job ordering.
+    - run: npx -y @puppeteer/browsers install chrome-headless-shell@stable --path "$HOME/.cache/puppeteer"
+    # Regenerated protocol types/goldens must match what is committed, TypeScript must typecheck
+    # and build, and the Go driver packages must pass - including the engine suite's guard that
+    # engine/biloba.js has not drifted from the canonical biloba.js.
+    - run: make driver-test
+    # The real daemon, driving a real shared Chrome, reaching the same observable outcome as the
+    # Go API.  Fails (not skips) if it is not configured.
+    - run: make driver-parity
+    # The shipping topology: three worker processes, one daemon each, one shared Chrome.
+    - run: make driver-e2e

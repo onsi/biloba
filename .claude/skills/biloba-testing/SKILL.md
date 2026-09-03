@@ -16,6 +16,9 @@ The `Makefile` wraps the canonical invocations — prefer these:
 | `make test` | headless (chrome-headless-shell), parallel + randomized | your default, every change |
 | `make test-all` | `make test`, then the same suite in full ("new") headless google-chrome (`BILOBA_TEST_HIGH_FIDELITY=true`) | before changes touching tab/Chrome lifecycle — both lanes are what CI runs |
 | `make stress-test` | 6 procs under moderate CPU/IO load (`stress`), 41 repeats, generous total budget | **only periodically, or when you suspect a change might be flaky** — it's slow and needs `stress` (`brew install stress`) |
+| `make driver-test` | the Go driver packages (`./engine ./protocol ./cmd/bilobad`, including the generated-protocol and biloba.js drift specs) and the TypeScript unit suites | when touching `engine/`, `protocol/`, `cmd/bilobad/`, or `typescript/` |
+| `make driver-parity` | the Go/TypeScript parity contract: a real `bilobad` driving a real shared Chrome, asserted against the same fixture from both languages | same, plus before trusting a new vertical slice |
+| `make driver-e2e` | the shipping topology: three vitest worker *processes*, one `bilobad` each, one shared Chrome | before anything touching session isolation, daemon lifecycle, or shared-browser attach/detach |
 
 Under the hood `make test` is just `ginkgo -r -p --randomize-all`. `-p` (parallel) is the realistic mode — Biloba is built for it (one shared Chrome, one isolated root tab per process); `--randomize-all` enforces spec independence.
 
@@ -27,6 +30,109 @@ To focus while debugging, run in serial and optionally non-headless/interactive:
 ginkgo --focus="..."                 # serial, easier to read
 BILOBA_INTERACTIVE=true ginkgo       # headed; pauses on failure until ^C (serial, few specs)
 ```
+
+### The driver lanes, and why they refuse to skip
+
+CI runs every one of these (`.github/workflows/test.yml`). Two rules keep them honest:
+
+- **The engine suite fails rather than skips when it cannot find Chrome.** It resolves the binary
+  through `engine.LocateChrome("")` — the same search the Go suite and `bilobad` use (explicit path
+  → `BILOBA_CHROME_HEADLESS_SHELL` → `$PATH` → the puppeteer/Biloba caches). It is the only guard
+  that `engine/biloba.js` still matches the canonical `biloba.js`, so a quiet skip there means the
+  copy can drift unnoticed. If it fails, run `make update-chrome`.
+- **`typescript/test/parity.test.ts` fails rather than skips when `BILOBA_DAEMON_EXECUTABLE` is
+  unset.** It is the only test that exercises the real daemon end to end; "4 skipped, exit 0" is
+  indistinguishable from "4 passed" at a glance. Run it via `make driver-parity` (which builds the
+  daemon first). To opt out on purpose, set `BILOBA_SKIP_PARITY=true`.
+
+`bilobad` resolves Chrome itself, so neither lane needs a browser environment variable.
+
+`make driver-test` deliberately does *not* run `go generate ./engine` — regenerating
+`engine/biloba.js` there would silently repair the drift the engine suite exists to catch. Run
+`go generate ./engine` yourself after editing `biloba.js`.
+
+### The e2e suite tests the topology, not an approximation of it
+
+`typescript/test/e2e/` is the only place the shipping arrangement — N worker processes, one daemon
+each, one shared Chrome — exists as such. `globalSetup` starts the single Chrome in the main process
+and provides its websocket URL; each test *file* becomes its own forked worker with its own daemon.
+
+The `rendezvous()` barriers in `test/e2e/harness.ts` are load-bearing twice over. They order the
+workers so an assertion happens while the others are demonstrably live, **and** they are the proof
+that the workers are concurrent processes at all: run the files serially and the first one blocks
+until it times out. A green run is therefore evidence of the topology. If you add a worker file,
+update the expected count in every `rendezvous()` call — a stale count makes the barrier release
+early and quietly stops proving anything.
+
+`crash.e2e.test.ts` runs in a second vitest invocation with a Chrome of its own, because it kills
+things on purpose. Its specs run in a deliberate order — the recoverable crashes first, the terminal
+one (killing Chrome) last — and vitest runs `it`s in source order, so that ordering is local and
+explicit rather than a property of how files happen to get scheduled.
+
+Every case in it pins a *diagnosis*. A crash reported as an assertion timeout is worse than useless:
+it says the page never reached the expected state, sending the reader to debug a test that was fine.
+The four covered: a crashed renderer (`PAGE_CRASHED`, recoverable by navigating), a dead browser
+(`BROWSER_GONE`), a worker killed without teardown (its daemon reaps itself, Chrome and the other
+workers are untouched), and Chrome unreachable at daemon startup (`DRIVER_CLOSED` with the daemon's
+stderr attached).
+
+Two of those carry timing bounds, and the bounds are the point rather than decoration: CDP does not
+*fail* calls against a dead renderer or a dead browser, it stops answering them, so both used to sit
+until their deadline and then report a timeout. Loosening those bounds would let the old behaviour
+back in silently.
+
+The isolation assertion is self-evidencing for the same reason: all three workers set
+`owner=<name>` on the *same* origin, so three different values coexisting is exactly what browser-
+context isolation means. If it broke, they would see each other's.
+
+### Two guards on the wire protocol
+
+`protocol/` is the Go↔TypeScript boundary, and it has a guard on each side that you should extend
+rather than work around:
+
+- `protocol/encoding_test.go` marshals every response type and compares the keys that actually
+  appear against the keys the **generated** TypeScript declares required. This is what catches
+  `omitempty` on a struct (a no-op in Go: the field ships on every response while TypeScript calls
+  it optional — make the Go field a pointer). When you add a wire field, add its type to the table.
+- `typescript/test/protocol-golden.test.ts` asserts the goldens with `toEqual`, not
+  `toMatchObject`, so a field the daemon starts or stops emitting is a failure rather than a
+  silently-ignored extra key.
+
+`protocol/generated_test.go` is the drift guard for the generated TypeScript and golden frames: it
+renders them from the Go wire structs and compares against what is on disk. It deliberately does not
+shell out to git — "does the tree match the last commit?" is the wrong question (it passes a staged
+divergent file and fails a working tree you just regenerated correctly), so nothing here needs you to
+commit before the check goes green. After editing the wire structs, run `go generate ./protocol` and
+commit the generated files alongside the change.
+
+Two conventions the wire specs enforce, worth knowing before you add a method:
+
+- **A bad request costs the request, not the daemon.** One worker's daemon owns every session that
+  worker is driving, so an unknown method, mis-shaped params, a duplicate in-flight id, a zero id, or
+  an unparseable frame body are all answered as errors while the loop keeps going. Only a genuinely
+  desynced stream (short read, bad length prefix) ends it. `protocol/stdio_test.go` pins each case
+  with a `stillServing()` call afterwards — follow that shape.
+- **A stub daemon and the real one answer to one contract.** `typescript/test/support/assertions.ts`
+  holds the invariants a timed-out operation owes; both `client.test.ts` (fast, stub) and
+  `parity.test.ts` (slow, real `bilobad`) assert through it. Generated types constrain the *shape* a
+  stub can send, but nothing constrains its *behaviour* — a stub is free to claim a failed click
+  succeeded. Sharing the assertion is what stops that: it caught the stub reporting a timed-out
+  click with an empty trajectory, which the real daemon cannot produce. Put invariants there and
+  payload specifics at the call site.
+- **Some failures are not worth retrying.** `engine.Poll` stops immediately on a fatal attempt
+  error — the engine's runner-neutral answer to `gomega.StopTrying`, which the Go API already uses
+  for the same reason (`capture.go`, `visual.go`, `cookie_matchers.go`: a decode into the wrong
+  pointer type, a missing baseline, a selector that will never parse). Mark one with
+  `engine.Fatal(err)`, or give an `engine.Error` a code whose `Fatal()` is true. Getting this wrong
+  is expensive in a specific way: the poll burns its whole budget and then reports a *timeout*,
+  attributing to the page a failure that was never about the page. The line to walk: a
+  `ReferenceError` or `TypeError` is the ordinary shape of "not there yet" (biloba.js not installed,
+  an element not rendered) and must stay retryable; a `SyntaxError` cannot start parsing later, so it
+  is fatal. Same for a malformed *expectation* — invalid `expectedJson` is the caller's bug, not a
+  page that has not settled.
+- **Meaning goes on the wire, not into inference.** `evaluate` carries an explicit `invoke` flag
+  rather than guessing from whether the argument array is empty. If you find yourself deriving one
+  field's meaning from another's emptiness, add the field instead.
 
 ## Suite setup (`biloba_suite_test.go`)
 

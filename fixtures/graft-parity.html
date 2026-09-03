@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+  <body>
+    <h1>Biloba parity</h1>
+    <label>Name <input data-testid="name"></label>
+    <output id="echo"></output>
+    <button aria-label="Increment">Increment</button>
+    <div id="count">0</div>
+    <div id="delayed">loading</div>
+    <script>
+      const input = document.querySelector('[data-testid="name"]')
+      input.addEventListener('input', () => document.querySelector('#echo').textContent = input.value)
+      document.querySelector('button').addEventListener('click', () => {
+        const count = document.querySelector('#count')
+        count.textContent = String(Number(count.textContent) + 1)
+      })
+      setTimeout(() => document.querySelector('#delayed').textContent = 'ready', 80)
+    </script>
+  </body>
+</html>
