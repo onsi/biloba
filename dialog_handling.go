@@ -1,7 +1,10 @@
 package biloba
 
 import (
+	"context"
+
 	"github.com/chromedp/cdproto/page"
+	"github.com/onsi/biloba/engine"
 	"github.com/onsi/gomega/types"
 )
 
@@ -181,7 +184,9 @@ func (b *Biloba) dismissDialog(response bool, text string) {
 		if text != "" {
 			action = action.WithPromptText(text)
 		}
-		b.runCDP("dismiss the JavaScript dialog", action)
+		_ = b.runEngine("dismiss the JavaScript dialog", func(ctx context.Context) error {
+			return engine.RunActionContext(ctx, action)
+		})
 	}()
 }
 

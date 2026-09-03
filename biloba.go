@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/onsi/biloba/engine"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -27,10 +28,8 @@ import (
 
 	"github.com/jehiah/agentdetection"
 
-	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/emulation"
-	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/inspector"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
@@ -71,12 +70,7 @@ func chromeMajorVersion(product string) int {
 // minimumSupportedChromeMajor, prints a one-time warning with upgrade instructions.  It is
 // best-effort: any probe/parse failure is silently ignored so a version check never breaks startup.
 func warnIfChromeUnsupported(ginkgoT GinkgoTInterface, browserCtx context.Context, highFidelity bool) {
-	var product string
-	err := chromedp.Run(browserCtx, chromedp.ActionFunc(func(ctx context.Context) error {
-		_, p, _, _, _, err := browser.GetVersion().Do(ctx)
-		product = p
-		return err
-	}))
+	product, err := engine.ChromeProductContext(browserCtx)
 	if err != nil {
 		return
 	}
@@ -231,11 +225,13 @@ func (b *Biloba) applyHighFidelityViewport() error {
 		return nil
 	}
 	return retryTransientCDP(func() error {
-		return b.runCDP("apply the high-fidelity viewport emulation", chromedp.EmulateViewport(
-			int64(b.ChromeConnection.WindowWidth),
-			int64(b.ChromeConnection.WindowHeight),
-			emulateViewportMatchingScreen,
-		))
+		return b.runEngine("apply the high-fidelity viewport emulation", func(ctx context.Context) error {
+			return engine.EmulateViewportContext(ctx,
+				b.ChromeConnection.WindowWidth,
+				b.ChromeConnection.WindowHeight,
+				emulateViewportMatchingScreen,
+			)
+		})
 	})
 }
 
@@ -250,11 +246,18 @@ func (b *Biloba) reassertViewportForCompositor() {
 	if !b.ChromeConnection.HighFidelity || b.ChromeConnection.WindowWidth <= 0 || b.ChromeConnection.WindowHeight <= 0 {
 		return
 	}
-	var dims []int64
-	if err := b.runCDP("measure the viewport", chromedp.Evaluate("[window.innerWidth, window.innerHeight]", &dims)); err != nil || len(dims) != 2 || dims[0] <= 0 || dims[1] <= 0 {
+	var width, height int64
+	err := b.runEngine("measure the viewport", func(ctx context.Context) error {
+		var err error
+		width, height, err = engine.ViewportDimensionsContext(ctx)
+		return err
+	})
+	if err != nil || width <= 0 || height <= 0 {
 		return
 	}
-	_ = b.runCDP("re-apply the viewport emulation", chromedp.EmulateViewport(dims[0], dims[1], emulateViewportMatchingScreen))
+	_ = b.runEngine("re-apply the viewport emulation", func(ctx context.Context) error {
+		return engine.EmulateViewportContext(ctx, int(width), int(height), emulateViewportMatchingScreen)
+	})
 }
 
 // applyFocusEmulation makes this tab behave as though its page always holds the system focus.  An
@@ -267,7 +270,9 @@ func (b *Biloba) reassertViewportForCompositor() {
 // page as focused.
 func (b *Biloba) applyFocusEmulation() error {
 	return retryTransientCDP(func() error {
-		return b.runCDP("enable focus emulation", emulation.SetFocusEmulationEnabled(true))
+		return b.runEngine("enable focus emulation", func(ctx context.Context) error {
+			return engine.SetFocusEmulationContext(ctx)
+		})
 	})
 }
 
@@ -340,16 +345,16 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...SpinUpOption) ChromeConne
 		// EmulateViewport each tab back up to that size (see applyHighFidelityViewport).
 		// chrome-headless-shell has no such virtual-screen clamp, so this probe and the EmulateViewport
 		// workaround are skipped in the default mode.
-		var outerDims []int
-		if err := chromedp.Run(browserCtx, chromedp.Evaluate("[window.outerWidth, window.outerHeight]", &outerDims)); err != nil {
+		outerWidth, outerHeight, err := engine.OuterWindowSizeContext(browserCtx)
+		if err != nil {
 			ginkgoT.Fatalf("failed to spin up chrome: %s", err)
 			return ChromeConnection{}
 		}
-		if len(outerDims) == 2 {
-			cc.WindowWidth = outerDims[0]
-			cc.WindowHeight = outerDims[1]
+		if outerWidth > 0 && outerHeight > 0 {
+			cc.WindowWidth = outerWidth
+			cc.WindowHeight = outerHeight
 		}
-	} else if err := chromedp.Run(browserCtx, chromedp.Evaluate("1", nil)); err != nil {
+	} else if err := engine.PingContext(browserCtx); err != nil {
 		ginkgoT.Fatalf("failed to spin up chrome: %s", err)
 		return ChromeConnection{}
 	}
@@ -711,10 +716,7 @@ func (b *Biloba) bootstrapIsolatedTab(allocatorContext context.Context, bootstra
 		}
 
 		bootstrapCtx, cancelBootstrap := chromedp.NewContext(allocatorContext, bootstrapOpts...)
-		// Unbounded on purpose: this Run is what allocates the browser and its target on bootstrapCtx,
-		// so a deadline here would own - and then kill - the Chrome connection.  See the note in
-		// SpinUpChrome.
-		if err := chromedp.Run(bootstrapCtx, chromedp.Evaluate("1", nil)); err != nil {
+		if err := engine.PingContext(bootstrapCtx); err != nil {
 			cancelBootstrap()
 			lastErr = err
 			continue
@@ -1027,7 +1029,9 @@ func (b *Biloba) Prepare() {
 	// ensureFetchEnabled turned off (a cached response raises no Fetch event, so interception
 	// would silently miss it)
 	if wasFetchEnabled {
-		b.runCDP("disable network interception", fetch.Disable(), network.SetCacheDisabled(false))
+		_ = b.runEngine("disable network interception", func(ctx context.Context) error {
+			return engine.DisableInterceptionContext(ctx)
+		})
 	}
 
 	// attachFailureArtifactsIfFailed clears the per-spec poll diagnostics on its way out, but it is
@@ -1352,22 +1356,7 @@ func (b *Biloba) progressReporter() string {
 // (tab) within it, returning both IDs. Chrome 149+ requires WithNewWindow(true) when
 // creating a target in a non-default browser context.
 func newIsolatedBrowserContextAndTarget(ctx context.Context) (cdp.BrowserContextID, target.ID, error) {
-	var browserContextID cdp.BrowserContextID
-	var targetID target.ID
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
-		c := chromedp.FromContext(ctx)
-		be := cdp.WithExecutor(ctx, c.Browser)
-		var err error
-		browserContextID, err = target.CreateBrowserContext().WithDisposeOnDetach(true).Do(be)
-		if err != nil {
-			return err
-		}
-		targetID, err = target.CreateTarget("about:blank").
-			WithBrowserContextID(browserContextID).
-			WithNewWindow(true).
-			Do(be)
-		return err
-	}))
+	browserContextID, targetID, err := engine.NewIsolatedTargetContext(ctx)
 	return browserContextID, targetID, err
 }
 
@@ -1423,13 +1412,9 @@ func (b *Biloba) registerTabFor(c context.Context, cancel context.CancelFunc) *B
 
 	var browserContextID cdp.BrowserContextID
 	err := retryTransientCDP(func() error {
-		return chromedp.Run(c,
-			chromedp.ActionFunc(func(ctx context.Context) error {
-				info, err := target.GetTargetInfo().Do(ctx)
-				browserContextID = info.BrowserContextID
-				return err
-			}),
-		)
+		var infoErr error
+		browserContextID, infoErr = engine.TargetBrowserContextContext(c)
+		return infoErr
 	})
 	if err != nil {
 		cancel()

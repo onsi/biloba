@@ -12,6 +12,7 @@ import (
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
+	"github.com/onsi/biloba/engine"
 )
 
 func (b *Biloba) configureDownloadBehaviorForAllTabsWithBrowserContextID(browserContextId cdp.BrowserContextID) {
@@ -23,17 +24,17 @@ func (b *Biloba) configureDownloadBehaviorForAllTabsWithBrowserContextID(browser
 }
 
 func (b *Biloba) configureDownloadBehavior() {
-	b.runCDP("configure the download behavior",
-		browser.SetDownloadBehavior(browser.SetDownloadBehaviorBehaviorAllowAndName).
-			WithDownloadPath(b.root.downloadDir).
-			WithEventsEnabled(true).
-			WithBrowserContextID(b.browserContextID))
+	_ = b.runEngine("configure the download behavior", func(ctx context.Context) error {
+		return engine.ConfigureDownloadsContext(ctx, b.browserContextID, b.root.downloadDir)
+	})
 }
 
 // enableCrashReporting turns on the Inspector domain, which is one of the two ways Chrome announces a
 // dead renderer.  chromedp enables Page/Runtime/Network/DOM on its own but not this one.
 func (b *Biloba) enableCrashReporting() {
-	b.runCDP("enable crash reporting", inspector.Enable())
+	_ = b.runEngine("enable crash reporting", func(ctx context.Context) error {
+		return engine.EnableCrashReportingContext(ctx)
+	})
 }
 
 // installBilobaOnEveryDocument hands biloba.js to Chrome once, to run at the start of every document
@@ -58,10 +59,9 @@ func (b *Biloba) enableCrashReporting() {
 // not.  Nothing about this may become load-bearing without a fallback - a silent failure would
 // otherwise turn every command after a navigation into a "_biloba is not defined" round trip.
 func (b *Biloba) installBilobaOnEveryDocument() {
-	err := b.runCDP("install biloba.js on every new document", chromedp.ActionFunc(func(ctx context.Context) error {
-		_, err := page.AddScriptToEvaluateOnNewDocument(bilobaJS).Do(ctx)
-		return err
-	}))
+	err := b.runEngine("install biloba.js on every new document", func(ctx context.Context) error {
+		return engine.InstallScriptOnNewDocumentContext(ctx, bilobaJS)
+	})
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	b.state.bilobaAutoInstalled = err == nil
