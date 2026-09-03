@@ -720,6 +720,30 @@ describe("Biloba TypeScript client", () => {
     expect((requests.at(-1) as {request: {poll?: {mode?: string}}}).request.poll?.mode).toBeUndefined();
   });
 
+  it("accepts immediate as an action-friendly alias for immediate mode", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+
+    await session.locator("#save").click({immediate: true});
+    await session.getByTestId("name").setValue("Ada", {immediate: true});
+
+    expect(requests.filter(({method}) => method === "Click" || method === "SetValue")).toMatchObject([
+      {method: "Click", request: {poll: {mode: "IMMEDIATE"}}},
+      {method: "SetValue", request: {poll: {mode: "IMMEDIATE"}}},
+    ]);
+  });
+
+  it("rejects contradictory immediate action modes before sending a request", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+
+    const error = await session.locator("#save").click({immediate: true, mode: "consistently"})
+      .catch((reason: unknown) => reason);
+
+    expect(error).toMatchObject({code: "INVALID_ARGUMENT"});
+    expect(requests.filter(({method}) => method === "Click")).toHaveLength(0);
+  });
+
   it("serializes realistic pointer and keyboard actions", async () => {
     browser = await connectClient();
     const session = await browser.openSession();
