@@ -126,6 +126,24 @@ var _ = Describe("runner-neutral engine primitives", func() {
 		Expect(terminalDeadline.AttemptCount).To(Equal(1))
 		Expect(terminalDeadlineAttempts).To(Equal(2))
 
+		terminalCanceledAttempts := 0
+		terminalCanceled, err := engine.Poll(context.Background(), engine.PollPolicy{
+			Mode:     engine.PollConsistently,
+			Timeout:  20 * time.Millisecond,
+			Interval: time.Millisecond,
+		}, func(ctx context.Context) (engine.Observation, bool, error) {
+			terminalCanceledAttempts++
+			if terminalCanceledAttempts == 1 {
+				return engine.Observation{Value: "steady"}, true, nil
+			}
+			<-ctx.Done()
+			return engine.Observation{}, false, fmt.Errorf("browser operation: %w", context.Canceled)
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(terminalCanceled.Final.Value).To(Equal("steady"))
+		Expect(terminalCanceled.AttemptCount).To(Equal(1))
+		Expect(terminalCanceledAttempts).To(Equal(2))
+
 		broken, err := engine.Poll(context.Background(), engine.PollPolicy{
 			Mode:     engine.PollConsistently,
 			Timeout:  time.Second,
