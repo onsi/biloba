@@ -1,6 +1,6 @@
 {
   "name": "biloba",
-  "description": "Write fast, stable browser tests with Biloba in your own Ginkgo/Gomega suite. Skills for setup, the dual immediate/matcher API, semantic role/text/label locators, realistic interactions (b.Realistic() for occlusion/hover/drag), visual regression assertions against committed screenshot baselines (b.HaveScreenshot), the XPath DSL, a full API reference, orienting to an unfamiliar page, debugging failures, diagnosing/preventing flaky specs, and driving Biloba from a TypeScript/vitest suite through the bilobad daemon.",
+  "description": "Deprecated compatibility alias for Biloba's Go/Ginkgo/Gomega skills. Existing biloba:* invocations continue to work; new installations should use biloba-gomega.",
   "version": "0.15.4",
   "author": {
     "name": "Onsi Fakhouri",
@@ -9,5 +9,5 @@
   "homepage": "https://onsi.github.io/biloba/",
   "repository": "https://github.com/onsi/biloba",
   "license": "MIT",
-  "keywords": ["biloba", "ginkgo", "gomega", "browser-testing", "chromedp", "go", "typescript", "vitest"]
+  "keywords": ["biloba", "ginkgo", "gomega", "browser-testing", "compatibility", "deprecated"]
 }

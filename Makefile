@@ -5,7 +5,16 @@
 
 GINKGO := go run github.com/onsi/ginkgo/v2/ginkgo
 
-.PHONY: test test-all stress-test update-chrome driver-test driver-parity driver-e2e
+.PHONY: test test-all stress-test update-chrome driver-test driver-parity driver-e2e check-plugins sync-plugin-versions
+
+## check-plugins: validate plugin manifests, versions, namespaces, skill names, and client separation.
+check-plugins:
+	./scripts/check-plugins.sh
+
+## sync-plugin-versions: release-tool hook; copy BILOBA_VERSION into every Biloba plugin manifest.
+## Onsi's shipit should run this after updating BILOBA_VERSION and before creating the release commit.
+sync-plugin-versions:
+	./scripts/sync-plugin-versions.sh
 
 ## test: standard headless (chrome-headless-shell) suite - parallel + randomized. Your default.
 test:

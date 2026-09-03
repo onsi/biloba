@@ -12,6 +12,20 @@ jobs:
       with:
         go-version-file: 'go.mod'
     - run: go mod tidy && git diff --exit-code go.mod go.sum
+    - run: make check-plugins
+
+  docs:
+    runs-on: ubuntu-latest
+    name: Build docs
+    env:
+      BUNDLE_GEMFILE: ${{ github.workspace }}/docs/Gemfile
+    steps:
+    - uses: actions/checkout@v5
+    - uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: '3.2'
+        bundler-cache: true
+    - run: bundle exec jekyll build --source docs --destination _site
 
   build:
     runs-on: ubuntu-latest
