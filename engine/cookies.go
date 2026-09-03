@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
@@ -38,6 +39,32 @@ func SetCookiesContext(targetCtx context.Context, browserContextID cdp.BrowserCo
 	return withBrowserExecutor(targetCtx, func(browserCtx context.Context) error {
 		return storage.SetCookies(params).WithBrowserContextID(browserContextID).Do(browserCtx)
 	})
+}
+
+// GetCookiesContext reads every cookie in one isolated browser context.
+func GetCookiesContext(targetCtx context.Context, browserContextID cdp.BrowserContextID) ([]Cookie, error) {
+	var stored []*network.Cookie
+	err := withBrowserExecutor(targetCtx, func(browserCtx context.Context) error {
+		var readErr error
+		stored, readErr = storage.GetCookies().WithBrowserContextID(browserContextID).Do(browserCtx)
+		return readErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	cookies := make([]Cookie, len(stored))
+	for index, cookie := range stored {
+		cookies[index] = Cookie{
+			Name: cookie.Name, Value: cookie.Value, Domain: cookie.Domain, Path: cookie.Path,
+			Secure: cookie.Secure, HTTPOnly: cookie.HTTPOnly, SameSite: string(cookie.SameSite),
+			Session: cookie.Session,
+		}
+		// Chrome reports the expiry as Unix seconds, and -1 for a session cookie.
+		if !cookie.Session && cookie.Expires > 0 {
+			cookies[index].Expires = time.Unix(int64(cookie.Expires), 0)
+		}
+	}
+	return cookies, nil
 }
 
 func ClearCookiesContext(targetCtx context.Context, browserContextID cdp.BrowserContextID) error {

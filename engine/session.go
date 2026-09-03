@@ -27,6 +27,10 @@ type Cookie struct {
 	Secure   bool
 	HTTPOnly bool
 	SameSite string
+
+	// Session is populated by reads only, and is true for a cookie with no expiration.  Setting it
+	// has no effect: a set cookie is a session cookie exactly when Expires is the zero time.
+	Session bool
 }
 
 type Diagnostics struct {
@@ -188,6 +192,17 @@ func (s *Session) SetCookies(ctx context.Context, cookies []Cookie) error {
 		}
 		return SetCookiesContext(opCtx, s.browserContextID, location, cookies)
 	})
+}
+
+// GetCookies reads every cookie in this session's isolated browser context.
+func (s *Session) GetCookies(ctx context.Context) ([]Cookie, error) {
+	var cookies []Cookie
+	err := s.serial(ctx, "get cookies", func(opCtx context.Context) error {
+		var readErr error
+		cookies, readErr = GetCookiesContext(opCtx, s.browserContextID)
+		return readErr
+	})
+	return cookies, err
 }
 
 func (s *Session) Evaluate(ctx context.Context, script string) (any, error) {
