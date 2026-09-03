@@ -16,9 +16,12 @@ export interface Worker {
  * One daemon per worker, one Chrome for all of them.
  */
 export async function connectWorker(name: string): Promise<Worker> {
+  const workerRoot = join(inject("rendezvousDir"), "visual", name);
   const browser = await connect({
     daemonExecutable: inject("daemonExecutable"),
     chromeWsUrl: inject("chromeWsUrl"),
+    artifactDir: join(workerRoot, "artifacts"),
+    screenshotBaselinesDir: join(workerRoot, "baselines"),
   });
   const session = await browser.openSession();
   await session.prepare();
@@ -80,4 +83,14 @@ export async function expectOwnStateOnly(worker: Worker): Promise<void> {
 export async function claimState(worker: Worker): Promise<void> {
   await worker.session.setCookies([{name: "owner", value: worker.name, domain: "127.0.0.1", path: "/"}]);
   await worker.session.evaluate(`window.localStorage.setItem("owner", ${JSON.stringify(worker.name)})`);
+}
+
+export async function expectScreenshotIsolation(worker: Worker): Promise<void> {
+  const bytes = await worker.session.getByRole("heading", {name: "Biloba parity"}).captureScreenshot();
+  expect([...bytes.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+  const path = await worker.session.captureScreenshot({output: "path", name: "shared/capture"});
+  const peers = await rendezvous("screenshots", worker.name, 3, {path});
+  const paths = peers.map((peer) => String(peer["path"]));
+  expect(new Set(paths).size).toBe(3);
+  expect((await readFile(path)).subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
 }

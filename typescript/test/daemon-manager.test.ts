@@ -1,9 +1,10 @@
 import {mkdtemp, readFile, rm, writeFile, chmod} from "node:fs/promises";
 import {tmpdir} from "node:os";
-import {join} from "node:path";
+import {join, resolve} from "node:path";
 import {afterEach, describe, expect, it} from "vitest";
 
 import {connect, startDaemon, startSharedBrowser, type DaemonProcess, type SharedBrowserProcess} from "../src/index.js";
+import {resolveUpdateScreenshots, resolveVisualConnectOptions} from "../src/internal/client.js";
 
 describe("bilobad process manager", () => {
   let daemon: DaemonProcess | undefined;
@@ -34,12 +35,22 @@ setInterval(() => {}, 1000);
       executable,
       chromePath: "/opt/chrome",
       artifactDir: "/tmp/biloba-artifacts",
+      screenshotBaselinesDir: "/tmp/biloba-baselines",
+      updateScreenshots: true,
+      screenshotPixelTolerance: 0.02,
+      screenshotChannelTolerance: 8,
+      maxScreenshotBytes: 1024,
     });
 
     await expect.poll(async () => await readFile(argumentsPath, "utf8").catch(() => "")).not.toBe("");
     expect(JSON.parse(await readFile(argumentsPath, "utf8"))).toEqual([
       "--chrome-path=/opt/chrome",
       "--artifact-dir=/tmp/biloba-artifacts",
+      "--screenshot-baselines-dir=/tmp/biloba-baselines",
+      "--update-screenshots=true",
+      "--screenshot-pixel-tolerance=0.02",
+      "--screenshot-channel-tolerance=8",
+      "--max-screenshot-bytes=1024",
     ]);
     expect(daemon.pid).toBeGreaterThan(0);
 
@@ -61,6 +72,64 @@ process.exit(7);
       code: "DRIVER_CLOSED",
       daemonDetail: "chrome executable is missing\n",
     });
+  });
+
+  it("parses every screenshot-update environment spelling and warns on invalid values", () => {
+    const warnings: string[] = [];
+    for (const value of ["1", "t", "true", "y", "yes", "on", " TRUE "]) {
+      expect(resolveUpdateScreenshots(undefined, value, (message) => warnings.push(message))).toBe(true);
+    }
+    for (const value of ["0", "f", "false", "n", "no", "off", "", " ", undefined]) {
+      expect(resolveUpdateScreenshots(undefined, value, (message) => warnings.push(message))).toBe(false);
+    }
+    expect(resolveUpdateScreenshots(undefined, " definitely ", (message) => warnings.push(message))).toBe(false);
+    expect(warnings).toEqual([expect.stringContaining("unrecognized value")]);
+    expect(resolveUpdateScreenshots(true, " definitely ", (message) => warnings.push(message))).toBe(true);
+    expect(resolveUpdateScreenshots(false, "true", (message) => warnings.push(message))).toBe(false);
+    expect(warnings).toHaveLength(1);
+  });
+
+  it("resolves explicit visual roots over environment roots over absolute defaults", () => {
+    const defaults = resolveVisualConnectOptions({}, {}, () => undefined);
+    expect(defaults).toMatchObject({
+      artifactDir: resolve("biloba-screenshots"),
+      screenshotBaselinesDir: resolve("biloba-baselines"),
+      updateScreenshots: false,
+      screenshotPixelTolerance: 0,
+      screenshotChannelTolerance: 0,
+      maxScreenshotBytes: 16 * 1024 * 1024,
+    });
+    const environment = resolveVisualConnectOptions({}, {
+      BILOBA_SCREENSHOTS_DIR: "env-artifacts",
+      BILOBA_SCREENSHOT_BASELINES_DIR: "env-baselines",
+      BILOBA_UPDATE_SCREENSHOTS: "yes",
+    }, () => undefined);
+    expect(environment).toMatchObject({artifactDir: resolve("env-artifacts"), screenshotBaselinesDir: resolve("env-baselines"), updateScreenshots: true});
+    const explicit = resolveVisualConnectOptions({
+      artifactDir: "explicit-artifacts",
+      screenshotBaselinesDir: "explicit-baselines",
+      updateScreenshots: false,
+      screenshotPixelTolerance: 0.02,
+      screenshotChannelTolerance: 8,
+      maxScreenshotBytes: 1024,
+    }, {
+      BILOBA_SCREENSHOTS_DIR: "env-artifacts",
+      BILOBA_SCREENSHOT_BASELINES_DIR: "env-baselines",
+      BILOBA_UPDATE_SCREENSHOTS: "yes",
+    }, () => undefined);
+    expect(explicit).toMatchObject({
+      artifactDir: resolve("explicit-artifacts"),
+      screenshotBaselinesDir: resolve("explicit-baselines"),
+      updateScreenshots: false,
+      screenshotPixelTolerance: 0.02,
+      screenshotChannelTolerance: 8,
+      maxScreenshotBytes: 1024,
+    });
+    for (const options of [
+      {maxScreenshotBytes: 0}, {maxScreenshotBytes: 16 * 1024 * 1024 + 1},
+      {screenshotPixelTolerance: Number.NaN}, {screenshotPixelTolerance: Number.POSITIVE_INFINITY}, {screenshotPixelTolerance: -0.01}, {screenshotPixelTolerance: 1.01},
+      {screenshotChannelTolerance: -1}, {screenshotChannelTolerance: 256}, {screenshotChannelTolerance: 1.5},
+    ]) expect(() => resolveVisualConnectOptions(options, {}, () => undefined)).toThrow();
   });
 
   it("starts a shared-browser host and reads its websocket endpoint", async () => {

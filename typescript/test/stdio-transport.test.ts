@@ -78,6 +78,26 @@ describe("stdio transport", () => {
     });
   });
 
+  it("preserves fatal visual diagnostics and derives their artifact paths", async () => {
+    const comparison = transport.screenshot({sessionId: "session-1", operation: {kind: "EXPECT", target: {kind: "PAGE"}, name: "card"}});
+    const request = await nextRequest(requests);
+    const visual = {
+      match: false,
+      updated: false,
+      warnings: [],
+      schemes: [{status: "missing", match: false, baselinePath: "/tmp/card.png", actualPath: "/tmp/card.actual.png"}],
+      attemptCount: 1,
+      elapsedMs: 2,
+    };
+    toClient.write(encodeFrame({id: request.id, error: {code: "VISUAL_BASELINE", message: "missing baseline", diagnostics: {visual}}}));
+
+    await expect(comparison).rejects.toMatchObject({
+      code: "VISUAL_BASELINE",
+      visual,
+      artifactPaths: ["/tmp/card.png", "/tmp/card.actual.png"],
+    });
+  });
+
   it("sends an explicit cancellation frame for an AbortSignal", async () => {
     const controller = new AbortController();
     const assertion = transport.assert({

@@ -9,6 +9,7 @@ require (
 	github.com/jehiah/agentdetection v0.0.0-20260504180809-d55902bec14c
 	github.com/onsi/ginkgo/v2 v2.30.0
 	github.com/onsi/gomega v1.41.0
+	golang.org/x/sys v0.47.0
 )
 
 require (
@@ -26,7 +27,6 @@ require (
 	golang.org/x/mod v0.38.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/term v0.45.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/tools v0.48.0 // indirect

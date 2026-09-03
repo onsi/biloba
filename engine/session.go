@@ -44,7 +44,7 @@ type Diagnostics struct {
 	ScreenshotPath string
 }
 
-// Session is an isolated root tab. Operations on one session are serialized.
+// Session is a browser target scoped to one isolated context. Operations on one session are serialized.
 type Session struct {
 	browser          *Browser
 	ctx              context.Context
@@ -92,6 +92,9 @@ type Session struct {
 	root             *Session
 	initialWidth     int
 	initialHeight    int
+	restoreViewport  *ViewportSize
+	visual           visualLifecycle
+	media            Media
 	highFidelity     bool
 	initScriptIDs    []page.ScriptIdentifier
 	// crashed is closed by Chrome's Inspector.targetCrashed listener, which runs on chromedp's event
@@ -167,7 +170,7 @@ func (s *Session) Close() error {
 	if alreadyClosed {
 		return nil
 	}
-	if s.browser != nil {
+	if s.browser != nil && !s.frameTarget {
 		s.browser.mu.Lock()
 		browserClosing := s.browser.closed
 		s.browser.mu.Unlock()
@@ -197,7 +200,7 @@ func (s *Session) Close() error {
 			return target.DisposeBrowserContext(s.browserContextID).Do(browserCtx)
 		})
 		cancel()
-	} else if s.browser != nil && !s.frameTarget {
+	} else if s.browser != nil && !s.frameTarget && !s.browser.targetWasDestroyed(s.targetID) {
 		ctx, cancel := context.WithTimeout(s.browser.ctx, 5*time.Second)
 		disposeErr = s.withBrowserExecutor(ctx, func(browserCtx context.Context) error {
 			return target.CloseTarget(s.targetID).Do(browserCtx)
@@ -223,6 +226,21 @@ func (s *Session) Close() error {
 		return contextError("close session", disposeErr)
 	}
 	return nil
+}
+
+func (s *Session) markTargetDestroyed() {
+	s.eventsEnabled.Store(false)
+	s.releaseAllResponseHolds()
+	s.cancelActiveDownloads()
+	s.mu.Lock()
+	if !s.closed {
+		s.closed = true
+		s.clearDialogs()
+		s.clearResponseHoldBookkeeping()
+		s.clearNetworkBookkeeping()
+		s.cancel()
+	}
+	s.mu.Unlock()
 }
 
 // NewTab opens another target in this session's browser context, sharing cookies and storage.
@@ -271,14 +289,18 @@ func (s *Session) Activate(ctx context.Context) error {
 }
 
 func (s *Session) Prepare(ctx context.Context) error {
-	if s.ownsContext && s.browser != nil {
-		if err := s.browser.closeContextDescendants(ctx, s); err != nil {
-			return err
-		}
-	}
 	return s.serial(ctx, "prepare", func(opCtx context.Context) error {
+		if s.ownsContext && s.browser != nil {
+			if err := s.browser.closeContextDescendants(opCtx, s); err != nil {
+				return err
+			}
+		}
 		s.eventsEnabled.Store(false)
 		defer s.eventsEnabled.Store(true)
+		wasCrashed := s.hasCrashed()
+		if err := s.cleanupVisualState(opCtx, !wasCrashed); err != nil && !wasCrashed {
+			return err
+		}
 		if err := s.resetResponseHolds(opCtx); err != nil {
 			return err
 		}
@@ -307,8 +329,9 @@ func (s *Session) Prepare(ctx context.Context) error {
 		if err := ClearCookiesContext(opCtx, s.browserContextID); err != nil {
 			return err
 		}
-		if err := s.resetEmulation(opCtx); err != nil {
-			return err
+		emulationErr := s.resetEmulation(opCtx)
+		if emulationErr != nil && !wasCrashed {
+			return emulationErr
 		}
 		navigateBlank := func() error {
 			return chromedp.Run(opCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
@@ -323,9 +346,30 @@ func (s *Session) Prepare(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if err := s.applyViewport(opCtx, s.initialWidth, s.initialHeight); err != nil {
+		// Navigating the root first stops its old document from opening another popup while descendant
+		// handles are being closed. Re-discover afterward to catch anything spawned during cleanup.
+		if s.ownsContext && s.browser != nil {
+			if err := s.browser.closeContextDescendants(opCtx, s); err != nil {
+				return err
+			}
+		}
+		s.visual.frozen = false
+		if err := s.clearVisualColor(opCtx); err != nil {
 			return err
 		}
+		if emulationErr != nil {
+			if err := s.resetEmulation(opCtx); err != nil {
+				return err
+			}
+		}
+		viewportWidth, viewportHeight := s.initialWidth, s.initialHeight
+		if s.restoreViewport != nil {
+			viewportWidth, viewportHeight = s.restoreViewport.Width, s.restoreViewport.Height
+		}
+		if err := s.applyViewport(opCtx, viewportWidth, viewportHeight); err != nil {
+			return err
+		}
+		s.restoreViewport = nil
 		s.installed = false
 		s.clearCrashed()
 		return nil
@@ -345,6 +389,12 @@ func (s *Session) Navigate(ctx context.Context, destination string) error {
 // downstream failure instead of at the navigation that caused it.
 func (s *Session) NavigateWithStatus(ctx context.Context, destination string, expectedStatus int) error {
 	return s.serial(ctx, "navigate", func(opCtx context.Context) error {
+		recoveringCrash := s.hasCrashed()
+		if !recoveringCrash {
+			if err := s.clearVisualFreeze(opCtx); err != nil {
+				return err
+			}
+		}
 		width, height := int64(s.initialWidth), int64(s.initialHeight)
 		if s.highFidelity && !s.hasCrashed() {
 			var sizeErr error
@@ -352,6 +402,11 @@ func (s *Session) NavigateWithStatus(ctx context.Context, destination string, ex
 			if sizeErr != nil {
 				return sizeErr
 			}
+		}
+		restoreDiagnosticsViewport := s.restoreViewport != nil
+		if restoreDiagnosticsViewport {
+			width = int64(s.restoreViewport.Width)
+			height = int64(s.restoreViewport.Height)
 		}
 		result, err := NavigateContext(opCtx, destination)
 		// A navigation gives the target a fresh renderer, which is how a crashed page recovers - but
@@ -366,9 +421,15 @@ func (s *Session) NavigateWithStatus(ctx context.Context, destination string, ex
 			s.clearCrashed()
 			s.eventsEnabled.Store(true)
 		}
-		if (err == nil || result.HTTPFailure) && s.highFidelity {
+		if recoveringCrash && (err == nil || result.HTTPFailure) {
+			s.visual.frozen = false
+		}
+		if (err == nil || result.HTTPFailure) && (s.highFidelity || restoreDiagnosticsViewport) {
 			if viewportErr := s.applyViewport(opCtx, int(width), int(height)); viewportErr != nil {
 				return viewportErr
+			}
+			if restoreDiagnosticsViewport {
+				s.restoreViewport = nil
 			}
 		}
 		// Chrome reports a 4xx/5xx document as a loading failure, so that particular error is not

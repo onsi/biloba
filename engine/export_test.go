@@ -2,6 +2,20 @@ package engine
 
 import "context"
 
+type VisualOperationHooksForTest struct {
+	EmulateColorScheme func(context.Context, string) error
+	RunHandler         func(context.Context, string, string) (HandlerResponse, error)
+}
+
+// SetVisualOperationHooksForTest injects failures at the two visual lifecycle boundaries.
+func SetVisualOperationHooksForTest(session *Session, hooks VisualOperationHooksForTest) func() {
+	previousEmulate, previousHandler := session.visual.emulate, session.visual.handler
+	session.visual.emulate, session.visual.handler = hooks.EmulateColorScheme, hooks.RunHandler
+	return func() {
+		session.visual.emulate, session.visual.handler = previousEmulate, previousHandler
+	}
+}
+
 // SessionContextForTest exposes a session's chromedp target context so engine_test.go can
 // exercise the context-level primitives (NavigateContext and friends) against a live tab.
 func SessionContextForTest(session *Session) context.Context {

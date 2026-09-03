@@ -18,7 +18,7 @@ import {
   type Cookie,
 } from "../src/index.js";
 import {connectWithTransport, decodeBinaryBody, encodeBinaryBody} from "../src/internal/client.js";
-import type {HandshakeResponse, OpenSessionResponse, OperationResult, Request} from "../src/generated/protocol.js";
+import type {HandshakeResponse, OpenSessionResponse, OperationResult, Request, VisualResult as WireVisualResult} from "../src/generated/protocol.js";
 import {encodeFrame, FrameDecoder} from "../src/internal/framing.js";
 import {expectTimedOutAction, expectTimedOutAssertion} from "./support/assertions.js";
 import {StdioTransport} from "../src/internal/stdio-transport.js";
@@ -62,6 +62,7 @@ describe("Biloba TypeScript client", () => {
   let browser: Browser | undefined;
   let assertImplementation: Implementation;
   let clickImplementation: Implementation;
+  let screenshotImplementation: Implementation;
   let observeCancel: (() => void) | undefined;
   let warningHistory: unknown[];
   let closeSessionError: string | undefined;
@@ -82,6 +83,7 @@ describe("Biloba TypeScript client", () => {
       }));
     };
     clickImplementation = (_request, respond) => respond(operationResult());
+    screenshotImplementation = (_request, respond) => respond(operationResult({screenshot: {pngBase64: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString("base64"), width: 1, height: 1}}));
     observeCancel = undefined;
     warningHistory = [];
     closeSessionError = undefined;
@@ -144,6 +146,7 @@ describe("Biloba TypeScript client", () => {
       case "assert": assertImplementation(request, respond); break;
       case "dom": assertImplementation(request, respond); break;
       case "click": clickImplementation(request, respond); break;
+      case "screenshot": screenshotImplementation(request, respond); break;
       case "cancel": observeCancel?.(); break;
       case "closeSession": closeSessionError === undefined ? reply({}) : toClient.write(encodeFrame({id: envelope.id, error: {code: "INVALID_ARGUMENT", message: closeSessionError}})); break;
       case "prepareSession": warningHistory = []; reply({}); break;
@@ -151,9 +154,61 @@ describe("Biloba TypeScript client", () => {
     }
   }
 
-  async function connectClient(): Promise<Browser> {
-    return await connectWithTransport(transport);
+  async function connectClient(options: Parameters<typeof connectWithTransport>[1] = {}): Promise<Browser> {
+    return await connectWithTransport(transport, options);
   }
+
+  it("captures page and locator screenshots as typed bytes or daemon paths", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    expect(await session.captureScreenshot()).toEqual(new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+    screenshotImplementation = (_request, respond) => respond(operationResult({screenshot: {artifactPath: "/tmp/capture-card.png", width: 10, height: 20}}));
+    expect(await session.getByTestId("card").captureScreenshot({output: "path", name: "checkout/card", mask: [".clock"]})).toBe("/tmp/capture-card.png");
+    expect(requests.filter(({method}) => method === "Screenshot").map(({request}) => request.operation)).toEqual([
+      {kind: "CAPTURE", target: {kind: "PAGE"}, output: "BYTES"},
+      {kind: "CAPTURE", target: {kind: "ELEMENT", locator: {kind: "TEST_ID", value: "card", match: "EXACT", first: false}}, output: "PATH", name: "checkout/card", masks: [{kind: "CSS", value: ".clock", match: "EXACT", first: false}]},
+    ]);
+  });
+
+  it("returns visual results and preserves them on timeout errors", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    const visual: WireVisualResult = {match: true, updated: false, warnings: [], schemes: [{status: "matched", match: true, baselinePath: "/tmp/card.png"}], attemptCount: 1, elapsedMs: 12};
+    screenshotImplementation = (_request, respond) => respond(operationResult({visual}));
+    await expect(session.expectScreenshot("card", {colorSchemes: ["light", "dark"], pixelTolerance: 0.01})).resolves.toEqual(visual);
+    screenshotImplementation = (_request, respond) => respond(operationResult({matched: false, visual: {...visual, match: false, schemes: [{status: "mismatched", match: false, baselinePath: "/tmp/card.png", actualPath: "/tmp/card.actual.png"}]}}));
+    await expect(session.expectScreenshot("card")).rejects.toMatchObject({code: "TIMEOUT", visual: {match: false}, artifactPaths: ["/tmp/card.png", "/tmp/card.actual.png"]});
+  });
+
+  it("rejects malformed and conflicting screenshot response shapes", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    screenshotImplementation = (_request, respond) => respond(operationResult({screenshot: {pngBase64: "%%%=", width: 1, height: 1}}));
+    await expect(session.captureScreenshot()).rejects.toMatchObject({code: "DRIVER_ERROR"});
+    screenshotImplementation = (_request, respond) => respond(operationResult({screenshot: {pngBase64: "iVBORw==", artifactPath: "/tmp/both.png", width: 1, height: 1}}));
+    await expect(session.captureScreenshot()).rejects.toThrow(/conflicting output fields/);
+    screenshotImplementation = (_request, respond) => respond(operationResult({screenshot: {pngBase64: "iVBORw==", width: 1, height: 1}, visual: {match: true, updated: false, warnings: [], schemes: [], attemptCount: 1, elapsedMs: 1}}));
+    await expect(session.captureScreenshot()).rejects.toThrow(/invalid result shape/);
+  });
+
+  it("enforces the connect-level screenshot bound before sending and emits capture warnings", async () => {
+    const warnings: unknown[] = [];
+    browser = await connectClient({maxScreenshotBytes: 4, onScreenshotWarning: (warning) => warnings.push(warning)});
+    const session = await browser.openSession();
+    await expect(session.captureScreenshot({maxBytes: 5})).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    expect(requests.filter(({method}) => method === "Screenshot")).toHaveLength(0);
+    screenshotImplementation = (_request, respond) => respond(operationResult({screenshot: {pngBase64: "iVBORw==", width: 1, height: 1, warnings: ["element was clipped"]}}));
+    await expect(session.captureScreenshot()).resolves.toHaveLength(4);
+    expect(warnings).toEqual([{sessionId: "session-1", operation: "captureScreenshot", message: "element was clipped"}]);
+  });
+
+  it("rejects a mask locator owned by another session before sending", async () => {
+    browser = await connectClient();
+    const first = await browser.openSession();
+    const second = await browser.openSession();
+    await expect(first.captureScreenshot({mask: [second.locator(".foreign")]})).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    expect(requests.filter(({method}) => method === "Screenshot")).toHaveLength(0);
+  });
 
   it("keeps a session usable when close is rejected by active eventful work", async () => {
     browser = await connectClient();

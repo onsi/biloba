@@ -1,6 +1,6 @@
 import {afterAll, beforeAll, expect, it} from "vitest";
 
-import {claimState, connectWorker, expectOwnStateOnly, rendezvous, type Worker} from "./harness.js";
+import {claimState, connectWorker, expectOwnStateOnly, expectScreenshotIsolation, rendezvous, type Worker} from "./harness.js";
 
 // The worker that leaves early.  Its job is to prove that one worker finishing - closing its
 // browser handle, which stops its bilobad and disposes its browser context - takes nothing away
@@ -23,6 +23,8 @@ it("keeps its browser state to itself while the other workers write theirs", asy
 
   await expectOwnStateOnly(worker);
 });
+
+it("keeps screenshot bytes and paths isolated from other workers", async () => { await expectScreenshotIsolation(worker); });
 
 it("closes its daemon while the other workers are still working", async () => {
   await rendezvous("ready-for-close", NAME, 3);

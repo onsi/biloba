@@ -7,13 +7,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
 
 const Version = "1"
+const MaxScreenshotBytes = 16 << 20
 
 var Capabilities = []string{
 	"locator.css", "locator.xpath", "locator.test_id", "locator.text", "locator.role", "locator.label", "locator.placeholder", "locator.alt_text", "locator.title", "locator.refinements", "locator.first",
@@ -24,6 +28,7 @@ var Capabilities = []string{
 	"lifecycle.tabs", "lifecycle.context_identity", "lifecycle.cookies", "lifecycle.storage", "lifecycle.javascript", "lifecycle.page_state", "lifecycle.console", "lifecycle.emulation", "lifecycle.frames",
 	"dialogs.handlers", "dialogs.history", "dialogs.warnings", "downloads.history", "downloads.content", "downloads.cancel",
 	"network.history", "network.idle.http", "network.handlers", "network.response_callbacks", "network.holds", "network.emulation", "network.cache",
+	"screenshot.capture", "visual.compare",
 }
 
 type ErrorCode string
@@ -52,9 +57,10 @@ const (
 	// CodePageCrashed is this session's renderer dying while the browser itself lives on.  Chrome
 	// stops answering for that target rather than erroring, so without this the operation would
 	// simply hang until its deadline.  Navigating the session again recovers it.
-	CodePageCrashed ErrorCode = "PAGE_CRASHED"
-	CodeDriver      ErrorCode = "DRIVER_ERROR"
-	CodeCancelled   ErrorCode = "CANCELLED"
+	CodePageCrashed    ErrorCode = "PAGE_CRASHED"
+	CodeDriver         ErrorCode = "DRIVER_ERROR"
+	CodeCancelled      ErrorCode = "CANCELLED"
+	CodeVisualBaseline ErrorCode = "VISUAL_BASELINE"
 )
 
 type ProtocolError struct {
@@ -139,7 +145,50 @@ const (
 	OperationActivate
 	OperationDOM
 	OperationLifecycle
+	OperationScreenshot
 )
+
+type ScreenshotOperationKind uint8
+
+const (
+	ScreenshotCapture ScreenshotOperationKind = iota + 1
+	ScreenshotExpect
+)
+
+type ScreenshotTargetKind uint8
+
+const (
+	ScreenshotPage ScreenshotTargetKind = iota + 1
+	ScreenshotElement
+)
+
+type ScreenshotOutput uint8
+
+const (
+	ScreenshotBytes ScreenshotOutput = iota + 1
+	ScreenshotPath
+)
+
+type ScreenshotTarget struct {
+	Kind    ScreenshotTargetKind
+	Locator Locator
+}
+
+type ScreenshotOperation struct {
+	Kind                ScreenshotOperationKind
+	Target              ScreenshotTarget
+	Output              ScreenshotOutput
+	Name                string
+	Masks               []Locator
+	Animated            bool
+	ColorScheme         string
+	ColorSchemes        []string
+	MaxBytes            int
+	PixelTolerance      float64
+	PixelToleranceSet   bool
+	ChannelTolerance    int
+	ChannelToleranceSet bool
+}
 
 type LifecycleOperationKind uint8
 
@@ -175,8 +224,9 @@ const (
 )
 
 type Operation struct {
-	Kind OperationKind
-	URL  string
+	Kind       OperationKind
+	Screenshot ScreenshotOperation
+	URL        string
 	// ExpectedStatus is always concrete by the time an Operation is built - Dispatch resolves the
 	// request's omitted 0 to 200 - so nothing downstream has to know the default.
 	ExpectedStatus int
@@ -466,6 +516,8 @@ type Result struct {
 	StartedAt    time.Time
 	Elapsed      time.Duration
 	Diagnostics  Diagnostics
+	Screenshot   *ScreenshotCaptureResult
+	Visual       *WireVisualResult
 }
 
 type Observation struct {
@@ -476,11 +528,12 @@ type Observation struct {
 }
 
 type Diagnostics struct {
-	Locator        string `json:"locator,omitempty"`
-	Expected       string `json:"expected,omitempty"`
-	DOMOutline     string `json:"domOutline,omitempty"`
-	ScreenshotPath string `json:"screenshotPath,omitempty"`
-	DaemonDetail   string `json:"daemonDetail,omitempty"`
+	Locator        string            `json:"locator,omitempty"`
+	Expected       string            `json:"expected,omitempty"`
+	DOMOutline     string            `json:"domOutline,omitempty"`
+	ScreenshotPath string            `json:"screenshotPath,omitempty"`
+	DaemonDetail   string            `json:"daemonDetail,omitempty"`
+	Visual         *WireVisualResult `json:"visual,omitempty"`
 }
 
 // The wire structs below are the authoritative JSON protocol definition.  The
@@ -822,6 +875,96 @@ type AssertRequest struct {
 	Poll      PollOptions    `json:"poll,omitempty"`
 }
 
+type WireScreenshotTarget struct {
+	Kind    string       `json:"kind"`
+	Locator *WireLocator `json:"locator,omitempty"`
+}
+
+type WireScreenshotOperation struct {
+	Kind             string               `json:"kind"`
+	Target           WireScreenshotTarget `json:"target"`
+	Output           string               `json:"output,omitempty"`
+	Name             string               `json:"name,omitempty"`
+	Masks            []WireLocator        `json:"masks,omitempty"`
+	Animated         bool                 `json:"animated,omitempty"`
+	ColorScheme      string               `json:"colorScheme,omitempty"`
+	ColorSchemes     []string             `json:"colorSchemes,omitempty"`
+	MaxBytes         *int                 `json:"maxBytes,omitempty"`
+	PixelTolerance   *float64             `json:"pixelTolerance,omitempty"`
+	ChannelTolerance *int                 `json:"channelTolerance,omitempty"`
+}
+
+type ScreenshotRequest struct {
+	SessionID string                   `json:"sessionId"`
+	Operation *WireScreenshotOperation `json:"operation"`
+	Poll      PollOptions              `json:"poll,omitempty"`
+}
+
+type ScreenshotCaptureResult struct {
+	PNGBase64    string   `json:"pngBase64,omitempty"`
+	ArtifactPath string   `json:"artifactPath,omitempty"`
+	Width        int      `json:"width"`
+	Height       int      `json:"height"`
+	Warnings     []string `json:"warnings,omitempty"`
+	FullyClipped bool     `json:"fullyClipped,omitempty"`
+	Vanished     bool     `json:"vanished,omitempty"`
+}
+
+type WireScreenshotPoint struct {
+	X int `json:"x"`
+	Y int `json:"y"`
+}
+type WireScreenshotRect struct {
+	Min WireScreenshotPoint `json:"min"`
+	Max WireScreenshotPoint `json:"max"`
+}
+type WireScreenshotBounds struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+type WireVisualRegion struct {
+	Rect            WireScreenshotRect `json:"rect"`
+	DifferingPixels int                `json:"differingPixels"`
+}
+type WireVisualDiff struct {
+	Match               bool                 `json:"match"`
+	DimensionMismatch   bool                 `json:"dimensionMismatch"`
+	Baseline            WireScreenshotBounds `json:"baseline"`
+	Actual              WireScreenshotBounds `json:"actual"`
+	TotalPixels         int                  `json:"totalPixels"`
+	DifferingPixels     int                  `json:"differingPixels"`
+	Fraction            float64              `json:"fraction"`
+	MaxChannelDelta     int                  `json:"maxChannelDelta"`
+	Regions             []WireVisualRegion   `json:"regions"`
+	RegionCount         int                  `json:"regionCount"`
+	Shifted             bool                 `json:"shifted"`
+	Shift               *WireScreenshotPoint `json:"shift,omitempty"`
+	Scattered           bool                 `json:"scattered"`
+	RasterizationLikely bool                 `json:"rasterizationLikely"`
+	Unchanged           string               `json:"unchanged,omitempty"`
+}
+type WireVisualSchemeResult struct {
+	Scheme        string          `json:"scheme,omitempty"`
+	Status        string          `json:"status"`
+	Match         bool            `json:"match"`
+	BaselinePath  string          `json:"baselinePath"`
+	ActualPath    string          `json:"actualPath,omitempty"`
+	DiffPath      string          `json:"diffPath,omitempty"`
+	Diff          *WireVisualDiff `json:"diff,omitempty"`
+	PreviousDiff  *WireVisualDiff `json:"previousDiff,omitempty"`
+	Diagnosis     string          `json:"diagnosis,omitempty"`
+	Warning       string          `json:"warning,omitempty"`
+	UpdateSummary string          `json:"updateSummary,omitempty"`
+}
+type WireVisualResult struct {
+	Match        bool                     `json:"match"`
+	Updated      bool                     `json:"updated"`
+	Schemes      []WireVisualSchemeResult `json:"schemes"`
+	Warnings     []string                 `json:"warnings"`
+	AttemptCount uint32                   `json:"attemptCount"`
+	ElapsedMS    int64                    `json:"elapsedMs"`
+}
+
 type CancelRequest struct {
 	RequestID uint64 `json:"requestId"`
 }
@@ -835,9 +978,11 @@ type OperationResult struct {
 	// A pointer, because `omitempty` does nothing for a struct: a value here put an empty
 	// "diagnostics":{} on every successful response while the generated TypeScript declared the
 	// field optional.  See TestProtocol's encoding specs.
-	Diagnostics      *Diagnostics `json:"diagnostics,omitempty"`
-	RPCRequestCount  uint32       `json:"rpcRequestCount"`
-	RPCResponseCount uint32       `json:"rpcResponseCount"`
+	Diagnostics      *Diagnostics             `json:"diagnostics,omitempty"`
+	RPCRequestCount  uint32                   `json:"rpcRequestCount"`
+	RPCResponseCount uint32                   `json:"rpcResponseCount"`
+	Screenshot       *ScreenshotCaptureResult `json:"screenshot,omitempty"`
+	Visual           *WireVisualResult        `json:"visual,omitempty"`
 }
 
 type PollObservation struct {
@@ -1064,6 +1209,16 @@ func (s *Server) Dispatch(ctx context.Context, method string, params json.RawMes
 			return nil, err
 		}
 		return s.execute(ctx, request.SessionID, Operation{Kind: OperationLifecycle, Lifecycle: LifecycleOperation{Kind: LifecycleClearCookies}})
+	case "screenshot":
+		var request ScreenshotRequest
+		if err := decodeParams(params, &request); err != nil {
+			return nil, err
+		}
+		operation, operationErr := screenshotOperationFromWire(request.Operation, request.Poll)
+		if operationErr != nil {
+			return nil, operationErr
+		}
+		return s.execute(ctx, request.SessionID, Operation{Kind: OperationScreenshot, Screenshot: operation, Poll: operationPoll(request.Poll)})
 	case "eventful":
 		var request EventfulRequest
 		if err := decodeParams(params, &request); err != nil {
@@ -1463,7 +1618,18 @@ func (s *Server) execute(ctx context.Context, sessionID string, operation Operat
 	defer entry.mu.Unlock()
 	result, executeErr := entry.session.Execute(ctx, operation)
 	if executeErr != nil {
-		return nil, normalizeError(executeErr)
+		protocolErr := normalizeError(executeErr)
+		if result.Visual != nil {
+			copy := *protocolErr
+			diagnostics := Diagnostics{}
+			if copy.Diagnostics != nil {
+				diagnostics = *copy.Diagnostics
+			}
+			diagnostics.Visual = result.Visual
+			copy.Diagnostics = &diagnostics
+			protocolErr = &copy
+		}
+		return nil, protocolErr
 	}
 	return resultToWire(result), nil
 }
@@ -1594,6 +1760,140 @@ func pollFromWire(poll PollOptions) (PollPolicy, *ProtocolError) {
 		return PollPolicy{}, NewError(CodeInvalidArgument, "unsupported poll mode")
 	}
 	return PollPolicy{Timeout: time.Duration(poll.TimeoutMS) * time.Millisecond, Interval: time.Duration(poll.IntervalMS) * time.Millisecond, Mode: mode}, nil
+}
+
+var screenshotNamePartRE = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
+
+func screenshotOperationFromWire(wire *WireScreenshotOperation, pollWire PollOptions) (ScreenshotOperation, *ProtocolError) {
+	if wire == nil {
+		return ScreenshotOperation{}, NewError(CodeInvalidArgument, "operation is required")
+	}
+	kinds := map[string]ScreenshotOperationKind{"CAPTURE": ScreenshotCapture, "EXPECT": ScreenshotExpect}
+	kind, ok := kinds[wire.Kind]
+	if !ok {
+		return ScreenshotOperation{}, NewError(CodeInvalidArgument, "unsupported screenshot operation")
+	}
+	targetKinds := map[string]ScreenshotTargetKind{"PAGE": ScreenshotPage, "ELEMENT": ScreenshotElement}
+	targetKind, ok := targetKinds[wire.Target.Kind]
+	if !ok {
+		return ScreenshotOperation{}, NewError(CodeInvalidArgument, "unsupported screenshot target")
+	}
+	target := ScreenshotTarget{Kind: targetKind}
+	if targetKind == ScreenshotPage && wire.Target.Locator != nil {
+		return ScreenshotOperation{}, NewError(CodeInvalidArgument, "page screenshot target must not include a locator")
+	}
+	if targetKind == ScreenshotElement {
+		if wire.Target.Locator == nil {
+			return ScreenshotOperation{}, NewError(CodeInvalidArgument, "element screenshot target requires a locator")
+		}
+		locator, err := locatorFromWire(wire.Target.Locator)
+		if err != nil {
+			return ScreenshotOperation{}, err
+		}
+		target.Locator = locator
+	}
+	masks := make([]Locator, len(wire.Masks))
+	for i := range wire.Masks {
+		locator, err := locatorFromWire(&wire.Masks[i])
+		if err != nil {
+			return ScreenshotOperation{}, NewError(CodeInvalidArgument, fmt.Sprintf("masks[%d]: %s", i, err.Message))
+		}
+		masks[i] = locator
+	}
+	operation := ScreenshotOperation{Kind: kind, Target: target, Masks: masks, Animated: wire.Animated, Name: wire.Name, ColorScheme: wire.ColorScheme, ColorSchemes: append([]string(nil), wire.ColorSchemes...)}
+	if wire.MaxBytes != nil {
+		if *wire.MaxBytes <= 0 || *wire.MaxBytes > MaxScreenshotBytes {
+			return ScreenshotOperation{}, NewError(CodeInvalidArgument, fmt.Sprintf("maxBytes must be between 1 and %d", MaxScreenshotBytes))
+		}
+		operation.MaxBytes = *wire.MaxBytes
+	}
+	if kind == ScreenshotCapture {
+		if pollWire != (PollOptions{}) {
+			return ScreenshotOperation{}, NewError(CodeInvalidArgument, "raw screenshot capture does not support poll options")
+		}
+		outputs := map[string]ScreenshotOutput{"": ScreenshotBytes, "BYTES": ScreenshotBytes, "PATH": ScreenshotPath}
+		output, exists := outputs[wire.Output]
+		if !exists {
+			return ScreenshotOperation{}, NewError(CodeInvalidArgument, "unsupported screenshot output")
+		}
+		operation.Output = output
+		if wire.Name != "" && output != ScreenshotPath {
+			return ScreenshotOperation{}, NewError(CodeInvalidArgument, "name is only supported for path screenshot output")
+		}
+		if wire.Name != "" {
+			if err := validateScreenshotName(wire.Name); err != nil {
+				return ScreenshotOperation{}, err
+			}
+		}
+		if len(wire.ColorSchemes) > 0 || wire.PixelTolerance != nil || wire.ChannelTolerance != nil {
+			return ScreenshotOperation{}, NewError(CodeInvalidArgument, "raw screenshot capture does not support comparison options")
+		}
+		if wire.ColorScheme != "" && wire.ColorScheme != "light" && wire.ColorScheme != "dark" {
+			return ScreenshotOperation{}, NewError(CodeInvalidArgument, "colorScheme must be light or dark")
+		}
+		return operation, nil
+	}
+	if wire.Output != "" || wire.ColorScheme != "" {
+		return ScreenshotOperation{}, NewError(CodeInvalidArgument, "visual screenshot comparison does not support output or colorScheme")
+	}
+	if err := validateScreenshotName(wire.Name); err != nil {
+		return ScreenshotOperation{}, err
+	}
+	if pollWire.Mode == "CONSISTENTLY" {
+		return ScreenshotOperation{}, NewError(CodeInvalidArgument, "visual screenshot comparison does not support consistently")
+	}
+	if _, err := pollFromWire(pollWire); err != nil {
+		return ScreenshotOperation{}, err
+	}
+	seenSchemes := map[string]bool{}
+	if len(wire.ColorSchemes) > 2 {
+		return ScreenshotOperation{}, NewError(CodeInvalidArgument, "colorSchemes supports at most light and dark")
+	}
+	for _, scheme := range wire.ColorSchemes {
+		if scheme != "light" && scheme != "dark" {
+			return ScreenshotOperation{}, NewError(CodeInvalidArgument, "colorSchemes entries must be light or dark")
+		}
+		if seenSchemes[scheme] {
+			return ScreenshotOperation{}, NewError(CodeInvalidArgument, "colorSchemes must not contain duplicates")
+		}
+		seenSchemes[scheme] = true
+	}
+	if wire.PixelTolerance != nil {
+		if math.IsNaN(*wire.PixelTolerance) || math.IsInf(*wire.PixelTolerance, 0) || *wire.PixelTolerance < 0 || *wire.PixelTolerance > 1 {
+			return ScreenshotOperation{}, NewError(CodeInvalidArgument, "pixelTolerance must be between 0 and 1")
+		}
+		operation.PixelTolerance, operation.PixelToleranceSet = *wire.PixelTolerance, true
+	}
+	if wire.ChannelTolerance != nil {
+		if *wire.ChannelTolerance < 0 || *wire.ChannelTolerance > 255 {
+			return ScreenshotOperation{}, NewError(CodeInvalidArgument, "channelTolerance must be between 0 and 255")
+		}
+		operation.ChannelTolerance, operation.ChannelToleranceSet = *wire.ChannelTolerance, true
+	}
+	return operation, nil
+}
+
+func operationPoll(poll PollOptions) PollPolicy {
+	converted, _ := pollFromWire(poll)
+	return converted
+}
+
+func validateScreenshotName(name string) *ProtocolError {
+	if strings.TrimSpace(name) == "" {
+		return NewError(CodeInvalidArgument, "screenshot name is required")
+	}
+	if filepath.IsAbs(name) || strings.HasPrefix(name, "/") || strings.Contains(name, `\`) {
+		return NewError(CodeInvalidArgument, "screenshot name must be a relative logical name")
+	}
+	for _, part := range strings.Split(name, "/") {
+		if part == "" || part == "." || part == ".." {
+			return NewError(CodeInvalidArgument, "screenshot name contains an invalid path segment")
+		}
+		if strings.Trim(screenshotNamePartRE.ReplaceAllString(part, "_"), "_") == "" {
+			return NewError(CodeInvalidArgument, "screenshot name contains an unusable path segment")
+		}
+	}
+	return nil
 }
 
 func eventfulOperationFromWire(wire *WireEventfulOperation, pollWire PollOptions) (EventfulOperation, *ProtocolError) {
@@ -1984,6 +2284,7 @@ func resultToWire(result Result) OperationResult {
 		Matched: result.Matched, ObservedJSON: result.ObservedJSON, AttemptCount: result.Attempts, Trajectory: trajectory,
 		Timings:         Timings{StartedUnixMS: result.StartedAt.UnixMilli(), ElapsedMS: result.Elapsed.Milliseconds()},
 		RPCRequestCount: 1, RPCResponseCount: 1,
+		Screenshot: result.Screenshot, Visual: result.Visual,
 	}
 	if result.Diagnostics != (Diagnostics{}) {
 		diagnostics := result.Diagnostics

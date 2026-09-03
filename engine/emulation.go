@@ -126,7 +126,13 @@ func setTimezone(ctx context.Context, timezone string) error {
 }
 
 func (s *Session) SetMedia(ctx context.Context, media Media) error {
-	return s.serial(ctx, "set media", func(opCtx context.Context) error { return setMedia(opCtx, media) })
+	return s.serial(ctx, "set media", func(opCtx context.Context) error {
+		if err := setMedia(opCtx, media); err != nil {
+			return err
+		}
+		s.media = media
+		return nil
+	})
 }
 func (s *Session) ClearMedia(ctx context.Context) error { return s.SetMedia(ctx, Media{}) }
 func setMedia(ctx context.Context, media Media) error {
@@ -146,5 +152,6 @@ func (s *Session) resetEmulation(ctx context.Context) error {
 			return err
 		}
 	}
+	s.media = Media{}
 	return nil
 }
