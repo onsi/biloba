@@ -25,7 +25,62 @@ func (b *engineBackend) OpenSession(ctx context.Context) (protocol.Session, erro
 
 func (b *engineBackend) Close() error { return b.browser.Close() }
 
-type engineSession struct{ session *engine.Session }
+type engineSession struct {
+	session  *engine.Session
+	frameURL string
+}
+
+func (s *engineSession) Metadata() protocol.SessionMetadata {
+	return protocol.SessionMetadata{ContextID: string(s.session.ContextID()), TargetID: string(s.session.TargetID()), OpenerID: string(s.session.OpenerID()), OwnsContext: s.session.OwnsContext(), Frame: s.frameURL != "", URL: s.frameURL}
+}
+
+func (s *engineSession) Tabs(ctx context.Context) ([]protocol.Session, error) {
+	tabs, err := s.session.Tabs(ctx)
+	if err != nil {
+		return nil, engineRPCError(err)
+	}
+	result := make([]protocol.Session, len(tabs))
+	for index, tab := range tabs {
+		result[index] = &engineSession{session: tab}
+	}
+	return result, nil
+}
+
+func (s *engineSession) WaitForTab(ctx context.Context, query protocol.TabQuery, policy protocol.PollPolicy) (protocol.Session, error) {
+	converted, err := tabQueryFromProtocol(query)
+	if err != nil {
+		return nil, err
+	}
+	tab, waitErr := s.session.WaitForTab(ctx, converted, pollPolicyFromProtocol(policy))
+	if waitErr != nil {
+		return nil, engineRPCError(waitErr)
+	}
+	return &engineSession{session: tab}, nil
+}
+
+func (s *engineSession) Frames(ctx context.Context) ([]protocol.Session, error) {
+	frames, err := s.session.Frames(ctx)
+	if err != nil {
+		return nil, engineRPCError(err)
+	}
+	result := make([]protocol.Session, len(frames))
+	for index, frame := range frames {
+		result[index] = &engineSession{session: frame.Session, frameURL: frame.URL()}
+	}
+	return result, nil
+}
+
+func (s *engineSession) WaitForFrame(ctx context.Context, query protocol.FrameQuery, policy protocol.PollPolicy) (protocol.Session, error) {
+	tabQuery, err := tabQueryFromProtocol(protocol.TabQuery{Title: query.Title, URL: query.URL, HasElement: query.HasElement})
+	if err != nil {
+		return nil, err
+	}
+	frame, waitErr := s.session.WaitForFrame(ctx, engine.FrameQuery{Title: tabQuery.Title, URL: tabQuery.URL, HasElement: tabQuery.HasElement}, pollPolicyFromProtocol(policy))
+	if waitErr != nil {
+		return nil, engineRPCError(waitErr)
+	}
+	return &engineSession{session: frame.Session, frameURL: frame.URL()}, nil
+}
 
 const defaultPollTimeout = 10 * time.Second
 const assertionAttemptTimeout = time.Second
@@ -174,9 +229,321 @@ func (s *engineSession) Execute(ctx context.Context, operation protocol.Operatio
 			return protocol.Result{}, err
 		}
 		return s.poll(ctx, operation, assertion)
+	case protocol.OperationLifecycle:
+		return s.lifecycle(ctx, operation)
 	default:
 		return protocol.Result{}, protocol.NewError(protocol.CodeInvalidArgument, "unsupported operation")
 	}
+}
+
+func tabQueryFromProtocol(query protocol.TabQuery) (engine.TabQuery, error) {
+	result := engine.TabQuery{SpawnedOnly: query.SpawnedOnly}
+	if query.Title != nil {
+		value, err := expectationFromProtocol(*query.Title)
+		if err != nil {
+			return engine.TabQuery{}, err
+		}
+		result.Title = &value
+	}
+	if query.URL != nil {
+		value, err := expectationFromProtocol(*query.URL)
+		if err != nil {
+			return engine.TabQuery{}, err
+		}
+		result.URL = &value
+	}
+	if query.HasElement != nil {
+		value, err := selectorFromProtocol(*query.HasElement)
+		if err != nil {
+			return engine.TabQuery{}, err
+		}
+		result.HasElement = &value
+	}
+	return result, nil
+}
+
+func (s *engineSession) lifecycle(ctx context.Context, operation protocol.Operation) (protocol.Result, error) {
+	started := time.Now()
+	lifecycle := operation.Lifecycle
+	switch lifecycle.Kind {
+	case protocol.LifecycleGetCookies:
+		cookies, err := s.session.GetCookies(ctx)
+		if err != nil {
+			return protocol.Result{}, engineRPCError(err)
+		}
+		return observedResult(started, cookiesToWire(cookies)), nil
+	case protocol.LifecycleClearCookies:
+		return oneAttempt(started, s.session.ClearCookies(ctx))
+	case protocol.LifecycleCookieQuery:
+		return s.poll(ctx, operation, s.cookieAssertion(lifecycle))
+	case protocol.LifecycleStorageSet, protocol.LifecycleStorageGet, protocol.LifecycleStorageGetAll, protocol.LifecycleStorageRemove, protocol.LifecycleStorageClear, protocol.LifecycleStorageLength:
+		return s.storageOperation(ctx, operation, started)
+	case protocol.LifecycleWaitForDefined:
+		result, err := s.session.WaitForDefined(ctx, lifecycle.Expression, withDefaultPollTimeout(pollPolicyFromProtocol(operation.Poll)))
+		if err != nil {
+			return pollResult(result, false), engineRPCError(err)
+		}
+		return pollResult(result, true), nil
+	case protocol.LifecycleURL:
+		if lifecycle.Expectation.Kind != 0 {
+			return s.poll(ctx, operation, s.lifecycleValueAssertion(lifecycle, func(readCtx context.Context) (any, error) {
+				value, err := s.session.URL(readCtx)
+				return value.Value, err
+			}))
+		}
+		value, err := s.session.URL(ctx)
+		if err != nil {
+			return protocol.Result{}, engineRPCError(err)
+		}
+		return observedResult(started, value.Value), nil
+	case protocol.LifecycleTitle:
+		if lifecycle.Expectation.Kind != 0 {
+			return s.poll(ctx, operation, s.lifecycleValueAssertion(lifecycle, func(readCtx context.Context) (any, error) { return s.session.Title(readCtx) }))
+		}
+		value, err := s.session.Title(ctx)
+		if err != nil {
+			return protocol.Result{}, engineRPCError(err)
+		}
+		return observedResult(started, value), nil
+	case protocol.LifecycleWindowSize:
+		if lifecycle.Expectation.Kind != 0 {
+			return s.poll(ctx, operation, s.lifecycleValueAssertion(lifecycle, func(readCtx context.Context) (any, error) {
+				width, height, err := s.session.WindowSize(readCtx)
+				return map[string]int{"width": width, "height": height}, err
+			}))
+		}
+		width, height, err := s.session.WindowSize(ctx)
+		if err != nil {
+			return protocol.Result{}, engineRPCError(err)
+		}
+		return observedResult(started, map[string]int{"width": width, "height": height}), nil
+	case protocol.LifecycleOutline:
+		value, err := s.session.Outline(ctx)
+		if err != nil {
+			return protocol.Result{}, engineRPCError(err)
+		}
+		return observedResult(started, value), nil
+	case protocol.LifecycleAccessibilityOutline:
+		value, err := s.session.AccessibilityOutline(ctx)
+		if err != nil {
+			return protocol.Result{}, engineRPCError(err)
+		}
+		return observedResult(started, value), nil
+	case protocol.LifecycleConsoleMessages:
+		if lifecycle.Expectation.Kind != 0 {
+			return s.poll(ctx, operation, func(context.Context) (engine.Observation, bool, error) {
+				expected, convertErr := expectationFromProtocol(lifecycle.Expectation)
+				if convertErr != nil {
+					return engine.Observation{}, false, engine.Fatal(convertErr)
+				}
+				for _, message := range s.session.ConsoleMessages() {
+					if lifecycle.Key != "" && lifecycle.Key != message.Type {
+						continue
+					}
+					matched, matchErr := engine.MatchExpectation(message.Text, expected)
+					if matchErr != nil {
+						return engine.Observation{}, false, engine.Fatal(matchErr)
+					}
+					if matched {
+						return engine.Observation{Value: consoleMessageToWire(message)}, true, nil
+					}
+				}
+				return engine.Observation{Value: nil}, false, nil
+			})
+		}
+		return observedResult(started, consoleMessagesToWire(s.session.ConsoleMessages())), nil
+	case protocol.LifecycleSetDeviceMetrics:
+		return oneAttempt(started, s.session.SetDeviceMetrics(ctx, engine.DeviceMetrics{Width: lifecycle.Width, Height: lifecycle.Height, DeviceScaleFactor: lifecycle.DeviceScaleFactor, Mobile: lifecycle.Mobile}))
+	case protocol.LifecycleClearDeviceMetrics:
+		return oneAttempt(started, s.session.ClearDeviceMetrics(ctx))
+	case protocol.LifecycleSetGeolocation:
+		return oneAttempt(started, s.session.SetGeolocation(ctx, engine.Geolocation{Latitude: lifecycle.Latitude, Longitude: lifecycle.Longitude, Accuracy: lifecycle.Accuracy}))
+	case protocol.LifecycleClearGeolocation:
+		return oneAttempt(started, s.session.ClearGeolocation(ctx))
+	case protocol.LifecycleSetPermissions:
+		permissions := map[engine.Permission]engine.PermissionState{}
+		for name, state := range lifecycle.Permissions {
+			permissions[engine.Permission(name)] = engine.PermissionState(state)
+		}
+		return oneAttempt(started, s.session.SetPermissions(ctx, lifecycle.Origin, permissions))
+	case protocol.LifecycleResetPermissions:
+		return oneAttempt(started, s.session.ResetPermissions(ctx))
+	case protocol.LifecycleSetLocale:
+		return oneAttempt(started, s.session.SetLocale(ctx, lifecycle.Locale))
+	case protocol.LifecycleClearLocale:
+		return oneAttempt(started, s.session.ClearLocale(ctx))
+	case protocol.LifecycleSetTimezone:
+		return oneAttempt(started, s.session.SetTimezone(ctx, lifecycle.Timezone))
+	case protocol.LifecycleClearTimezone:
+		return oneAttempt(started, s.session.ClearTimezone(ctx))
+	case protocol.LifecycleSetMedia:
+		return oneAttempt(started, s.session.SetMedia(ctx, engine.Media{Type: lifecycle.MediaType, ColorScheme: lifecycle.ColorScheme, ReducedMotion: lifecycle.ReducedMotion}))
+	case protocol.LifecycleClearMedia:
+		return oneAttempt(started, s.session.ClearMedia(ctx))
+	default:
+		return protocol.Result{}, protocol.NewError(protocol.CodeInvalidArgument, "unsupported lifecycle operation")
+	}
+}
+
+func consoleMessageToWire(message engine.ConsoleMessage) map[string]any {
+	return map[string]any{"type": message.Type, "text": message.Text, "args": message.Args, "timestamp": message.Timestamp}
+}
+
+func consoleMessagesToWire(messages []engine.ConsoleMessage) []map[string]any {
+	result := make([]map[string]any, len(messages))
+	for index, message := range messages {
+		result[index] = consoleMessageToWire(message)
+	}
+	return result
+}
+
+func (s *engineSession) lifecycleValueAssertion(operation protocol.LifecycleOperation, read func(context.Context) (any, error)) engine.Assertion {
+	return func(ctx context.Context) (engine.Observation, bool, error) {
+		value, err := read(ctx)
+		if err != nil {
+			return engine.Observation{}, false, err
+		}
+		expected, convertErr := expectationFromProtocol(operation.Expectation)
+		if convertErr != nil {
+			return engine.Observation{}, false, engine.Fatal(convertErr)
+		}
+		matched, matchErr := engine.MatchExpectation(value, expected)
+		return engine.Observation{Value: value}, matched, matchErr
+	}
+}
+
+func cookiesToWire(cookies []engine.Cookie) []protocol.WireCookie {
+	result := make([]protocol.WireCookie, len(cookies))
+	for index, cookie := range cookies {
+		result[index] = protocol.WireCookie{Name: cookie.Name, Value: cookie.Value, Domain: cookie.Domain, Path: cookie.Path, Secure: cookie.Secure, HTTPOnly: cookie.HTTPOnly, SameSite: cookie.SameSite, Session: cookie.Session}
+		if !cookie.Session && !cookie.Expires.IsZero() {
+			result[index].ExpiresUnix = float64(cookie.Expires.UnixMilli()) / 1000
+		}
+	}
+	return result
+}
+
+func (s *engineSession) cookieAssertion(operation protocol.LifecycleOperation) engine.Assertion {
+	return func(ctx context.Context) (engine.Observation, bool, error) {
+		cookies, err := s.session.GetCookies(ctx)
+		if err != nil {
+			return engine.Observation{}, false, err
+		}
+		matched := make([]engine.Cookie, 0)
+		for _, cookie := range cookies {
+			ok, matchErr := cookieMatches(cookie, operation.Cookie)
+			if matchErr != nil {
+				return engine.Observation{}, false, engine.Fatal(matchErr)
+			}
+			if ok {
+				matched = append(matched, cookie)
+			}
+		}
+		if operation.Count {
+			ok, matchErr := engine.MatchExpectation(len(matched), mustEngineExpectation(operation.Expectation))
+			return engine.Observation{Value: len(matched)}, ok, matchErr
+		}
+		if len(matched) == 0 {
+			return engine.Observation{Value: nil}, false, nil
+		}
+		return engine.Observation{Value: cookiesToWire(matched[:1])[0]}, true, nil
+	}
+}
+
+func cookieMatches(cookie engine.Cookie, query protocol.CookieQuery) (bool, error) {
+	for expectation, value := range map[*protocol.Expectation]any{query.Name: cookie.Name, query.Value: cookie.Value, query.Domain: cookie.Domain, query.Path: cookie.Path, query.SameSite: cookie.SameSite} {
+		if expectation == nil {
+			continue
+		}
+		converted, err := expectationFromProtocol(*expectation)
+		if err != nil {
+			return false, err
+		}
+		matched, err := engine.MatchExpectation(value, converted)
+		if err != nil || !matched {
+			return false, err
+		}
+	}
+	if query.Secure != nil && cookie.Secure != *query.Secure {
+		return false, nil
+	}
+	if query.HTTPOnly != nil && cookie.HTTPOnly != *query.HTTPOnly {
+		return false, nil
+	}
+	return true, nil
+}
+
+func mustEngineExpectation(expectation protocol.Expectation) engine.Expectation {
+	converted, _ := expectationFromProtocol(expectation)
+	return converted
+}
+
+func (s *engineSession) storageOperation(ctx context.Context, operation protocol.Operation, started time.Time) (protocol.Result, error) {
+	state := operation.Lifecycle
+	area := engine.StorageArea(state.Area)
+	storage := s.session.Storage(area)
+	switch state.Kind {
+	case protocol.LifecycleStorageSet:
+		var value any
+		if err := json.Unmarshal([]byte(state.ValueJSON), &value); err != nil {
+			return protocol.Result{}, protocol.NewError(protocol.CodeInvalidArgument, err.Error())
+		}
+		return oneAttempt(started, storage.Set(ctx, state.Key, value))
+	case protocol.LifecycleStorageRemove:
+		return oneAttempt(started, storage.Remove(ctx, state.Key))
+	case protocol.LifecycleStorageClear:
+		return oneAttempt(started, storage.Clear(ctx))
+	case protocol.LifecycleStorageGetAll:
+		value, err := storage.GetAll(ctx)
+		if err != nil {
+			return protocol.Result{}, engineRPCError(err)
+		}
+		return observedResult(started, value), nil
+	case protocol.LifecycleStorageLength:
+		if state.Expectation.Kind != 0 {
+			return s.poll(ctx, operation, func(attemptCtx context.Context) (engine.Observation, bool, error) {
+				value, err := storage.Length(attemptCtx)
+				if err != nil {
+					return engine.Observation{}, false, err
+				}
+				expected, convertErr := expectationFromProtocol(state.Expectation)
+				if convertErr != nil {
+					return engine.Observation{}, false, engine.Fatal(convertErr)
+				}
+				matched, matchErr := engine.MatchExpectation(value, expected)
+				return engine.Observation{Value: value}, matched, matchErr
+			})
+		}
+		value, err := storage.Length(ctx)
+		if err != nil {
+			return protocol.Result{}, engineRPCError(err)
+		}
+		return observedResult(started, value), nil
+	case protocol.LifecycleStorageGet:
+		if state.Expectation.Kind != 0 {
+			return s.poll(ctx, operation, func(attemptCtx context.Context) (engine.Observation, bool, error) {
+				value, found, err := storage.Get(attemptCtx, state.Key)
+				if err != nil {
+					return engine.Observation{}, false, err
+				}
+				if !found {
+					return engine.Observation{Value: nil}, false, nil
+				}
+				expected, convertErr := expectationFromProtocol(state.Expectation)
+				if convertErr != nil {
+					return engine.Observation{}, false, engine.Fatal(convertErr)
+				}
+				matched, matchErr := engine.MatchExpectation(value, expected)
+				return engine.Observation{Value: value}, matched, matchErr
+			})
+		}
+		value, found, err := storage.Get(ctx, state.Key)
+		if err != nil {
+			return protocol.Result{}, engineRPCError(err)
+		}
+		return observedResult(started, map[string]any{"value": value, "found": found}), nil
+	}
+	return protocol.Result{}, protocol.NewError(protocol.CodeInvalidArgument, "unsupported storage operation")
 }
 
 func (s *engineSession) domAssertion(operation protocol.DOMOperation) (engine.Assertion, error) {

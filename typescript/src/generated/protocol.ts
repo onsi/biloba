@@ -47,10 +47,48 @@ export interface HandshakeResponse {
 
 export interface OpenSessionResponse {
   sessionId: string;
+  contextId?: string;
+  targetId?: string;
+  openerId?: string;
+  ownsContext?: boolean;
+  frame?: boolean;
+  url?: string;
 }
 
 export interface SessionRequest {
   sessionId: string;
+}
+
+export interface TabQueryRequest {
+  spawnedOnly?: boolean;
+  title?: Expectation;
+  url?: Expectation;
+  has?: Locator;
+}
+
+export interface ListHandlesRequest {
+  sessionId: string;
+  spawnedOnly?: boolean;
+}
+
+export interface WaitForTabRequest {
+  sessionId: string;
+  query: TabQueryRequest;
+  poll?: PollOptions;
+}
+
+export interface WaitForFrameRequest {
+  sessionId: string;
+  query: TabQueryRequest;
+  poll?: PollOptions;
+}
+
+export interface HandleListResponse {
+  handles: OpenSessionResponse[];
+}
+
+export interface InvalidationResponse {
+  invalidatedSessionIds?: string[];
 }
 
 export interface NavigateRequest {
@@ -152,10 +190,68 @@ export interface Cookie {
   secure?: boolean;
   httpOnly?: boolean;
   sameSite?: string;
+  session?: boolean;
 }
 
 export interface SetCookiesRequest {
   sessionId: string;
+  cookies: Cookie[];
+}
+
+export interface CookieQuery {
+  name?: Expectation;
+  value?: Expectation;
+  domain?: Expectation;
+  path?: Expectation;
+  sameSite?: Expectation;
+  secure?: boolean;
+  httpOnly?: boolean;
+}
+
+export interface DeviceMetrics {
+  width: number;
+  height: number;
+  deviceScaleFactor: number;
+  mobile?: boolean;
+}
+
+export interface Geolocation {
+  latitude: number;
+  longitude: number;
+  accuracy?: number;
+}
+
+export interface Media {
+  type?: string;
+  colorScheme?: string;
+  reducedMotion?: string;
+}
+
+export interface LifecycleOperation {
+  kind: "GET_COOKIES" | "CLEAR_COOKIES" | "COOKIE_QUERY" | "STORAGE_SET" | "STORAGE_GET" | "STORAGE_GET_ALL" | "STORAGE_REMOVE" | "STORAGE_CLEAR" | "STORAGE_LENGTH" | "WAIT_FOR_DEFINED" | "URL" | "TITLE" | "WINDOW_SIZE" | "OUTLINE" | "ACCESSIBILITY_OUTLINE" | "CONSOLE_MESSAGES" | "SET_DEVICE_METRICS" | "CLEAR_DEVICE_METRICS" | "SET_GEOLOCATION" | "CLEAR_GEOLOCATION" | "SET_PERMISSIONS" | "RESET_PERMISSIONS" | "SET_LOCALE" | "CLEAR_LOCALE" | "SET_TIMEZONE" | "CLEAR_TIMEZONE" | "SET_MEDIA" | "CLEAR_MEDIA";
+  area?: string;
+  key?: string;
+  valueJson?: string;
+  expression?: string;
+  cookie?: CookieQuery;
+  count?: boolean;
+  device?: DeviceMetrics;
+  geolocation?: Geolocation;
+  origin?: string;
+  permissions?: Record<string, string>;
+  locale?: string;
+  timezone?: string;
+  media?: Media;
+}
+
+export interface LifecycleRequest {
+  sessionId: string;
+  operation?: LifecycleOperation;
+  expectation?: Expectation;
+  poll?: PollOptions;
+}
+
+export interface CookieListResponse {
   cookies: Cookie[];
 }
 

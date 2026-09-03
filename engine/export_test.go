@@ -9,7 +9,7 @@ func SessionContextForTest(session *Session) context.Context {
 }
 
 // HTTPStatusFailureForTest exposes the classifier NavigateContext uses to tell Chrome's
-// loading failure for a 4xx/5xx document from a genuine transport/target failure.  Which
+// loading failure for a 4xx/5xx document from a genuine transport/target failure. Which
 // responses Chrome reports that way varies by Chrome version, so the classification is pinned
 // here rather than by racing a browser that may or may not produce the error.
 func HTTPStatusFailureForTest(err error) bool {
@@ -20,4 +20,16 @@ func HTTPStatusFailureForTest(err error) bool {
 // recovery state machine to be tested without disturbing other specs sharing the test browser.
 func MarkSessionCrashedForTest(session *Session) {
 	session.markCrashed()
+}
+
+// SetHeadlessShellInstallerForTest replaces the network installer for deterministic acquisition specs.
+func SetHeadlessShellInstallerForTest(installer func(context.Context) (string, error)) func() {
+	previous := headlessShellInstaller
+	headlessShellInstaller = installer
+	return func() { headlessShellInstaller = previous }
+}
+
+// InstallHeadlessShellArchiveForTest exercises atomic cache publication without network access.
+func InstallHeadlessShellArchiveForTest(archivePath, destination, platform string) error {
+	return installHeadlessShellArchive(archivePath, destination, platform)
 }

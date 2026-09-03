@@ -5,6 +5,7 @@ import type {
   DOMRequest,
   Expectation as WireExpectation,
   Locator as WireLocator,
+	LifecycleOperation as WireLifecycleOperation,
   LocatorRequest,
   OperationResult as StdioOperationResult,
   SetValueRequest,
@@ -18,6 +19,21 @@ import {
   type ConnectOptions,
   type Cookie,
   type ClickOptions,
+	type CommandOptions,
+	type WaitingCommandOptions,
+	type PollOptions,
+	type CookieQuery,
+	type BrowserStorage,
+	type StorageArea,
+	type StorageItem,
+	type TabQuery,
+	type WindowSize,
+	type ConsoleMessage,
+	type DeviceMetrics,
+	type Geolocation,
+	type Permission,
+	type PermissionState,
+	type MediaEmulation,
   type CancellationOptions,
   type KeyboardOptions,
   type PointerOptions,
@@ -74,7 +90,7 @@ class ClientBrowser implements Browser {
   async openSession(): Promise<Session> {
     this.#assertOpen();
     const response = await this.#transport.openSession({});
-    return this.#trackSession(response.sessionId ?? "");
+    return this.#trackSession(response);
   }
 
   async close(): Promise<void> {
@@ -90,71 +106,116 @@ class ClientBrowser implements Browser {
     if (this.#closed) throw new BilobaError({code: "DRIVER_CLOSED", message: "Biloba browser is closed"});
   }
 
-  #trackSession(id: string): ClientSession {
+  #trackSession(response: import("../generated/protocol.js").OpenSessionResponse): ClientSession {
+		const existing = [...this.#sessions].find((candidate) => candidate.id === response.sessionId);
+		if (existing) return existing;
     let session: ClientSession;
     session = new ClientSession(
-      id,
+      response,
       this.#transport,
       () => this.#sessions.delete(session),
-      (siblingId) => this.#trackSession(siblingId),
+      (sibling) => this.#trackSession(sibling),
+			(ids) => this.#invalidateSessions(ids),
     );
     this.#sessions.add(session);
     return session;
   }
+
+	#invalidateSessions(ids: readonly string[]): void {
+		for (const session of this.#sessions) {
+			if (ids.includes(session.id)) session.invalidate();
+		}
+	}
 }
 
 class ClientSession implements Session {
   readonly id: string;
+	readonly contextId: string;
+	readonly targetId: string;
+	readonly openerId?: string;
+	readonly ownsContext: boolean;
+	readonly isFrame: boolean;
+	readonly frameUrl?: string;
   readonly #transport: DriverTransport;
   readonly #onClose: () => void;
-  readonly #registerSibling: (id: string) => ClientSession;
+  readonly #registerSibling: (response: import("../generated/protocol.js").OpenSessionResponse) => ClientSession;
+	readonly #invalidateSessions: (ids: readonly string[]) => void;
   closed = false;
 
   constructor(
-    id: string,
+    response: import("../generated/protocol.js").OpenSessionResponse,
     transport: DriverTransport,
     onClose: () => void,
-    registerSibling: (id: string) => ClientSession,
+    registerSibling: (response: import("../generated/protocol.js").OpenSessionResponse) => ClientSession,
+		invalidateSessions: (ids: readonly string[]) => void,
   ) {
-    this.id = id;
+		this.id = response.sessionId;
+		this.contextId = response.contextId ?? "";
+		this.targetId = response.targetId ?? "";
+		if (response.openerId !== undefined) this.openerId = response.openerId;
+		this.ownsContext = response.ownsContext ?? false;
+		this.isFrame = response.frame ?? false;
+		if (response.url !== undefined) this.frameUrl = response.url;
     this.#transport = transport;
     this.#onClose = onClose;
     this.#registerSibling = registerSibling;
+		this.#invalidateSessions = invalidateSessions;
   }
 
-  async newTab(): Promise<Session> {
+  async newTab(options: WaitingCommandOptions = {}): Promise<Session> {
     this.#assertOpen();
-    const response = await this.#transport.newTab({sessionId: this.id});
-    return this.#registerSibling(response.sessionId ?? "");
+    assertWaitingCommandOptions(options, "newTab");
+    const response = await this.#transport.newTab({sessionId: this.id}, options);
+    return this.#registerSibling(response);
   }
 
-  async addInitScript(script: string, options: WaitOptions = {}): Promise<void> {
+	async tabs(options: CommandOptions = {}): Promise<readonly Session[]> { return await this.#listHandles("tabs", false, options); }
+	async spawnedTabs(options: CommandOptions = {}): Promise<readonly Session[]> { return await this.#listHandles("tabs", true, options); }
+	async frames(options: CommandOptions = {}): Promise<readonly Session[]> { return await this.#listHandles("frames", false, options); }
+	async findTab(query: TabQuery, options: CommandOptions = {}): Promise<Session | undefined> {
+		const tabs = await this.tabs(options);
+		if (Object.keys(query).length === 0) return tabs[0];
+		// A zero-time server poll keeps all predicates on the same candidate observation.
+		try { return await this.waitForTab(query, {...options, mode: "immediate"}); } catch (error) { if (error instanceof BilobaError && error.code === "TIMEOUT") return undefined; throw error; }
+	}
+	async waitForTab(query: TabQuery, options: PollOptions = {}): Promise<Session> { return await this.#waitForHandle("tab", query, options); }
+	async waitForFrame(query: TabQuery, options: PollOptions = {}): Promise<Session> { return await this.#waitForHandle("frame", query, options); }
+
+  async addInitScript(script: string, options: CommandOptions = {}): Promise<void> {
     this.#assertOpen();
+    assertCancellationOptions(options, "addInitScript");
     const response = await this.#transport.addInitScript({sessionId: this.id, script}, options);
     operationResult(response, "add init script operation", new Error().stack);
   }
 
-  async activate(options: WaitOptions = {}): Promise<void> {
+  async activate(options: CommandOptions = {}): Promise<void> {
     this.#assertOpen();
+    assertCancellationOptions(options, "activate");
     const response = await this.#transport.activate({sessionId: this.id}, options);
     operationResult(response, "activate tab operation", new Error().stack);
   }
 
-  async prepare(): Promise<void> {
+  async prepare(options: WaitingCommandOptions = {}): Promise<{readonly invalidatedSessionIds: readonly string[]}> {
     this.#assertOpen();
-    await this.#transport.prepareSession({sessionId: this.id});
+		assertWaitingCommandOptions(options, "prepare");
+		const response = await this.#transport.prepareSession({sessionId: this.id}, options);
+		const ids = response.invalidatedSessionIds ?? [];
+		this.#invalidateSessions(ids);
+		return {invalidatedSessionIds: ids};
   }
 
-  async navigate(url: string, options: WaitOptions = {}): Promise<void> {
+  async navigate(url: string, options: WaitingCommandOptions = {}): Promise<void> {
     this.#assertOpen();
+    assertWaitingCommandOptions(options, "navigate");
     await this.#transport.navigate({sessionId: this.id, url}, options);
   }
 
   // Mirrors the Go runner's NavigateWithStatus.  navigate() asserting 200 is what makes a broken
   // fixture fail at the navigation rather than as a baffling assertion three lines later; this is
   // the way to say the 4xx/5xx page is the page you meant to load.
-  async navigateWithStatus(url: string, expectedStatus: number, options: WaitOptions = {}): Promise<void> {
+  async navigateWithStatus(url: string, expectedStatus: number, options: WaitingCommandOptions = {}): Promise<void> {
     this.#assertOpen();
+    assertWaitingCommandOptions(options, "navigateWithStatus");
     await this.#transport.navigate({sessionId: this.id, url, expectedStatus}, options);
   }
 
@@ -179,8 +240,9 @@ class ClientSession implements Session {
     return parseJson(response.observedJson) as string;
   }
 
-  async setCookies(cookies: readonly Cookie[]): Promise<void> {
+  async setCookies(cookies: readonly Cookie[], options: CommandOptions = {}): Promise<void> {
     this.#assertOpen();
+    assertCancellationOptions(options, "setCookies");
     await this.#transport.setCookies({
       sessionId: this.id,
       // The public Cookie lets a caller pass an explicit undefined for any optional member; the
@@ -199,8 +261,34 @@ class ClientSession implements Session {
           expiresUnix: typeof expires === "number" ? expires : expires.getTime() / 1_000,
         }),
       })),
-    });
+    }, options);
   }
+
+	async getCookies(options: CommandOptions = {}): Promise<readonly Cookie[]> {
+		this.#assertOpen();
+		assertCancellationOptions(options, "getCookies");
+		const response = await this.#transport.getCookies({sessionId: this.id}, options);
+		return response.cookies.map(cookieFromWire);
+	}
+	async clearCookies(options: CommandOptions = {}): Promise<void> {
+		this.#assertOpen();
+		assertCancellationOptions(options, "clearCookies");
+		operationResult(await this.#transport.clearCookies({sessionId: this.id}, options), "clear cookies operation", new Error().stack);
+	}
+	async findCookie(query: CookieQuery, options: CommandOptions = {}): Promise<Cookie | undefined> {
+		return (await this.getCookies(options)).find((cookie) => currentCookieMatches(cookie, query));
+	}
+	async expectCookie(query: CookieQuery, options: PollOptions = {}): Promise<Cookie> {
+		const response = await this.lifecycleOperation({kind: "COOKIE_QUERY", cookie: wireCookieQuery(query)}, options);
+		operationResult(response, "cookie assertion", new Error().stack);
+		return cookieFromWire(parseJson(response.observedJson) as import("../generated/protocol.js").Cookie);
+	}
+	async expectCookieCount(expected: number | Expectation, query: CookieQuery = {}, options: PollOptions = {}): Promise<AssertionResult> {
+		const response = await this.lifecycleOperation({kind: "COOKIE_QUERY", cookie: wireCookieQuery(query), count: true}, options, wireExpectation(expected));
+		return assertionResult(response, new Error().stack);
+	}
+	localStorage(): BrowserStorage { return new ClientStorage(this, "localStorage"); }
+	sessionStorage(): BrowserStorage { return new ClientStorage(this, "sessionStorage"); }
 
   // invoke tells the daemon what expression means instead of letting it infer that from the
   // argument count: passing an args array - even an empty one - is the caller saying "call this",
@@ -210,9 +298,10 @@ class ClientSession implements Session {
   async evaluate<T = unknown>(
     expression: string,
     args?: readonly SerializableValue[],
-    options: WaitOptions = {},
+    options: CommandOptions = {},
   ): Promise<T> {
     this.#assertOpen();
+    assertCancellationOptions(options, "evaluate");
     const response = await this.#transport.evaluate({
       sessionId: this.id,
       expression,
@@ -225,9 +314,10 @@ class ClientSession implements Session {
   async evaluateAsync<T = unknown>(
     expression: string,
     args?: readonly SerializableValue[],
-    options: WaitOptions = {},
+    options: WaitingCommandOptions = {},
   ): Promise<T> {
     this.#assertOpen();
+    assertWaitingCommandOptions(options, "evaluateAsync");
     const response = await this.#transport.evaluate({
       sessionId: this.id,
       expression,
@@ -238,17 +328,87 @@ class ClientSession implements Session {
     return parseJson(response.observedJson) as T;
   }
 
-  async setWindowSize(width: number, height: number, options: WaitOptions = {}): Promise<void> {
+  async waitForDefined<T = unknown>(expression: string, options: PollOptions = {}): Promise<T> {
+		const response = await this.lifecycleOperation({kind: "WAIT_FOR_DEFINED", expression}, options);
+		operationResult(response, "wait for defined JavaScript value", new Error().stack);
+		return parseJson(response.observedJson) as T;
+	}
+
+  async setWindowSize(width: number, height: number, options: CommandOptions = {}): Promise<void> {
     this.#assertOpen();
+    assertCancellationOptions(options, "setWindowSize");
     const response = await this.#transport.setWindowSize({sessionId: this.id, width, height}, options);
     operationResult(response, "set window size operation", new Error().stack);
   }
+
+	async windowSize(options: CommandOptions = {}): Promise<WindowSize> { return await this.#lifecycleValue<WindowSize>({kind: "WINDOW_SIZE"}, options); }
+	async title(options: CommandOptions = {}): Promise<string> { return await this.#lifecycleValue<string>({kind: "TITLE"}, options); }
+	async expectTitle(expected: ExpectedValue, options: PollOptions = {}): Promise<AssertionResult> { return assertionResult(await this.lifecycleOperation({kind: "TITLE"}, options, wireExpectation(expected)), new Error().stack); }
+	async outline(options: CommandOptions = {}): Promise<string> { return await this.#lifecycleValue<string>({kind: "OUTLINE"}, options); }
+	async accessibilityOutline(options: CommandOptions = {}): Promise<string> { return await this.#lifecycleValue<string>({kind: "ACCESSIBILITY_OUTLINE"}, options); }
+	async consoleMessages(options: CommandOptions = {}): Promise<readonly ConsoleMessage[]> { return await this.#lifecycleValue<readonly ConsoleMessage[]>({kind: "CONSOLE_MESSAGES"}, options); }
+	async expectConsoleMessage(expected: ExpectedValue, options: PollOptions & {type?: string} = {}): Promise<ConsoleMessage> {
+		const {type, ...poll} = options;
+		const response = await this.lifecycleOperation({kind: "CONSOLE_MESSAGES", ...(type !== undefined && {key: type})}, poll, wireExpectation(expected));
+		operationResult(response, "console message assertion", new Error().stack);
+		return parseJson(response.observedJson) as ConsoleMessage;
+	}
+	async setDeviceMetrics(metrics: DeviceMetrics, options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "SET_DEVICE_METRICS", device: {width: metrics.width, height: metrics.height, deviceScaleFactor: metrics.deviceScaleFactor ?? 1, ...(metrics.mobile !== undefined && {mobile: metrics.mobile})}}, options); }
+	async clearDeviceMetrics(options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "CLEAR_DEVICE_METRICS"}, options); }
+	async setGeolocation(location: Geolocation, options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "SET_GEOLOCATION", geolocation: {latitude: location.latitude, longitude: location.longitude, ...(location.accuracy !== undefined && {accuracy: location.accuracy})}}, options); }
+	async clearGeolocation(options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "CLEAR_GEOLOCATION"}, options); }
+	async setPermissions(origin: string, permissions: Readonly<Partial<Record<Permission, PermissionState>>>, options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "SET_PERMISSIONS", origin, permissions: {...permissions} as Record<string, string>}, options); }
+	async resetPermissions(options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "RESET_PERMISSIONS"}, options); }
+	async setLocale(locale: string, options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "SET_LOCALE", locale}, options); }
+	async clearLocale(options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "CLEAR_LOCALE"}, options); }
+	async setTimezone(timezone: string, options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "SET_TIMEZONE", timezone}, options); }
+	async clearTimezone(options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "CLEAR_TIMEZONE"}, options); }
+	async setMedia(media: MediaEmulation, options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "SET_MEDIA", media: {...(media.type !== undefined && {type: media.type}), ...(media.colorScheme !== undefined && {colorScheme: media.colorScheme}), ...(media.reducedMotion !== undefined && {reducedMotion: media.reducedMotion})}}, options); }
+  async clearMedia(options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "CLEAR_MEDIA"}, options); }
+
+	async #listHandles(kind: "tabs" | "frames", spawnedOnly: boolean, options: CommandOptions): Promise<readonly Session[]> {
+		this.#assertOpen();
+		assertCancellationOptions(options, kind);
+		const request = {sessionId: this.id, ...(spawnedOnly && {spawnedOnly: true})};
+		const response = kind === "tabs" ? await this.#transport.listTabs(request, options) : await this.#transport.listFrames(request, options);
+		return response.handles.map(this.#registerSibling);
+	}
+	async #waitForHandle(kind: "tab" | "frame", query: TabQuery, options: PollOptions): Promise<Session> {
+		this.#assertOpen();
+		assertPollOptions(options, `waitFor${kind === "tab" ? "Tab" : "Frame"}`);
+		const request = {sessionId: this.id, query: wireTabQuery(query), poll: pollPolicy(options)};
+		const transportOptions = {...options, ...(options.timeoutMs !== undefined && {deadlineMs: options.timeoutMs + 2_100})};
+		const response = kind === "tab" ? await this.#transport.waitForTab(request, transportOptions) : await this.#transport.waitForFrame(request, transportOptions);
+		return this.#registerSibling(response);
+	}
+	async lifecycleOperation(operation: WireLifecycleOperation, options: WaitOptions, expectation?: WireExpectation): Promise<DriverOperationResult> {
+		this.#assertOpen();
+		assertPollOptions(options, "lifecycle operation");
+		return await this.#transport.lifecycle({sessionId: this.id, operation, ...(expectation && {expectation}), poll: pollPolicy(options)}, {...options, ...(options.timeoutMs !== undefined && {deadlineMs: options.timeoutMs + 2_100})});
+	}
+	async #lifecycleValue<T>(operation: WireLifecycleOperation, options: CommandOptions): Promise<T> {
+		assertCancellationOptions(options, "lifecycle state read");
+		const response = await this.lifecycleOperation(operation, {...options, mode: "immediate"});
+		operationResult(response, "lifecycle state read", new Error().stack);
+		return parseJson(response.observedJson) as T;
+	}
+	async #lifecycleCommand(operation: WireLifecycleOperation, options: CommandOptions): Promise<void> {
+		assertCancellationOptions(options, "lifecycle command");
+		operationResult(await this.lifecycleOperation(operation, {...options, mode: "immediate"}), "lifecycle command", new Error().stack);
+	}
+
+	invalidate(): void {
+		if (this.closed) return;
+		this.closed = true;
+		this.#onClose();
+	}
 
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     try {
-      await this.#transport.closeSession({sessionId: this.id});
+			const response = await this.#transport.closeSession({sessionId: this.id});
+			this.#invalidateSessions(response.invalidatedSessionIds ?? []);
     } finally {
       this.#onClose();
     }
@@ -357,8 +517,9 @@ class ClientSession implements Session {
     }, options, callsiteStack);
   }
 
-  async holdResponse(expectedUrl: ExpectedValue, options: WaitOptions = {}): Promise<ResponseHold> {
+  async holdResponse(expectedUrl: ExpectedValue, options: CommandOptions = {}): Promise<ResponseHold> {
     this.#assertOpen();
+    assertCancellationOptions(options, "holdResponse");
     const response = await this.#transport.holdResponse({
       sessionId: this.id,
       expectation: wireExpectation(expectedUrl),
@@ -370,13 +531,7 @@ class ClientSession implements Session {
     return new ClientResponseHold(this.id, observed.holdId, this.#transport);
   }
 
-  async url(): Promise<string> {
-    const result = await this.assert({
-      kind: "URL",
-      expectation: {kind: "ANYTHING"},
-    }, {mode: "immediate"}, new Error().stack);
-    return result.observed as string;
-  }
+	async url(options: CommandOptions = {}): Promise<string> { return await this.#lifecycleValue<string>({kind: "URL"}, options); }
 
   async assert(
     assertion: WireAssertion,
@@ -482,6 +637,18 @@ class ClientSession implements Session {
   }
 }
 
+class ClientStorage implements BrowserStorage {
+	constructor(private readonly session: ClientSession, private readonly area: StorageArea) {}
+	async set(key: string, value: SerializableValue, options: CommandOptions = {}): Promise<void> { operationResult(await this.session.lifecycleOperation({kind: "STORAGE_SET", area: this.area, key, valueJson: JSON.stringify(value)}, {...options, mode: "immediate"}), "storage set", new Error().stack); }
+	async get<T = unknown>(key: string, options: CommandOptions = {}): Promise<StorageItem<T>> { const response = await this.session.lifecycleOperation({kind: "STORAGE_GET", area: this.area, key}, {...options, mode: "immediate"}); operationResult(response, "storage get", new Error().stack); const item = parseJson(response.observedJson) as {found: boolean; value?: T}; return item.found ? {found: true, value: item.value as T} : {found: false}; }
+	async getAll(options: CommandOptions = {}): Promise<Readonly<Record<string, unknown>>> { const response = await this.session.lifecycleOperation({kind: "STORAGE_GET_ALL", area: this.area}, {...options, mode: "immediate"}); return parseJson(response.observedJson) as Readonly<Record<string, unknown>>; }
+	async remove(key: string, options: CommandOptions = {}): Promise<void> { operationResult(await this.session.lifecycleOperation({kind: "STORAGE_REMOVE", area: this.area, key}, {...options, mode: "immediate"}), "storage remove", new Error().stack); }
+	async clear(options: CommandOptions = {}): Promise<void> { operationResult(await this.session.lifecycleOperation({kind: "STORAGE_CLEAR", area: this.area}, {...options, mode: "immediate"}), "storage clear", new Error().stack); }
+	async length(options: CommandOptions = {}): Promise<number> { const response = await this.session.lifecycleOperation({kind: "STORAGE_LENGTH", area: this.area}, {...options, mode: "immediate"}); return parseJson(response.observedJson) as number; }
+	async expectItem<T = unknown>(key: string, expected: ExpectedValue = {kind: "anything"}, options: PollOptions = {}): Promise<T> { const response = await this.session.lifecycleOperation({kind: "STORAGE_GET", area: this.area, key}, options, wireExpectation(expected)); operationResult(response, "storage item assertion", new Error().stack); return parseJson(response.observedJson) as T; }
+	async expectLength(expected: number | Expectation, options: PollOptions = {}): Promise<AssertionResult> { return assertionResult(await this.session.lifecycleOperation({kind: "STORAGE_LENGTH", area: this.area}, options, wireExpectation(expected)), new Error().stack); }
+}
+
 class ClientResponseHold implements ResponseHold {
   constructor(
     private readonly sessionId: string,
@@ -489,12 +656,14 @@ class ClientResponseHold implements ResponseHold {
     private readonly transport: DriverTransport,
   ) {}
 
-  async await(options: WaitOptions = {}): Promise<HeldResponse> {
+  async await(options: WaitingCommandOptions = {}): Promise<HeldResponse> {
+    assertWaitingCommandOptions(options, "responseHold.await");
     const response = await this.transport.awaitResponseHold({sessionId: this.sessionId, holdId: this.holdId}, options);
     return parseJson(response.observedJson) as HeldResponse;
   }
 
-  async release(options: WaitOptions = {}): Promise<void> {
+  async release(options: CommandOptions = {}): Promise<void> {
+    assertCancellationOptions(options, "responseHold.release");
     const response = await this.transport.releaseResponseHold({sessionId: this.sessionId, holdId: this.holdId}, options);
     operationResult(response, "release response hold operation", new Error().stack);
   }
@@ -987,6 +1156,64 @@ function wireLocator(locator: Locator | string): WireLocator {
   throw new BilobaError({code: "INVALID_ARGUMENT", message: "locator belongs to a different Biloba client"});
 }
 
+function wireTabQuery(query: TabQuery): import("../generated/protocol.js").TabQueryRequest {
+	return {
+		...(query.title !== undefined && {title: wireExpectation(query.title)}),
+		...(query.url !== undefined && {url: wireExpectation(query.url)}),
+		...(query.has !== undefined && {has: wireLocator(query.has)}),
+	};
+}
+
+function wireCookieQuery(query: CookieQuery): import("../generated/protocol.js").CookieQuery {
+	return {
+		...(query.name !== undefined && {name: wireExpectation(query.name)}),
+		...(query.value !== undefined && {value: wireExpectation(query.value)}),
+		...(query.domain !== undefined && {domain: wireExpectation(query.domain)}),
+		...(query.path !== undefined && {path: wireExpectation(query.path)}),
+		...(query.sameSite !== undefined && {sameSite: wireExpectation(query.sameSite)}),
+		...(query.secure !== undefined && {secure: query.secure}),
+		...(query.httpOnly !== undefined && {httpOnly: query.httpOnly}),
+	};
+}
+
+function cookieFromWire(cookie: import("../generated/protocol.js").Cookie): Cookie {
+	return {
+		name: cookie.name,
+		value: cookie.value,
+		...(cookie.domain !== undefined && {domain: cookie.domain}),
+		...(cookie.path !== undefined && {path: cookie.path}),
+		...(cookie.expiresUnix !== undefined && cookie.expiresUnix !== 0 && {expires: new Date(cookie.expiresUnix * 1_000)}),
+		...(cookie.secure !== undefined && {secure: cookie.secure}),
+		...(cookie.httpOnly !== undefined && {httpOnly: cookie.httpOnly}),
+		...(cookie.sameSite !== undefined && {sameSite: cookie.sameSite}),
+		...(cookie.session !== undefined && {session: cookie.session}),
+	};
+}
+
+function currentCookieMatches(cookie: Cookie, query: CookieQuery): boolean {
+	for (const [expected, observed] of [[query.name, cookie.name], [query.value, cookie.value], [query.domain, cookie.domain ?? ""], [query.path, cookie.path ?? ""], [query.sameSite, cookie.sameSite ?? ""]] as const) {
+		if (expected !== undefined && !currentValueMatches(observed, expected)) return false;
+	}
+	return (query.secure === undefined || cookie.secure === query.secure) && (query.httpOnly === undefined || cookie.httpOnly === query.httpOnly);
+}
+
+function currentValueMatches(observed: string, expected: ExpectedValue): boolean {
+	if (expected instanceof RegExp) return expected.test(observed);
+	if (!isExpectation(expected)) return observed === expected;
+	switch (expected.kind) {
+		case "equal": return observed === expected.expected;
+		case "contains": return observed.includes(expected.expected);
+		case "prefix": return observed.startsWith(expected.expected);
+		case "suffix": return observed.endsWith(expected.expected);
+		case "regexp": return new RegExp(expected.expected).test(observed);
+		case "anything": return true;
+		case "not": return !currentValueMatches(observed, expected.child);
+		case "all": return expected.children.every((child) => currentValueMatches(observed, child));
+		case "any": return expected.children.some((child) => currentValueMatches(observed, child));
+		default: return false;
+	}
+}
+
 function wireNames(names: readonly NameSpec[]): NonNullable<WireDOMOperation["names"]> {
   return names.map((name) => typeof name === "string" ? {name} : {name: name.name, allowMissing: true});
 }
@@ -1002,6 +1229,14 @@ function assertCancellationOptions(options: CancellationOptions, operation: stri
   for (const key of Object.keys(options)) {
     if (key !== "signal") {
       throw new BilobaError({code: "INVALID_ARGUMENT", message: `${operation} only accepts cancellation options`});
+    }
+  }
+}
+
+function assertWaitingCommandOptions(options: WaitingCommandOptions, operation: string): void {
+  for (const key of Object.keys(options)) {
+    if (key !== "signal" && key !== "timeoutMs") {
+      throw new BilobaError({code: "INVALID_ARGUMENT", message: `${operation} only accepts timeout and cancellation options`});
     }
   }
 }

@@ -23,6 +23,16 @@ func EmulateViewportContext(ctx context.Context, width, height int, opts ...chro
 	return chromedp.Run(ctx, chromedp.EmulateViewport(int64(width), int64(height), opts...))
 }
 
+// EmulateViewportMatchingScreenContext keeps full headless Chrome's compositor surface aligned
+// with its layout viewport, so trusted input is not clipped to Chrome's default 800x600 screen.
+func EmulateViewportMatchingScreenContext(ctx context.Context, width, height int) error {
+	matchScreen := func(metrics *emulation.SetDeviceMetricsOverrideParams, _ *emulation.SetTouchEmulationEnabledParams) {
+		metrics.ScreenWidth = metrics.Width
+		metrics.ScreenHeight = metrics.Height
+	}
+	return EmulateViewportContext(ctx, width, height, matchScreen)
+}
+
 // KeyEventContext dispatches keys as real keyboard events, so keydown/keypress/keyup all fire.
 func KeyEventContext(ctx context.Context, keys string, opts ...chromedp.KeyOption) error {
 	if keys == "" {

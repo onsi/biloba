@@ -1,6 +1,9 @@
 package biloba
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // CapOutlineForTest exposes capOutlineWithCap so that outline_test.go can
 // exercise the truncation path with a small byte cap.
@@ -28,6 +31,11 @@ func LocateHeadlessShellForTest(explicit string) string {
 	return locateHeadlessShell(explicit)
 }
 
+// HeadlessShellBinaryNameForTest exposes the shared platform-specific shell name.
+func HeadlessShellBinaryNameForTest() string {
+	return headlessShellBinaryName()
+}
+
 // HeadlessShellInstructionsForTest exposes headlessShellInstructions for headless_shell_test.go.
 func HeadlessShellInstructionsForTest() string {
 	return headlessShellInstructions()
@@ -43,14 +51,21 @@ func MinimumSupportedChromeMajorForTest() int {
 	return minimumSupportedChromeMajor
 }
 
-// ChromeForTestingPlatformForTest exposes chromeForTestingPlatform for headless_shell_test.go.
-func ChromeForTestingPlatformForTest() (string, error) {
-	return chromeForTestingPlatform()
-}
-
 // InstallHeadlessShellForTest exposes installHeadlessShell for headless_shell_test.go.
 func InstallHeadlessShellForTest() (string, error) {
 	return installHeadlessShell()
+}
+
+// SetHeadlessShellResolverForTest replaces the engine resolver for deterministic adapter specs.
+func SetHeadlessShellResolverForTest(resolver func(context.Context, string, bool) (string, bool, error)) func() {
+	previous := resolveHeadlessShell
+	resolveHeadlessShell = resolver
+	return func() { resolveHeadlessShell = previous }
+}
+
+// ResolveHeadlessShellForTest exercises the public Go adapter's error and progress behavior.
+func ResolveHeadlessShellForTest(ginkgoT GinkgoTInterface, explicit string, autoInstall bool) (string, error) {
+	return resolveHeadlessShellPath(ginkgoT, &spinUpConfig{headlessShellPath: explicit, autoInstall: autoInstall})
 }
 
 // SafeAllTabScreenshotsForTest exposes safeAllTabScreenshots for integration tests.

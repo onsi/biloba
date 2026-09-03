@@ -9,6 +9,12 @@ import type {
   EvaluateRequest,
   HandshakeRequest,
   HandshakeResponse,
+	HandleListResponse,
+	InvalidationResponse,
+	LifecycleRequest,
+	CookieListResponse,
+	ListHandlesRequest,
+	WaitForTabRequest,
   HoldResponseRequest,
   LocatorRequest,
   NavigateRequest,
@@ -107,10 +113,10 @@ export class StdioTransport {
   activate(request: SessionRequest, options: TransportOptions = {}): Promise<OperationResult> {
     return this.#request("activate", request, withDefaultDeadline(options));
   }
-  prepareSession(request: SessionRequest, options: TransportOptions = {}): Promise<Record<string, never>> {
+	prepareSession(request: SessionRequest, options: TransportOptions = {}): Promise<InvalidationResponse> {
     return this.#request("prepareSession", request, withDefaultDeadline(options));
   }
-  closeSession(request: SessionRequest, options: TransportOptions = {}): Promise<Record<string, never>> {
+  closeSession(request: SessionRequest, options: TransportOptions = {}): Promise<InvalidationResponse> {
     return this.#request("closeSession", request, withDefaultDeadline(options));
   }
   navigate(request: NavigateRequest, options: TransportOptions = {}): Promise<OperationResult> {
@@ -119,6 +125,27 @@ export class StdioTransport {
   setCookies(request: SetCookiesRequest, options: TransportOptions = {}): Promise<OperationResult> {
     return this.#request("setCookies", request, withDefaultDeadline(options));
   }
+	getCookies(request: SessionRequest, options: TransportOptions = {}): Promise<CookieListResponse> {
+		return this.#request("getCookies", request, withDefaultDeadline(options));
+	}
+	clearCookies(request: SessionRequest, options: TransportOptions = {}): Promise<OperationResult> {
+		return this.#request("clearCookies", request, withDefaultDeadline(options));
+	}
+	listTabs(request: ListHandlesRequest, options: TransportOptions = {}): Promise<HandleListResponse> {
+		return this.#request("listTabs", request, withDefaultDeadline(options));
+	}
+	listFrames(request: ListHandlesRequest, options: TransportOptions = {}): Promise<HandleListResponse> {
+		return this.#request("listFrames", request, withDefaultDeadline(options));
+	}
+	waitForTab(request: WaitForTabRequest, options: TransportOptions = {}): Promise<OpenSessionResponse> {
+		return this.#request("waitForTab", request, options);
+	}
+	waitForFrame(request: WaitForTabRequest, options: TransportOptions = {}): Promise<OpenSessionResponse> {
+		return this.#request("waitForFrame", request, options);
+	}
+	lifecycle(request: LifecycleRequest, options: TransportOptions = {}): Promise<OperationResult> {
+		return this.#request("lifecycle", request, options);
+	}
   click(request: LocatorRequest, options: TransportOptions = {}): Promise<OperationResult> {
     return this.#request("click", request, options);
   }
