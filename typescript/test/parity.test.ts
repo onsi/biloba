@@ -40,8 +40,11 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
         "Set BILOBA_SKIP_PARITY=true to skip this suite on purpose.",
       );
     }
-    server = createServer((_request, response) => {
+    server = createServer((request, response) => {
       response.setHeader("content-type", "text/html");
+      // A 4xx that still renders HTML - the case that makes navigate()'s 200 assertion something you
+      // need a way out of, rather than a rule that is always right.
+      if (request.url === "/not-found") response.statusCode = 404;
       createReadStream(fixturePath).pipe(response);
     });
     await new Promise<void>((resolve, reject) => {
@@ -93,6 +96,20 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     // expression".  The daemon is told which, so neither reading depends on the argument count.
     expect(await session.evaluate<number>("() => 41 + 1", [])).toBe(42);
     expect(await session.evaluate<number>("(a, b) => a + b", [40, 2])).toBe(42);
+  });
+
+  it("treats a non-200 page as navigable when the caller asks for that status", async () => {
+    // Pairs with "treats a non-200 page as navigable when the spec asks for that status" in
+    // graft_parity_test.go.  Go has Navigate/NavigateWithStatus; if TypeScript has only the former,
+    // an error page is testable from one API and unreachable from the other.
+    await session.prepare();
+    await session.navigateWithStatus(`${baseUrl}/not-found`, 404);
+    await session.getByRole("heading", {name: "Biloba parity"}).expectVisible();
+
+    const failure = await session.navigate(`${baseUrl}/not-found`).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(BilobaError);
+    expect((failure as BilobaError).code, "a wrong status is not a driver fault and not a retryable one").toBe("NAVIGATION");
+    expect((failure as BilobaError).message).toContain("expected HTTP status 200");
   });
 
   it("returns structured failure output from the real daemon", async () => {

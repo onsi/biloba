@@ -7,10 +7,10 @@ import {StdioTransport} from "./stdio-transport.js";
 
 export interface StartDaemonOptions {
   executable: string;
-  chromePath?: string;
-  chromeWsUrl?: string;
-  artifactDir?: string;
-  readyTimeoutMs?: number;
+  chromePath?: string | undefined;
+  chromeWsUrl?: string | undefined;
+  artifactDir?: string | undefined;
+  readyTimeoutMs?: number | undefined;
 }
 
 export interface DaemonProcess {

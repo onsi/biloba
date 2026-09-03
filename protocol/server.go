@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 )
@@ -23,10 +24,20 @@ var Capabilities = []string{
 type ErrorCode string
 
 const (
-	CodeInvalidArgument  ErrorCode = "INVALID_ARGUMENT"
-	CodeTimeout          ErrorCode = "TIMEOUT"
-	CodeTargetNotFound   ErrorCode = "TARGET_NOT_FOUND"
-	CodeTargetNotReady   ErrorCode = "TARGET_NOT_READY"
+	CodeInvalidArgument ErrorCode = "INVALID_ARGUMENT"
+	CodeTimeout         ErrorCode = "TIMEOUT"
+	CodeTargetNotFound  ErrorCode = "TARGET_NOT_FOUND"
+	// CodeTargetNotReady is a target that was found and refused the operation - a click on a hidden
+	// element, say.  It means "not yet", so it is the one failure code that implies a retry might
+	// succeed; do not reach for it as a general-purpose bucket for page-caused errors that will
+	// never come good (an argument the caller got wrong is INVALID_ARGUMENT, a navigation that
+	// landed on the wrong status is NAVIGATION).
+	CodeTargetNotReady ErrorCode = "TARGET_NOT_READY"
+	// CodeNavigation is a navigation whose main document answered with a status the caller did not
+	// ask for.  Distinct from TARGET_NOT_READY because waiting cannot change it: the page loaded,
+	// it simply is not the page the caller said it expected.  Navigate to the same URL with a
+	// matching expectedStatus if the error page is what you meant to test.
+	CodeNavigation       ErrorCode = "NAVIGATION"
 	CodeJavaScript       ErrorCode = "JAVASCRIPT_ERROR"
 	CodeProtocolMismatch ErrorCode = "PROTOCOL_MISMATCH"
 	CodeDriverClosed     ErrorCode = "DRIVER_CLOSED"
@@ -76,16 +87,19 @@ const (
 )
 
 type Operation struct {
-	Kind          OperationKind
-	URL           string
-	Cookies       []Cookie
-	Locator       Locator
-	Poll          PollPolicy
-	ValueJSON     string
-	Expression    string
-	ArgumentsJSON string
-	Invoke        *bool
-	Assertion     Assertion
+	Kind OperationKind
+	URL  string
+	// ExpectedStatus is always concrete by the time an Operation is built - Dispatch resolves the
+	// request's omitted 0 to 200 - so nothing downstream has to know the default.
+	ExpectedStatus int
+	Cookies        []Cookie
+	Locator        Locator
+	Poll           PollPolicy
+	ValueJSON      string
+	Expression     string
+	ArgumentsJSON  string
+	Invoke         *bool
+	Assertion      Assertion
 }
 
 type LocatorKind uint8
@@ -207,6 +221,9 @@ type SessionRequest struct {
 type NavigateRequest struct {
 	SessionID string `json:"sessionId"`
 	URL       string `json:"url"`
+	// ExpectedStatus is the HTTP status the main document must answer with.  Omitted (0) means 200,
+	// so a client that does not care keeps sending exactly what it sent before.
+	ExpectedStatus int `json:"expectedStatus,omitempty"`
 }
 
 type PollOptions struct {
@@ -380,7 +397,14 @@ func (s *Server) Dispatch(ctx context.Context, method string, params json.RawMes
 		if request.URL == "" {
 			return nil, NewError(CodeInvalidArgument, "url is required")
 		}
-		return s.execute(ctx, request.SessionID, Operation{Kind: OperationNavigate, URL: request.URL})
+		expectedStatus := request.ExpectedStatus
+		if expectedStatus == 0 {
+			expectedStatus = http.StatusOK
+		}
+		if expectedStatus < 100 || expectedStatus > 599 {
+			return nil, NewError(CodeInvalidArgument, fmt.Sprintf("expectedStatus must be a valid HTTP status code, got %d", expectedStatus))
+		}
+		return s.execute(ctx, request.SessionID, Operation{Kind: OperationNavigate, URL: request.URL, ExpectedStatus: expectedStatus})
 	case "setCookies":
 		var request SetCookiesRequest
 		if err := decodeParams(params, &request); err != nil {

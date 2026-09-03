@@ -68,7 +68,7 @@ func typeScript() string {
 	var output strings.Builder
 	output.WriteString("// Code generated from the Go protocol definition; DO NOT EDIT.\n\n")
 	output.WriteString("export type ErrorCode =\n")
-	for _, code := range []protocol.ErrorCode{protocol.CodeInvalidArgument, protocol.CodeTimeout, protocol.CodeTargetNotFound, protocol.CodeTargetNotReady, protocol.CodeJavaScript, protocol.CodeProtocolMismatch, protocol.CodeDriverClosed, protocol.CodeDriver, protocol.CodeCancelled, protocol.CodeBrowserGone, protocol.CodePageCrashed} {
+	for _, code := range []protocol.ErrorCode{protocol.CodeInvalidArgument, protocol.CodeTimeout, protocol.CodeTargetNotFound, protocol.CodeTargetNotReady, protocol.CodeNavigation, protocol.CodeJavaScript, protocol.CodeProtocolMismatch, protocol.CodeDriverClosed, protocol.CodeDriver, protocol.CodeCancelled, protocol.CodeBrowserGone, protocol.CodePageCrashed} {
 		fmt.Fprintf(&output, "  | %q\n", code)
 	}
 	output.WriteString(";\n\n")

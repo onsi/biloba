@@ -4,6 +4,8 @@ import (
 	"context"
 	_ "embed"
 	"errors"
+	"fmt"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -156,6 +158,16 @@ func (s *Session) Prepare(ctx context.Context) error {
 
 // Navigate loads a URL and requires the main document response to have HTTP status 200.
 func (s *Session) Navigate(ctx context.Context, destination string) error {
+	return s.NavigateWithStatus(ctx, destination, http.StatusOK)
+}
+
+// NavigateWithStatus loads a URL and requires the main document response to have expectedStatus.
+// A 4xx or 5xx page that renders perfectly good HTML is a legitimate thing to test - this is how you
+// say so, and it mirrors the Go runner's Biloba.NavigateWithStatus.  Navigate's insistence on 200 is
+// an assertion, not a transport rule: unexpected error pages are a broken fixture far more often
+// than they are the subject of the test, and letting one through surfaces later as a confusing
+// downstream failure instead of at the navigation that caused it.
+func (s *Session) NavigateWithStatus(ctx context.Context, destination string, expectedStatus int) error {
 	return s.serial(ctx, "navigate", func(opCtx context.Context) error {
 		result, err := NavigateContext(opCtx, destination)
 		// A navigation gives the target a fresh renderer, which is how a crashed page recovers - but
@@ -175,8 +187,8 @@ func (s *Session) Navigate(ctx context.Context, destination string) error {
 			return err
 		}
 		if result.Status != 0 {
-			if result.Status != 200 {
-				return &Error{Code: CodeNavigation, Operation: "navigate", Message: "expected HTTP status 200", Observed: result.Status}
+			if result.Status != expectedStatus {
+				return &Error{Code: CodeNavigation, Operation: "navigate", Message: fmt.Sprintf("expected HTTP status %d", expectedStatus), Observed: result.Status}
 			}
 			return nil
 		}

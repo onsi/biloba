@@ -6,6 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -186,6 +190,61 @@ var _ = Describe("bilobad", func() {
 		Expect(stdoutReader.Close()).To(Succeed())
 		Expect(stdinReader.Close()).To(Succeed())
 	}, SpecTimeout(90*time.Second))
+
+	Describe("mapping engine error codes onto the protocol", func() {
+		It("gives every engine code an explicit mapping", func() {
+			// Falling through to DRIVER_ERROR is silent: the client is told the daemon broke for a
+			// failure the page caused.  A code added to the engine has to be classified here.
+			for code := range engineErrorCodesInSource() {
+				Expect(engineProtocolCodes).To(HaveKey(code), "engine.ErrorCode %q has no protocol counterpart in engineProtocolCodes", code)
+			}
+		})
+
+		It("maps nothing the engine no longer defines", func() {
+			declared := engineErrorCodesInSource()
+			for code := range engineProtocolCodes {
+				Expect(declared).To(HaveKey(code), "engineProtocolCodes maps %q, which the engine does not define", code)
+			}
+		})
+
+		DescribeTable("converting an engine failure", func(code engine.ErrorCode, expected protocol.ErrorCode) {
+			converted := engineRPCError(&engine.Error{Code: code, Operation: "evaluate", Message: "boom"})
+			var protocolErr *protocol.ProtocolError
+			Expect(errors.As(converted, &protocolErr)).To(BeTrue())
+			Expect(protocolErr.Code).To(Equal(expected))
+			Expect(protocolErr.Message).To(Equal("evaluate: boom"))
+		},
+			Entry("a page-level JavaScript error", engine.CodeJavaScript, protocol.CodeJavaScript),
+			Entry("a script that will never parse", engine.CodeInvalidScript, protocol.CodeJavaScript),
+			Entry("a navigation that landed on the wrong status", engine.CodeNavigation, protocol.CodeNavigation),
+			Entry("an action the target refused", engine.CodeActionFailed, protocol.CodeTargetNotReady),
+			Entry("an argument the caller got wrong", engine.CodeInvalidArgument, protocol.CodeInvalidArgument),
+			Entry("a browser that never started", engine.CodeBrowserStart, protocol.CodeDriver),
+			Entry("an unrecognized code", engine.ErrorCode("brand_new"), protocol.CodeDriver),
+		)
+	})
 })
+
+// engineErrorCodesInSource reads the engine's own declarations rather than a list kept here, which
+// would go stale in exactly the way the mapping did.
+func engineErrorCodesInSource() map[engine.ErrorCode]string {
+	GinkgoHelper()
+	paths, err := filepath.Glob(filepath.Join("..", "..", "engine", "*.go"))
+	Expect(err).NotTo(HaveOccurred())
+	pattern := regexp.MustCompile(`(?m)^\s*(Code\w+)\s+ErrorCode\s+=\s+"([a-z_]+)"`)
+	codes := map[engine.ErrorCode]string{}
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		source, err := os.ReadFile(path)
+		Expect(err).NotTo(HaveOccurred())
+		for _, match := range pattern.FindAllStringSubmatch(string(source), -1) {
+			codes[engine.ErrorCode(match[2])] = match[1]
+		}
+	}
+	Expect(codes).NotTo(BeEmpty(), "could not find the engine's ErrorCode declarations")
+	return codes
+}
 
 func boolPointer(value bool) *bool { return &value }

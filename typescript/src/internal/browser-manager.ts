@@ -6,8 +6,8 @@ import {BilobaError} from "../index.js";
 
 export interface StartSharedBrowserOptions {
   executable: string;
-  chromePath?: string;
-  readyTimeoutMs?: number;
+  chromePath?: string | undefined;
+  readyTimeoutMs?: number | undefined;
 }
 
 export interface SharedBrowserProcess {

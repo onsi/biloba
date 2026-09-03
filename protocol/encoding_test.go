@@ -91,7 +91,8 @@ var _ = Describe("the generated protocol declarations", func() {
 
 		Expect(declared).To(ConsistOf(
 			string(protocol.CodeInvalidArgument), string(protocol.CodeTimeout), string(protocol.CodeTargetNotFound),
-			string(protocol.CodeTargetNotReady), string(protocol.CodeJavaScript), string(protocol.CodeProtocolMismatch),
+			string(protocol.CodeTargetNotReady), string(protocol.CodeNavigation), string(protocol.CodeJavaScript),
+			string(protocol.CodeProtocolMismatch),
 			string(protocol.CodeDriverClosed), string(protocol.CodeDriver), string(protocol.CodeCancelled),
 			string(protocol.CodeBrowserGone), string(protocol.CodePageCrashed),
 		), "a code the daemon can send but TypeScript does not declare is a code the client cannot narrow on")

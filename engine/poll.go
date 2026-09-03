@@ -11,6 +11,10 @@ type ErrorCode string
 
 const (
 	CodeInvalidSelector ErrorCode = "invalid_selector"
+	// CodeInvalidArgument is the caller handing an operation something it cannot act on - a cookie
+	// with no domain, say.  Distinct from CodeActionFailed, which is the target refusing an
+	// operation whose arguments were fine: that one can come good on a retry, this one never can.
+	CodeInvalidArgument ErrorCode = "invalid_argument"
 	CodeBrowserStart    ErrorCode = "browser_start"
 	CodeSessionClosed   ErrorCode = "session_closed"
 	CodeNavigation      ErrorCode = "navigation"
