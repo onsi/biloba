@@ -937,6 +937,9 @@ func (s *Session) serial(requestCtx context.Context, operation string, run func(
 	if !recovers && s.hasCrashed() {
 		return pageCrashed()
 	}
+	if requestCtx.Err() != nil {
+		return requestContextError(operation, requestCtx, err)
+	}
 	var engineErr *Error
 	if errors.As(err, &engineErr) {
 		return engineErr
@@ -952,6 +955,18 @@ func (s *Session) serial(requestCtx context.Context, operation string, run func(
 			Message:   "the browser is no longer available (it exited, crashed, or was closed)",
 			Cause:     err,
 		}
+	}
+	return requestContextError(operation, requestCtx, err)
+}
+
+func requestContextError(operation string, requestCtx context.Context, err error) *Error {
+	if requestErr := requestCtx.Err(); requestErr != nil {
+		result := contextError(operation, requestErr)
+		var engineErr *Error
+		if errors.As(err, &engineErr) {
+			result.Operation = engineErr.Operation
+		}
+		return result
 	}
 	return contextError(operation, err)
 }

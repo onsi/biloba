@@ -1,10 +1,43 @@
 package engine
 
 import (
+	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/onsi/gomega"
 )
+
+func TestRequestContextErrorPreservesDeadlineCause(t *testing.T) {
+	g := gomega.NewWithT(t)
+	requestCtx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	<-requestCtx.Done()
+
+	err := requestContextError("evaluate", requestCtx, context.Canceled)
+
+	g.Expect(errors.Is(err, context.DeadlineExceeded)).To(gomega.BeTrue())
+	var engineErr *Error
+	g.Expect(errors.As(err, &engineErr)).To(gomega.BeTrue())
+	g.Expect(engineErr.Code).To(gomega.Equal(CodeDeadline))
+}
+
+func TestRequestContextErrorPreservesNestedOperation(t *testing.T) {
+	g := gomega.NewWithT(t)
+	requestCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := requestContextError("prepare", requestCtx, &Error{
+		Code:      CodeCanceled,
+		Operation: "list tabs",
+		Message:   context.Canceled.Error(),
+		Cause:     context.Canceled,
+	})
+
+	g.Expect(err.Operation).To(gomega.Equal("list tabs"))
+	g.Expect(errors.Is(err, context.Canceled)).To(gomega.BeTrue())
+}
 
 // These are plain testing-based units (not Ginkgo specs) because dot-importing Gomega into package
 // engine collides with the engine's own Assertion type.  They need no browser: the diagnostics

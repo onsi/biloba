@@ -30,7 +30,9 @@ await session.locator("#count").expectText("1");
 ## Read this instead
 
 The narrative documentation lives with the rest of Biloba's docs:
-**[Biloba from TypeScript](https://onsi.github.io/biloba/#biloba-from-typescript)** — the topology and why it's shaped this way, setup, locators, actions and assertions, `evaluate`, failure output and what each error code means, and what the client doesn't cover yet.
+**[Biloba from TypeScript](https://onsi.github.io/biloba/#biloba-from-typescript)** — setup and shared-browser topology; launch modes; selectors; DOM, input, geometry, tabs, cookies, storage, dialogs, downloads, and network APIs; screenshots and visual assertions; diagnostics; and structured failures.
+
+The client preserves the observable behavior of Biloba's public Go API with TypeScript-native spelling. Async `expect*` methods replace Gomega matchers, `expectScreenshot()` replaces `HaveScreenshot`, and the Vitest adapter replaces Ginkgo-specific failure and progress hooks.
 
 ## Working in this directory
 

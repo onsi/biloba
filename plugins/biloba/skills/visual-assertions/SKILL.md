@@ -15,6 +15,8 @@ Eventually(".card").Should(SatisfyAll(b.BeInViewport(b.Fully()), b.HaveScreensho
 
 Docs: <https://onsi.github.io/biloba/#visual-assertions>.
 
+In TypeScript, use `session.expectScreenshot(...)` or `locator.expectScreenshot(...)`. The baseline, update, masking, tolerance, freeze, color-scheme, artifact, and diagnosis behavior is the same; see `biloba:typescript` for TypeScript option names.
+
 **Give it a real deadline.** Gomega's default `Eventually` is 1s and a capture-and-compare is not free:
 
 ```go
