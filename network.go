@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"github.com/onsi/biloba/engine"
 	"maps"
 	"net/http"
 	"reflect"
@@ -1154,12 +1155,9 @@ func (b *Biloba) ensureFetchEnabled() {
 		return
 	}
 
-	// cache first, then Fetch: that way there is no window in which requests are being intercepted
-	// but could still be answered from cache.
-	if err := b.runCDP("enable network interception",
-		network.SetCacheDisabled(true),
-		fetch.Enable().WithPatterns([]*fetch.RequestPattern{{URLPattern: "*"}}),
-	); err != nil {
+	if err := b.runEngine("enable network interception", func(ctx context.Context) error {
+		return engine.EnableInterceptionContext(ctx)
+	}); err != nil {
 		b.gt.Fatalf("Failed to enable network interception:\n%s", err.Error())
 	}
 }
@@ -1322,7 +1320,9 @@ func (b *Biloba) handleRequestStagePause(ev *fetch.EventRequestPaused) {
 		default:
 			action = fetch.ContinueRequest(ev.RequestID)
 		}
-		b.runCDP("answer the intercepted request", action)
+		_ = b.runEngine("answer a paused network request", func(ctx context.Context) error {
+			return engine.RunActionContext(ctx, action)
+		})
 	}()
 }
 
@@ -1331,7 +1331,9 @@ func (b *Biloba) handleResponseStagePause(ev *fetch.EventRequestPaused) {
 	go func() {
 		if handler == nil {
 			// Not ours to modify: hand the real response straight back to the page.
-			b.runCDP("continue the intercepted response", fetch.ContinueResponse(ev.RequestID))
+			_ = b.runEngine("continue an unmodified network response", func(ctx context.Context) error {
+				return engine.RunActionContext(ctx, fetch.ContinueResponse(ev.RequestID))
+			})
 			return
 		}
 
@@ -1342,14 +1344,12 @@ func (b *Biloba) handleResponseStagePause(ev *fetch.EventRequestPaused) {
 		for _, h := range ev.ResponseHeaders {
 			original.Headers[h.Name] = h.Value
 		}
-		// GetResponseBody is only valid at the response stage; chromedp decodes base64 for us.  It
-		// must run through chromedp.Run so it picks up the target's CDP executor from the context.
 		var body []byte
-		b.runCDP("read the intercepted response body", chromedp.ActionFunc(func(ctx context.Context) error {
+		_ = b.runEngine("read a paused network response", func(ctx context.Context) error {
 			var err error
-			body, err = fetch.GetResponseBody(ev.RequestID).Do(ctx)
+			body, err = engine.ResponseBodyContext(ctx, ev.RequestID)
 			return err
-		}))
+		})
 		original.Body = string(body)
 
 		response := handler.resolve(original)
@@ -1361,7 +1361,9 @@ func (b *Biloba) handleResponseStagePause(ev *fetch.EventRequestPaused) {
 		if headers := response.headerEntries(); len(headers) > 0 {
 			params = params.WithResponseHeaders(headers)
 		}
-		b.runCDP("fulfil the intercepted response", params)
+		_ = b.runEngine("fulfill a modified network response", func(ctx context.Context) error {
+			return engine.RunActionContext(ctx, params)
+		})
 	}()
 }
 

@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/onsi/biloba/engine"
 	"strings"
 
 	"github.com/chromedp/cdproto/accessibility"
-	"github.com/chromedp/chromedp"
 )
 
 /*
@@ -35,11 +35,11 @@ func (b *Biloba) A11yOutline() string {
 
 func (b *Biloba) a11yOutline() (string, error) {
 	var nodes []*accessibility.Node
-	err := b.runCDP("capture the accessibility tree", chromedp.ActionFunc(func(ctx context.Context) error {
+	err := b.runEngine("capture the accessibility tree", func(ctx context.Context) error {
 		var err error
-		nodes, err = accessibility.GetFullAXTree().Do(ctx)
+		nodes, err = engine.AccessibilityTreeContext(ctx)
 		return err
-	}))
+	})
 	if err != nil {
 		return "", err
 	}

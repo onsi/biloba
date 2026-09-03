@@ -1,8 +1,11 @@
 package biloba
 
 import (
+	"context"
+
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/kb"
+	"github.com/onsi/biloba/engine"
 	"github.com/onsi/gomega/gcustom"
 	"github.com/onsi/gomega/types"
 )
@@ -166,7 +169,9 @@ func (b *Biloba) dispatchKeys(keys string, mods []clickModifier) error {
 	if len(mods) > 0 {
 		opts = append(opts, chromedp.KeyModifiers(modifierMask(mods)))
 	}
-	return b.runCDP("dispatch keyboard input", chromedp.KeyEvent(keys, opts...))
+	return b.runEngine("dispatch keyboard input", func(ctx context.Context) error {
+		return engine.KeyEventContext(ctx, keys, opts...)
+	})
 }
 
 // focusAndSendKeys focuses the element matching selector (failing if it is missing, hidden, or
