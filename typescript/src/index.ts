@@ -1,8 +1,10 @@
-import {connectWithTransport, resolveVisualConnectOptions, stripStackHeader} from "./internal/client.js";
+import {automationDetected, booleanEnvironment, connectWithTransport, resolveDiagnosticsPolicy, resolveVisualConnectOptions, stripStackHeader} from "./internal/client.js";
 import {
   startSharedBrowser as spawnSharedBrowser,
   type SharedBrowserProcess,
   type StartSharedBrowserOptions,
+  type SharedBrowserConnection,
+  type ResolvedLaunchMetadata,
 } from "./internal/browser-manager.js";
 import {
   startDaemon as spawnDaemon,
@@ -11,7 +13,7 @@ import {
 } from "./internal/daemon-manager.js";
 
 export type {DaemonProcess, StartDaemonOptions};
-export type {SharedBrowserProcess, StartSharedBrowserOptions};
+export type {SharedBrowserProcess, StartSharedBrowserOptions, SharedBrowserConnection, ResolvedLaunchMetadata};
 
 export const Keys = {
   Backspace: "\b",
@@ -340,13 +342,28 @@ export interface TabQuery {
   has?: Locator | string | undefined;
 }
 export interface WindowSize {readonly width: number; readonly height: number}
-export interface ConsoleMessage {readonly type: string; readonly text: string; readonly args: readonly unknown[]; readonly timestamp: string}
+export type ChromeMode = "headless-shell" | "headless" | "headful";
+export interface ChromeLaunchOptions {mode?: ChromeMode | undefined; chromePath?: string | undefined; autoInstall?: boolean | undefined; chromeArgs?: readonly string[] | undefined; windowSize?: WindowSize | undefined}
+export type LaunchMetadata = (ResolvedLaunchMetadata & {readonly attached: false}) | (ResolvedLaunchMetadata & {readonly attached: true; readonly source: "shared-host"}) | {readonly attached: true; readonly source: "external"; readonly chromeArgs: readonly []; readonly windowSize: WindowSize; readonly autoInstalled: false};
+export type DiagnosticsPurpose = "failure" | "progress" | "on-demand";
+export interface DriverDebugEntry {readonly timestamp: string; readonly direction: "send" | "receive" | "internal"; readonly message: string; readonly truncated?: boolean}
+export interface DriverDebugEventsDropped {readonly code: "EVENTS_DROPPED"; readonly message: string; readonly details: {readonly count: number}}
+export type DriverDebugEvent = DriverDebugEntry | DriverDebugEventsDropped;
+export interface CaptureDiagnosticsOptions extends CommandOptions {purpose?: DiagnosticsPurpose; name?: string; screenshots?: boolean; outlines?: boolean; viewport?: WindowSize; maxScreenshotBytes?: number; includeScreenshotBytes?: boolean}
+export type DiagnosticsArtifact = "tab" | "title" | "outline" | "outline-write" | "screenshot" | "screenshot-write" | "viewport-restore";
+export type DiagnosticsArtifactErrorCode = BilobaErrorCode | "IO_ERROR" | "ACTION_FAILED" | "DEADLINE_EXCEEDED";
+export interface DiagnosticsArtifactError {readonly artifact: DiagnosticsArtifact; readonly code: DiagnosticsArtifactErrorCode; readonly message: string}
+export interface TabDiagnostics {readonly sessionId?: string; readonly targetId: string; readonly title: string; readonly screenshotPath?: string; readonly screenshot?: Uint8Array; readonly outlinePath?: string; readonly domOutline?: string; readonly errors: readonly DiagnosticsArtifactError[]}
+export interface ContextDiagnostics {readonly purpose: DiagnosticsPurpose; readonly artifactDir?: string; readonly tabs: readonly TabDiagnostics[]}
+export interface ConsoleStackFrame {readonly url: string; readonly functionName: string; readonly line: number; readonly column: number}
+export interface ConsoleMessage {readonly type: string; readonly text: string; readonly args: readonly unknown[]; readonly timestamp: string; readonly stack: readonly ConsoleStackFrame[]}
 export type DialogType = "alert" | "beforeunload" | "confirm" | "prompt";
 export interface Dialog {readonly type: DialogType; readonly message: string; readonly defaultPrompt: string; readonly accepted: boolean; readonly promptText: string; readonly autoHandled: boolean}
 export interface DialogQuery {readonly type?: DialogType | undefined; readonly message?: ExpectedValue | undefined}
 export interface DialogHandlerOptions {readonly message?: ExpectedValue | undefined; readonly accept?: boolean | undefined; readonly promptText?: string | undefined}
 export interface DialogHandler {readonly id: string; remove(options?: CommandOptions): Promise<void>}
 export interface Warning {readonly code: "dialog_auto_handled"; readonly message: string; readonly dialog: Dialog}
+export interface BilobaWarning {readonly code: string; readonly message: string; readonly details?: Readonly<Record<string, unknown>>; readonly dialog?: Dialog}
 export type WarningSink = (warning: Warning) => void;
 export type DownloadState = "active" | "complete" | "cancelled";
 export interface Download {readonly id: string; readonly url: string; readonly filename: string; readonly state: DownloadState; readonly receivedBytes: number; readonly totalBytes: number; readonly startedAt: number; readonly completedAt?: number; content(options?: CommandOptions & {maxBytes?: number | undefined}): Promise<Uint8Array>; cancel(options?: CommandOptions): Promise<void>}
@@ -432,6 +449,7 @@ interface BilobaErrorOptions {
   callsiteStack?: string;
   visual?: VisualResult;
   artifactPaths?: readonly string[];
+  diagnostics?: ContextDiagnostics;
 }
 
 export class BilobaError extends Error {
@@ -447,6 +465,7 @@ export class BilobaError extends Error {
   readonly rpcResponseCount?: number;
   readonly visual?: VisualResult;
   readonly artifactPaths: readonly string[];
+  readonly diagnostics?: ContextDiagnostics;
 
   constructor(options: BilobaErrorOptions) {
     super(options.message);
@@ -463,6 +482,7 @@ export class BilobaError extends Error {
     if (options.rpcResponseCount !== undefined) this.rpcResponseCount = options.rpcResponseCount;
     if (options.visual !== undefined) this.visual = options.visual;
     this.artifactPaths = options.artifactPaths ?? [];
+    if (options.diagnostics !== undefined) this.diagnostics = options.diagnostics;
     if (options.callsiteStack) {
       this.stack = `${this.name}: ${this.message}\n${stripStackHeader(options.callsiteStack)}`;
     }
@@ -628,6 +648,7 @@ export interface Session {
   captureScreenshot(options?: ScreenshotBytesOptions): Promise<Uint8Array>;
   captureScreenshot(options: ScreenshotPathOptions): Promise<string>;
   expectScreenshot(name: string, options?: VisualScreenshotOptions): Promise<VisualResult>;
+  captureDiagnostics(options?: CaptureDiagnosticsOptions): Promise<ContextDiagnostics>;
   setCookies(cookies: readonly Cookie[], options?: CommandOptions): Promise<void>;
   getCookies(options?: CommandOptions): Promise<readonly Cookie[]>;
   clearCookies(options?: CommandOptions): Promise<void>;
@@ -646,6 +667,9 @@ export interface Session {
   outline(options?: CommandOptions): Promise<string>;
   accessibilityOutline(options?: CommandOptions): Promise<string>;
   consoleMessages(options?: CommandOptions): Promise<readonly ConsoleMessage[]>;
+  onConsoleMessage(listener: (message: ConsoleMessage) => void): () => void;
+  warnings(options?: CommandOptions): Promise<readonly BilobaWarning[]>;
+  onWarning(listener: (warning: BilobaWarning) => void): () => void;
   expectConsoleMessage(expected: ExpectedValue, options?: PollOptions & {type?: string | undefined}): Promise<ConsoleMessage>;
   setDeviceMetrics(metrics: DeviceMetrics, options?: CommandOptions): Promise<void>;
   clearDeviceMetrics(options?: CommandOptions): Promise<void>;
@@ -680,7 +704,6 @@ export interface Session {
   expectRequest(expectedUrl: ExpectedValue, options?: WaitOptions & {method?: string | undefined}): Promise<AssertionResult>;
   handleDialogs(type: DialogType, options?: DialogHandlerOptions): Promise<DialogHandler>;
   dialogs(query?: DialogQuery, options?: CommandOptions): Promise<readonly Dialog[]>;
-  warnings(options?: CommandOptions): Promise<readonly Warning[]>;
   downloads(query?: DownloadQuery, options?: CommandOptions): Promise<readonly Download[]>;
   expectDownload(query?: DownloadQuery, options?: PollOptions): Promise<Download>;
   requests(query?: RequestQuery, options?: CommandOptions): Promise<readonly NetworkRequest[]>;
@@ -725,14 +748,19 @@ export interface ResponseHold {
 export interface Browser {
   readonly protocolVersion: string;
   readonly capabilities: ReadonlySet<string>;
+  readonly launch: LaunchMetadata;
   openSession(): Promise<Session>;
   close(): Promise<void>;
 }
 
-export interface ConnectOptions {
+export interface DiagnosticsPolicyOptions {artifactDir?: string; failureScreenshots?: boolean; failureOutlines?: boolean; failureViewport?: WindowSize; progressScreenshots?: boolean; progressOutlines?: boolean; progressViewport?: WindowSize; pollTrajectory?: boolean; inlineScreenshots?: boolean | "auto"; maxScreenshotBytes?: number}
+export interface ConnectOptions extends ChromeLaunchOptions {
   daemonExecutable?: string | undefined;
   chromePath?: string | undefined;
   chromeWsUrl?: string | undefined;
+  chromeConnection?: SharedBrowserConnection | undefined;
+  diagnostics?: DiagnosticsPolicyOptions | undefined;
+  debugLog?: ((entry: DriverDebugEvent) => void) | undefined;
   artifactDir?: string | undefined;
   signal?: AbortSignal | undefined;
   warningSink?: WarningSink | undefined;
@@ -752,6 +780,10 @@ export async function connect(options: ConnectOptions = {}): Promise<Browser> {
       message: "connect requires daemonExecutable",
     });
   }
+  validateLaunchOptions(options);
+  if (options.artifactDir !== undefined && options.diagnostics?.artifactDir !== undefined && options.artifactDir !== options.diagnostics.artifactDir) throw new BilobaError({code: "INVALID_ARGUMENT", message: "artifactDir conflicts with diagnostics.artifactDir"});
+  const diagnostics = resolveDiagnosticsPolicy({...options.diagnostics, ...(options.artifactDir !== undefined && {artifactDir: options.artifactDir})}, process.env, automationDetected(process.env));
+  const launchMode = options.mode ?? (booleanEnvironment("BILOBA_INTERACTIVE", process.env) === true ? "headful" : undefined);
   const screenshotWarning = options.onScreenshotWarning;
   const visual = resolveVisualConnectOptions(options, process.env, (message) => {
     if (screenshotWarning) screenshotWarning({sessionId: "", operation: "expectScreenshot", message});
@@ -759,11 +791,28 @@ export async function connect(options: ConnectOptions = {}): Promise<Browser> {
   });
   const daemon = await spawnDaemon({
     executable,
+    ...(options.chromeConnection ? {chromeWsUrl: options.chromeConnection.wsURL, attachedLaunchMetadata: Buffer.from(JSON.stringify({mode: options.chromeConnection.launch.mode, executablePath: options.chromeConnection.launch.executablePath, chromeArgs: options.chromeConnection.launch.chromeArgs, width: options.chromeConnection.launch.windowSize.width, height: options.chromeConnection.launch.windowSize.height, attached: true, autoInstalled: options.chromeConnection.launch.autoInstalled})).toString("base64")} : options.chromeWsUrl ? {chromeWsUrl: options.chromeWsUrl} : {}),
     ...(options.chromePath && {chromePath: options.chromePath}),
-    ...(options.chromeWsUrl && {chromeWsUrl: options.chromeWsUrl}),
+    ...(launchMode && {mode: launchMode}),
+    ...(options.chromeArgs && {chromeArgs: options.chromeArgs}),
+    ...(options.autoInstall !== undefined && {autoInstall: options.autoInstall}),
+    ...(options.windowSize && {windowSize: options.windowSize}),
+    ...(options.debugLog && {debugLog: true}),
+    ...(diagnostics.artifactDir && {artifactDir: diagnostics.artifactDir}),
     ...visual,
+    ...(visual.artifactDir && {visualArtifactDir: visual.artifactDir}),
+    artifactDir: diagnostics.artifactDir,
   });
-  return await connectWithTransport(daemon.transport, {...options, maxScreenshotBytes: visual.maxScreenshotBytes, onScreenshotWarning: screenshotWarning}, () => daemon.stop());
+  return await connectWithTransport(daemon.transport, {...options, diagnostics, maxScreenshotBytes: visual.maxScreenshotBytes, onScreenshotWarning: screenshotWarning}, () => daemon.stop());
+}
+
+
+function validateLaunchOptions(options: ConnectOptions): void {
+  if (options.mode !== undefined && !["headless-shell", "headless", "headful"].includes(options.mode)) throw new BilobaError({code: "INVALID_ARGUMENT", message: "mode must be headless-shell, headless, or headful"});
+  if (options.windowSize && (!Number.isInteger(options.windowSize.width) || !Number.isInteger(options.windowSize.height) || options.windowSize.width <= 0 || options.windowSize.height <= 0)) throw new BilobaError({code: "INVALID_ARGUMENT", message: "windowSize dimensions must be positive integers"});
+  if (options.autoInstall && options.mode !== undefined && options.mode !== "headless-shell") throw new BilobaError({code: "INVALID_ARGUMENT", message: "autoInstall is only valid in headless-shell mode"});
+  for (const argument of options.chromeArgs ?? []) if (!/^--[A-Za-z0-9][A-Za-z0-9-]*(=.*)?$/.test(argument)) throw new BilobaError({code: "INVALID_ARGUMENT", message: `invalid Chrome argument ${JSON.stringify(argument)}`});
+  if (options.chromeConnection && (options.chromeWsUrl !== undefined || options.mode !== undefined || options.chromePath !== undefined || options.autoInstall !== undefined || options.chromeArgs !== undefined || options.windowSize !== undefined)) throw new BilobaError({code: "INVALID_ARGUMENT", message: "chromeConnection conflicts with process launch options"});
 }
 
 export async function startDaemon(options: StartDaemonOptions): Promise<DaemonProcess> {

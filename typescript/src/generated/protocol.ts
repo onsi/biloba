@@ -23,6 +23,7 @@ export interface Diagnostics {
   screenshotPath?: string;
   daemonDetail?: string;
   visual?: VisualResult;
+  context?: ContextDiagnosticsResponse;
 }
 
 export interface ProtocolError {
@@ -45,6 +46,17 @@ export interface HandshakeRequest {
 export interface HandshakeResponse {
   protocolVersion: string;
   capabilities: string[];
+  launch: LaunchMetadata;
+}
+
+export interface LaunchMetadata {
+  mode?: string;
+  executablePath?: string;
+  chromeArgs: string[];
+  width?: number;
+  height?: number;
+  attached: boolean;
+  autoInstalled: boolean;
 }
 
 export interface OpenSessionResponse {
@@ -91,6 +103,41 @@ export interface HandleListResponse {
 
 export interface InvalidationResponse {
   invalidatedSessionIds?: string[];
+}
+
+export interface CaptureDiagnosticsRequest {
+  sessionId: string;
+  purpose: string;
+  name?: string;
+  screenshots?: boolean;
+  outlines?: boolean;
+  width?: number;
+  height?: number;
+  maxBytes?: number;
+  includeScreenshotBytes?: boolean;
+}
+
+export interface DiagnosticsArtifactErrorResponse {
+  artifact: string;
+  code: string;
+  message: string;
+}
+
+export interface TabDiagnosticsResponse {
+  sessionId?: string;
+  targetId: string;
+  title: string;
+  screenshotPath?: string;
+  screenshotBase64?: string;
+  outlinePath?: string;
+  domOutline?: string;
+  errors: DiagnosticsArtifactErrorResponse[];
+}
+
+export interface ContextDiagnosticsResponse {
+  purpose: string;
+  artifactDir?: string;
+  tabs: TabDiagnosticsResponse[];
 }
 
 export interface NavigateRequest {
@@ -318,9 +365,31 @@ export interface CallbackResultRequest {
 
 export interface EventFrame {
   event: string;
+  params?: unknown;
   invocationId?: string;
   callbackId?: string;
   payload?: unknown;
+}
+
+export interface SubscribeEventsRequest {
+  sessionId?: string;
+  types: string[];
+}
+
+export interface SubscribeEventsResponse {
+  subscriptionId: string;
+}
+
+export interface UnsubscribeEventsRequest {
+  subscriptionId: string;
+}
+
+export interface EventEnvelope {
+  subscriptionId: string;
+  sessionId?: string;
+  generation?: number;
+  sequence: number;
+  payload: unknown;
 }
 
 export interface LocatorRequest {

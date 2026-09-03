@@ -46,57 +46,65 @@ type Diagnostics struct {
 
 // Session is a browser target scoped to one isolated context. Operations on one session are serialized.
 type Session struct {
-	browser          *Browser
-	ctx              context.Context
-	cancel           context.CancelFunc
-	browserContextID cdp.BrowserContextID
-	targetID         target.ID
-	openerID         target.ID
-	ownsContext      bool
-	frameTarget      bool
-	artifactDir      string
-	mu               sync.Mutex
-	requestMu        sync.Mutex
-	requests         []Request
-	consoleMu        sync.Mutex
-	consoleMessages  []ConsoleMessage
-	dialogMu         sync.Mutex
-	dialogHandlers   []dialogHandlerEntry
-	dialogHistory    []Dialog
-	dialogSequence   uint64
-	warnings         []Warning
-	downloadMu       sync.Mutex
-	downloads        map[string]*Download
-	downloadOrder    []string
-	downloadDir      string
-	networkMu        sync.Mutex
-	networkHandlers  map[string]*networkHandlerEntry
-	networkOrder     []string
-	networkSequence  uint64
-	interceptionMu   sync.Mutex
-	interceptionSeq  uint64
-	responses        []Response
-	inflight         map[network.RequestID]struct{}
-	cacheEnabled     bool
-	networkState     NetworkState
-	networkShadows   []NetworkShadowDiagnostic
-	eventsEnabled    atomic.Bool
-	holdMu           sync.Mutex
-	holds            map[string]*responseHold
-	holdOrder        []string
-	holdSequence     uint64
-	fetchEnabled     bool
-	interceptions    int
-	closed           bool
-	installed        bool
-	root             *Session
-	initialWidth     int
-	initialHeight    int
-	restoreViewport  *ViewportSize
-	visual           visualLifecycle
-	media            Media
-	highFidelity     bool
-	initScriptIDs    []page.ScriptIdentifier
+	browser               *Browser
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	browserContextID      cdp.BrowserContextID
+	targetID              target.ID
+	openerID              target.ID
+	ownsContext           bool
+	frameTarget           bool
+	artifactDir           string
+	mu                    sync.Mutex
+	requestMu             sync.Mutex
+	requests              []Request
+	consoleMu             sync.Mutex
+	consoleMessages       []ConsoleMessage
+	consoleDropped        uint64
+	consoleSubs           map[uint64]*consoleSubscriber
+	consoleSubSeq         uint64
+	dialogMu              sync.Mutex
+	dialogHandlers        []dialogHandlerEntry
+	dialogHistory         []Dialog
+	dialogSequence        uint64
+	warnings              []Warning
+	warningsDropped       uint64
+	warningSubs           map[uint64]*warningSubscriber
+	warningSubSeq         uint64
+	downloadMu            sync.Mutex
+	downloads             map[string]*Download
+	downloadOrder         []string
+	downloadDir           string
+	networkMu             sync.Mutex
+	networkHandlers       map[string]*networkHandlerEntry
+	networkOrder          []string
+	networkSequence       uint64
+	interceptionMu        sync.Mutex
+	interceptionSeq       uint64
+	responses             []Response
+	inflight              map[network.RequestID]struct{}
+	cacheEnabled          bool
+	networkState          NetworkState
+	networkShadows        []NetworkShadowDiagnostic
+	networkShadowsDropped uint64
+	eventsEnabled         atomic.Bool
+	eventGeneration       atomic.Uint64
+	holdMu                sync.Mutex
+	holds                 map[string]*responseHold
+	holdOrder             []string
+	holdSequence          uint64
+	fetchEnabled          bool
+	interceptions         int
+	closed                bool
+	installed             bool
+	root                  *Session
+	initialWidth          int
+	initialHeight         int
+	restoreViewport       *ViewportSize
+	visual                visualLifecycle
+	media                 Media
+	highFidelity          bool
+	initScriptIDs         []page.ScriptIdentifier
 	// crashed is closed by Chrome's Inspector.targetCrashed listener, which runs on chromedp's event
 	// goroutine rather than under mu - hence its own lock.  A channel rather than a bool because an
 	// operation already in flight has to be interrupted, not merely refused next time: CDP does not
@@ -139,6 +147,12 @@ func (s *Session) markCrashed() {
 	default:
 		close(s.crashed)
 	}
+	// eventsEnabled already stops recording and delivery, so the subscriptions can simply go quiet
+	// and resume when the recovery navigation turns it back on.  Closing them here would end them
+	// permanently - closeConsoleSubscriptions deletes the map entry - so a listener registered before
+	// the crash would silently receive nothing for the rest of the session, including after the
+	// documented "navigate again to recover it".  Go's console stream is a chromedp.ListenTarget on
+	// the tab context, which a renderer crash does not tear down.
 	s.eventsEnabled.Store(false)
 	s.releaseAllResponseHolds()
 	s.cancelActiveDownloads()
@@ -160,24 +174,29 @@ func (s *Session) hasCrashed() bool {
 }
 
 func (s *Session) Close() error {
+	// Refusing because a sibling tab is mid-download is a retryable answer, not a close - callers are
+	// told to loop until it succeeds.  So it has to be decided before anything is torn down: running
+	// the teardown first and then rolling eventsEnabled back left the caller with a session that
+	// looks healthy but has lost every console/warning subscriber and every armed response hold.
+	// The guard takes only the browser lock, so it is safe to run before the holds are released.
+	if s.browser != nil && !s.frameTarget {
+		s.browser.mu.Lock()
+		browserClosing := s.browser.closed
+		s.browser.mu.Unlock()
+		if !browserClosing && s.browser.contextHasActiveDownloads(s.browserContextID) {
+			return &Error{Code: CodeActionFailed, Operation: "close session", Message: "browser context has active downloads"}
+		}
+	}
 	// A response hold may be blocking an operation that owns mu. Release it before touching mu,
 	// otherwise Close and the paused renderer would wait on each other forever.
 	s.eventsEnabled.Store(false)
+	s.closeEventSubscriptions()
 	s.releaseAllResponseHolds()
 	s.mu.Lock()
 	alreadyClosed := s.closed
 	s.mu.Unlock()
 	if alreadyClosed {
 		return nil
-	}
-	if s.browser != nil && !s.frameTarget {
-		s.browser.mu.Lock()
-		browserClosing := s.browser.closed
-		s.browser.mu.Unlock()
-		if !browserClosing && s.browser.contextHasActiveDownloads(s.browserContextID) {
-			s.eventsEnabled.Store(true)
-			return &Error{Code: CodeActionFailed, Operation: "close session", Message: "browser context has active downloads"}
-		}
 	}
 	if s.ownsContext && s.browser != nil {
 		ctx, cancel := context.WithTimeout(s.browser.ctx, 5*time.Second)
@@ -230,6 +249,7 @@ func (s *Session) Close() error {
 
 func (s *Session) markTargetDestroyed() {
 	s.eventsEnabled.Store(false)
+	s.closeEventSubscriptions()
 	s.releaseAllResponseHolds()
 	s.cancelActiveDownloads()
 	s.mu.Lock()
@@ -296,6 +316,7 @@ func (s *Session) Prepare(ctx context.Context) error {
 			}
 		}
 		s.eventsEnabled.Store(false)
+		s.eventGeneration.Add(1)
 		defer s.eventsEnabled.Store(true)
 		wasCrashed := s.hasCrashed()
 		if err := s.cleanupVisualState(opCtx, !wasCrashed); err != nil && !wasCrashed {

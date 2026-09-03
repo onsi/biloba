@@ -11,7 +11,7 @@ import {encodeFrame} from "../src/internal/framing.js";
 describe("Go-generated protocol goldens", () => {
   it("matches the TypeScript request envelope and framing", async () => {
     const golden = await loadGolden<Request>("handshake-request.json");
-    expect(golden).toEqual({id: 1, method: "handshake", params: {protocolVersion: "1"}});
+    expect(golden).toEqual({id: 1, method: "handshake", params: {protocolVersion: "2"}});
 
     const frame = encodeFrame(golden);
     expect(frame.readUInt32LE(0)).toBe(frame.length - 4);

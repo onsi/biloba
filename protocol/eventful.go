@@ -128,10 +128,48 @@ type CallbackResultRequest struct {
 
 type EventFrame struct {
 	Event        string `json:"event"`
+	Params       any    `json:"params,omitempty"`
 	InvocationID string `json:"invocationId,omitempty"`
 	CallbackID   string `json:"callbackId,omitempty"`
 	Payload      any    `json:"payload,omitempty"`
 }
+
+type SessionEvent struct {
+	Type       string
+	Generation uint64
+	Payload    any
+}
+type EventSubscription interface {
+	Events() <-chan SessionEvent
+	Close() error
+}
+type LiveEventSession interface {
+	Session
+	SubscribeEvents([]string) (EventSubscription, error)
+}
+type DebugEventSource interface {
+	SubscribeDebug() (EventSubscription, error)
+}
+
+type SubscribeEventsRequest struct {
+	SessionID string   `json:"sessionId,omitempty"`
+	Types     []string `json:"types"`
+}
+type SubscribeEventsResponse struct {
+	SubscriptionID string `json:"subscriptionId"`
+}
+type UnsubscribeEventsRequest struct {
+	SubscriptionID string `json:"subscriptionId"`
+}
+type EventEnvelope struct {
+	Event          string `json:"-"`
+	SubscriptionID string `json:"subscriptionId"`
+	SessionID      string `json:"sessionId,omitempty"`
+	Generation     uint64 `json:"generation,omitempty"`
+	Sequence       uint64 `json:"sequence"`
+	Payload        any    `json:"payload"`
+}
+type EventEmitter func(EventEnvelope) error
 
 type CallbackInvoker interface {
 	Invoke(context.Context, CallbackInvocation) (WireNetworkOverride, error)

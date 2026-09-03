@@ -67,6 +67,11 @@ import {
   type ScreenshotWarning,
   type VisualResult,
   type VisualScreenshotOptions,
+  type LaunchMetadata,
+  type CaptureDiagnosticsOptions,
+  type ContextDiagnostics,
+  type DriverDebugEvent,
+  type BilobaWarning,
 } from "../index.js";
 import {StdioTransport} from "./stdio-transport.js";
 
@@ -75,6 +80,44 @@ type DriverOperationResult = StdioOperationResult;
 let callbackSequence = 0;
 const maxScreenshotBytes = 16 * 1024 * 1024;
 type VisualClientConfig = {readonly maxBytes: number; readonly warningSink?: (warning: ScreenshotWarning) => void};
+export interface ResolvedDiagnosticsPolicy {artifactDir?: string; failureScreenshots: boolean; failureOutlines: boolean; failureViewport?: WindowSize; progressScreenshots: boolean; progressOutlines: boolean; progressViewport?: WindowSize; pollTrajectory: boolean; inlineScreenshots: boolean | "auto"; maxScreenshotBytes: number}
+
+export function booleanEnvironment(name: string, environment: NodeJS.ProcessEnv): boolean | undefined {
+  const raw = environment[name];
+  if (raw === undefined || raw === "") return undefined;
+  if (["1", "t", "true"].includes(raw.toLowerCase())) return true;
+  if (["0", "f", "false"].includes(raw.toLowerCase())) return false;
+  process.emitWarning(`${name} must be a boolean; ignoring ${JSON.stringify(raw)}`, {code: "BILOBA_INVALID_ENV"});
+  return undefined;
+}
+
+export function resolveDiagnosticsPolicy(options: import("../index.js").DiagnosticsPolicyOptions, environment: NodeJS.ProcessEnv, automation: boolean): ResolvedDiagnosticsPolicy {
+  const artifactDir = options.artifactDir ?? environment.BILOBA_SCREENSHOTS_DIR ?? (automation ? "./biloba-screenshots" : undefined);
+  let inlineDefault: boolean | "auto" = automation ? false : "auto";
+  if (booleanEnvironment("BILOBA_INTERACTIVE", environment) === true && options.inlineScreenshots === undefined) inlineDefault = "auto";
+  if (options.inlineScreenshots === undefined && environment.BILOBA_INLINE_SCREENSHOTS) {
+    const inline = environment.BILOBA_INLINE_SCREENSHOTS;
+    if (inline === "none") inlineDefault = false;
+    else if (["iterm", "kitty", "sixel"].includes(inline)) inlineDefault = true;
+    else process.emitWarning(`BILOBA_INLINE_SCREENSHOTS must be iterm, kitty, sixel, or none; ignoring ${JSON.stringify(inline)}`, {code: "BILOBA_INVALID_ENV"});
+  }
+  return {
+    ...(artifactDir !== undefined && {artifactDir}),
+    failureScreenshots: options.failureScreenshots ?? true,
+    failureOutlines: options.failureOutlines ?? automation,
+    ...(options.failureViewport && {failureViewport: options.failureViewport}),
+    progressScreenshots: options.progressScreenshots ?? true,
+    progressOutlines: options.progressOutlines ?? false,
+    ...(options.progressViewport && {progressViewport: options.progressViewport}),
+    pollTrajectory: options.pollTrajectory ?? true,
+    inlineScreenshots: options.inlineScreenshots ?? inlineDefault,
+    maxScreenshotBytes: options.maxScreenshotBytes ?? maxScreenshotBytes,
+  };
+}
+
+export function automationDetected(environment: NodeJS.ProcessEnv): boolean {
+  return Boolean(environment.CI || environment.AI_AGENT || environment.CLAUDECODE || environment.CURSOR_AGENT || environment.GEMINI_CLI || environment.CODEX_SANDBOX);
+}
 
 class ClientBrowser implements Browser {
   readonly #transport: DriverTransport;
@@ -82,24 +125,43 @@ class ClientBrowser implements Browser {
   readonly #stopDaemon?: () => Promise<void>;
   readonly protocolVersion: string;
   readonly capabilities: ReadonlySet<string>;
+  readonly launch: LaunchMetadata;
   readonly #warningSink?: (warning: Warning) => void;
   readonly #visual: VisualClientConfig;
+  readonly #diagnostics: ResolvedDiagnosticsPolicy;
   #closed = false;
+  #debugSubscription?: Promise<string>;
 
   constructor(
     transport: DriverTransport,
     protocolVersion: string,
     capabilities: readonly string[],
+    launch: LaunchMetadata,
     stopDaemon?: () => Promise<void>,
     warningSink?: (warning: Warning) => void,
     visual: VisualClientConfig = {maxBytes: maxScreenshotBytes},
+    debugLog?: (entry: DriverDebugEvent) => void,
+    diagnostics: ResolvedDiagnosticsPolicy = resolveDiagnosticsPolicy({}, {}, false),
   ) {
     this.#transport = transport;
     this.protocolVersion = protocolVersion;
     this.capabilities = new Set(capabilities);
+    this.launch = launch;
     if (stopDaemon) this.#stopDaemon = stopDaemon;
     if (warningSink) this.#warningSink = warningSink;
     this.#visual = visual;
+    this.#diagnostics = diagnostics;
+    if (debugLog) {
+      this.#debugSubscription = this.#transport.subscribeEvents({types: ["debug"]}).then(({subscriptionId}) => {
+        this.#transport.registerEventListener(subscriptionId, (event, envelope) => {
+          try {
+            if (event === "eventsDropped") debugLog(envelope.payload as Extract<DriverDebugEvent, {code: "EVENTS_DROPPED"}>);
+            else debugLog(envelope.payload as Exclude<DriverDebugEvent, {code: "EVENTS_DROPPED"}>);
+          } catch { /* sink isolation */ }
+        });
+        return subscriptionId;
+      }).catch((error: unknown) => { try { debugLog({timestamp: new Date().toISOString(), direction: "internal", message: error instanceof Error ? error.message : String(error)}); } catch { /* sink isolation */ } return ""; });
+    }
   }
 
   // Every call opens a genuinely new daemon session with its own browser context.  Sessions are
@@ -117,6 +179,7 @@ class ClientBrowser implements Browser {
     this.#closed = true;
     await Promise.allSettled([...this.#sessions].map(async (session) => session.close()));
     this.#sessions.clear();
+    if (this.#debugSubscription) { try { const id = await this.#debugSubscription; if (id) { this.#transport.removeEventListener(id); await this.#transport.unsubscribeEvents({subscriptionId: id}); } } catch { /* teardown is best effort */ } }
     this.#transport.close();
     await this.#stopDaemon?.();
   }
@@ -137,6 +200,7 @@ class ClientBrowser implements Browser {
       (ids) => this.#invalidateSessions(ids),
       this.#warningSink,
       this.#visual,
+      this.#diagnostics,
     );
     this.#sessions.add(session);
     return session;
@@ -163,9 +227,15 @@ class ClientSession implements Session {
   readonly #invalidateSessions: (ids: readonly string[]) => void;
   readonly #warningSink?: (warning: Warning) => void;
   readonly #visual: VisualClientConfig;
+  readonly #diagnostics: ResolvedDiagnosticsPolicy;
   #warningCount = 0;
   readonly #callbackIDs = new Set<string>();
+  readonly #consoleListeners = new Set<(message: ConsoleMessage) => void>();
+  readonly #warningListeners = new Set<(warning: BilobaWarning) => void>();
+  readonly #liveSubscriptions = new Map<"console" | "warning", Promise<string>>();
+  readonly #liveTeardown = new Map<"console" | "warning", Promise<void>>();
   #warningFlush: Promise<void> | undefined;
+  #eventGeneration = 0;
   closed = false;
 
   constructor(
@@ -176,6 +246,7 @@ class ClientSession implements Session {
     invalidateSessions: (ids: readonly string[]) => void,
     warningSink?: (warning: Warning) => void,
     visual: VisualClientConfig = {maxBytes: maxScreenshotBytes},
+    diagnostics: ResolvedDiagnosticsPolicy = resolveDiagnosticsPolicy({}, {}, false),
   ) {
     this.id = response.sessionId;
     this.contextId = response.contextId ?? "";
@@ -190,6 +261,7 @@ class ClientSession implements Session {
     this.#invalidateSessions = invalidateSessions;
     if (warningSink) this.#warningSink = warningSink;
     this.#visual = visual;
+    this.#diagnostics = diagnostics;
   }
 
   async newTab(options: WaitingCommandOptions = {}): Promise<Session> {
@@ -204,6 +276,22 @@ class ClientSession implements Session {
   async captureScreenshot(options: ScreenshotPathOptions): Promise<string>;
   async captureScreenshot(options: ScreenshotBytesOptions | ScreenshotPathOptions = {}): Promise<Uint8Array | string> {
     return await this.captureScreenshotTarget(undefined, options);
+  }
+
+  async captureDiagnostics(options: CaptureDiagnosticsOptions = {}): Promise<ContextDiagnostics> {
+    this.#assertOpen();
+    assertOptionKeys(options, "captureDiagnostics", new Set(["signal", "timeoutMs", "purpose", "name", "screenshots", "outlines", "viewport", "maxScreenshotBytes", "includeScreenshotBytes"]));
+    const purpose = options.purpose ?? "on-demand";
+    const screenshots = options.screenshots ?? (purpose === "failure" ? this.#diagnostics.failureScreenshots : purpose === "progress" ? this.#diagnostics.progressScreenshots : true);
+    const outlines = options.outlines ?? (purpose === "failure" ? this.#diagnostics.failureOutlines : purpose === "progress" ? this.#diagnostics.progressOutlines : true);
+    const viewport = options.viewport ?? (purpose === "failure" ? this.#diagnostics.failureViewport : purpose === "progress" ? this.#diagnostics.progressViewport : undefined);
+    if (viewport && (!Number.isInteger(viewport.width) || !Number.isInteger(viewport.height) || viewport.width <= 0 || viewport.height <= 0)) throw new BilobaError({code: "INVALID_ARGUMENT", message: "captureDiagnostics viewport dimensions must be positive integers"});
+    const maxBytes = options.maxScreenshotBytes;
+    const configuredLimit = this.#visual.maxBytes;
+    if (maxBytes !== undefined && (!Number.isInteger(maxBytes) || maxBytes <= 0 || maxBytes > configuredLimit)) throw new BilobaError({code: "INVALID_ARGUMENT", message: `maxScreenshotBytes must be between 1 and ${configuredLimit}`});
+    const includeScreenshotBytes = options.includeScreenshotBytes ?? (this.#diagnostics.inlineScreenshots !== false);
+    const response = await this.#transport.captureContextDiagnostics({sessionId: this.id, purpose, ...(options.name !== undefined && {name: options.name}), screenshots, outlines, ...(viewport && {width: viewport.width, height: viewport.height}), ...(maxBytes !== undefined && {maxBytes}), ...(includeScreenshotBytes && {includeScreenshotBytes: true})}, options);
+    return {purpose: response.purpose as ContextDiagnostics["purpose"], ...(response.artifactDir && {artifactDir: response.artifactDir}), tabs: response.tabs.map((tab) => ({...(tab.sessionId && {sessionId: tab.sessionId}), targetId: tab.targetId, title: tab.title, ...(tab.screenshotPath && {screenshotPath: tab.screenshotPath}), ...(tab.screenshotBase64 && {screenshot: decodeBinaryBody(tab.screenshotBase64, maxBytes ?? configuredLimit)}), ...(tab.outlinePath && {outlinePath: tab.outlinePath}), ...(tab.domOutline && {domOutline: tab.domOutline}), errors: tab.errors as import("../index.js").DiagnosticsArtifactError[]}))};
   }
 
   async expectScreenshot(name: string, options: VisualScreenshotOptions = {}): Promise<VisualResult> {
@@ -322,6 +410,7 @@ class ClientSession implements Session {
     this.#assertOpen();
     assertWaitingCommandOptions(options, "prepare");
     const response = await this.#transport.prepareSession({sessionId: this.id}, options);
+    this.#eventGeneration++;
     this.#clearCallbacks();
     this.#warningCount = 0;
     const ids = response.invalidatedSessionIds ?? [];
@@ -481,6 +570,8 @@ class ClientSession implements Session {
   async outline(options: CommandOptions = {}): Promise<string> { return await this.#lifecycleValue<string>({kind: "OUTLINE"}, options); }
   async accessibilityOutline(options: CommandOptions = {}): Promise<string> { return await this.#lifecycleValue<string>({kind: "ACCESSIBILITY_OUTLINE"}, options); }
   async consoleMessages(options: CommandOptions = {}): Promise<readonly ConsoleMessage[]> { return await this.#lifecycleValue<readonly ConsoleMessage[]>({kind: "CONSOLE_MESSAGES"}, options); }
+  onConsoleMessage(listener: (message: ConsoleMessage) => void): () => void { return this.#addLiveListener("console", listener); }
+  onWarning(listener: (warning: BilobaWarning) => void): () => void { return this.#addLiveListener("warning", listener); }
   async expectConsoleMessage(expected: ExpectedValue, options: PollOptions & {type?: string} = {}): Promise<ConsoleMessage> {
     const {type, ...poll} = options;
     const response = await this.lifecycleOperation({kind: "CONSOLE_MESSAGES", ...(type !== undefined && {key: type})}, poll, wireExpectation(expected));
@@ -539,6 +630,7 @@ class ClientSession implements Session {
     if (this.closed) return;
     this.closed = true;
     this.#clearCallbacks();
+    this.#clearLiveListeners();
     this.#warningCount = 0;
     this.#onClose();
   }
@@ -548,6 +640,7 @@ class ClientSession implements Session {
     const response = await this.#transport.closeSession({sessionId: this.id});
     this.closed = true;
     this.#clearCallbacks();
+    this.#clearLiveListeners();
     this.#warningCount = 0;
     this.#invalidateSessions(response.invalidatedSessionIds ?? []);
     this.#onClose();
@@ -661,7 +754,7 @@ class ClientSession implements Session {
     return new ClientDialogHandler(this.id, result.id, this.#transport);
   }
   async dialogs(query: DialogQuery = {}, options: CommandOptions = {}): Promise<readonly Dialog[]> { return await this.eventfulValue({kind: "DIALOGS", ...eventfulQuery(query)}, options); }
-  async warnings(options: CommandOptions = {}): Promise<readonly Warning[]> { return await this.eventfulValue({kind: "WARNINGS"}, options); }
+  async warnings(options: CommandOptions = {}): Promise<readonly BilobaWarning[]> { return await this.eventfulValue({kind: "WARNINGS"}, options); }
   async downloads(query: DownloadQuery = {}, options: CommandOptions = {}): Promise<readonly Download[]> { return (await this.eventfulValue<readonly DownloadRecord[]>({kind: "DOWNLOADS", ...eventfulQuery(query)}, options)).map((download) => new ClientDownload(this.id, download, this.#transport)); }
   async expectDownload(query: DownloadQuery = {}, options: PollOptions = {}): Promise<Download> { return new ClientDownload(this.id, await this.eventfulValue<DownloadRecord>({kind: "WAIT_FOR_DOWNLOAD", ...eventfulQuery(query)}, options, true), this.#transport); }
   async waitForDownload(query: DownloadQuery = {}, options: PollOptions = {}): Promise<Download> { return await this.expectDownload(query, options); }
@@ -717,6 +810,46 @@ class ClientSession implements Session {
     try { await this.#warningFlush; } finally { this.#warningFlush = undefined; }
   }
   #clearCallbacks(): void { for (const id of this.#callbackIDs) this.#transport.removeResponseCallback(id); this.#callbackIDs.clear(); }
+
+  #addLiveListener(kind: "console", listener: (message: ConsoleMessage) => void): () => void;
+  #addLiveListener(kind: "warning", listener: (warning: BilobaWarning) => void): () => void;
+  #addLiveListener(kind: "console" | "warning", listener: ((message: ConsoleMessage) => void) | ((warning: BilobaWarning) => void)): () => void {
+    this.#assertOpen();
+    const listeners = kind === "console" ? this.#consoleListeners : this.#warningListeners;
+    (listeners as Set<typeof listener>).add(listener);
+    if (!this.#liveSubscriptions.has(kind)) {
+      const pending = (this.#liveTeardown.get(kind) ?? Promise.resolve()).then(async () => await this.#transport.subscribeEvents({sessionId: this.id, types: [kind]})).then(({subscriptionId}) => {
+        this.#transport.registerEventListener(subscriptionId, (event, envelope) => {
+          if ((envelope.generation ?? 0) < this.#eventGeneration) return;
+          this.#eventGeneration = Math.max(this.#eventGeneration, envelope.generation ?? 0);
+          const current = kind === "console" ? this.#consoleListeners : this.#warningListeners;
+          if (event === "eventsDropped") {
+            const warning = envelope.payload as BilobaWarning;
+            for (const callback of this.#warningListeners) { try { callback(warning); } catch { /* listeners are isolated */ } }
+            return;
+          }
+          for (const callback of current as Set<(value: unknown) => void>) { try { callback(envelope.payload); } catch { /* listeners are isolated */ } }
+        });
+        return subscriptionId;
+      });
+      this.#liveSubscriptions.set(kind, pending);
+    }
+    let removed = false;
+    return () => {
+      if (removed) return; removed = true; (listeners as Set<typeof listener>).delete(listener);
+      if (listeners.size === 0) void this.#removeLiveSubscription(kind);
+    };
+  }
+
+  async #removeLiveSubscription(kind: "console" | "warning"): Promise<void> {
+    const pending = this.#liveSubscriptions.get(kind); if (!pending) return; this.#liveSubscriptions.delete(kind);
+    const teardown = (async () => { try { const id = await pending; this.#transport.removeEventListener(id); await this.#transport.unsubscribeEvents({subscriptionId: id}); } catch { /* teardown is best effort */ } })();
+    this.#liveTeardown.set(kind, teardown);
+    await teardown;
+    if (this.#liveTeardown.get(kind) === teardown) this.#liveTeardown.delete(kind);
+  }
+
+  #clearLiveListeners(): void { this.#consoleListeners.clear(); this.#warningListeners.clear(); void this.#removeLiveSubscription("console"); void this.#removeLiveSubscription("warning"); }
 
   async url(options: CommandOptions = {}): Promise<string> { return await this.#lifecycleValue<string>({kind: "URL"}, options); }
 
@@ -1593,33 +1726,48 @@ function assertWindowKeyboardOptions(options: WindowKeyboardOptions): void {
 // so this stays reachable from the repo's own tests and from nowhere else.
 export async function connectWithTransport(
   transport: StdioTransport,
-  options: Pick<ConnectOptions, "signal" | "warningSink" | "maxScreenshotBytes" | "onScreenshotWarning"> = {},
+  options: Pick<ConnectOptions, "signal" | "warningSink" | "maxScreenshotBytes" | "onScreenshotWarning" | "debugLog" | "diagnostics"> = {},
   stopDaemon?: () => Promise<void>,
 ): Promise<Browser> {
   try {
     const handshake = await transport.handshake(
-      {protocolVersion: "1"},
+      {protocolVersion: "2"},
       options.signal ? {signal: options.signal} : {},
     );
-    if (handshake.protocolVersion !== "1") {
+    if (handshake.protocolVersion !== "2") {
       throw new BilobaError({
         code: "PROTOCOL_MISMATCH",
-        message: `Biloba protocol mismatch: client 1, daemon ${handshake.protocolVersion}`,
+        message: `Biloba protocol mismatch: client 2, daemon ${handshake.protocolVersion}`,
       });
     }
     return new ClientBrowser(
       transport,
       handshake.protocolVersion ?? "",
       handshake.capabilities ?? [],
+      launchFromWire(handshake.launch),
       stopDaemon,
       options.warningSink,
       {maxBytes: options.maxScreenshotBytes ?? maxScreenshotBytes, ...(options.onScreenshotWarning && {warningSink: options.onScreenshotWarning})},
+      options.debugLog,
+      resolveDiagnosticsPolicy(options.diagnostics ?? {}, process.env, automationDetected(process.env)),
     );
   } catch (error) {
     transport.close();
     await stopDaemon?.();
     throw error;
   }
+}
+
+export function launchFromWire(value: import("../generated/protocol.js").LaunchMetadata): LaunchMetadata {
+  const invalid = (message: string): never => { throw new BilobaError({code: "DRIVER_ERROR", message: `bilobad returned invalid launch metadata: ${message}`}); };
+  if (!value || !Array.isArray(value.chromeArgs) || !value.chromeArgs.every((arg) => typeof arg === "string" && /^--[A-Za-z0-9][A-Za-z0-9-]*(=.*)?$/.test(arg)) || typeof value.attached !== "boolean" || typeof value.autoInstalled !== "boolean") return invalid("invalid arguments or booleans");
+  const width = value.width || 1024, height = value.height || 768;
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) return invalid("window dimensions must be positive integers");
+  const size = {width, height}; const args = [...value.chromeArgs];
+  if (value.attached && value.mode === undefined) return {attached: true, source: "external", chromeArgs: [], windowSize: size, autoInstalled: false};
+  if (!["headless-shell", "headless", "headful"].includes(value.mode ?? "") || typeof value.executablePath !== "string" || value.executablePath.length === 0) return invalid("resolved launch fields are incomplete");
+  if (value.attached) return {mode: value.mode as import("../index.js").ChromeMode, executablePath: value.executablePath, chromeArgs: args, windowSize: size, autoInstalled: value.autoInstalled, attached: true, source: "shared-host"};
+  return {mode: value.mode as import("../index.js").ChromeMode, executablePath: value.executablePath, chromeArgs: args, windowSize: size, autoInstalled: value.autoInstalled, attached: false};
 }
 
 function assertionResult(response: DriverOperationResult, callsiteStack: string | undefined): AssertionResult {
@@ -1649,6 +1797,7 @@ function assertionResult(response: DriverOperationResult, callsiteStack: string 
       ...(diagnostics.domOutline && {domOutline: diagnostics.domOutline}),
       ...(diagnostics.screenshotPath && {screenshotPath: diagnostics.screenshotPath}),
       ...(diagnostics.daemonDetail && {daemonDetail: diagnostics.daemonDetail}),
+      ...(diagnostics.context && {diagnostics: diagnosticsFromWire(diagnostics.context)}),
       rpcRequestCount: response.rpcRequestCount ?? 0,
       rpcResponseCount: response.rpcResponseCount ?? 0,
       ...(callsiteStack && {callsiteStack}),
@@ -1662,6 +1811,10 @@ function assertionResult(response: DriverOperationResult, callsiteStack: string 
     rpcResponseCount: response.rpcResponseCount ?? 0,
     ...(response.timings && {elapsedMs: Number(response.timings.elapsedMs ?? 0)}),
   };
+}
+
+function diagnosticsFromWire(value: import("../generated/protocol.js").ContextDiagnosticsResponse): ContextDiagnostics {
+  return {purpose: value.purpose as ContextDiagnostics["purpose"], ...(value.artifactDir && {artifactDir: value.artifactDir}), tabs: value.tabs.map((tab) => ({...(tab.sessionId && {sessionId: tab.sessionId}), targetId: tab.targetId, title: tab.title, ...(tab.screenshotPath && {screenshotPath: tab.screenshotPath}), ...(tab.screenshotBase64 && {screenshot: decodeBinaryBody(tab.screenshotBase64)}), ...(tab.outlinePath && {outlinePath: tab.outlinePath}), ...(tab.domOutline && {domOutline: tab.domOutline}), errors: tab.errors as import("../index.js").DiagnosticsArtifactError[]}))};
 }
 
 function operationResult(

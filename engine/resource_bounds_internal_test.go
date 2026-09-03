@@ -138,3 +138,40 @@ func headerEntriesEqual(a, b []HeaderEntry) bool {
 	}
 	return true
 }
+
+func TestNetworkShadowDiagnosticsAreBoundedAndTruncated(t *testing.T) {
+	// One record is appended per intercepted request, each carrying client callsites, so an unbounded
+	// slice grows with traffic rather than with the number of handlers - and once the retained set
+	// outgrows a protocol frame the diagnostic stops being answerable at all.
+	session := &Session{}
+	oversized := string(bytes.Repeat([]byte("u"), DefaultWarningPreviewBytes*2))
+	for range DefaultEventHistoryLimit + 250 {
+		session.appendNetworkShadowLocked(NetworkShadowDiagnostic{
+			URL:      oversized,
+			Winner:   NetworkOwnerProvenance{Callsite: oversized},
+			Shadowed: []NetworkOwnerProvenance{{Callsite: oversized}},
+		})
+	}
+	if len(session.networkShadows) != DefaultEventHistoryLimit {
+		t.Fatalf("retained %d shadow records, want the %d bound", len(session.networkShadows), DefaultEventHistoryLimit)
+	}
+	if session.networkShadowsDropped != 250 {
+		t.Fatalf("dropped counter is %d, want 250 - a silent eviction reads as 'nothing was shadowed'", session.networkShadowsDropped)
+	}
+	// truncateUTF8 appends a "… [truncated]" marker, so the bound is the preview plus that marker.
+	if got := len(session.networkShadows[0].URL); got > DefaultWarningPreviewBytes+32 {
+		t.Fatalf("retained a %d-byte URL, want it truncated to about %d", got, DefaultWarningPreviewBytes)
+	}
+}
+
+func TestRetainedProvenanceCallsitesAreTruncated(t *testing.T) {
+	oversized := string(bytes.Repeat([]byte("s"), DefaultWarningPreviewBytes*2))
+	handler := networkHandlerOwnerProvenance(&networkHandlerEntry{options: NetworkHandlerOptions{Callsite: oversized}})
+	if len(handler.Callsite) > DefaultWarningPreviewBytes+32 {
+		t.Fatalf("handler callsite is %d bytes, want at most %d", len(handler.Callsite), DefaultWarningPreviewBytes)
+	}
+	hold := responseHoldOwnerProvenance(&responseHold{callsite: oversized})
+	if len(hold.Callsite) > DefaultWarningPreviewBytes+32 {
+		t.Fatalf("hold callsite is %d bytes, want at most %d", len(hold.Callsite), DefaultWarningPreviewBytes)
+	}
+}

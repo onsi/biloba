@@ -31,6 +31,8 @@ type BrowserConfig struct {
 	WindowHeight   int
 	ArtifactDir    string
 	AutoInstall    bool
+	// DebugSink receives bounded structured CDP traffic asynchronously. Nil disables debug work.
+	DebugSink func(DebugEntry)
 }
 
 // LaunchMetadata is the resolved process configuration used by a Browser. Attached browsers set
@@ -72,6 +74,7 @@ type Browser struct {
 	closedOrder  []target.ID
 	closed       bool
 	webSocketURL string
+	debug        *debugDispatcher
 }
 
 // StartBrowser starts exactly one Chrome process using the supplied executable.
@@ -139,14 +142,16 @@ func StartBrowser(ctx context.Context, config BrowserConfig) (*Browser, error) {
 	for _, argument := range arguments {
 		opts = append(opts, chromedp.Flag(argument.name, argument.value))
 	}
+	debug := newDebugDispatcher(config.DebugSink)
 	allocCtx, cancelAllocator := chromedp.NewExecAllocator(ctx, opts...)
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
 	cancel := func() {
+		debug.stop()
 		cancelBrowser()
 		cancelAllocator()
 		_ = os.RemoveAll(profile)
 	}
-	if err := allocateBrowserWithoutTab(browserCtx); err != nil {
+	if err := allocateBrowserWithoutTab(browserCtx, debug); err != nil {
 		cancel()
 		return nil, typedError(CodeBrowserStart, "start browser", err)
 	}
@@ -159,6 +164,7 @@ func StartBrowser(ctx context.Context, config BrowserConfig) (*Browser, error) {
 		ctx: browserCtx, cancel: cancel, artifactDir: config.ArtifactDir,
 		sessions: map[*Session]struct{}{}, webSocketURL: wsURL,
 		mode: mode, windowWidth: width, windowHeight: height,
+		debug:  debug,
 		launch: LaunchMetadata{Mode: mode, ExecutablePath: executablePath, Arguments: append([]string(nil), config.Arguments...), WindowWidth: width, WindowHeight: height, AutoInstalled: autoInstalled},
 	}
 	if err := browser.listenForDestroyedTargets(); err != nil {
@@ -188,10 +194,11 @@ func parseChromeArgument(argument string) (string, any, error) {
 var validChromeArgumentName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*$`)
 
 func connectBrowser(ctx context.Context, config BrowserConfig) (*Browser, error) {
+	debug := newDebugDispatcher(config.DebugSink)
 	allocCtx, cancelAllocator := chromedp.NewRemoteAllocator(ctx, config.WebSocketURL, chromedp.NoModifyURL)
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
-	cancel := func() { cancelBrowser(); cancelAllocator() }
-	if err := allocateBrowserWithoutTab(browserCtx); err != nil {
+	cancel := func() { debug.stop(); cancelBrowser(); cancelAllocator() }
+	if err := allocateBrowserWithoutTab(browserCtx, debug); err != nil {
 		cancel()
 		return nil, typedError(CodeBrowserStart, "connect browser", err)
 	}
@@ -199,6 +206,7 @@ func connectBrowser(ctx context.Context, config BrowserConfig) (*Browser, error)
 		ctx: browserCtx, cancel: cancel, artifactDir: config.ArtifactDir,
 		sessions: map[*Session]struct{}{}, webSocketURL: config.WebSocketURL,
 		mode: config.Mode, windowWidth: config.WindowWidth, windowHeight: config.WindowHeight,
+		debug:  debug,
 		launch: LaunchMetadata{Attached: true},
 	}
 	if err := browser.listenForDestroyedTargets(); err != nil {
@@ -278,13 +286,9 @@ func readWebSocketURL(profile string) (string, error) {
 // Allocator/Browser are exported chromedp fields; this is what chromedp.Run itself does, minus
 // the target.
 //
-// Caveat, because it cannot be enforced in code: chromedp's own initContextBrowser also forwards
-// the context's browserOpts to Allocate and appends its browserListeners to the new Browser.  Both
-// fields are unexported, so this cannot replicate them - which means a chromedp.WithBrowserOption
-// (WithLogf/WithErrorf/WithDebugf) or a ListenBrowser registered against the contexts built in
-// StartBrowser/connectBrowser would be silently ignored.  Neither is used here today.  If you add
-// one, go through chromedp.Run instead and deal with the stray tab another way.
-func allocateBrowserWithoutTab(browserCtx context.Context) error {
+// Explicit engine-owned browser options are passed directly to Allocate. Context browser options
+// and listeners remain inaccessible here; adding either requires preserving this tabless path.
+func allocateBrowserWithoutTab(browserCtx context.Context, debug *debugDispatcher) error {
 	chrome := chromedp.FromContext(browserCtx)
 	if chrome == nil {
 		return errors.New("not a chromedp context")
@@ -292,7 +296,11 @@ func allocateBrowserWithoutTab(browserCtx context.Context) error {
 	if chrome.Browser != nil {
 		return nil // already allocated; allocating again would leak the first browser
 	}
-	browser, err := chrome.Allocator.Allocate(browserCtx)
+	options := []chromedp.BrowserOption{}
+	if debug != nil {
+		options = append(options, chromedp.WithBrowserDebugf(debug.logf))
+	}
+	browser, err := chrome.Allocator.Allocate(browserCtx, options...)
 	if err != nil {
 		return err
 	}
@@ -501,6 +509,7 @@ func (b *Browser) Close() error {
 		return nil
 	}
 	b.closed = true
+	b.debug.stop()
 	sessions := make([]*Session, 0, len(b.sessions))
 	for session := range b.sessions {
 		sessions = append(sessions, session)
@@ -512,6 +521,9 @@ func (b *Browser) Close() error {
 	b.cancel()
 	return nil
 }
+
+// DebugDropped reports entries discarded because the opt-in debug sink did not keep up.
+func (b *Browser) DebugDropped() uint64 { return b.debug.droppedCount() }
 
 func (b *Browser) removeSession(session *Session) {
 	b.mu.Lock()

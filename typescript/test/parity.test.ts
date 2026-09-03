@@ -75,9 +75,25 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     baselineDir = join(artifactDir, "baselines");
     // No chromePath: bilobad runs the same runner-neutral Chrome search the Go suite does, so this
     // exercises the resolution path a real worker takes.
-    sharedBrowser = await startSharedBrowser({executable: daemonExecutable});
-    browser = await connect({daemonExecutable: daemonExecutable, chromeWsUrl: sharedBrowser.wsURL, artifactDir, screenshotBaselinesDir: baselineDir, onScreenshotWarning: ({message}) => screenshotWarnings.push(message)});
+    sharedBrowser = await startSharedBrowser({executable: daemonExecutable, chromeArgs: ["--site-per-process"]});
+    browser = await connect({daemonExecutable: daemonExecutable, chromeConnection: sharedBrowser.connection, artifactDir, screenshotBaselinesDir: baselineDir, onScreenshotWarning: ({message}) => screenshotWarnings.push(message)});
     session = await browser.openSession();
+  });
+
+  it("drives a cross-origin OOPIF launched under site-per-process", async () => {
+    expect(browser.launch).toMatchObject({attached: true, source: "shared-host", chromeArgs: ["--site-per-process"], windowSize: {width: 1024, height: 768}});
+    const session = await browser.openSession();
+    const crossOrigin = baseUrl.replace("127.0.0.1", "localhost");
+    await session.navigate(baseUrl);
+    await session.evaluate(`url => { const frame = document.createElement("iframe"); frame.id = "oopif"; frame.src = url; document.body.append(frame); }`, [crossOrigin]);
+    const frame = await session.waitForFrame({url: {kind: "contains", expected: "localhost"}}, {timeoutMs: 5_000});
+    expect(frame.isFrame).toBe(true);
+    expect(frame.frameUrl).toContain("localhost");
+    await frame.getByRole("heading", {name: "Biloba parity"}).expectVisible();
+    expect((await session.captureDiagnostics({screenshots: false, outlines: false})).tabs.every((tab) => tab.targetId !== frame.targetId)).toBe(true);
+    await session.prepare();
+    await expect(frame.title()).rejects.toMatchObject({code: "DRIVER_CLOSED"});
+    await session.close();
   });
 
   it("captures raw screenshots and runs the visual baseline workflow through the real daemon", async () => {

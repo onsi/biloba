@@ -17,8 +17,19 @@ import (
 func ServeStdio(ctx context.Context, server *Server, input io.Reader, output io.Writer) error {
 	reader := NewFramedReader(input)
 	writer := NewFramedWriter(output)
+	writeErrors := make(chan error, 1)
 	callbacks := newStdioCallbackBroker(writer)
 	server.SetCallbackInvoker(callbacks)
+	server.SetEventEmitter(func(event EventEnvelope) error {
+		err := writer.Write(EventFrame{Event: event.Event, Params: event})
+		if err != nil {
+			select {
+			case writeErrors <- err:
+			default:
+			}
+		}
+		return err
+	})
 	ctx, cancelAll := context.WithCancel(ctx)
 	defer cancelAll()
 	type readResult struct {
@@ -44,8 +55,6 @@ func ServeStdio(ctx context.Context, server *Server, input io.Reader, output io.
 			}
 		}
 	}()
-	writeErrors := make(chan error, 1)
-
 	var activeMu sync.Mutex
 	active := map[uint64]context.CancelFunc{}
 	var requests sync.WaitGroup

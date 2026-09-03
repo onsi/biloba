@@ -36,6 +36,15 @@ var _ = Describe("driver protocol", func() {
 		Expect(err.Code).To(Equal(protocol.CodeProtocolMismatch))
 	})
 
+	It("keeps empty launch arguments an array on the handshake wire", func() {
+		server := protocol.NewServer(&launchBackend{})
+		response, dispatchErr := server.Dispatch(context.Background(), "handshake", json.RawMessage(`{"protocolVersion":"2"}`))
+		Expect(dispatchErr).To(BeNil())
+		encoded, err := json.Marshal(response)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(encoded)).To(ContainSubstring(`"chromeArgs":[]`))
+	})
+
 	It("opens, prepares, and closes a session", func() {
 		backend := &fakeBackend{}
 		client, cleanup := startTestServer(backend)
@@ -125,6 +134,83 @@ var _ = Describe("driver protocol", func() {
 		Expect(expect.ChannelTolerance).To(Equal(8))
 		Expect(recorder.lastOperation().Poll.Timeout).To(Equal(500 * time.Millisecond))
 	})
+
+	It("validates and carries all-tab context diagnostic options", func() {
+		recorder := &diagnosticSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+		var response protocol.ContextDiagnosticsResponse
+		Expect(client.call("captureContextDiagnostics", protocol.CaptureDiagnosticsRequest{
+			SessionID: opened.SessionID, Purpose: "progress", Name: "slow checkout", Screenshots: true,
+			Outlines: true, Width: 640, Height: 480, MaxBytes: 1024, IncludeScreenshotBytes: true,
+		}, &response)).To(Succeed())
+		Expect(recorder.options).To(Equal(protocol.ContextDiagnosticsOptions{
+			Purpose: "progress", Name: "slow checkout", Screenshots: true, Outlines: true,
+			Width: 640, Height: 480, MaxBytes: 1024, IncludeScreenshotBytes: true,
+		}))
+		Expect(response.Tabs).To(HaveLen(1))
+		Expect(response.Tabs[0].ScreenshotBase64).To(Equal("iVBORw=="))
+	})
+
+	It("subscribes and unsubscribes typed session events", func() {
+		emitted := make(chan protocol.EventEnvelope, 1)
+		events := &eventSession{events: make(chan protocol.SessionEvent, 1)}
+		server := protocol.NewServer(&fakeBackend{custom: events})
+		server.SetEventEmitter(func(event protocol.EventEnvelope) error {
+			emitted <- event
+			return nil
+		})
+		openedValue, openErr := server.Dispatch(context.Background(), "openSession", json.RawMessage(`{}`))
+		Expect(openErr).To(BeNil())
+		opened := openedValue.(protocol.OpenSessionResponse)
+		value, subscribeErr := server.Dispatch(context.Background(), "subscribeEvents", mustJSON(protocol.SubscribeEventsRequest{SessionID: opened.SessionID, Types: []string{"console", "warning"}}))
+		Expect(subscribeErr).To(BeNil())
+		subscription := value.(protocol.SubscribeEventsResponse)
+		events.events <- protocol.SessionEvent{Type: "console", Generation: 2, Payload: map[string]any{"text": "ready"}}
+		Eventually(emitted).Should(Receive(SatisfyAll(
+			WithTransform(func(value protocol.EventEnvelope) string { return value.SubscriptionID }, Equal(subscription.SubscriptionID)),
+			WithTransform(func(value protocol.EventEnvelope) uint64 { return value.Generation }, Equal(uint64(2))),
+		)))
+		_, unsubscribeErr := server.Dispatch(context.Background(), "unsubscribeEvents", mustJSON(protocol.UnsubscribeEventsRequest{SubscriptionID: subscription.SubscriptionID}))
+		Expect(unsubscribeErr).To(BeNil())
+		Expect(events.closed.Load()).To(BeTrue())
+	})
+
+	It("closes session subscriptions without deadlocking the event drain", func() {
+		events := &eventSession{events: make(chan protocol.SessionEvent)}
+		server := protocol.NewServer(&fakeBackend{custom: events})
+		openedValue, openErr := server.Dispatch(context.Background(), "openSession", json.RawMessage(`{}`))
+		Expect(openErr).To(BeNil())
+		opened := openedValue.(protocol.OpenSessionResponse)
+		_, subscribeErr := server.Dispatch(context.Background(), "subscribeEvents", mustJSON(protocol.SubscribeEventsRequest{SessionID: opened.SessionID, Types: []string{"console"}}))
+		Expect(subscribeErr).To(BeNil())
+		closed := make(chan struct{})
+		go func() {
+			defer close(closed)
+			_, closeErr := server.Dispatch(context.Background(), "closeSession", mustJSON(protocol.SessionRequest{SessionID: opened.SessionID}))
+			Expect(closeErr).To(BeNil())
+		}()
+		Eventually(closed).Should(BeClosed())
+		Expect(events.closed.Load()).To(BeTrue())
+	})
+
+	DescribeTable("rejects invalid context diagnostics",
+		func(request protocol.CaptureDiagnosticsRequest) {
+			client, cleanup := startTestServer(&fakeBackend{custom: &diagnosticSession{}})
+			DeferCleanup(cleanup)
+			var opened protocol.OpenSessionResponse
+			Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+			request.SessionID = opened.SessionID
+			err := client.call("captureContextDiagnostics", request, nil)
+			Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
+		},
+		Entry("purpose", protocol.CaptureDiagnosticsRequest{Purpose: "periodic"}),
+		Entry("one-sided viewport", protocol.CaptureDiagnosticsRequest{Purpose: "failure", Width: 640}),
+		Entry("negative bound", protocol.CaptureDiagnosticsRequest{Purpose: "on-demand", MaxBytes: -1}),
+		Entry("oversized bound", protocol.CaptureDiagnosticsRequest{Purpose: "on-demand", MaxBytes: protocol.MaxScreenshotBytes + 1}),
+	)
 
 	maxZero, maxTooLarge := 0, protocol.MaxScreenshotBytes+1
 	pixelNegative, pixelTooLarge := -0.01, 1.01
@@ -692,6 +778,12 @@ type fakeBackend struct {
 	custom  protocol.Session
 }
 
+type launchBackend struct{ fakeBackend }
+
+func (*launchBackend) LaunchMetadata() protocol.WireLaunchMetadata {
+	return protocol.WireLaunchMetadata{Attached: true}
+}
+
 func (b *fakeBackend) OpenSession(context.Context) (protocol.Session, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -776,6 +868,41 @@ type recordingSession struct {
 type recordingEventfulSession struct {
 	recordingSession
 	operation protocol.EventfulOperation
+}
+
+type diagnosticSession struct {
+	recordingSession
+	options protocol.ContextDiagnosticsOptions
+}
+
+type eventSession struct {
+	recordingSession
+	events chan protocol.SessionEvent
+	closed atomic.Bool
+}
+
+func (s *eventSession) SubscribeEvents(_ []string) (protocol.EventSubscription, error) {
+	return &fakeEventSubscription{events: s.events, closed: &s.closed}, nil
+}
+
+type fakeEventSubscription struct {
+	events chan protocol.SessionEvent
+	closed *atomic.Bool
+	once   sync.Once
+}
+
+func (s *fakeEventSubscription) Events() <-chan protocol.SessionEvent { return s.events }
+func (s *fakeEventSubscription) Close() error {
+	s.once.Do(func() {
+		s.closed.Store(true)
+		close(s.events)
+	})
+	return nil
+}
+
+func (s *diagnosticSession) CaptureContextDiagnostics(_ context.Context, options protocol.ContextDiagnosticsOptions) (protocol.ContextDiagnosticsResponse, error) {
+	s.options = options
+	return protocol.ContextDiagnosticsResponse{Purpose: options.Purpose, Tabs: []protocol.TabDiagnosticsResponse{{TargetID: "root", Title: "Checkout", ScreenshotBase64: "iVBORw==", Errors: []protocol.DiagnosticsArtifactErrorResponse{}}}}, nil
 }
 
 func (s *recordingEventfulSession) ExecuteEventful(_ context.Context, operation protocol.EventfulOperation) (any, error) {

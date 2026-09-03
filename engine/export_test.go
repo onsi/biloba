@@ -36,6 +36,10 @@ func MarkSessionCrashedForTest(session *Session) {
 	session.markCrashed()
 }
 
+func EmitWarningForTest(session *Session, warning Warning) {
+	session.recordWarning(warning)
+}
+
 // SetHeadlessShellInstallerForTest replaces the network installer for deterministic acquisition specs.
 func SetHeadlessShellInstallerForTest(installer func(context.Context) (string, error)) func() {
 	previous := headlessShellInstaller

@@ -34,6 +34,11 @@ type DiagnosticsCaptureOptions struct {
 	Outlines    bool
 	Viewport    *ViewportSize
 	MaxBytes    int
+	// IncludeScreenshotBytes retains the same bounded PNG bytes used for artifact output.
+	IncludeScreenshotBytes bool
+	// PrimaryScreenshotPrefix preserves a caller's established first-tab artifact name while the
+	// same capture also gathers typed diagnostics for every tab.
+	PrimaryScreenshotPrefix string
 }
 
 type DiagnosticsArtifactError struct {
@@ -46,6 +51,7 @@ type TabDiagnostics struct {
 	TargetID       target.ID
 	Title          string
 	ScreenshotPath string
+	Screenshot     []byte
 	OutlinePath    string
 	DOMOutline     string
 	Errors         []DiagnosticsArtifactError
@@ -82,8 +88,12 @@ func (s *Session) CaptureContextDiagnostics(ctx context.Context, options Diagnos
 		}
 		return tabs[i].targetID < tabs[j].targetID
 	})
-	for _, tab := range tabs {
-		tabResult := tab.captureContextTabDiagnostics(ctx, options)
+	for index, tab := range tabs {
+		tabOptions := options
+		if index > 0 {
+			tabOptions.PrimaryScreenshotPrefix = ""
+		}
+		tabResult := tab.captureContextTabDiagnostics(ctx, tabOptions)
 		result.Tabs = append(result.Tabs, tabResult)
 		if ctx.Err() != nil {
 			return result, contextError("capture context diagnostics", ctx.Err())
@@ -148,11 +158,19 @@ func (s *Session) captureContextTabDiagnostics(ctx context.Context, options Diag
 			} else if validationErr := validateScreenshotPNG(image, options.MaxBytes); validationErr != nil {
 				result.Errors = append(result.Errors, diagnosticsError("screenshot", validationErr))
 			} else {
-				path, writeErr := writeDiagnosticsArtifact(s.artifactDir, options, s.targetID, "png", image)
-				if writeErr != nil {
+				if options.IncludeScreenshotBytes {
+					result.Screenshot = append([]byte(nil), image...)
+				}
+				if s.artifactDir != "" {
+					path, writeErr := writeDiagnosticsScreenshot(s.artifactDir, options, s.targetID, image)
+					if writeErr != nil {
+						result.Errors = append(result.Errors, diagnosticsError("screenshot-write", writeErr))
+					} else {
+						result.ScreenshotPath = path
+					}
+				} else if !options.IncludeScreenshotBytes {
+					_, writeErr := writeDiagnosticsArtifact(s.artifactDir, options, s.targetID, "png", image)
 					result.Errors = append(result.Errors, diagnosticsError("screenshot-write", writeErr))
-				} else {
-					result.ScreenshotPath = path
 				}
 			}
 		}
@@ -162,6 +180,23 @@ func (s *Session) captureContextTabDiagnostics(ctx context.Context, options Diag
 		result.Errors = append(result.Errors, diagnosticsError("tab", err))
 	}
 	return result
+}
+
+func writeDiagnosticsScreenshot(dir string, options DiagnosticsCaptureOptions, targetID target.ID, image []byte) (string, error) {
+	if options.PrimaryScreenshotPrefix == "" {
+		return writeDiagnosticsArtifact(dir, options, targetID, "png", image)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	path := artifactPath(dir, options.PrimaryScreenshotPrefix, "png")
+	// Unlike the other diagnostics artifacts this one lands on a stable, predictable path, so a
+	// crash or a full disk mid-write leaves a truncated PNG exactly where the next run - and the
+	// reader following the path in the failure output - will pick it up.  Write beside it and rename.
+	if err := writeFileAtomically(path, image); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 func diagnosticsError(artifact string, err error) DiagnosticsArtifactError {
@@ -230,4 +265,30 @@ func writeDiagnosticsArtifact(dir string, options DiagnosticsCaptureOptions, tar
 		return path, nil
 	}
 	return abs, nil
+}
+
+// writeFileAtomically publishes data at path via a temporary file in the same directory, so a
+// reader either sees the previous contents or the complete new ones.
+func writeFileAtomically(path string, data []byte) error {
+	file, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	temporary := file.Name()
+	defer func() { _ = os.Remove(temporary) }()
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(temporary, 0o644); err != nil {
+		return err
+	}
+	return replaceScreenshotFile(temporary, path)
 }

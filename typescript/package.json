@@ -8,7 +8,8 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./vitest": {"types": "./dist/vitest.d.ts", "import": "./dist/vitest.js"}
   },
   "files": [
     "dist"
@@ -22,6 +23,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {},
+  "peerDependencies": {"vitest": ">=3 <4"},
+  "peerDependenciesMeta": {"vitest": {"optional": true}},
   "devDependencies": {
     "@types/node": "22.15.30",
     "typescript": "5.8.3",

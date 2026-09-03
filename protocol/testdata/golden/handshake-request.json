@@ -2,6 +2,6 @@
   "id": 1,
   "method": "handshake",
   "params": {
-    "protocolVersion": "1"
+    "protocolVersion": "2"
   }
 }
