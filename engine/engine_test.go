@@ -36,10 +36,34 @@ var _ = Describe("runner-neutral engine primitives", func() {
 
 	It("encodes the pilot locator forms for biloba.js", func() {
 		Expect(engine.CSS("main > button").Encoded()).To(Equal("smain > button"))
+		Expect(engine.XPath("//main//button").Encoded()).To(Equal("x//main//button"))
 		Expect(engine.TestID("save").Encoded()).To(HavePrefix("a"))
 		Expect(engine.Text("Saved", engine.Contains).First().Encoded()).To(ContainSubstring(`"nth":0`))
 		Expect(engine.Role("button", "Submit", engine.Exact).Encoded()).To(ContainSubstring(`"nameMode":"exact"`))
 		Expect(engine.Role("button", "Submit", engine.Exact).First().Description()).To(Equal(`getByRole("button", name="Submit", exact).first()`))
+	})
+
+	It("composes XPath with runner-neutral locators", func() {
+		selector := engine.XPath("//article").Containing(engine.XPath(".//h2[text()=\"Ada\"]"))
+		Expect(selector.Encoded()).To(ContainSubstring(`"selector":"x.//h2[text()=\"Ada\"]"`))
+		Expect(selector.Description()).To(Equal(`xpath("//article").containing(xpath(".//h2[text()=\"Ada\"]"))`))
+	})
+
+	It("encodes the locator composition used by the consumer suite", func() {
+		selector := engine.CSS(".row").
+			ContainingText("Ada").
+			Within(engine.TestID("results")).
+			Nth(1)
+		Expect(selector.Encoded()).To(And(
+			HavePrefix("a"),
+			ContainSubstring(`"within":"a{\"attr\":\"data-testid\"`),
+			ContainSubstring(`"kind":"containsText"`),
+			ContainSubstring(`"nth":1`),
+		))
+		Expect(selector.Description()).To(Equal(`locator(".row").containingText("Ada").within(getByTestId("results")).nth(1)`))
+
+		union := engine.TestID("sent").Or(engine.TestID("delivered")).Last()
+		Expect(union.Encoded()).To(And(ContainSubstring(`"by":"or"`), ContainSubstring(`"nth":-1`)))
 	})
 
 	It("polls entirely in Go and returns the attempt trajectory", func() {
@@ -57,6 +81,105 @@ var _ = Describe("runner-neutral engine primitives", func() {
 		Expect(result.Final.Value).To(Equal(3))
 		Expect(result.AttemptCount).To(Equal(3))
 		Expect(result.Attempts).To(HaveLen(3))
+	})
+
+	It("supports immediate and consistency polling without a runner", func() {
+		immediateAttempts := 0
+		immediate, err := engine.Poll(context.Background(), engine.PollPolicy{
+			Mode: engine.PollImmediate,
+		}, func(context.Context) (engine.Observation, bool, error) {
+			immediateAttempts++
+			return engine.Observation{Value: "loading"}, false, nil
+		})
+		Expect(err).To(HaveOccurred())
+		Expect(immediate.AttemptCount).To(Equal(1))
+		Expect(immediateAttempts).To(Equal(1))
+
+		consistentAttempts := 0
+		consistent, err := engine.Poll(context.Background(), engine.PollPolicy{
+			Mode:     engine.PollConsistently,
+			Timeout:  20 * time.Millisecond,
+			Interval: 2 * time.Millisecond,
+		}, func(context.Context) (engine.Observation, bool, error) {
+			consistentAttempts++
+			return engine.Observation{Value: "steady"}, true, nil
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(consistent.AttemptCount).To(BeNumerically(">", 1))
+		Expect(consistentAttempts).To(Equal(consistent.AttemptCount))
+
+		terminalDeadlineAttempts := 0
+		terminalDeadline, err := engine.Poll(context.Background(), engine.PollPolicy{
+			Mode:     engine.PollConsistently,
+			Timeout:  20 * time.Millisecond,
+			Interval: time.Millisecond,
+		}, func(ctx context.Context) (engine.Observation, bool, error) {
+			terminalDeadlineAttempts++
+			if terminalDeadlineAttempts == 1 {
+				return engine.Observation{Value: "steady"}, true, nil
+			}
+			<-ctx.Done()
+			return engine.Observation{}, false, ctx.Err()
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(terminalDeadline.Final.Value).To(Equal("steady"))
+		Expect(terminalDeadline.AttemptCount).To(Equal(1))
+		Expect(terminalDeadlineAttempts).To(Equal(2))
+
+		terminalCanceledAttempts := 0
+		terminalCanceled, err := engine.Poll(context.Background(), engine.PollPolicy{
+			Mode:     engine.PollConsistently,
+			Timeout:  20 * time.Millisecond,
+			Interval: time.Millisecond,
+		}, func(ctx context.Context) (engine.Observation, bool, error) {
+			terminalCanceledAttempts++
+			if terminalCanceledAttempts == 1 {
+				return engine.Observation{Value: "steady"}, true, nil
+			}
+			<-ctx.Done()
+			return engine.Observation{}, false, fmt.Errorf("browser operation: %w", context.Canceled)
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(terminalCanceled.Final.Value).To(Equal("steady"))
+		Expect(terminalCanceled.AttemptCount).To(Equal(1))
+		Expect(terminalCanceledAttempts).To(Equal(2))
+
+		broken, err := engine.Poll(context.Background(), engine.PollPolicy{
+			Mode:     engine.PollConsistently,
+			Timeout:  time.Second,
+			Interval: time.Millisecond,
+		}, func(context.Context) (engine.Observation, bool, error) {
+			return engine.Observation{Value: "changed"}, false, nil
+		})
+		Expect(err).To(HaveOccurred())
+		Expect(broken.AttemptCount).To(Equal(1))
+	})
+
+	It("matches the typed expectation algebra used by runner adapters", func() {
+		matches := func(actual any, expectation engine.Expectation) bool {
+			matched, err := engine.MatchExpectation(actual, expectation)
+			Expect(err).NotTo(HaveOccurred())
+			return matched
+		}
+
+		Expect(matches("Ada Lovelace", engine.Expectation{Kind: engine.ExpectContains, Expected: "Lovelace"})).To(BeTrue())
+		Expect(matches("Ada Lovelace", engine.Expectation{Kind: engine.ExpectRegexp, Expected: `^Ada\s`})).To(BeTrue())
+		Expect(matches("Ada Lovelace", engine.Expectation{Kind: engine.ExpectPrefix, Expected: "Ada"})).To(BeTrue())
+		Expect(matches("Ada Lovelace", engine.Expectation{Kind: engine.ExpectSuffix, Expected: "Lovelace"})).To(BeTrue())
+		Expect(matches([]any{"primary", "wide"}, engine.Expectation{Kind: engine.ExpectContains, Expected: "primary"})).To(BeTrue())
+		Expect(matches(3, engine.Expectation{Kind: engine.ExpectNumber, Operator: ">=", Expected: 2})).To(BeTrue())
+		Expect(matches("", engine.Expectation{Kind: engine.ExpectEmpty})).To(BeTrue())
+		Expect(matches("ready", engine.Expectation{Kind: engine.ExpectAll, Children: []engine.Expectation{
+			{Kind: engine.ExpectContains, Expected: "read"},
+			{Kind: engine.ExpectNot, Children: []engine.Expectation{{Kind: engine.ExpectEqual, Expected: "loading"}}},
+		}})).To(BeTrue())
+		Expect(matches("ready", engine.Expectation{Kind: engine.ExpectAny, Children: []engine.Expectation{
+			{Kind: engine.ExpectEqual, Expected: "done"},
+			{Kind: engine.ExpectEqual, Expected: "ready"},
+		}})).To(BeTrue())
+
+		_, err := engine.MatchExpectation("value", engine.Expectation{Kind: engine.ExpectRegexp, Expected: "["})
+		Expect(err).To(MatchError(ContainSubstring("invalid regular expression")))
 	})
 
 	It("stops polling the moment an attempt reports something retrying cannot fix", func() {
@@ -127,6 +250,24 @@ var _ = Describe("runner-neutral engine primitives", func() {
 		Expect(attempts).To(Equal(1))
 	})
 
+	It("can bound a stuck browser read without consuming the entire poll budget", func() {
+		attempts := 0
+		result, err := engine.Poll(context.Background(), engine.PollPolicy{
+			Timeout: 100 * time.Millisecond, AttemptTimeout: 10 * time.Millisecond,
+		}, func(ctx context.Context) (engine.Observation, bool, error) {
+			attempts++
+			if attempts == 1 {
+				<-ctx.Done()
+				return engine.Observation{}, false, ctx.Err()
+			}
+			return engine.Observation{Value: "ready"}, true, nil
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.AttemptCount).To(Equal(2))
+		Expect(result.Final.Value).To(Equal("ready"))
+	})
+
 	It("encodes raw JavaScript arguments identically wherever a call is generated", func() {
 		encoded, err := engine.EncodeArgs(15, "literal", rawJSArg{placeholder: `"__placeholder__"`, expression: "app.numRecords + 1"})
 		Expect(err).NotTo(HaveOccurred())
@@ -165,7 +306,15 @@ var _ = BeforeSuite(func() {
 			response.WriteHeader(http.StatusNotFound)
 			return
 		}
-		fmt.Fprint(response, `<!doctype html><button aria-label="Save">Save</button><input data-testid="name"><div id="status">loading</div><script>document.querySelector('button').onclick=()=>{document.querySelector('#status').textContent='saved'};setTimeout(()=>{if(document.querySelector('#status').textContent==='loading')document.querySelector('#status').textContent='ready'},30)</script>`)
+		if request.URL.Path == "/destination" {
+			fmt.Fprint(response, `<!doctype html><h1 data-testid="destination">arrived</h1>`)
+			return
+		}
+		if request.URL.Path == "/dom-surface" {
+			fmt.Fprint(response, `<!doctype html><style>#scroll{height:60px;width:160px;overflow:auto}#space{height:180px}.box{width:80px;height:40px}.hidden{display:none}#hover:hover{color:rgb(1, 2, 3)}#shout{text-transform:uppercase}</style><div id="texts">  visible <span class="hidden">SECRET</span> <span id="shout">shout</span> </div><label for="email">Email address</label><input id="email" placeholder="you@example.com" data-qa="email" value="Ada"><select id="choice"><option value="a">Alpha</option><option value="b">Beta</option></select><img alt="Portrait" title="Ada image"><button id="action" class="primary wide" data-json='{"ready":true}' data-note="memo">Act</button><input id="check" type="checkbox"><div id="hover" class="box">Hover</div><div id="scroll"><div id="space"></div><div id="target" class="box">target text</div></div><div class="item" data-rank="a">One</div><div class="item hidden" data-rank="b">Two</div><p id="selection">alpha <strong>beta</strong> alpha</p><script>window.events=[];for(const type of ['click','dblclick','contextmenu','auxclick','mouseover','focus','blur'])document.addEventListener(type,e=>window.events.push({type,button:e.button,shift:e.shiftKey,target:e.target.id}));document.querySelector('#action').customEcho=function(v){return this.id+':'+v}</script>`)
+			return
+		}
+		fmt.Fprint(response, `<!doctype html><a data-testid="go" href="/destination">Go</a><button aria-label="Save">Save</button><input data-testid="name"><input data-testid="upload" type="file"><div id="status">loading</div><div data-testid="drag-source" style="width:40px;height:40px;background:red"></div><div data-testid="drop-target" style="width:100px;height:80px;background:blue;margin-left:200px"></div><div id="drag-status">waiting</div><script>document.querySelector('button').onclick=()=>{document.querySelector('#status').textContent='saved'};setTimeout(()=>{if(document.querySelector('#status').textContent==='loading')document.querySelector('#status').textContent='ready'},30);let dragging=false;document.querySelector('[data-testid="drag-source"]').onpointerdown=()=>dragging=true;document.onpointerup=e=>{if(dragging&&document.querySelector('[data-testid="drop-target"]').contains(document.elementFromPoint(e.clientX,e.clientY)))document.querySelector('#drag-status').textContent='dropped';dragging=false}</script>`)
 	}))
 	var err error
 	browser, err = engine.StartBrowser(context.Background(), engine.BrowserConfig{
@@ -230,6 +379,163 @@ var _ = Describe("browser engine", func() {
 		result, err := session.Evaluate(ctx, "2")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(BeNumerically("==", 2))
+	})
+
+	It("executes XPath after locator-level composition", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+
+		text, err := session.Text(ctx, engine.XPath("//button").First())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(text.Value).To(Equal("Save"))
+	})
+
+	It("drives realistic pointer and keyboard input through the runner-neutral session", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+
+		Expect(session.RealisticClick(ctx, engine.Role("button", "Save", engine.Exact))).To(Succeed())
+		text, err := session.Text(ctx, engine.CSS("#status"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(text.Value).To(Equal("saved"))
+
+		Expect(session.RealisticSetValue(ctx, engine.TestID("name"), "Ada")).To(Succeed())
+		Expect(session.Type(ctx, engine.TestID("name"), " Lovelace", true)).To(Succeed())
+		value, err := session.Value(ctx, engine.TestID("name"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(value.Value).To(Equal("Ada Lovelace"))
+	})
+
+	It("keeps the target executor alive after a click initiates navigation", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+
+		clickCtx, cancelClick := context.WithTimeout(context.Background(), time.Second)
+		Expect(session.RealisticClick(clickCtx, engine.TestID("go"))).To(Succeed())
+		cancelClick()
+		navigationCtx, cancelNavigation := context.WithTimeout(context.Background(), time.Second)
+		_, err = engine.Poll(navigationCtx, engine.PollPolicy{Timeout: time.Second}, func(ctx context.Context) (engine.Observation, bool, error) {
+			value, readErr := session.Evaluate(ctx, `window.location.pathname`)
+			return engine.Observation{Value: value}, value == "/destination", readErr
+		})
+		Expect(err).NotTo(HaveOccurred())
+		cancelNavigation()
+		readCtx, cancelRead := context.WithTimeout(context.Background(), time.Second)
+		defer cancelRead()
+		result, err := engine.Poll(readCtx, engine.PollPolicy{Timeout: time.Second}, func(ctx context.Context) (engine.Observation, bool, error) {
+			observation, readErr := session.Text(ctx, engine.TestID("destination"))
+			return observation, observation.Value == "arrived", readErr
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Final.Value).To(Equal("arrived"))
+	})
+
+	It("drags between resolved elements with browser pointer input", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+
+		Expect(session.DragTo(ctx, engine.TestID("drag-source"), engine.TestID("drop-target"))).To(Succeed())
+		status, err := session.Text(ctx, engine.CSS("#drag-status"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(status.Value).To(Equal("dropped"))
+	})
+
+	It("opens a sibling tab in the same browser context and controls its document lifecycle", func(ctx SpecContext) {
+		parent, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(parent.Close)
+		Expect(parent.Navigate(ctx, server.URL)).To(Succeed())
+		_, err = parent.Evaluate(ctx, `document.cookie = "shared=present; path=/"`)
+		Expect(err).NotTo(HaveOccurred())
+
+		sibling, err := parent.NewTab(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(sibling.Close)
+		Expect(sibling.AddInitScript(ctx, `window.__bilobaInitMarker = "installed"`)).To(Succeed())
+		Expect(sibling.Navigate(ctx, server.URL)).To(Succeed())
+		Expect(sibling.Activate(ctx)).To(Succeed())
+		value, err := sibling.Evaluate(ctx, `[document.cookie.includes("shared=present"), window.__bilobaInitMarker]`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(value).To(Equal([]any{true, "installed"}))
+
+		Expect(sibling.Close()).To(Succeed())
+		value, err = parent.Evaluate(ctx, `document.cookie.includes("shared=present")`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(value).To(BeTrue(), "closing a sibling tab must not dispose the shared browser context")
+	})
+
+	It("awaits promises, resizes the viewport, and sets file inputs through the runner-neutral session", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+
+		value, err := session.EvaluateAsync(ctx, `Promise.resolve("settled")`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(value).To(Equal("settled"))
+
+		Expect(session.SetWindowSize(ctx, 375, 812)).To(Succeed())
+		dimensions, err := session.Evaluate(ctx, `[window.innerWidth, window.innerHeight]`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dimensions).To(Equal([]any{float64(375), float64(812)}))
+
+		path := GinkgoT().TempDir() + "/avatar.txt"
+		Expect(os.WriteFile(path, []byte("avatar"), 0o600)).To(Succeed())
+		observation, err := session.SetUpload(ctx, engine.TestID("upload"), []string{path})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(observation.Found).To(HaveValue(BeTrue()))
+		name, err := session.Evaluate(ctx, `document.querySelector('[data-testid="upload"]').files[0].name`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(name).To(Equal("avatar.txt"))
+	})
+
+	It("records requests made by the session", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		_, err = session.EvaluateAsync(ctx, `fetch("/saved", {method: "POST"})`)
+		Expect(err).NotTo(HaveOccurred())
+
+		Eventually(session.Requests).Should(ContainElement(SatisfyAll(
+			HaveField("URL", HaveSuffix("/saved")),
+			HaveField("Method", Equal("POST")),
+		)))
+		Expect(session.Prepare(ctx)).To(Succeed())
+		Expect(session.Requests()).To(BeEmpty())
+	})
+
+	It("holds a matching response until it is explicitly released", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		holdID, err := session.HoldResponse(ctx, engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/held"})
+		Expect(err).NotTo(HaveOccurred())
+
+		done := make(chan error, 1)
+		go func() {
+			defer GinkgoRecover()
+			_, evaluateErr := session.EvaluateAsync(ctx, `fetch("/held").then(response => response.text())`)
+			done <- evaluateErr
+		}()
+		waitCtx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		held, err := session.AwaitResponseHold(waitCtx, holdID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(held.URL).To(HaveSuffix("/held"))
+		Consistently(done, 20*time.Millisecond).ShouldNot(Receive())
+		Expect(session.ReleaseResponseHold(ctx, holdID)).To(Succeed())
+		Eventually(done).Should(Receive(Succeed()))
 	})
 
 	It("isolates cookies and storage while allowing sessions to run concurrently", func(ctx SpecContext) {

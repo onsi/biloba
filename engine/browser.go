@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/inspector"
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
@@ -175,12 +177,33 @@ func (b *Browser) OpenSession(ctx context.Context) (*Session, error) {
 		cleanupExecutor := cdp.WithExecutor(cleanupCtx, chromedp.FromContext(b.ctx).Browser)
 		_ = target.DisposeBrowserContext(browserContextID).Do(cleanupExecutor)
 	}()
+	session, err := b.openTabLocked(ctx, browserContextID, true, browserExecutor)
+	if err != nil {
+		return nil, err
+	}
+	keepBrowserContext = true
+	return session, nil
+}
+
+func (b *Browser) openTab(ctx context.Context, browserContextID cdp.BrowserContextID, ownsContext bool) (*Session, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return nil, &Error{Code: CodeSessionClosed, Operation: "new tab", Message: "browser is closed"}
+	}
+	opCtx, cancel := executorContext(b.ctx, ctx)
+	defer cancel()
+	chrome := chromedp.FromContext(opCtx)
+	return b.openTabLocked(ctx, browserContextID, ownsContext, cdp.WithExecutor(opCtx, chrome.Browser))
+}
+
+func (b *Browser) openTabLocked(ctx context.Context, browserContextID cdp.BrowserContextID, ownsContext bool, browserExecutor context.Context) (*Session, error) {
 	targetID, err := target.CreateTarget("about:blank").
 		WithBrowserContextID(browserContextID).
 		WithNewWindow(true).
 		Do(browserExecutor)
 	if err != nil {
-		return nil, contextError("open session", err)
+		return nil, contextError("open tab", err)
 	}
 	tabCtx, cancelTab := chromedp.NewContext(b.ctx, chromedp.WithTargetID(targetID))
 	attachDone := make(chan error, 1)
@@ -197,11 +220,11 @@ func (b *Browser) OpenSession(ctx context.Context) (*Session, error) {
 	}
 	if err != nil {
 		cancelTab()
-		return nil, contextError("open session", err)
+		return nil, contextError("open tab", err)
 	}
 	session := &Session{
 		browser: b, ctx: tabCtx, cancel: cancelTab, browserContextID: browserContextID,
-		artifactDir: b.artifactDir,
+		targetID: targetID, ownsContext: ownsContext, artifactDir: b.artifactDir,
 	}
 	// Chrome announces a dead renderer once, on this target, and then goes quiet: subsequent CDP
 	// calls neither succeed nor fail, they simply never answer.  Catching the announcement is the
@@ -210,9 +233,14 @@ func (b *Browser) OpenSession(ctx context.Context) (*Session, error) {
 		if _, ok := event.(*inspector.EventTargetCrashed); ok {
 			session.markCrashed()
 		}
+		if request, ok := event.(*network.EventRequestWillBeSent); ok {
+			session.recordRequest(request)
+		}
+		if paused, ok := event.(*fetch.EventRequestPaused); ok {
+			session.handlePausedResponse(paused)
+		}
 	})
 	b.sessions[session] = struct{}{}
-	keepBrowserContext = true
 	return session, nil
 }
 

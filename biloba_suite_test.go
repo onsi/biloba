@@ -183,6 +183,9 @@ func matcherOrEqual(expected interface{}) OmegaMatcher {
 
 func ServeFixtures() {
 	s := ghttp.NewServer()
+	s.RouteToHandler("GET", regexp.MustCompile(`^/held$`), func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 	s.RouteToHandler("GET", regexp.MustCompile(`^/[\w.\-]*$`), func(w http.ResponseWriter, r *http.Request) {
 		fname := strings.Trim(r.URL.Path, "/")
 		fixture, err := os.ReadFile("./fixtures/" + fname)
@@ -207,6 +210,7 @@ func ServeFixtures() {
 	}
 	s.RouteToHandler("GET", regexp.MustCompile(`/api/.*`), apiHandler)
 	s.RouteToHandler("POST", regexp.MustCompile(`/api/.*`), apiHandler)
+	s.RouteToHandler("POST", regexp.MustCompile(`^/observed$`), apiHandler)
 	fixtureServer = s.URL()
 	DeferCleanup(s.Close)
 }

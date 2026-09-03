@@ -3,9 +3,13 @@ import type {Readable, Writable} from "node:stream";
 import {BilobaError, type WaitOptions} from "../index.js";
 import type {
   AssertRequest,
+  AddInitScriptRequest,
+  DragToRequest,
+  DOMRequest,
   EvaluateRequest,
   HandshakeRequest,
   HandshakeResponse,
+  HoldResponseRequest,
   LocatorRequest,
   NavigateRequest,
   OpenSessionRequest,
@@ -13,9 +17,14 @@ import type {
   OperationResult,
   ProtocolError,
   Response,
+  ResponseHoldRequest,
   SessionRequest,
   SetCookiesRequest,
   SetValueRequest,
+  SetUploadRequest,
+  SetWindowSizeRequest,
+  TypeRequest,
+  SendKeysRequest,
 } from "../generated/protocol.js";
 import {encodeFrame, FrameDecoder} from "./framing.js";
 
@@ -89,6 +98,15 @@ export class StdioTransport {
   openSession(request: OpenSessionRequest, options: TransportOptions = {}): Promise<OpenSessionResponse> {
     return this.#request("openSession", request, withDefaultDeadline(options));
   }
+  newTab(request: SessionRequest, options: TransportOptions = {}): Promise<OpenSessionResponse> {
+    return this.#request("newTab", request, withDefaultDeadline(options));
+  }
+  addInitScript(request: AddInitScriptRequest, options: TransportOptions = {}): Promise<OperationResult> {
+    return this.#request("addInitScript", request, withDefaultDeadline(options));
+  }
+  activate(request: SessionRequest, options: TransportOptions = {}): Promise<OperationResult> {
+    return this.#request("activate", request, withDefaultDeadline(options));
+  }
   prepareSession(request: SessionRequest, options: TransportOptions = {}): Promise<Record<string, never>> {
     return this.#request("prepareSession", request, withDefaultDeadline(options));
   }
@@ -107,11 +125,38 @@ export class StdioTransport {
   setValue(request: SetValueRequest, options: TransportOptions = {}): Promise<OperationResult> {
     return this.#request("setValue", request, options);
   }
+  type(request: TypeRequest, options: TransportOptions = {}): Promise<OperationResult> {
+    return this.#request("type", request, options);
+  }
+  sendKeys(request: SendKeysRequest, options: TransportOptions = {}): Promise<OperationResult> {
+    return this.#request("sendKeys", request, withDefaultDeadline(options));
+  }
+  setWindowSize(request: SetWindowSizeRequest, options: TransportOptions = {}): Promise<OperationResult> {
+    return this.#request("setWindowSize", request, withDefaultDeadline(options));
+  }
+  setUpload(request: SetUploadRequest, options: TransportOptions = {}): Promise<OperationResult> {
+    return this.#request("setUpload", request, options);
+  }
+  dragTo(request: DragToRequest, options: TransportOptions = {}): Promise<OperationResult> {
+    return this.#request("dragTo", request, options);
+  }
+  holdResponse(request: HoldResponseRequest, options: TransportOptions = {}): Promise<OperationResult> {
+    return this.#request("holdResponse", request, withDefaultDeadline(options));
+  }
+  awaitResponseHold(request: ResponseHoldRequest, options: TransportOptions = {}): Promise<OperationResult> {
+    return this.#request("awaitResponseHold", request, withDefaultDeadline(options));
+  }
+  releaseResponseHold(request: ResponseHoldRequest, options: TransportOptions = {}): Promise<OperationResult> {
+    return this.#request("releaseResponseHold", request, withDefaultDeadline(options));
+  }
   evaluate(request: EvaluateRequest, options: TransportOptions = {}): Promise<OperationResult> {
     return this.#request("evaluate", request, withDefaultDeadline(options));
   }
   assert(request: AssertRequest, options: TransportOptions = {}): Promise<OperationResult> {
     return this.#request("assert", request, options);
+  }
+  dom(request: DOMRequest, options: TransportOptions = {}): Promise<OperationResult> {
+    return this.#request("dom", request, options);
   }
 
   async #request<Result>(method: string, params: object, options: TransportOptions): Promise<Result> {

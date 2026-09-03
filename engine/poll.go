@@ -21,6 +21,13 @@ const (
 	CodeJavaScript      ErrorCode = "javascript"
 	CodeNotFound        ErrorCode = "not_found"
 	CodeActionFailed    ErrorCode = "action_failed"
+	// CodeConditionNotMet is a handler that ran to completion against a real element and answered
+	// "no" - an element that exists but is not visible.  It is an error so that a poll keeps going
+	// and Immediate() still fails fast, but it is the one failure a satisfied expectation may
+	// swallow: for a negated matcher, "no" is the answer.  Every other failure - above all
+	// CodeNotFound, which is how biloba.js reports a selector that matched nothing - must survive,
+	// or ShouldNot(...) passes vacuously against an element that was never there.
+	CodeConditionNotMet ErrorCode = "condition_not_met"
 	CodeBrowserGone     ErrorCode = "browser_gone"
 	CodeInvalidScript   ErrorCode = "invalid_script"
 	CodePageCrashed     ErrorCode = "page_crashed"
@@ -103,9 +110,19 @@ type Attempt struct {
 }
 
 type PollPolicy struct {
-	Timeout  time.Duration
-	Interval time.Duration
+	Timeout        time.Duration
+	Interval       time.Duration
+	AttemptTimeout time.Duration
+	Mode           PollMode
 }
+
+type PollMode uint8
+
+const (
+	PollEventually PollMode = iota
+	PollImmediate
+	PollConsistently
+)
 
 type PollResult struct {
 	Final        Observation
@@ -133,7 +150,19 @@ func Poll(ctx context.Context, policy PollPolicy, assertion Assertion) (PollResu
 	result := PollResult{StartedAt: started}
 	for {
 		attemptStarted := time.Now()
-		observation, matched, attemptErr := assertion(pollCtx)
+		attemptCtx := pollCtx
+		cancelAttempt := func() {}
+		if policy.AttemptTimeout > 0 {
+			attemptCtx, cancelAttempt = context.WithTimeout(pollCtx, policy.AttemptTimeout)
+		}
+		observation, matched, attemptErr := assertion(attemptCtx)
+		cancelAttempt()
+		if policy.Mode == PollConsistently && result.AttemptCount > 0 && attemptErr != nil && ctx.Err() == nil &&
+			errors.Is(pollCtx.Err(), context.DeadlineExceeded) &&
+			(errors.Is(attemptErr, context.DeadlineExceeded) || errors.Is(attemptErr, context.Canceled)) {
+			result.Duration = time.Since(started)
+			return result, nil
+		}
 		attempt := Attempt{
 			Number:      len(result.Attempts) + 1,
 			StartedAt:   attemptStarted,
@@ -153,7 +182,26 @@ func Poll(ctx context.Context, policy PollPolicy, assertion Assertion) (PollResu
 			return result, fatalPollError(result, attemptErr)
 		}
 		if matched && attemptErr == nil {
-			return result, nil
+			if policy.Mode != PollConsistently {
+				return result, nil
+			}
+		} else if policy.Mode == PollImmediate || policy.Mode == PollConsistently {
+			message := "condition did not match"
+			if policy.Mode == PollConsistently {
+				message = "condition did not remain satisfied"
+			}
+			if attemptErr != nil {
+				message = attemptErr.Error()
+			}
+			return result, &Error{
+				Code:         CodeActionFailed,
+				Operation:    "poll",
+				Message:      message,
+				Cause:        attemptErr,
+				Observed:     result.Final.Value,
+				AttemptCount: result.AttemptCount,
+				Attempts:     result.Attempts,
+			}
 		}
 
 		timer := time.NewTimer(policy.Interval)
@@ -161,6 +209,9 @@ func Poll(ctx context.Context, policy PollPolicy, assertion Assertion) (PollResu
 		case <-pollCtx.Done():
 			if !timer.Stop() {
 				<-timer.C
+			}
+			if policy.Mode == PollConsistently && ctx.Err() == nil && errors.Is(pollCtx.Err(), context.DeadlineExceeded) {
+				return result, nil
 			}
 			code := CodeCanceled
 			if ctx.Err() != nil {

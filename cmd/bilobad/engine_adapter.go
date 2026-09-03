@@ -27,8 +27,18 @@ func (b *engineBackend) Close() error { return b.browser.Close() }
 
 type engineSession struct{ session *engine.Session }
 
+const defaultPollTimeout = 10 * time.Second
+const assertionAttemptTimeout = time.Second
+
 func (s *engineSession) Prepare(ctx context.Context) error { return s.session.Prepare(ctx) }
 func (s *engineSession) Close() error                      { return s.session.Close() }
+func (s *engineSession) NewTab(ctx context.Context) (protocol.Session, error) {
+	tab, err := s.session.NewTab(ctx)
+	if err != nil {
+		return nil, engineRPCError(err)
+	}
+	return &engineSession{session: tab}, nil
+}
 
 func (s *engineSession) Execute(ctx context.Context, operation protocol.Operation) (protocol.Result, error) {
 	started := time.Now()
@@ -50,7 +60,12 @@ func (s *engineSession) Execute(ctx context.Context, operation protocol.Operatio
 			return protocol.Result{}, err
 		}
 		return s.poll(ctx, operation, func(ctx context.Context) (engine.Observation, bool, error) {
-			err := s.session.Click(ctx, selector)
+			var err error
+			if operation.Realistic {
+				err = s.session.RealisticClick(ctx, selector)
+			} else {
+				err = s.session.Click(ctx, selector)
+			}
 			return engine.Observation{}, err == nil, err
 		})
 	case protocol.OperationSetValue:
@@ -63,15 +78,86 @@ func (s *engineSession) Execute(ctx context.Context, operation protocol.Operatio
 			return protocol.Result{}, protocol.NewError(protocol.CodeInvalidArgument, fmt.Sprintf("value_json: %v", err))
 		}
 		return s.poll(ctx, operation, func(ctx context.Context) (engine.Observation, bool, error) {
-			err := s.session.SetValue(ctx, selector, value)
+			var err error
+			if operation.Realistic {
+				err = s.session.RealisticSetValue(ctx, selector, value)
+			} else {
+				err = s.session.SetValue(ctx, selector, value)
+			}
 			return engine.Observation{}, err == nil, err
 		})
+	case protocol.OperationType:
+		selector, err := selectorFromProtocol(operation.Locator)
+		if err != nil {
+			return protocol.Result{}, err
+		}
+		return s.poll(ctx, operation, func(ctx context.Context) (engine.Observation, bool, error) {
+			err := s.session.Type(ctx, selector, operation.Keys, operation.Realistic)
+			return engine.Observation{}, err == nil, err
+		})
+	case protocol.OperationSendKeys:
+		return oneAttempt(started, s.session.SendKeys(ctx, operation.Keys))
+	case protocol.OperationSetWindowSize:
+		return oneAttempt(started, s.session.SetWindowSize(ctx, operation.Width, operation.Height))
+	case protocol.OperationSetUpload:
+		selector, err := selectorFromProtocol(operation.Locator)
+		if err != nil {
+			return protocol.Result{}, err
+		}
+		return s.poll(ctx, operation, func(ctx context.Context) (engine.Observation, bool, error) {
+			observation, err := s.session.SetUpload(ctx, selector, operation.Paths)
+			return observation, observation.Found != nil && *observation.Found, err
+		})
+	case protocol.OperationDragTo:
+		source, err := selectorFromProtocol(operation.Locator)
+		if err != nil {
+			return protocol.Result{}, err
+		}
+		targetSelector, err := selectorFromProtocol(operation.Target)
+		if err != nil {
+			return protocol.Result{}, err
+		}
+		return s.poll(ctx, operation, func(ctx context.Context) (engine.Observation, bool, error) {
+			mode := engine.Fast
+			if operation.Realistic {
+				mode = engine.Realistic
+			}
+			err := s.session.DragWith(ctx, source, targetSelector, mode)
+			return engine.Observation{}, err == nil, err
+		})
+	case protocol.OperationAddInitScript:
+		return oneAttempt(started, s.session.AddInitScript(ctx, operation.Expression))
+	case protocol.OperationActivate:
+		return oneAttempt(started, s.session.Activate(ctx))
+	case protocol.OperationHoldResponse:
+		expectation, err := expectationFromProtocol(operation.Expectation)
+		if err != nil {
+			return protocol.Result{}, err
+		}
+		holdID, err := s.session.HoldResponse(ctx, expectation)
+		if err != nil {
+			return protocol.Result{}, engineRPCError(err)
+		}
+		return observedResult(started, map[string]any{"holdId": holdID}), nil
+	case protocol.OperationAwaitResponseHold:
+		response, err := s.session.AwaitResponseHold(ctx, operation.HoldID)
+		if err != nil {
+			return protocol.Result{}, engineRPCError(err)
+		}
+		return observedResult(started, map[string]any{"url": response.URL, "status": response.Status}), nil
+	case protocol.OperationReleaseResponseHold:
+		return oneAttempt(started, s.session.ReleaseResponseHold(ctx, operation.HoldID))
 	case protocol.OperationEvaluate:
 		script, err := evaluationScript(operation.Expression, operation.ArgumentsJSON, operation.Invoke)
 		if err != nil {
 			return protocol.Result{}, err
 		}
-		value, err := s.session.Evaluate(ctx, script)
+		var value any
+		if operation.AwaitPromise {
+			value, err = s.session.EvaluateAsync(ctx, script)
+		} else {
+			value, err = s.session.Evaluate(ctx, script)
+		}
 		if err != nil {
 			return protocol.Result{}, engineRPCError(err)
 		}
@@ -82,8 +168,282 @@ func (s *engineSession) Execute(ctx context.Context, operation protocol.Operatio
 			return protocol.Result{}, err
 		}
 		return s.poll(ctx, operation, assertion)
+	case protocol.OperationDOM:
+		assertion, err := s.domAssertion(operation.DOM)
+		if err != nil {
+			return protocol.Result{}, err
+		}
+		return s.poll(ctx, operation, assertion)
 	default:
 		return protocol.Result{}, protocol.NewError(protocol.CodeInvalidArgument, "unsupported operation")
+	}
+}
+
+func (s *engineSession) domAssertion(operation protocol.DOMOperation) (engine.Assertion, error) {
+	var selector, target, container engine.Selector
+	var err error
+	if operation.Kind != protocol.DOMSendKeys && operation.Kind != protocol.DOMClearSelection && operation.Kind != protocol.DOMNormalizeColor {
+		selector, err = selectorFromProtocol(operation.Locator)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if operation.Target.Kind != 0 {
+		target, err = selectorFromProtocol(operation.Target)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if operation.Container.Kind != 0 {
+		container, err = selectorFromProtocol(operation.Container)
+		if err != nil {
+			return nil, err
+		}
+	}
+	mode := engine.Fast
+	if operation.Realistic {
+		mode = engine.Realistic
+	}
+	modifiers, err := modifiersFromProtocol(operation.Modifiers)
+	if err != nil {
+		return nil, err
+	}
+	textModes := map[string]engine.TextMode{"INNER_TEXT": engine.InnerText, "TEXT_CONTENT": engine.TextContent, "NORMALIZED_TEXT": engine.NormalizedText}
+	states := map[string]engine.ElementState{"visible": engine.StateVisible, "enabled": engine.StateEnabled, "clickable": engine.StateClickable, "checked": engine.StateChecked, "focused": engine.StateFocused}
+	relations := map[string]engine.GeometryRelation{"above": engine.Above, "below": engine.Below, "leftOf": engine.LeftOf, "rightOf": engine.RightOf, "encloses": engine.Encloses, "overlaps": engine.Overlaps}
+	names := make([]engine.NameSpec, len(operation.Names))
+	plainNames := make([]string, len(operation.Names))
+	for index, name := range operation.Names {
+		plainNames[index] = name.Name
+		if name.AllowMissing {
+			names[index] = engine.OptionalName(name.Name)
+		} else {
+			names[index] = engine.RequiredName(name.Name)
+		}
+	}
+	var value any
+	if operation.Kind == protocol.DOMSetProperty {
+		if err := json.Unmarshal([]byte(operation.ValueJSON), &value); err != nil {
+			return nil, protocol.NewError(protocol.CodeInvalidArgument, fmt.Sprintf("valueJson: %v", err))
+		}
+	}
+	arguments := []any{}
+	if operation.ArgumentsJSON != "" {
+		if err := json.Unmarshal([]byte(operation.ArgumentsJSON), &arguments); err != nil {
+			return nil, protocol.NewError(protocol.CodeInvalidArgument, fmt.Sprintf("argumentsJson: %v", err))
+		}
+	}
+	expectation := engine.Expectation{Kind: engine.ExpectAnything}
+	if operation.Expectation.Kind != 0 {
+		expectation, err = expectationFromProtocol(operation.Expectation)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return func(ctx context.Context) (engine.Observation, bool, error) {
+		observation := engine.Observation{}
+		var operationErr error
+		switch operation.Kind {
+		case protocol.DOMText:
+			observation, operationErr = s.session.TextByMode(ctx, selector, textModes[operation.TextMode])
+		case protocol.DOMTexts:
+			observation, operationErr = s.session.Texts(ctx, selector, textModes[operation.TextMode])
+		case protocol.DOMClasses:
+			observation, operationErr = s.session.Classes(ctx, selector)
+		case protocol.DOMClassesForEach:
+			observation, operationErr = s.session.ClassesForEach(ctx, selector)
+		case protocol.DOMDistinctAttributeCount:
+			observation, operationErr = s.session.DistinctAttributeCount(ctx, selector, operation.Name)
+		case protocol.DOMAttributes:
+			observation, operationErr = s.session.Attributes(ctx, selector, names)
+		case protocol.DOMAttributesForEach:
+			observation, operationErr = s.session.AttributesForEach(ctx, selector, plainNames)
+		case protocol.DOMJSONAttribute:
+			observation, operationErr = s.session.JSONAttribute(ctx, selector, operation.Name)
+		case protocol.DOMProperties:
+			observation, operationErr = s.session.Properties(ctx, selector, names)
+		case protocol.DOMPropertiesForEach:
+			observation, operationErr = s.session.PropertiesForEach(ctx, selector, plainNames)
+		case protocol.DOMPropertyForEach:
+			observation, operationErr = s.session.PropertyForEach(ctx, selector, operation.Name)
+		case protocol.DOMValues:
+			observation, operationErr = s.session.Values(ctx, selector)
+		case protocol.DOMState:
+			state, ok := states[operation.State]
+			if !ok {
+				return observation, false, engine.Fatal(protocol.NewError(protocol.CodeInvalidArgument, "unsupported element state"))
+			}
+			observation, operationErr = s.session.State(ctx, selector, state)
+		case protocol.DOMAllState:
+			state, ok := states[operation.State]
+			if !ok {
+				return observation, false, engine.Fatal(protocol.NewError(protocol.CodeInvalidArgument, "unsupported all-element state"))
+			}
+			observation, operationErr = s.session.AllState(ctx, selector, state)
+		case protocol.DOMSetProperty:
+			scope := engine.FirstMatch
+			if operation.All {
+				scope = engine.AllMatches
+			}
+			operationErr = s.session.SetProperty(ctx, selector, operation.Name, value, scope)
+		case protocol.DOMFocus:
+			operationErr = s.session.Focus(ctx, selector)
+		case protocol.DOMBlur:
+			operationErr = s.session.Blur(ctx, selector)
+		case protocol.DOMHover:
+			operationErr = s.session.Hover(ctx, selector, mode)
+		case protocol.DOMType:
+			operationErr = s.session.TypeWith(ctx, selector, operation.Keys, engine.KeyboardOptions{Mode: mode, Modifiers: modifiers})
+		case protocol.DOMSendKeys:
+			operationErr = s.session.SendKeysWith(ctx, operation.Keys, modifiers)
+		case protocol.DOMClick:
+			button, buttonErr := buttonFromProtocol(operation.Button)
+			if buttonErr != nil {
+				return observation, false, engine.Fatal(buttonErr)
+			}
+			options := engine.ClickOptions{Mode: mode, Button: button, Count: operation.ClickCount, Modifiers: modifiers}
+			if operation.HasOffset {
+				options.Offset = &engine.Point{X: operation.OffsetX, Y: operation.OffsetY}
+			}
+			operationErr = s.session.ClickWith(ctx, selector, options)
+		case protocol.DOMClickEach:
+			operationErr = s.session.ClickEach(ctx, selector, mode)
+		case protocol.DOMTap:
+			options := engine.PointerOptions{Mode: mode, Modifiers: modifiers}
+			if operation.HasOffset {
+				options.Offset = &engine.Point{X: operation.OffsetX, Y: operation.OffsetY}
+			}
+			operationErr = s.session.Tap(ctx, selector, options)
+		case protocol.DOMDrag:
+			operationErr = s.session.DragWith(ctx, selector, target, mode)
+		case protocol.DOMScrollIntoView:
+			options := engine.ScrollIntoViewOptions{TopOffset: operation.TopOffset, HasTopOffset: operation.HasTopOffset}
+			if operation.Container.Kind != 0 {
+				options.Container = container
+			}
+			operationErr = s.session.ScrollIntoView(ctx, selector, options)
+		case protocol.DOMScrollWheel:
+			operationErr = s.session.ScrollWheel(ctx, selector, operation.DeltaX, operation.DeltaY, mode)
+		case protocol.DOMSelect:
+			operationErr = s.session.Select(ctx, selector, engine.Selection{Substring: operation.Substring, Occurrence: operation.Occurrence, Start: operation.Start, End: operation.End, Range: operation.Range})
+		case protocol.DOMClearSelection:
+			operationErr = s.session.ClearSelection(ctx)
+		case protocol.DOMInvokeMethod:
+			observation, operationErr = s.session.InvokeMethod(ctx, selector, operation.Method, arguments...)
+		case protocol.DOMInvokeFunction:
+			observation, operationErr = s.session.InvokeFunction(ctx, selector, operation.Expression, arguments...)
+		case protocol.DOMInvokeMethodForEach:
+			observation, operationErr = s.session.InvokeMethodForEach(ctx, selector, operation.Method, arguments...)
+		case protocol.DOMInvokeFunctionForEach:
+			observation, operationErr = s.session.InvokeFunctionForEach(ctx, selector, operation.Expression, arguments...)
+		case protocol.DOMBoundingBox:
+			var box engine.Box
+			box, operationErr = s.session.BoundingBox(ctx, selector)
+			observation.Value = box
+		case protocol.DOMScrollOffset:
+			var offset engine.ScrollOffset
+			offset, operationErr = s.session.ScrollOffset(ctx, selector)
+			observation.Value = offset
+		case protocol.DOMOffsetWithin:
+			var offset engine.Offset
+			offset, operationErr = s.session.OffsetWithin(ctx, selector, target)
+			observation.Value = offset
+		case protocol.DOMRelativeBoxes:
+			var boxes engine.BoxPair
+			boxes, operationErr = s.session.RelativeBoxes(ctx, selector, target)
+			observation.Value = boxes
+		case protocol.DOMGeometryRelation:
+			relation, ok := relations[operation.Relation]
+			if !ok {
+				return observation, false, engine.Fatal(protocol.NewError(protocol.CodeInvalidArgument, "unsupported geometry relation"))
+			}
+			observation, operationErr = s.session.GeometryRelation(ctx, selector, target, relation)
+		case protocol.DOMGapBetween:
+			var gap engine.BoxDelta
+			gap, operationErr = s.session.GapBetween(ctx, selector, target)
+			observation.Value = gap
+		case protocol.DOMInViewport:
+			observation, operationErr = s.session.InViewport(ctx, selector, operation.Fully)
+		case protocol.DOMDocumentOrder:
+			var order engine.DocumentOrder
+			order, operationErr = s.session.DocumentOrder(ctx, selector, target)
+			observation.Value = order
+		case protocol.DOMComputedStyle:
+			observation, operationErr = s.session.ComputedStyle(ctx, selector, operation.Name)
+		case protocol.DOMComputedStyleNumber:
+			observation, operationErr = s.session.ComputedStyleNumber(ctx, selector, operation.Name)
+		case protocol.DOMNormalizeColor:
+			observation, operationErr = s.session.NormalizeColor(ctx, operation.ValueJSON)
+		default:
+			return observation, false, engine.Fatal(protocol.NewError(protocol.CodeInvalidArgument, "unsupported DOM operation"))
+		}
+		matched := operationErr == nil
+		if operation.Expectation.Kind != 0 {
+			if operation.Every {
+				matched, err = everyMatches(jsonShape(observation.Value), operation.ProjectName, expectation)
+			} else {
+				matched, err = engine.MatchExpectation(jsonShape(observation.Value), expectation)
+			}
+			if err != nil {
+				return observation, false, engine.Fatal(protocol.NewError(protocol.CodeInvalidArgument, err.Error()))
+			}
+			operationErr = clearedReadError(matched, operationErr)
+		}
+		return observation, matched, operationErr
+	}, nil
+}
+
+func everyMatches(actual any, projectName string, expectation engine.Expectation) (bool, error) {
+	value := reflect.ValueOf(actual)
+	if !value.IsValid() || (value.Kind() != reflect.Array && value.Kind() != reflect.Slice) || value.Len() == 0 {
+		return false, nil
+	}
+	for index := 0; index < value.Len(); index++ {
+		item := value.Index(index).Interface()
+		if projectName != "" {
+			properties, ok := item.(map[string]any)
+			if !ok {
+				return false, nil
+			}
+			item = properties[projectName]
+		}
+		matched, err := engine.MatchExpectation(item, expectation)
+		if err != nil || !matched {
+			return matched, err
+		}
+	}
+	return true, nil
+}
+
+func modifiersFromProtocol(values []string) (engine.Modifier, error) {
+	var modifiers engine.Modifier
+	for _, value := range values {
+		switch value {
+		case "Shift":
+			modifiers |= engine.ShiftModifier
+		case "Control":
+			modifiers |= engine.ControlModifier
+		case "Alt":
+			modifiers |= engine.AltModifier
+		case "Meta":
+			modifiers |= engine.MetaModifier
+		default:
+			return 0, protocol.NewError(protocol.CodeInvalidArgument, fmt.Sprintf("unsupported modifier %q", value))
+		}
+	}
+	return modifiers, nil
+}
+
+func buttonFromProtocol(value string) (engine.MouseButton, error) {
+	switch value {
+	case "", "left":
+		return engine.LeftButton, nil
+	case "right":
+		return engine.RightButton, nil
+	case "middle":
+		return engine.MiddleButton, nil
+	default:
+		return 0, protocol.NewError(protocol.CodeInvalidArgument, fmt.Sprintf("unsupported mouse button %q", value))
 	}
 }
 
@@ -125,9 +485,10 @@ func evaluationArguments(argumentsJSON string) ([]any, error) {
 }
 
 func (s *engineSession) poll(ctx context.Context, operation protocol.Operation, assertion engine.Assertion) (protocol.Result, error) {
-	policy := engine.PollPolicy{Timeout: operation.Poll.Timeout, Interval: operation.Poll.Interval}
-	if policy.Timeout <= 0 {
-		policy.Timeout = time.Second
+	policy := pollPolicyFromProtocol(operation.Poll)
+	policy = withDefaultPollTimeout(policy)
+	if operation.Kind == protocol.OperationAssert || operation.Kind == protocol.OperationDOM {
+		policy.AttemptTimeout = assertionAttemptTimeout
 	}
 	result, pollErr := engine.Poll(ctx, policy, assertion)
 	converted := pollResult(result, pollErr == nil)
@@ -157,6 +518,13 @@ func (s *engineSession) poll(ctx context.Context, operation protocol.Operation, 
 		converted.Diagnostics.DaemonDetail += "; capture diagnostics: " + diagnosticErr.Error()
 	}
 	return converted, nil
+}
+
+func withDefaultPollTimeout(policy engine.PollPolicy) engine.PollPolicy {
+	if policy.Timeout <= 0 {
+		policy.Timeout = defaultPollTimeout
+	}
+	return policy
 }
 
 // The client arms its own timer at the very deadline it puts on the request, so capturing
@@ -190,11 +558,15 @@ func diagnosticsBudget(ctx context.Context, now time.Time) time.Duration {
 func (s *engineSession) assertion(assertion protocol.Assertion) (engine.Assertion, error) {
 	var selector engine.Selector
 	var err error
-	if assertion.Kind != protocol.AssertionURL && assertion.Kind != protocol.AssertionEvaluate {
+	if assertion.Kind != protocol.AssertionURL && assertion.Kind != protocol.AssertionEvaluate && assertion.Kind != protocol.AssertionRequest {
 		selector, err = selectorFromProtocol(assertion.Locator)
 		if err != nil {
 			return nil, err
 		}
+	}
+	expectation, err := expectationFromProtocol(assertion.Expectation)
+	if err != nil {
+		return nil, err
 	}
 	return func(ctx context.Context) (engine.Observation, bool, error) {
 		var observation engine.Observation
@@ -202,40 +574,97 @@ func (s *engineSession) assertion(assertion protocol.Assertion) (engine.Assertio
 		switch assertion.Kind {
 		case protocol.AssertionVisible:
 			observation, readErr = s.session.Visible(ctx, selector)
-			visible, _ := observation.Value.(bool)
-			return observation, visible, readErr
+		case protocol.AssertionExists:
+			observation, readErr = s.session.Exists(ctx, selector)
+		case protocol.AssertionEnabled:
+			observation, readErr = s.session.Enabled(ctx, selector)
+		case protocol.AssertionClickable:
+			observation, readErr = s.session.Clickable(ctx, selector)
 		case protocol.AssertionText:
 			observation, readErr = s.session.Text(ctx, selector)
 		case protocol.AssertionCount:
 			observation, readErr = s.session.Count(ctx, selector)
-			return observation, numericEqual(observation.Value, assertion.ExpectedCount), readErr
 		case protocol.AssertionAttribute:
 			observation, readErr = s.session.Attribute(ctx, selector, assertion.Attribute)
+		case protocol.AssertionProperty:
+			observation, readErr = s.session.Property(ctx, selector, assertion.Property)
+		case protocol.AssertionAllText:
+			observation, readErr = s.session.TextForEach(ctx, selector)
 		case protocol.AssertionValue:
 			observation, readErr = s.session.Value(ctx, selector)
-			matched, compareErr := jsonEqual(observation.Value, assertion.ExpectedJSON)
-			if compareErr != nil {
-				return observation, false, compareErr
-			}
-			return observation, matched, readErr
 		case protocol.AssertionURL:
 			observation, readErr = s.session.URL(ctx)
 		case protocol.AssertionEvaluate:
 			var value any
 			value, readErr = s.session.Evaluate(ctx, assertion.Expression)
 			observation = engine.Observation{Value: value}
-			matched, compareErr := jsonEqual(value, assertion.ExpectedJSON)
-			if compareErr != nil {
-				return observation, false, compareErr
+		case protocol.AssertionRequest:
+			requests := s.session.Requests()
+			observed := make([]map[string]any, 0, len(requests))
+			matched := false
+			for _, request := range requests {
+				observed = append(observed, map[string]any{"url": request.URL, "method": request.Method})
+				urlMatches, matchErr := engine.MatchExpectation(request.URL, expectation)
+				if matchErr != nil {
+					return engine.Observation{Value: observed}, false, engine.Fatal(protocol.NewError(protocol.CodeInvalidArgument, matchErr.Error()))
+				}
+				if urlMatches && (assertion.Method == "" || request.Method == assertion.Method) {
+					matched = true
+				}
 			}
-			return observation, matched, readErr
+			return engine.Observation{Value: observed}, matched, nil
 		default:
 			// Unreachable from the wire (assertionFromWire rejects unknown kinds first), but if it
 			// ever were reached, retrying would turn a rejected request into an assertion timeout.
 			return observation, false, engine.Fatal(protocol.NewError(protocol.CodeInvalidArgument, "unsupported assertion"))
 		}
-		return observation, stringMatches(observation.Value, assertion.ExpectedString, assertion.Match), readErr
+		matched, compareErr := engine.MatchExpectation(jsonShape(observation.Value), expectation)
+		if compareErr != nil {
+			return observation, false, engine.Fatal(protocol.NewError(protocol.CodeInvalidArgument, compareErr.Error()))
+		}
+		readErr = clearedReadError(matched, readErr)
+		return observation, matched, readErr
 	}, nil
+}
+
+func pollPolicyFromProtocol(policy protocol.PollPolicy) engine.PollPolicy {
+	mode := engine.PollEventually
+	switch policy.Mode {
+	case protocol.PollImmediate:
+		mode = engine.PollImmediate
+	case protocol.PollConsistently:
+		mode = engine.PollConsistently
+	}
+	return engine.PollPolicy{Timeout: policy.Timeout, Interval: policy.Interval, Mode: mode}
+}
+
+func expectationFromProtocol(expectation protocol.Expectation) (engine.Expectation, error) {
+	kinds := map[protocol.ExpectationKind]engine.ExpectationKind{
+		protocol.ExpectEqual: engine.ExpectEqual, protocol.ExpectContains: engine.ExpectContains,
+		protocol.ExpectRegexp: engine.ExpectRegexp, protocol.ExpectPrefix: engine.ExpectPrefix,
+		protocol.ExpectSuffix: engine.ExpectSuffix, protocol.ExpectNumber: engine.ExpectNumber,
+		protocol.ExpectEmpty: engine.ExpectEmpty, protocol.ExpectAll: engine.ExpectAll,
+		protocol.ExpectAny: engine.ExpectAny, protocol.ExpectNot: engine.ExpectNot,
+		protocol.ExpectAnything: engine.ExpectAnything,
+	}
+	kind, ok := kinds[expectation.Kind]
+	if !ok {
+		return engine.Expectation{}, protocol.NewError(protocol.CodeInvalidArgument, "unsupported expectation")
+	}
+	converted := engine.Expectation{Kind: kind, Operator: expectation.Operator}
+	if expectation.ExpectedJSON != "" {
+		if err := json.Unmarshal([]byte(expectation.ExpectedJSON), &converted.Expected); err != nil {
+			return engine.Expectation{}, protocol.NewError(protocol.CodeInvalidArgument, fmt.Sprintf("expectedJson is not valid JSON: %v", err))
+		}
+	}
+	for _, child := range expectation.Children {
+		convertedChild, err := expectationFromProtocol(child)
+		if err != nil {
+			return engine.Expectation{}, err
+		}
+		converted.Children = append(converted.Children, convertedChild)
+	}
+	return converted, nil
 }
 
 func selectorFromProtocol(locator protocol.Locator) (engine.Selector, error) {
@@ -247,17 +676,97 @@ func selectorFromProtocol(locator protocol.Locator) (engine.Selector, error) {
 	switch locator.Kind {
 	case protocol.LocatorCSS:
 		selector = engine.CSS(locator.Value)
+	case protocol.LocatorXPath:
+		selector = engine.XPath(locator.Value)
 	case protocol.LocatorTestID:
-		selector = engine.TestID(locator.Value)
+		if locator.Attribute != "" {
+			selector = engine.TestIDAttribute(locator.Value, locator.Attribute)
+		} else {
+			selector = engine.TestID(locator.Value)
+		}
 	case protocol.LocatorText:
 		selector = engine.Text(locator.Value, mode)
 	case protocol.LocatorRole:
 		selector = engine.Role(locator.Role, locator.Name, mode)
+	case protocol.LocatorLabel:
+		selector = engine.Label(locator.Value, mode)
+	case protocol.LocatorPlaceholder:
+		selector = engine.Placeholder(locator.Value, mode)
+	case protocol.LocatorAltText:
+		selector = engine.AltText(locator.Value, mode)
+	case protocol.LocatorTitle:
+		selector = engine.Title(locator.Value, mode)
+	case protocol.LocatorAnd, protocol.LocatorOr:
+		first, err := selectorFromProtocol(locator.Operands[0])
+		if err != nil {
+			return engine.Selector{}, err
+		}
+		selector = first
+		for _, operand := range locator.Operands[1:] {
+			converted, convertErr := selectorFromProtocol(operand)
+			if convertErr != nil {
+				return engine.Selector{}, convertErr
+			}
+			if locator.Kind == protocol.LocatorAnd {
+				selector = selector.And(converted)
+			} else {
+				selector = selector.Or(converted)
+			}
+		}
 	default:
 		return engine.Selector{}, protocol.NewError(protocol.CodeInvalidArgument, "unsupported locator")
 	}
-	if locator.First {
-		selector = selector.First()
+	if locator.Within != nil {
+		within, err := selectorFromProtocol(*locator.Within)
+		if err != nil {
+			return engine.Selector{}, err
+		}
+		selector = selector.Within(within)
+	}
+	for _, filter := range locator.Filters {
+		switch filter.Kind {
+		case protocol.LocatorFilterContainsText:
+			if filter.Negate {
+				selector = selector.NotContainingText(filter.Value)
+			} else {
+				selector = selector.ContainingText(filter.Value)
+			}
+		case protocol.LocatorFilterContains, protocol.LocatorFilterWithin:
+			converted, err := selectorFromProtocol(*filter.Selector)
+			if err != nil {
+				return engine.Selector{}, err
+			}
+			switch {
+			case filter.Kind == protocol.LocatorFilterWithin && filter.Negate:
+				selector = selector.NotWithin(converted)
+			case filter.Negate:
+				selector = selector.NotContaining(converted)
+			default:
+				selector = selector.Containing(converted)
+			}
+		}
+	}
+	if locator.LevelSet {
+		selector = selector.Level(locator.Level)
+	}
+	for _, state := range locator.States {
+		switch state {
+		case "checked":
+			selector = selector.Checked()
+		case "disabled":
+			selector = selector.Disabled()
+		case "expanded":
+			selector = selector.Expanded()
+		case "pressed":
+			selector = selector.Pressed()
+		case "selected":
+			selector = selector.Selected()
+		default:
+			return engine.Selector{}, protocol.NewError(protocol.CodeInvalidArgument, "unsupported locator state")
+		}
+	}
+	if locator.NthSet {
+		selector = selector.Nth(locator.Nth)
 	}
 	return selector, nil
 }
@@ -331,6 +840,8 @@ func locatorDescription(operation protocol.Operation) string {
 	locator := operation.Locator
 	if operation.Kind == protocol.OperationAssert {
 		locator = operation.Assertion.Locator
+	} else if operation.Kind == protocol.OperationDOM {
+		locator = operation.DOM.Locator
 	}
 	selector, err := selectorFromProtocol(locator)
 	if err != nil {
@@ -340,10 +851,22 @@ func locatorDescription(operation protocol.Operation) string {
 }
 
 func expectedDescription(operation protocol.Operation) string {
+	if operation.Kind == protocol.OperationDOM {
+		if operation.DOM.Expectation.Kind != 0 {
+			return expectationDescription(operation.DOM.Expectation)
+		}
+		return "operation to succeed"
+	}
 	if operation.Kind != protocol.OperationAssert {
 		return "operation to succeed"
 	}
 	assertion := operation.Assertion
+	if semantic := booleanAssertionDescription(assertion); semantic != "" {
+		return semantic
+	}
+	if assertion.Expectation.Kind != 0 {
+		return expectationDescription(assertion.Expectation)
+	}
 	switch assertion.Kind {
 	case protocol.AssertionVisible:
 		return "visible"
@@ -354,6 +877,76 @@ func expectedDescription(operation protocol.Operation) string {
 	default:
 		return assertion.ExpectedString
 	}
+}
+
+func booleanAssertionDescription(assertion protocol.Assertion) string {
+	var positive string
+	switch assertion.Kind {
+	case protocol.AssertionVisible:
+		positive = "visible"
+	case protocol.AssertionExists:
+		positive = "exist"
+	case protocol.AssertionEnabled:
+		positive = "enabled"
+	case protocol.AssertionClickable:
+		positive = "clickable"
+	default:
+		return ""
+	}
+	if assertion.Expectation.Kind != protocol.ExpectEqual {
+		return ""
+	}
+	var expected bool
+	if json.Unmarshal([]byte(assertion.Expectation.ExpectedJSON), &expected) != nil {
+		return ""
+	}
+	if expected {
+		return positive
+	}
+	if positive == "exist" {
+		return "not exist"
+	}
+	return "not " + positive
+}
+
+func expectationDescription(expectation protocol.Expectation) string {
+	var expected any
+	if expectation.ExpectedJSON != "" && json.Unmarshal([]byte(expectation.ExpectedJSON), &expected) == nil {
+		if expectation.Kind == protocol.ExpectEqual {
+			return fmt.Sprint(expected)
+		}
+	}
+	switch expectation.Kind {
+	case protocol.ExpectContains:
+		return fmt.Sprintf("contain %q", expected)
+	case protocol.ExpectRegexp:
+		return fmt.Sprintf("match %q", expected)
+	case protocol.ExpectPrefix:
+		return fmt.Sprintf("start with %q", expected)
+	case protocol.ExpectSuffix:
+		return fmt.Sprintf("end with %q", expected)
+	case protocol.ExpectNumber:
+		return fmt.Sprintf("%s %v", expectation.Operator, expected)
+	case protocol.ExpectEmpty:
+		return "empty"
+	case protocol.ExpectAnything:
+		return "any value"
+	case protocol.ExpectAll, protocol.ExpectAny:
+		parts := make([]string, len(expectation.Children))
+		for i, child := range expectation.Children {
+			parts[i] = expectationDescription(child)
+		}
+		joiner := " and "
+		if expectation.Kind == protocol.ExpectAny {
+			joiner = " or "
+		}
+		return strings.Join(parts, joiner)
+	case protocol.ExpectNot:
+		if len(expectation.Children) == 1 {
+			return "not " + expectationDescription(expectation.Children[0])
+		}
+	}
+	return expectation.ExpectedJSON
 }
 
 // engineProtocolCodes is the whole engine-to-protocol error vocabulary, in one place.  A code that
@@ -371,6 +964,9 @@ var engineProtocolCodes = map[engine.ErrorCode]protocol.ErrorCode{
 	// The target was found and refused the operation - a click on a hidden element.  That is a page
 	// state, not a driver fault, and it is the one bucket where a retry might succeed.
 	engine.CodeActionFailed: protocol.CodeTargetNotReady,
+	// The handler ran and answered no.  Same bucket as a refused action: the page could still change
+	// its mind, so a retry is meaningful.
+	engine.CodeConditionNotMet: protocol.CodeTargetNotReady,
 	// A navigation that landed on a status the caller did not ask for.  Deliberately not
 	// TARGET_NOT_READY: the page loaded fine, so waiting will never change the answer.
 	engine.CodeNavigation:    protocol.CodeNavigation,
@@ -404,4 +1000,44 @@ func engineRPCError(err error) error {
 		code = protocol.CodeDriver
 	}
 	return protocol.NewError(code, engineErr.Error())
+}
+
+// jsonShape renders an observation the way the client sees it, so an expectation decoded from the
+// wire can be compared against it.  The engine answers in Go types - engine.DocumentOrder is a named
+// string, engine.Box and its geometry siblings are structs - while the expectation arrives as
+// decoded JSON.  reflect.DeepEqual is type-sensitive, so without this an EQUAL fed the exact value
+// the matching read just returned is false forever: the assertion cannot fail loudly, it can only
+// time out.
+func jsonShape(value any) any {
+	switch value.(type) {
+	case nil, bool, string, float64, int, int64, []any, map[string]any:
+		return value
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return value
+	}
+	var decoded any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		return value
+	}
+	return decoded
+}
+
+// clearedReadError decides whether a satisfied expectation may swallow the error the read reported.
+// Only CodeConditionNotMet may be swallowed - the handler ran against a real element and answered
+// "no", which for a negated matcher is the answer rather than a failure.  Everything else survives,
+// above all CodeNotFound: biloba.js raises a selector that matched nothing as an error precisely so
+// that ShouldNot(<matcher>) cannot pass vacuously against an element that was never there (see the
+// poll() comment in biloba.js).  Swallowing it makes expectNotVisible("#missing") pass instantly and
+// makes a poll for a not-yet-rendered value answer null on its first attempt instead of waiting.
+func clearedReadError(matched bool, err error) error {
+	if !matched || err == nil || engine.IsFatal(err) {
+		return err
+	}
+	var engineErr *engine.Error
+	if errors.As(err, &engineErr) && engineErr.Code == engine.CodeConditionNotMet {
+		return nil
+	}
+	return err
 }

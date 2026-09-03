@@ -48,8 +48,17 @@ type Session struct {
 	ctx              context.Context
 	cancel           context.CancelFunc
 	browserContextID cdp.BrowserContextID
+	targetID         target.ID
+	ownsContext      bool
 	artifactDir      string
 	mu               sync.Mutex
+	requestMu        sync.Mutex
+	requests         []Request
+	holdMu           sync.Mutex
+	holds            map[string]*responseHold
+	holdOrder        []string
+	holdSequence     uint64
+	fetchEnabled     bool
 	closed           bool
 	installed        bool
 	// crashed is closed by Chrome's Inspector.targetCrashed listener, which runs on chromedp's event
@@ -106,11 +115,18 @@ func (s *Session) Close() error {
 		return nil
 	}
 	s.closed = true
+	s.releaseAllResponseHolds()
 	var disposeErr error
-	if s.browser != nil {
+	if s.browser != nil && s.ownsContext {
 		ctx, cancel := context.WithTimeout(s.browser.ctx, 5*time.Second)
 		disposeErr = s.withBrowserExecutor(ctx, func(browserCtx context.Context) error {
 			return target.DisposeBrowserContext(s.browserContextID).Do(browserCtx)
+		})
+		cancel()
+	} else if s.browser != nil {
+		ctx, cancel := context.WithTimeout(s.browser.ctx, 5*time.Second)
+		disposeErr = s.withBrowserExecutor(ctx, func(browserCtx context.Context) error {
+			return target.CloseTarget(s.targetID).Do(browserCtx)
 		})
 		cancel()
 	}
@@ -125,8 +141,47 @@ func (s *Session) Close() error {
 	return nil
 }
 
+// NewTab opens another target in this session's browser context, sharing cookies and storage.
+func (s *Session) NewTab(ctx context.Context) (*Session, error) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, &Error{Code: CodeSessionClosed, Operation: "new tab", Message: "session is closed"}
+	}
+	browser := s.browser
+	browserContextID := s.browserContextID
+	s.mu.Unlock()
+	if browser == nil {
+		return nil, &Error{Code: CodeSessionClosed, Operation: "new tab", Message: "browser is closed"}
+	}
+	return browser.openTab(ctx, browserContextID, false)
+}
+
+// AddInitScript installs JavaScript that runs before every future document in this tab.
+func (s *Session) AddInitScript(ctx context.Context, script string) error {
+	return s.serial(ctx, "add init script", func(opCtx context.Context) error {
+		return chromedp.Run(opCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
+			_, err := page.AddScriptToEvaluateOnNewDocument(script).Do(runCtx)
+			return err
+		}))
+	})
+}
+
+// Activate brings this tab to the foreground.
+func (s *Session) Activate(ctx context.Context) error {
+	return s.serial(ctx, "activate tab", func(opCtx context.Context) error {
+		return s.withBrowserExecutor(opCtx, func(browserCtx context.Context) error {
+			return target.ActivateTarget(s.targetID).Do(browserCtx)
+		})
+	})
+}
+
 func (s *Session) Prepare(ctx context.Context) error {
 	return s.serial(ctx, "prepare", func(opCtx context.Context) error {
+		if err := s.resetResponseHolds(opCtx); err != nil {
+			return err
+		}
+		s.clearRequests()
 		// Clear storage while the tab still has its current origin. about:blank has an opaque
 		// origin, so navigating first would leave localStorage behind for the next spec. A crashed
 		// renderer has already lost that storage and no longer answers evaluation requests, so skip
@@ -220,11 +275,50 @@ func (s *Session) GetCookies(ctx context.Context) ([]Cookie, error) {
 }
 
 func (s *Session) Evaluate(ctx context.Context, script string) (any, error) {
+	return s.evaluate(ctx, script, false)
+}
+
+// EvaluateAsync evaluates script and waits for a returned promise to settle.
+func (s *Session) EvaluateAsync(ctx context.Context, script string) (any, error) {
+	return s.evaluate(ctx, script, true)
+}
+
+func (s *Session) evaluate(ctx context.Context, script string, awaitPromise bool) (any, error) {
 	var result any
 	err := s.serial(ctx, "evaluate", func(opCtx context.Context) error {
-		return EvaluateContext(opCtx, script, false, &result)
+		return EvaluateContext(opCtx, script, awaitPromise, &result)
 	})
 	return result, err
+}
+
+// SetWindowSize changes this session's emulated viewport.
+func (s *Session) SetWindowSize(ctx context.Context, width, height int) error {
+	if width <= 0 || height <= 0 {
+		return &Error{Code: CodeInvalidArgument, Operation: "set window size", Message: "width and height must be positive"}
+	}
+	return s.serial(ctx, "set window size", func(opCtx context.Context) error {
+		return EmulateViewportContext(opCtx, width, height)
+	})
+}
+
+// SetUpload attaches paths to the first file input matching selector.
+func (s *Session) SetUpload(ctx context.Context, selector Selector, paths []string) (Observation, error) {
+	found := false
+	err := s.serial(ctx, "set upload", func(opCtx context.Context) error {
+		if len(paths) == 0 {
+			return &Error{Code: CodeInvalidArgument, Operation: "set upload", Message: "at least one path is required"}
+		}
+		if err := s.ensureBiloba(opCtx); err != nil {
+			return err
+		}
+		arguments, err := EncodeArgs(selector.Encoded())
+		if err != nil {
+			return err
+		}
+		found, err = SetFileInputFilesContext(opCtx, fmt.Sprintf("_biloba.node(...%s)", arguments), paths)
+		return err
+	})
+	return Observation{Found: &found}, err
 }
 
 func (s *Session) Click(ctx context.Context, selector Selector) error {
@@ -237,8 +331,105 @@ func (s *Session) SetValue(ctx context.Context, selector Selector, value any) er
 	return err
 }
 
+func (s *Session) RealisticClick(ctx context.Context, selector Selector) error {
+	return s.serial(ctx, "realistic click", func(opCtx context.Context) error {
+		return s.realisticClick(opCtx, selector)
+	})
+}
+
+// DragTo resolves stable, actionable centers for both endpoints and dispatches trusted pointer
+// input through Chrome. It is intended for pointer-driven drag libraries rather than native HTML5
+// draggable elements.
+func (s *Session) DragTo(ctx context.Context, source, target Selector) error {
+	return s.serial(ctx, "drag to", func(opCtx context.Context) error {
+		sourcePoint, err := s.actionablePoint(opCtx, source)
+		if err != nil {
+			return err
+		}
+		targetPoint, err := s.actionablePoint(opCtx, target)
+		if err != nil {
+			return err
+		}
+		return DragContext(opCtx, sourcePoint.x, sourcePoint.y, targetPoint.x, targetPoint.y, 15)
+	})
+}
+
+func (s *Session) RealisticSetValue(ctx context.Context, selector Selector, value any) error {
+	return s.serial(ctx, "realistic set value", func(opCtx context.Context) error {
+		kind, err := s.runHandler(opCtx, "inputKind", selector)
+		if err != nil {
+			return err
+		}
+		switch fmt.Sprint(kind.Result) {
+		case "checkbox":
+			desired, ok := value.(bool)
+			if !ok {
+				return &Error{Code: CodeInvalidArgument, Operation: "realistic set value", Message: "checkboxes only accept boolean values"}
+			}
+			current, currentErr := s.runHandler(opCtx, "getValue", selector)
+			if currentErr != nil {
+				return currentErr
+			}
+			if current.Result == desired {
+				return nil
+			}
+			return s.realisticClick(opCtx, selector)
+		case "text":
+			if err := s.realisticClick(opCtx, selector); err != nil {
+				return err
+			}
+			if _, err := s.runHandler(opCtx, "setProperty", selector, "value", ""); err != nil {
+				return err
+			}
+			if err := KeyEventContext(opCtx, fmt.Sprint(value)); err != nil {
+				return err
+			}
+			_, err := s.runHandler(opCtx, "blur", selector)
+			return err
+		default:
+			_, err := s.runHandler(opCtx, "setValue", selector, value)
+			return err
+		}
+	})
+}
+
+func (s *Session) Type(ctx context.Context, selector Selector, keys string, realistic bool) error {
+	return s.serial(ctx, "type", func(opCtx context.Context) error {
+		if realistic {
+			if _, err := s.runHandler(opCtx, "scrollIntoView", selector); err != nil {
+				return err
+			}
+		}
+		if _, err := s.runHandler(opCtx, "focus", selector); err != nil {
+			return err
+		}
+		return KeyEventContext(opCtx, keys)
+	})
+}
+
+func (s *Session) SendKeys(ctx context.Context, keys string) error {
+	return s.serial(ctx, "send keys", func(opCtx context.Context) error {
+		return KeyEventContext(opCtx, keys)
+	})
+}
+
 func (s *Session) Visible(ctx context.Context, selector Selector) (Observation, error) {
 	response, err := s.handler(ctx, "isVisible", selector)
+	return response.observation(response.Success), err
+}
+
+func (s *Session) Exists(ctx context.Context, selector Selector) (Observation, error) {
+	response, err := s.handler(ctx, "exists", selector)
+	return response.observation(response.Success), err
+}
+
+func (s *Session) Enabled(ctx context.Context, selector Selector) (Observation, error) {
+	response, err := s.handler(ctx, "isEnabled", selector)
+	return response.observation(response.Success), err
+}
+
+func (s *Session) Clickable(ctx context.Context, selector Selector) (Observation, error) {
+	response, err := s.handler(ctx, "isClickable", selector)
 	return response.observation(response.Success), err
 }
 
@@ -254,6 +445,16 @@ func (s *Session) Count(ctx context.Context, selector Selector) (Observation, er
 
 func (s *Session) Attribute(ctx context.Context, selector Selector, name string) (Observation, error) {
 	response, err := s.handler(ctx, "getAttribute", selector, name)
+	return response.observation(response.Result), err
+}
+
+func (s *Session) Property(ctx context.Context, selector Selector, name string) (Observation, error) {
+	response, err := s.handler(ctx, "getProperty", selector, name)
+	return response.observation(response.Result), err
+}
+
+func (s *Session) TextForEach(ctx context.Context, selector Selector) (Observation, error) {
+	response, err := s.handler(ctx, "getPropertyForEach", selector, "textContent")
 	return response.observation(response.Result), err
 }
 
@@ -365,6 +566,14 @@ func (s *Session) handler(ctx context.Context, name string, selector Selector, a
 }
 
 func (s *Session) runHandler(ctx context.Context, name string, selector Selector, args ...any) (HandlerResponse, error) {
+	return s.runHandlerWithAwait(ctx, name, selector, false, args...)
+}
+
+func (s *Session) runHandlerAsync(ctx context.Context, name string, selector Selector, args ...any) (HandlerResponse, error) {
+	return s.runHandlerWithAwait(ctx, name, selector, true, args...)
+}
+
+func (s *Session) runHandlerWithAwait(ctx context.Context, name string, selector Selector, awaitPromise bool, args ...any) (HandlerResponse, error) {
 	if err := s.ensureBiloba(ctx); err != nil {
 		return HandlerResponse{}, err
 	}
@@ -372,13 +581,17 @@ func (s *Session) runHandler(ctx context.Context, name string, selector Selector
 	if name == "outline" {
 		encodedSelector = ""
 	}
-	response, err := RunHandlerContext(ctx, name, encodedSelector, args...)
+	run := RunHandlerContext
+	if awaitPromise {
+		run = RunHandlerAsyncContext
+	}
+	response, err := run(ctx, name, encodedSelector, args...)
 	if err != nil {
 		s.installed = false
 		if installErr := s.ensureBiloba(ctx); installErr != nil {
 			return response, installErr
 		}
-		response, err = RunHandlerContext(ctx, name, encodedSelector, args...)
+		response, err = run(ctx, name, encodedSelector, args...)
 		if err != nil {
 			return response, err
 		}
@@ -391,9 +604,36 @@ func (s *Session) runHandler(ctx context.Context, name string, selector Selector
 		return response, &Error{Code: code, Operation: name, Message: response.Err, Observed: response.Result}
 	}
 	if !response.Success {
-		return response, &Error{Code: CodeActionFailed, Operation: name, Message: "operation did not succeed", Observed: response.Result}
+		return response, &Error{Code: CodeConditionNotMet, Operation: name, Message: "operation did not succeed", Observed: response.Result}
 	}
 	return response, nil
+}
+
+func (s *Session) realisticClick(ctx context.Context, selector Selector) error {
+	point, err := s.actionablePoint(ctx, selector)
+	if err != nil {
+		return err
+	}
+	return ClickXYContext(ctx, point.x, point.y)
+}
+
+type actionPoint struct{ x, y float64 }
+
+func (s *Session) actionablePoint(ctx context.Context, selector Selector) (actionPoint, error) {
+	response, err := s.runHandlerAsync(ctx, "scrollToStablePoint", selector)
+	if err != nil {
+		return actionPoint{}, err
+	}
+	point, ok := response.Result.(map[string]any)
+	if !ok {
+		return actionPoint{}, &Error{Code: CodeActionFailed, Operation: "resolve pointer target", Message: fmt.Sprintf("unexpected scroll point: %v", response.Result)}
+	}
+	x, xOK := number(point["x"])
+	y, yOK := number(point["y"])
+	if !xOK || !yOK || point["enabled"] != true || point["inViewport"] != true || point["hittable"] != true {
+		return actionPoint{}, &Error{Code: CodeActionFailed, Operation: "resolve pointer target", Message: "element is not actionable"}
+	}
+	return actionPoint{x: x, y: y}, nil
 }
 
 func (s *Session) ensureBiloba(ctx context.Context) error {

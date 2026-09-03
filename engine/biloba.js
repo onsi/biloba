@@ -153,6 +153,9 @@ if (!window["_biloba"]) {
             matched = pool.filter(el => sets.some(s => s.has(el)))
         } else if (q.by === "css") {
             matched = pool.filter(el => el.matches(q.value))
+        } else if (q.by === "xpath") {
+            let xpathMatches = new Set(selEach("x" + q.value))
+            matched = pool.filter(el => xpathMatches.has(el))
         } else if (q.by === "role") {
             matched = pool.filter(el => roleOf(el) === q.role && (!q.nameSet || matchText(accessibleName(el), q.name, q.nameMode)))
         } else if (q.by === "label") {

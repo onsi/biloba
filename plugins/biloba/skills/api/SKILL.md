@@ -5,7 +5,7 @@ description: One-line reference for every Biloba method and matcher, grouped by 
 
 # Biloba API reference
 
-Terse lookup. Docs: <https://onsi.github.io/biloba/>.
+Terse lookup for the **Go** API. The TypeScript client has its own, much smaller surface → `biloba:typescript`. Docs: <https://onsi.github.io/biloba/>.
 
 **Naming conventions — assume these, they're only restated where an entry breaks them:**
 
