@@ -1,13 +1,13 @@
 package biloba
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"sync/atomic"
 
-	"github.com/chromedp/cdproto/runtime"
-	"github.com/chromedp/chromedp"
+	"github.com/onsi/biloba/engine"
 	"github.com/onsi/gomega/gcustom"
 )
 
@@ -58,17 +58,6 @@ func (b *Biloba) RunErr(script string, args ...any) (any, error) {
 func (b *Biloba) runErr(script string, awaitPromise bool, args ...any) (any, error) {
 	b.blockIfNecessaryToEnsureSuccessfulDownloads()
 	var encodedResult []byte
-	options := func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
-		p = p.WithUserGesture(true)
-		if awaitPromise {
-			p = p.WithAwaitPromise(true)
-		}
-		return p
-	}
-	// The backstop deadline (see cdp.go).  runErr is the single funnel for every JS evaluation -
-	// Run/RunAsync AND every DOM method, since runBilobaHandler goes through it - so this one bound
-	// covers the hot path the hang report landed on.  An awaited promise gets the longer bound
-	// because the page's own JS, not Chrome's responsiveness, sets how long it takes.
 	timeout := cdpTimeout
 	what := "evaluate JavaScript in the page"
 	if awaitPromise {
@@ -76,14 +65,16 @@ func (b *Biloba) runErr(script string, awaitPromise bool, args ...any) (any, err
 	}
 	ctx, cancel := b.cdpContext(timeout)
 	defer cancel()
-	// The _biloba-is-gone retry re-runs inside THIS context rather than opening a fresh deadline, and
-	// it retries once rather than recursing - so the reload path stays bounded (one reload command,
-	// then whatever is left of this deadline) instead of being able to loop forever.
-	err := b.runCDPIn(ctx, timeout, what, chromedp.EvaluateAsDevTools(script, &encodedResult, options))
+	evaluate := func(runCtx context.Context) error {
+		var err error
+		encodedResult, err = engine.EvaluateRawContext(runCtx, script, awaitPromise)
+		return err
+	}
+	err := b.runEngineIn(ctx, timeout, what, evaluate)
 	if err != nil {
 		if strings.Contains(err.Error(), "_biloba is not defined") {
 			b.reloadBiloba()
-			err = b.runCDPIn(ctx, timeout, what, chromedp.EvaluateAsDevTools(script, &encodedResult, options))
+			err = b.runEngineIn(ctx, timeout, what, evaluate)
 		}
 		if err != nil {
 			return nil, err
@@ -105,7 +96,6 @@ func (b *Biloba) runErr(script string, awaitPromise bool, args ...any) (any, err
 	if len(encodedResult) == 0 {
 		return nil, fmt.Errorf("the script returned undefined, so there is nothing to decode into the pointer you provided.\nIf this script runs purely for its side effects, omit the decode target (or pass nil).\nOtherwise make sure the script returns a JSON-serializable value (e.g. `return true`).")
 	}
-
 	err = json.Unmarshal(encodedResult, args[0])
 	return args[0], err
 }
@@ -309,18 +299,14 @@ func (j JSFunc) Invoke(args ...any) string {
 		return string(j) + "()"
 	}
 
-	encodedArgsBytes, err := json.Marshal(args)
+	// the encoding is shared with the biloba.js handler path (dom.go's runBilobaHandler), so a
+	// JSVar interpolates the same way no matter which path carries the argument
+	encodedArgs, err := engine.EncodeArgs(args...)
 	if err != nil {
 		panic(err)
 	}
-	encodedArgs := string(encodedArgsBytes)
-	for _, arg := range args {
-		if v, ok := arg.(JSVar); ok {
-			encodedArgs = v.interpolate(encodedArgs)
-		}
-	}
 
-	return string(j) + "(..." + string(encodedArgs) + ")"
+	return string(j) + "(..." + encodedArgs + ")"
 }
 
 /*
@@ -364,5 +350,10 @@ type JSVar struct {
 	identifier string
 }
 
-func (j JSVar) MarshalJSON() ([]byte, error)   { return []byte(j.identifier), nil }
-func (j JSVar) interpolate(json string) string { return strings.Replace(json, j.identifier, j.v, 1) }
+func (j JSVar) MarshalJSON() ([]byte, error) { return []byte(j.identifier), nil }
+
+// RawJSPlaceholder and RawJSExpression implement engine.RawJSArg: they are how the shared
+// argument encoder recognizes a JSVar and swaps its JSON placeholder back out for the raw
+// JavaScript expression the user asked for.
+func (j JSVar) RawJSPlaceholder() string { return j.identifier }
+func (j JSVar) RawJSExpression() string  { return j.v }
