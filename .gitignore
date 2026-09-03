@@ -16,6 +16,7 @@
 TODO
 .DS_Store
 browser
+/.bin/
 # Process artifacts from the agent-improvement work (kept locally, not tracked)
 report.md
 CHANGELOG-TMP.md

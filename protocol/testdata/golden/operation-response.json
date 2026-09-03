@@ -1,0 +1,26 @@
+{
+  "id": 9,
+  "result": {
+    "matched": true,
+    "observedJson": "\"Saved\"",
+    "attemptCount": 2,
+    "trajectory": [
+      {
+        "attempt": 1,
+        "elapsedMs": 0,
+        "observedJson": "\"Saving\""
+      },
+      {
+        "attempt": 2,
+        "elapsedMs": 10,
+        "observedJson": "\"Saved\""
+      }
+    ],
+    "timings": {
+      "startedUnixMs": 1700000000000,
+      "elapsedMs": 10
+    },
+    "rpcRequestCount": 1,
+    "rpcResponseCount": 1
+  }
+}
