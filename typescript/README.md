@@ -4,6 +4,17 @@ A TypeScript client for [Biloba](https://onsi.github.io/biloba/) that lets a `vi
 
 **This is a prototype.**  The package is not published to npm, and its API will continue to shift before 1.0.
 
+## Claude Code skills
+
+The repository ships a dedicated Claude Code plugin for this client:
+
+```text
+/plugin marketplace add onsi/biloba
+/plugin install biloba-vitest@biloba
+```
+
+The deprecated `biloba@biloba` compatibility plugin contains only the Go client skills; it does not include the TypeScript/Vitest guidance.
+
 ## The short version
 
 Each `vitest` worker process spawns a small Go daemon (`bilobad`) and talks to it over framed JSON on stdin/stdout.  Every daemon attaches to one shared Chrome:

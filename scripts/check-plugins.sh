@@ -97,5 +97,6 @@ fi
 grep -Fq 'Biloba for Vitest' docs/vitest.md || fail "Vitest docs page is missing"
 grep -Fq 'biloba-gomega@biloba' README.md || fail "README does not advertise the Gomega plugin"
 grep -Fq 'biloba-vitest@biloba' README.md || fail "README does not advertise the Vitest plugin"
+grep -Fq 'biloba-vitest@biloba' typescript/README.md || fail "TypeScript README does not advertise the Vitest plugin"
 
 printf 'plugin checks passed (Biloba %s)\n' "$version"
