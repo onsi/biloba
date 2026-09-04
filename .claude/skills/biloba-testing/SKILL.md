@@ -19,6 +19,7 @@ The `Makefile` wraps the canonical invocations — prefer these:
 | `make driver-test` | the Go driver packages (`./engine ./protocol ./cmd/bilobad`, including the generated-protocol and biloba.js drift specs) and the TypeScript unit suites | when touching `engine/`, `protocol/`, `cmd/bilobad/`, or `typescript/` |
 | `make driver-parity` | the Go/TypeScript parity contract: a real `bilobad` driving a real shared Chrome, asserted against the same fixture from both languages | same, plus before trusting a new vertical slice |
 | `make driver-e2e` | the shipping topology: three vitest worker *processes*, one `bilobad` each, one shared Chrome | before anything touching session isolation, daemon lifecycle, or shared-browser attach/detach |
+| `make check-plugins` | both distributed plugin manifests, versions, namespaces, skill names, and client-separation rules | whenever changing `plugins/`, marketplace metadata, docs links, or the release version |
 
 Under the hood `make test` is just `ginkgo -r -p --randomize-all`. `-p` (parallel) is the realistic mode — Biloba is built for it (one shared Chrome, one isolated root tab per process); `--randomize-all` enforces spec independence.
 

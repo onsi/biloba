@@ -1,0 +1,13 @@
+{
+  "name": "biloba-gomega",
+  "description": "Write fast, stable browser tests with Biloba in a Go Ginkgo/Gomega suite. Skills for setup, the dual immediate/matcher API, semantic locators, realistic interactions, visual regression, XPath, API lookup, failure diagnosis, and preventing flaky specs.",
+  "version": "0.15.4",
+  "author": {
+    "name": "Onsi Fakhouri",
+    "url": "https://github.com/onsi"
+  },
+  "homepage": "https://onsi.github.io/biloba/",
+  "repository": "https://github.com/onsi/biloba",
+  "license": "MIT",
+  "keywords": ["biloba", "ginkgo", "gomega", "browser-testing", "chromedp", "go"]
+}

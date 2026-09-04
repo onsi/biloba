@@ -1,8 +1,19 @@
 # Biloba for TypeScript
 
-A TypeScript client for [Biloba](https://onsi.github.io/biloba/), so a `vitest` suite can drive the same browser automation Biloba brings to Ginkgo.
+A TypeScript client for [Biloba](https://onsi.github.io/biloba/) that lets a `vitest` suite drive Chrome through Biloba.
 
-**This is a prototype.**  The package is not published to npm, and its API will shift more freely than the Go one does.
+**This is a prototype.**  The package is not published to npm, and its API will continue to shift before 1.0.
+
+## Claude Code skills
+
+The repository ships a dedicated Claude Code plugin for this client:
+
+```text
+/plugin marketplace add onsi/biloba
+/plugin install biloba-vitest@biloba
+```
+
+The deprecated `biloba@biloba` compatibility plugin contains only the Go client skills; it does not include the TypeScript/Vitest guidance.
 
 ## The short version
 
@@ -16,8 +27,7 @@ vitest worker 3  ──▶  bilobad  ──┘
 
 Polling happens on the daemon.  An assertion with a 1s timeout and a 5ms interval is *one* request, not two hundred - the retry loop runs next to Chrome and answers once with the outcome and the trajectory it took.
 
-Actions poll by default. Pass `{immediate: true}` to try exactly once and fail fast, matching Go's
-`b.Immediate()` behavior; it is shorthand for `{mode: "immediate"}`.
+Actions poll by default. Pass `{immediate: true}` to try exactly once and fail fast; it is shorthand for `{mode: "immediate"}`.
 
 ```ts
 const browser = await connect({chromeWsUrl});
@@ -33,9 +43,9 @@ await session.locator("#count").expectText("1");
 ## Read this instead
 
 The narrative documentation lives with the rest of Biloba's docs:
-**[Biloba from TypeScript](https://onsi.github.io/biloba/#biloba-from-typescript)** — setup and shared-browser topology; launch modes; selectors; DOM, input, geometry, tabs, cookies, storage, dialogs, downloads, and network APIs; screenshots and visual assertions; diagnostics; and structured failures.
+**[Biloba from TypeScript](https://onsi.github.io/biloba/vitest.html)** — setup and shared-browser topology; launch modes; selectors; DOM, input, geometry, tabs, cookies, storage, dialogs, downloads, and network APIs; screenshots and visual assertions; diagnostics; and structured failures.
 
-The client preserves the observable behavior of Biloba's public Go API with TypeScript-native spelling. Async `expect*` methods replace Gomega matchers, `expectScreenshot()` replaces `HaveScreenshot`, and the Vitest adapter replaces Ginkgo-specific failure and progress hooks.
+The client uses TypeScript-native async actions, `expect*` assertions, typed results, and Vitest hooks for failure and progress capture.
 
 ## Working in this directory
 
