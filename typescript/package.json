@@ -1,0 +1,36 @@
+{
+  "name": "@onsi/biloba-vitest-prototype",
+  "version": "0.0.0-private",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.20.0",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./vitest": {"types": "./dist/vitest.d.ts", "import": "./dist/vitest.js"}
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "generate:protocol": "cd .. && go generate ./protocol",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:parity": "vitest run -c vitest.parity.config.ts",
+    "test:e2e": "vitest run -c vitest.e2e.config.ts && vitest run -c vitest.e2e-crash.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {},
+  "peerDependencies": {"vitest": ">=3 <4"},
+  "peerDependenciesMeta": {"vitest": {"optional": true}},
+  "devDependencies": {
+    "@types/node": "22.15.30",
+    "typescript": "5.8.3",
+    "vitest": "3.2.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -318,5 +318,18 @@ var _ = Describe("Javascript", func() {
 			b.Run("var counter = 17")
 			Ω(adder.Invoke(1, 2, 3.7, 4, 5, b.JSVar("counter + 3"))).Should(b.EvaluateTo(35.7))
 		})
+
+		It("interpolates a JSVar the same way when the argument rides a biloba.js DOM handler instead of Invoke", func() {
+			// the DOM methods generate their handler call from Go arguments too, so they share
+			// Invoke's encoder - otherwise a JSVar handed to a DOM method would silently arrive as
+			// the string literal of its placeholder
+			b.Navigate(fixtureServer + "/dom.html")
+			Eventually("#text-input").Should(b.Exist())
+			b.Run(`var suffix = " and beyond"`)
+
+			b.SetValue("#text-input", b.JSVar(`"to infinity" + suffix`))
+
+			Ω(b.GetValue("#text-input")).Should(Equal("to infinity and beyond"))
+		})
 	})
 })

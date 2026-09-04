@@ -1,11 +1,13 @@
 package biloba_test
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 
 	"github.com/onsi/biloba"
+	"github.com/onsi/biloba/engine"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -45,19 +47,50 @@ var _ = Describe("locating chrome-headless-shell", Label("no-browser"), func() {
 		os.Setenv("BILOBA_CHROME_HEADLESS_SHELL", fake)
 		Expect(biloba.LocateHeadlessShellForTest("")).To(Equal(fake))
 	})
+
+	It("finds a shell in the current Puppeteer cache layout", func() {
+		os.Unsetenv("BILOBA_CHROME_HEADLESS_SHELL")
+		GinkgoT().Setenv("PATH", "")
+		cacheRoot := filepath.Join(GinkgoT().TempDir(), ".cache", "puppeteer")
+		GinkgoT().Setenv("HOME", filepath.Dir(filepath.Dir(cacheRoot)))
+		fake := filepath.Join(cacheRoot, "chrome-headless-shell", "999.0.0", "chrome-headless-shell-test", biloba.HeadlessShellBinaryNameForTest())
+		Expect(os.MkdirAll(filepath.Dir(fake), 0o755)).To(Succeed())
+		Expect(os.WriteFile(fake, []byte("#!/bin/sh\n"), 0o755)).To(Succeed())
+
+		Expect(biloba.LocateHeadlessShellForTest("")).To(Equal(fake))
+	})
 })
 
 var _ = Describe("chrome-headless-shell acquisition helpers", Label("no-browser"), func() {
-	It("maps common platforms to Chrome for Testing identifiers", func() {
-		platform, err := biloba.ChromeForTestingPlatformForTest()
-		// the test host is one of the supported platforms
-		switch runtime.GOOS {
-		case "darwin", "linux", "windows":
-			Expect(err).ShouldNot(HaveOccurred())
-			Expect(platform).ShouldNot(BeEmpty())
-		default:
-			Expect(err).Should(HaveOccurred())
-		}
+	It("delegates local resolution and installation policy to the engine", func() {
+		GinkgoT().Setenv(engine.ChromeEnvVar, "")
+		GinkgoT().Setenv("PATH", "")
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+		GinkgoT().Setenv("XDG_CACHE_HOME", GinkgoT().TempDir())
+		calls := []bool{}
+		restore := biloba.SetHeadlessShellResolverForTest(func(_ context.Context, explicit string, autoInstall bool) (string, bool, error) {
+			Expect(explicit).To(Equal("/configured/shell"))
+			calls = append(calls, autoInstall)
+			if !autoInstall {
+				return "", false, errors.New("engine did not find a shell")
+			}
+			return "/engine/cache/shell", true, nil
+		})
+		DeferCleanup(restore)
+
+		path, err := biloba.ResolveHeadlessShellForTest(gt, "/configured/shell", false)
+		Expect(path).To(BeEmpty())
+		Expect(err).To(MatchError(And(
+			ContainSubstring("AutoInstallHeadlessShell"),
+			Not(ContainSubstring("engine did not find a shell")),
+		)))
+		Expect(string(gt.buffer.Contents())).To(BeEmpty(), "default resolution must not announce a download")
+
+		path, err = biloba.ResolveHeadlessShellForTest(gt, "/configured/shell", true)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(path).To(Equal("/engine/cache/shell"))
+		Expect(calls).To(Equal([]bool{false, true}))
+		Expect(string(gt.buffer.Contents())).To(ContainSubstring("downloading it via Chrome for Testing"))
 	})
 
 	It("produces actionable instructions when the shell cannot be found", func() {

@@ -5,14 +5,23 @@
     "url": "https://github.com/onsi"
   },
   "metadata": {
-    "description": "Skills for writing browser tests with Biloba — a Ginkgo/Gomega-native browser-testing framework for Go.",
-    "homepage": "https://onsi.github.io/biloba/"
+    "description": "Skills for writing browser tests with Biloba in Go/Gomega or TypeScript/Vitest suites."
   },
   "plugins": [
     {
+      "name": "biloba-gomega",
+      "source": "./plugins/biloba-gomega",
+      "description": "Write fast, stable Biloba tests in Go/Ginkgo/Gomega: setup, polling and matcher idioms, locators, realistic input, visual assertions, API lookup, diagnostics, and flake prevention."
+    },
+    {
+      "name": "biloba-vitest",
+      "source": "./plugins/biloba-vitest",
+      "description": "Write fast, stable Biloba tests in TypeScript/Vitest: daemon and shared-Chrome setup, sessions and locators, polling assertions, realistic input, visual assertions, diagnostics, and flake prevention."
+    },
+    {
       "name": "biloba",
       "source": "./plugins/biloba",
-      "description": "Write fast, stable browser tests with Biloba in your own Ginkgo suite: setup, the dual immediate/matcher API, the XPath DSL, a full API reference, page scaffolding, and failure debugging."
+      "description": "Deprecated compatibility alias for existing biloba:* Go/Gomega skill installations. New users should install biloba-gomega instead."
     }
   ]
 }

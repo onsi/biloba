@@ -159,7 +159,7 @@ Polling timeout, interval, and context are configurable Gomega-style with `tab.W
 
 By default Biloba interactions are **fast**: atomic JavaScript simulations (`el.click()`, value-set, synthetic events) that run as a single in-browser snippet — no scroll, no occlusion check, no real pointer.  This is what keeps Biloba quick and stable, and it's the right default for the vast majority of specs.
 
-For the handful of specs that need genuine input fidelity — real CSS `:hover`, occlusion-aware clicks, scroll-into-view, real keystrokes/drags/wheel/touch — `b.Realistic()` returns a view of the *same tab* whose interactions route through real Chrome DevTools Protocol input.  Same API, just a more faithful (and slightly slower) interaction engine.  See the [documentation](https://onsi.github.io/biloba) (and the `biloba:realistic-mode` Claude Code skill).
+For the handful of specs that need genuine input fidelity — real CSS `:hover`, occlusion-aware clicks, scroll-into-view, real keystrokes/drags/wheel/touch — `b.Realistic()` returns a view of the *same tab* whose interactions route through real Chrome DevTools Protocol input.  Same API, just a more faithful (and slightly slower) interaction engine.  See the [documentation](https://onsi.github.io/biloba) (and the `biloba-gomega:realistic-mode` Claude Code skill).
 
 ### Performance
 
@@ -183,14 +183,17 @@ The same instinct shapes `b.HaveScreenshot`, Biloba's visual-regression matcher:
 
 ### Using Biloba with Claude Code
 
-Biloba ships a set of [Claude Code](https://claude.com/claude-code) skills as a plugin, with this repo doubling as the marketplace. From inside Claude Code:
+Biloba ships separate [Claude Code](https://claude.com/claude-code) plugins for its Go/Gomega and TypeScript/Vitest clients, with this repo doubling as the marketplace. Install the client you use:
 
 ```
 /plugin marketplace add onsi/biloba
-/plugin install biloba@biloba
+/plugin install biloba-gomega@biloba
+/plugin install biloba-vitest@biloba
 ```
 
-(or non-interactively: `claude plugin marketplace add onsi/biloba` then `claude plugin install biloba@biloba`)
+(or use `claude plugin marketplace add onsi/biloba` followed by `claude plugin install biloba-gomega@biloba` or `claude plugin install biloba-vitest@biloba`.)
+
+The former `biloba@biloba` plugin remains as a deprecated compatibility alias for the Go/Gomega skills during the transition window. Existing `/biloba:*` invocations continue to work, but migrate to `biloba-gomega@biloba`; install both new client plugins only in repositories that genuinely exercise both clients.
 
 ---
 

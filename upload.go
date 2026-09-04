@@ -1,9 +1,9 @@
 package biloba
 
 import (
-	"github.com/chromedp/cdproto/dom"
-	"github.com/chromedp/cdproto/runtime"
-	"github.com/chromedp/chromedp"
+	"context"
+
+	"github.com/onsi/biloba/engine"
 	"github.com/onsi/gomega/gcustom"
 	"github.com/onsi/gomega/types"
 )
@@ -89,17 +89,11 @@ func (b *Biloba) performSetUpload(selector any, paths []string) (bool, error) {
 		return false, err
 	}
 
-	var node *runtime.RemoteObject
-	script := b.JSFunc("_biloba.node").Invoke(encoded)
-	if err := b.runCDP("resolve the file input element", chromedp.Evaluate(script, &node)); err != nil {
-		return false, err
-	}
-	if node == nil || node.ObjectID == "" {
-		return false, nil
-	}
-
-	if err := b.runCDP("set the file input's files", dom.SetFileInputFiles(paths).WithObjectID(node.ObjectID)); err != nil {
-		return false, err
-	}
-	return true, nil
+	var found bool
+	err = b.runEngine("set files on an upload input", func(ctx context.Context) error {
+		var runErr error
+		found, runErr = engine.SetFileInputFilesContext(ctx, b.JSFunc("_biloba.node").Invoke(encoded), paths)
+		return runErr
+	})
+	return found, err
 }

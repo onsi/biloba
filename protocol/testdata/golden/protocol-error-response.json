@@ -1,0 +1,7 @@
+{
+  "id": 7,
+  "error": {
+    "code": "PROTOCOL_MISMATCH",
+    "message": "protocol version mismatch"
+  }
+}

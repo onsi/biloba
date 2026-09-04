@@ -5,7 +5,16 @@
 
 GINKGO := go run github.com/onsi/ginkgo/v2/ginkgo
 
-.PHONY: test test-all stress-test update-chrome
+.PHONY: test test-all stress-test update-chrome driver-test driver-parity driver-e2e check-plugins sync-plugin-versions
+
+## check-plugins: validate plugin manifests, versions, namespaces, skill names, and client separation.
+check-plugins:
+	./scripts/check-plugins.sh
+
+## sync-plugin-versions: release-tool hook; copy BILOBA_VERSION into every Biloba plugin manifest.
+## Onsi's shipit should run this after updating BILOBA_VERSION and before creating the release commit.
+sync-plugin-versions:
+	./scripts/sync-plugin-versions.sh
 
 ## test: standard headless (chrome-headless-shell) suite - parallel + randomized. Your default.
 test:
@@ -16,6 +25,35 @@ test:
 test-all:
 	$(GINKGO) -r -p --randomize-all
 	BILOBA_TEST_HIGH_FIDELITY=true $(GINKGO) -r -p --randomize-all
+
+## driver-test: Go driver packages and TypeScript unit coverage.
+## Deliberately does NOT regenerate anything: `go generate ./engine` here would silently repair the
+## engine/biloba.js drift the engine suite exists to catch, and `go generate ./protocol` would do the
+## same for the generated types.  Both are guarded by specs instead (engine_test.go's drift spec and
+## protocol/generated_test.go), which compare what is on disk against what the generator renders -
+## so they are right on a dirty working tree too.  Run the generators yourself after editing
+## biloba.js or the protocol wire structs.
+driver-test:
+	cd typescript && pnpm install --frozen-lockfile && pnpm test && pnpm typecheck && pnpm build
+	$(GINKGO) --randomize-all ./engine ./protocol ./cmd/bilobad
+
+## driver-parity: run the shared Go/TypeScript behavior contract against the same fixture.
+## bilobad resolves Chrome itself (same search as the Go suite), so this needs no browser env var.
+## The TypeScript half fails rather than skips when it is misconfigured - see parity.test.ts.
+driver-parity:
+	mkdir -p .bin
+	go build -o .bin/bilobad ./cmd/bilobad
+	$(GINKGO) --randomize-all --focus="TypeScript driver parity contract" .
+	cd typescript && pnpm install --frozen-lockfile && BILOBA_DAEMON_EXECUTABLE="$(CURDIR)/.bin/bilobad" pnpm test:parity
+
+## driver-e2e: the topology itself - three vitest worker processes, one bilobad each, all sharing a
+## single Chrome.  Every other suite approximates this from inside one process; this one does not.
+## The suite's rendezvous barriers double as the proof that the workers really are concurrent: run
+## the files serially and they time out rather than passing vacuously.
+driver-e2e:
+	mkdir -p .bin
+	go build -o .bin/bilobad ./cmd/bilobad
+	cd typescript && pnpm install --frozen-lockfile && BILOBA_DAEMON_EXECUTABLE="$(CURDIR)/.bin/bilobad" pnpm test:e2e
 
 ## update-chrome: pull the latest stable chrome-headless-shell into the puppeteer cache Biloba
 ## searches first (~/.cache/puppeteer), so `make test` exercises the same Chrome CI auto-installs.

@@ -2,8 +2,10 @@ package biloba
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"github.com/onsi/biloba/engine"
 	"image"
 	"image/png"
 	"math"
@@ -13,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
 	"github.com/onsi/gomega"
 	"github.com/onsi/gomega/format"
@@ -648,14 +649,15 @@ func (b *Biloba) captureForComparison(selector any, cfg screenshotConfig, scheme
 // clean up: the flag goes up BEFORE the command that sets the override (a command that reports an
 // error may still have landed) and only comes down when a clear actually succeeds.
 func (b *Biloba) emulateColorScheme(scheme string) error {
+	timeout := b.waitingTimeout(screenshotCaptureTimeout)
 	ctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
-	params := emulation.SetEmulatedMedia()
 	if scheme != "" {
-		params = params.WithFeatures([]*emulation.MediaFeature{{Name: "prefers-color-scheme", Value: scheme}})
 		b.setColorSchemeEmulated(true)
 	}
-	err := b.runCDPIn(ctx, b.waitingTimeout(screenshotCaptureTimeout), "emulate the color scheme", params)
+	err := b.runEngineIn(ctx, timeout, "emulate the page color scheme", func(runCtx context.Context) error {
+		return engine.EmulateColorSchemeContext(runCtx, scheme)
+	})
 	if scheme == "" && err == nil {
 		b.setColorSchemeEmulated(false)
 	}
@@ -693,11 +695,16 @@ func (b *Biloba) clearLeakedColorSchemeEmulation() {
 // the page stops being told its viewport resized.  That is the app-shell case: a document that never
 // scrolls because an inner pane does.
 func (b *Biloba) fullPageScreenshot() ([]byte, float64, error) {
+	timeout := b.waitingTimeout(screenshotCaptureTimeout)
 	ctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
 	var img []byte
 	var cssWidth float64
-	err := b.runCDPIn(ctx, b.waitingTimeout(screenshotCaptureTimeout), "capture a screenshot of the page", capturePageAction(&img, &cssWidth))
+	err := b.runEngineIn(ctx, timeout, "capture a full-page screenshot", func(runCtx context.Context) error {
+		var err error
+		img, err = engine.CapturePageContext(runCtx, &cssWidth)
+		return err
+	})
 	return img, cssWidth, err
 }
 

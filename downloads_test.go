@@ -35,6 +35,23 @@ var _ = Describe("Downloading Files", func() {
 		Ω(string(dl.Content())).Should(Equal("Some new content"))
 	})
 
+	// Downloads are triggered by DOM interactions, so the throttle has to live on the DOM handler
+	// path itself (see runBilobaHandler in dom.go).  The "many downloads" specs below cover this
+	// too, but they fail as an opaque count mismatch that reads like a Chrome quirk; this one names
+	// the mechanism.
+	It("throttles DOM interactions against Chrome's download limit", func(ctx SpecContext) {
+		limit := biloba.ChromeDownloadLimitForTest()
+		for range limit {
+			b.Click("#download")
+		}
+		Eventually(ctx, b.AllCompleteDownloads).Should(HaveLen(limit))
+
+		b.Click("#download")
+
+		Eventually(ctx, b.AllCompleteDownloads).Should(HaveLen(limit+1),
+			"Chrome dropped the download past its %d-per-second limit, which means the DOM interaction that triggered it did not wait the limit out", limit)
+	}, SpecTimeout(30*time.Second))
+
 	It("can handle many downloads", func(ctx SpecContext) {
 		t := time.Now()
 		for i := 1; i < 15; i++ {

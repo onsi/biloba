@@ -1,0 +1,5 @@
+# vitest pulls in esbuild, whose postinstall fetches the platform binary.  pnpm 10+ refuses to run
+# a dependency's build scripts unless they are allowed here, and `pnpm install` exits non-zero when
+# it has to ignore one - which would fail CI at the install step.
+allowBuilds:
+  esbuild: true

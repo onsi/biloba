@@ -2,13 +2,9 @@ package biloba
 
 import (
 	"context"
-	"strings"
 	"time"
 
-	"github.com/chromedp/cdproto/cdp"
-	"github.com/chromedp/cdproto/network"
-	"github.com/chromedp/cdproto/storage"
-	"github.com/chromedp/chromedp"
+	"github.com/onsi/biloba/engine"
 )
 
 /*
@@ -47,17 +43,8 @@ func (b *Biloba) SetCookie(cookies ...Cookie) {
 	b.gt.Helper()
 	b.guardConfig("SetCookie")
 	location, _ := b.location()
-	params := make([]*network.CookieParam, len(cookies))
+	engineCookies := make([]engine.Cookie, len(cookies))
 	for i, cookie := range cookies {
-		param := &network.CookieParam{
-			Name:     cookie.Name,
-			Value:    cookie.Value,
-			Domain:   cookie.Domain,
-			Path:     cookie.Path,
-			Secure:   cookie.Secure,
-			HTTPOnly: cookie.HTTPOnly,
-			SameSite: network.CookieSameSite(cookie.SameSite),
-		}
 		// A cookie must be tied to an origin via either an explicit Domain or a URL. When no
 		// Domain is given we fall back to the tab's current location as the URL (an explicit
 		// Path, if any, still overrides the path the URL would imply). We fail loudly when
@@ -72,16 +59,11 @@ func (b *Biloba) SetCookie(cookies ...Cookie) {
 				b.gt.Fatalf("Failed to set cookie %q: a cookie needs an origin, but it has no Domain and the tab's current location (%q) is not one a cookie can attach to.\nNavigate the tab to a real URL before calling SetCookie, or set the cookie's Domain explicitly.", name, location)
 				return
 			}
-			param.URL = location
 		}
-		if !cookie.Expires.IsZero() {
-			expires := cdp.TimeSinceEpoch(cookie.Expires)
-			param.Expires = &expires
-		}
-		params[i] = param
+		engineCookies[i] = engine.Cookie{Name: cookie.Name, Value: cookie.Value, Domain: cookie.Domain, Path: cookie.Path, Expires: cookie.Expires, Secure: cookie.Secure, HTTPOnly: cookie.HTTPOnly, SameSite: cookie.SameSite}
 	}
-	err := b.runWithBrowserExecutor(func(ctx context.Context) error {
-		return storage.SetCookies(params).WithBrowserContextID(b.browserContextID).Do(ctx)
+	err := b.runEngine("set cookies", func(ctx context.Context) error {
+		return engine.SetCookiesContext(ctx, b.browserContextID, location, engineCookies)
 	})
 	if err != nil {
 		b.gt.Fatalf("Failed to set cookies:\n%s", err.Error())
@@ -92,7 +74,7 @@ func (b *Biloba) SetCookie(cookies ...Cookie) {
 // (and other opaque/empty origins) cannot hold cookies, which is the common reason a SetCookie
 // silently does nothing.
 func isUsableCookieOrigin(location string) bool {
-	return location != "" && !strings.HasPrefix(location, "about:")
+	return engine.IsUsableCookieOrigin(location)
 }
 
 /*
@@ -143,32 +125,29 @@ Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cook
 func (b *Biloba) GetCookies() Cookies {
 	b.gt.Helper()
 	b.guardConfig("GetCookies")
-	var networkCookies []*network.Cookie
-	err := b.runWithBrowserExecutor(func(ctx context.Context) error {
+	var engineCookies []engine.Cookie
+	err := b.runEngine("get cookies", func(ctx context.Context) error {
 		var err error
-		networkCookies, err = storage.GetCookies().WithBrowserContextID(b.browserContextID).Do(ctx)
+		engineCookies, err = engine.GetCookiesContext(ctx, b.browserContextID)
 		return err
 	})
 	if err != nil {
 		b.gt.Fatalf("Failed to get cookies:\n%s", err.Error())
 		return nil
 	}
-	cookies := make(Cookies, len(networkCookies))
-	for i, c := range networkCookies {
-		cookie := Cookie{
+	cookies := make(Cookies, len(engineCookies))
+	for i, c := range engineCookies {
+		cookies[i] = Cookie{
 			Name:     c.Name,
 			Value:    c.Value,
 			Domain:   c.Domain,
 			Path:     c.Path,
+			Expires:  c.Expires,
 			Secure:   c.Secure,
 			HTTPOnly: c.HTTPOnly,
-			SameSite: string(c.SameSite),
+			SameSite: c.SameSite,
 			Session:  c.Session,
 		}
-		if !c.Session && c.Expires > 0 {
-			cookie.Expires = time.Unix(int64(c.Expires), 0)
-		}
-		cookies[i] = cookie
 	}
 	return cookies
 }
@@ -183,8 +162,8 @@ Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cook
 func (b *Biloba) ClearCookies() {
 	b.gt.Helper()
 	b.guardConfig("ClearCookies")
-	err := b.runWithBrowserExecutor(func(ctx context.Context) error {
-		return storage.ClearCookies().WithBrowserContextID(b.browserContextID).Do(ctx)
+	err := b.runEngine("clear cookies", func(ctx context.Context) error {
+		return engine.ClearCookiesContext(ctx, b.browserContextID)
 	})
 	if err != nil {
 		b.gt.Fatalf("Failed to clear cookies:\n%s", err.Error())
@@ -202,19 +181,9 @@ func (b *Biloba) ClearCookies() {
 // afterwards). The try/catch makes the storage clear a no-op on about:blank and other
 // opaque origins, where accessing window.localStorage throws.
 func (b *Biloba) resetBrowsingState() {
-	b.runWithBrowserExecutor(func(ctx context.Context) error {
-		return storage.ClearCookies().WithBrowserContextID(b.browserContextID).Do(ctx)
+	_ = b.runEngine("clear cookies between specs", func(ctx context.Context) error {
+		return engine.ClearCookiesContext(ctx, b.browserContextID)
 	})
 	b.RunErr(`try { window.localStorage.clear(); window.sessionStorage.clear(); } catch (e) {}`)
 	b.clearLeakedColorSchemeEmulation()
-}
-
-// runWithBrowserExecutor runs f against the browser-level CDP executor (as opposed to the
-// target/tab executor). The storage cookie commands are browser-scoped and take a
-// BrowserContextID, so they must be dispatched on the Browser connection.
-func (b *Biloba) runWithBrowserExecutor(f func(ctx context.Context) error) error {
-	return b.runCDP("run a browser-level command", chromedp.ActionFunc(func(ctx context.Context) error {
-		c := chromedp.FromContext(ctx)
-		return f(cdp.WithExecutor(ctx, c.Browser))
-	}))
 }

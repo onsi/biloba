@@ -117,12 +117,27 @@ func (b *Biloba) runCDPWithin(timeout time.Duration, what string, actions ...chr
 // runCDPIn runs actions in an already-bounded context - the waiting commands build theirs with
 // waitingContext - so every path into Chrome funnels through one place that can diagnose a failure.
 func (b *Biloba) runCDPIn(ctx context.Context, timeout time.Duration, what string, actions ...chromedp.Action) error {
+	return b.runEngineIn(ctx, timeout, what, func(runCtx context.Context) error {
+		return chromedp.Run(runCtx, actions...)
+	})
+}
+
+// runEngine applies Biloba's CDP backstop and diagnosis around a runner-neutral engine operation.
+func (b *Biloba) runEngine(what string, run func(context.Context) error) error {
+	ctx, cancel := b.cdpContext(cdpTimeout)
+	defer cancel()
+	return b.runEngineIn(ctx, cdpTimeout, what, run)
+}
+
+// runEngineIn is the engine-operation counterpart to runCDPIn for callers that already own the
+// waiting context and timeout.
+func (b *Biloba) runEngineIn(ctx context.Context, timeout time.Duration, what string, run func(context.Context) error) error {
 	var err error
 	if simulateWedgedCDP != nil && simulateWedgedCDP() {
 		<-ctx.Done()
 		err = ctx.Err()
 	} else {
-		err = chromedp.Run(ctx, actions...)
+		err = run(ctx)
 	}
 	return b.diagnoseCDPError(what, timeout, err)
 }

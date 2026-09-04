@@ -1,11 +1,11 @@
 package biloba
 
 import (
+	"context"
 	"fmt"
+	"github.com/onsi/biloba/engine"
 
-	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/input"
-	"github.com/chromedp/chromedp"
 )
 
 /*
@@ -93,10 +93,9 @@ func (b *Biloba) realisticClickEach(selector any) error {
 		if !ok || !pt.enabled || !pt.inViewport || !pt.hittable {
 			continue
 		}
-		if err := b.runCDP("dispatch the mouse click",
-			chromedp.MouseEvent(input.MouseMoved, pt.x, pt.y),
-			chromedp.MouseClickXY(pt.x, pt.y),
-		); err != nil {
+		if err := b.runEngine("dispatch realistic click input", func(ctx context.Context) error {
+			return engine.ClickXYContext(ctx, pt.x, pt.y)
+		}); err != nil {
 			return err
 		}
 	}
@@ -172,19 +171,9 @@ func (b *Biloba) realisticMouseClick(selector any, cfg pointerConfig, button inp
 	if err != nil || !ok {
 		return ok, err
 	}
-	mods := modifierMask(cfg.modifiers)
-	actions := []chromedp.Action{chromedp.MouseEvent(input.MouseMoved, x, y)}
-	counts := []int64{1}
-	if clickCount >= 2 {
-		counts = []int64{1, 2}
-	}
-	for _, c := range counts {
-		actions = append(actions,
-			input.DispatchMouseEvent(input.MousePressed, x, y).WithButton(button).WithClickCount(c).WithModifiers(mods),
-			input.DispatchMouseEvent(input.MouseReleased, x, y).WithButton(button).WithClickCount(c).WithModifiers(mods),
-		)
-	}
-	if err := b.runCDP("dispatch the mouse click", actions...); err != nil {
+	if err := b.runEngine("dispatch realistic mouse input", func(ctx context.Context) error {
+		return engine.MouseClickContext(ctx, x, y, button, clickCount, modifierMask(cfg.modifiers))
+	}); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -216,11 +205,9 @@ func (b *Biloba) realisticTap(selector any, cfg pointerConfig) (bool, error) {
 	if err != nil || !ok {
 		return ok, err
 	}
-	if err := b.runCDP("dispatch the touch tap",
-		emulation.SetTouchEmulationEnabled(true),
-		input.DispatchTouchEvent(input.TouchStart, []*input.TouchPoint{{X: x, Y: y}}),
-		input.DispatchTouchEvent(input.TouchEnd, []*input.TouchPoint{}),
-	); err != nil {
+	if err := b.runEngine("dispatch realistic touch input", func(ctx context.Context) error {
+		return engine.TouchTapContext(ctx, x, y)
+	}); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -290,21 +277,9 @@ func (b *Biloba) realisticDragTo(source any, target any) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	actions := []chromedp.Action{
-		chromedp.MouseEvent(input.MouseMoved, src.x, src.y),
-		chromedp.MouseEvent(input.MousePressed, src.x, src.y, chromedp.ButtonType(input.Left), chromedp.ClickCount(1)),
-	}
-	steps := 5
-	for i := 1; i <= steps; i++ {
-		x := src.x + (tgt.x-src.x)*float64(i)/float64(steps)
-		y := src.y + (tgt.y-src.y)*float64(i)/float64(steps)
-		actions = append(actions, chromedp.MouseEvent(input.MouseMoved, x, y, chromedp.ButtonType(input.Left)))
-	}
-	actions = append(actions,
-		chromedp.MouseEvent(input.MouseMoved, tgt.x, tgt.y, chromedp.ButtonType(input.Left)),
-		chromedp.MouseEvent(input.MouseReleased, tgt.x, tgt.y, chromedp.ButtonType(input.Left), chromedp.ClickCount(1)),
-	)
-	if err := b.runCDP("dispatch the pointer drag", actions...); err != nil {
+	if err := b.runEngine("dispatch realistic drag input", func(ctx context.Context) error {
+		return engine.DragContext(ctx, src.x, src.y, tgt.x, tgt.y, 5)
+	}); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -323,7 +298,9 @@ func (b *Biloba) realisticScrollWheel(selector any, deltaX, deltaY float64) erro
 	if !pt.inViewport || !pt.hittable {
 		return fmt.Errorf("element is not actionable (it is off-screen or obscured by another element)")
 	}
-	return b.runCDP("dispatch the wheel event", input.DispatchMouseEvent(input.MouseWheel, pt.x, pt.y).WithDeltaX(deltaX).WithDeltaY(deltaY))
+	return b.runEngine("dispatch realistic scroll input", func(ctx context.Context) error {
+		return engine.ScrollWheelContext(ctx, pt.x, pt.y, deltaX, deltaY)
+	})
 }
 
 // realisticSetValue implements SetValue for realistic mode.  Text inputs are focused with a real
@@ -359,7 +336,9 @@ func (b *Biloba) realisticSetValue(selector any, value any) (bool, error) {
 		if r := b.runBilobaHandler("setProperty", selector, "value", ""); r.Error() != nil {
 			return false, r.Error()
 		}
-		if err := b.runCDP("type into the focused element", chromedp.KeyEvent(toString(value))); err != nil {
+		if err := b.runEngine("dispatch realistic keyboard input", func(ctx context.Context) error {
+			return engine.KeyEventContext(ctx, toString(value))
+		}); err != nil {
 			return false, err
 		}
 		if r := b.runBilobaHandler("blur", selector); r.Error() != nil {
@@ -381,7 +360,9 @@ func (b *Biloba) realisticHover(selector any) (bool, error) {
 	if !pt.inViewport {
 		return false, nil
 	}
-	if err := b.runCDP("move the mouse", chromedp.MouseEvent(input.MouseMoved, pt.x, pt.y)); err != nil {
+	if err := b.runEngine("dispatch realistic mouse movement", func(ctx context.Context) error {
+		return engine.MouseMoveContext(ctx, pt.x, pt.y)
+	}); err != nil {
 		return false, err
 	}
 	return true, nil

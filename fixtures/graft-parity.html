@@ -1,0 +1,84 @@
+<!doctype html>
+<html>
+  <head>
+    <style>
+      #surface { color: rgb(10, 20, 30); font-size: 16px; }
+      #scrollbox { height: 80px; width: 220px; overflow: auto; position: relative; }
+      #scroll-content { height: 320px; position: relative; }
+      #scroll-target { position: absolute; top: 240px; }
+      #geometry { position: relative; height: 140px; }
+      #geometry-a, #geometry-b { position: absolute; left: 10px; width: 60px; height: 30px; }
+      #geometry-a { top: 10px; }
+      #geometry-b { top: 70px; }
+      #hover-target:hover { background-color: rgb(1, 2, 3); }
+      #drag-zone { display: flex; gap: 120px; }
+      #drag-source, #drag-target { width: 40px; height: 40px; }
+    </style>
+  </head>
+  <body>
+    <h1>Biloba parity</h1>
+    <form id="profile"><label>Name <input data-testid="name" placeholder="Full name"></label></form>
+    <img alt="Parity mark" title="Biloba image" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">
+    <div data-qa="custom-id">custom selector</div>
+    <input data-testid="upload" type="file">
+    <input id="accepted" type="checkbox">
+    <select id="choice"><option value="a">Alpha</option><option value="b">Beta</option></select>
+    <output id="echo"></output>
+    <button aria-label="Increment">Increment</button>
+    <button data-testid="held-request">Held request</button>
+    <div id="count">0</div>
+    <div id="delayed">loading</div>
+    <section id="results">
+      <div class="row">Ada first</div>
+      <div class="row">Ada second</div>
+      <div class="row">Grace</div>
+    </section>
+    <div data-testid="sent">Sent</div>
+    <div data-testid="delivered">Delivered</div>
+    <div id="surface" class="primary wide" data-json='{"ready":true}' data-kind="one">  DOM   surface  </div>
+    <div id="rendered-text">  visible <span style="display:none">SECRET</span> <span style="text-transform:uppercase">shout</span> </div>
+    <div class="surface-item" data-kind="one">first</div>
+    <div class="surface-item" data-kind="two">second</div>
+    <button class="bulk">bulk one</button><button class="bulk">bulk two</button>
+    <button id="pointer-target">pointer target</button>
+    <button id="hover-target">hover target</button>
+    <div id="drag-zone"><div id="drag-source">drag</div><div id="drag-target">drop</div></div>
+    <div id="scrollbox"><div id="scroll-content"><span id="scroll-target">scroll target</span></div></div>
+    <p id="selection">select this phrase twice: phrase</p>
+    <div id="geometry"><div id="geometry-a"></div><div id="geometry-b"></div></div>
+    <div id="pointer-log"></div>
+    <div id="bulk-count">0</div>
+    <div id="drag-count">0</div>
+    <div id="last-key"></div>
+    <div id="key-modifiers"></div>
+    <script>
+      const input = document.querySelector('[data-testid="name"]')
+      input.addEventListener('input', () => document.querySelector('#echo').textContent = input.value)
+      document.querySelector('button').addEventListener('click', () => {
+        const count = document.querySelector('#count')
+        count.textContent = String(Number(count.textContent) + 1)
+      })
+      document.querySelector('[data-testid="held-request"]').addEventListener('click', () => fetch('/held'))
+      const pointerLog = document.querySelector('#pointer-log')
+      const pointerTarget = document.querySelector('#pointer-target')
+      pointerTarget.addEventListener('click', event => pointerLog.textContent = `click:${event.detail}:${event.shiftKey}`)
+      pointerTarget.addEventListener('dblclick', () => pointerLog.textContent = 'double')
+      pointerTarget.addEventListener('contextmenu', event => { event.preventDefault(); pointerLog.textContent = 'right' })
+      pointerTarget.addEventListener('auxclick', event => { event.preventDefault(); pointerLog.textContent = 'middle' })
+      document.querySelectorAll('.bulk').forEach(button => button.addEventListener('click', () => {
+        const count = document.querySelector('#bulk-count')
+        count.textContent = String(Number(count.textContent) + 1)
+      }))
+      document.querySelector('#drag-target').addEventListener('mouseup', () => {
+        const count = document.querySelector('#drag-count')
+        count.textContent = String(Number(count.textContent) + 1)
+      })
+      document.querySelector('#surface').customEcho = value => `surface:${value}`
+      setTimeout(() => document.querySelector('#delayed').textContent = 'ready', 80)
+      document.addEventListener('keydown', event => {
+        document.querySelector('#last-key').textContent = event.key
+        document.querySelector('#key-modifiers').textContent = `${event.key}:${event.shiftKey}:${event.ctrlKey}`
+      })
+    </script>
+  </body>
+</html>
