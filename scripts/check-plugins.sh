@@ -43,6 +43,45 @@ for plugin in biloba-gomega biloba-vitest; do
 		skill_name=${reference#*:}
 		[[ -d "plugins/$plugin/skills/$skill_name" ]] || fail "$reference points to a missing skill"
 	done < <(grep -RhoE "$plugin:[a-z0-9-]+" README.md docs "plugins/$plugin" | sort -u)
+
+	# Sibling cross-references inside a skill body carry no plugin prefix (the Gomega skills are
+	# served under two plugin names, so no hardcoded prefix is correct for both).  That means the
+	# prefixed check above validates nothing inside skills/, so validate the unprefixed routing
+	# form here instead: every "-> `name`" must name a skill of this same plugin.  The arrow is
+	# reserved for routing - do not use it for a value.
+	while IFS= read -r skill_name; do
+		[[ -d "plugins/$plugin/skills/$skill_name" ]] ||
+			fail "$plugin: routing reference to \`$skill_name\` does not name a skill in this plugin"
+	done < <(grep -RhoE '→ `[a-z0-9-]+`' "plugins/$plugin"/skills 2>/dev/null |
+		sed -e 's/^.* `//' -e 's/`$//' | sort -u)
+
+	# An unprefixed name is only resolvable if the reader knows to reuse the prefix they loaded
+	# the skill under, so any skill that uses the unprefixed routing form has to say so.  A skill
+	# that references its siblings by full plugin:skill name needs no note.
+	for skill_file in "plugins/$plugin"/skills/*/SKILL.md; do
+		[[ -f "$skill_file" ]] || continue
+		grep -qE '→ `[a-z0-9-]+`' "$skill_file" || continue
+		grep -Fq 'invoke one with the same plugin prefix you loaded this skill under' "$skill_file" ||
+			fail "$skill_file uses unprefixed skill references but is missing the invocation note"
+	done
+done
+
+# A skill name unique to one client plugin must never be referenced from the other - it would
+# route a reader to a skill they do not have installed.
+for plugin in biloba-gomega biloba-vitest; do
+	if [[ "$plugin" == biloba-gomega ]]; then
+		other=biloba-vitest
+	else
+		other=biloba-gomega
+	fi
+	for other_skill in "plugins/$other"/skills/*/; do
+		[[ -d "$other_skill" ]] || continue
+		skill_name=$(basename "$other_skill")
+		[[ -d "plugins/$plugin/skills/$skill_name" ]] && continue
+		if grep -RFq "\`$skill_name\`" "plugins/$plugin"/skills; then
+			fail "$plugin references \`$skill_name\`, which only exists in $other"
+		fi
+	done
 done
 
 canonical_count=0

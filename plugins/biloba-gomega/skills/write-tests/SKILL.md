@@ -1,11 +1,11 @@
 ---
 name: write-tests
-description: Author Go Ginkgo/Gomega Biloba specs — the dual polling/matcher API, .Capture, first-versus-all naming, DOM readiness anchors, CSS and semantic locators, shadow/iframe piercing, XPath, interactions, realistic input, visual regression, hermetic network control, app-state barriers, multi-tab flows, and state seeding. Use when writing or reviewing Biloba browser tests.
+description: Author Biloba specs in a Go Ginkgo/Gomega suite — the dual immediate/matcher API (act now vs. return a matcher you poll with Eventually), capturing a matcher's observed value with .Capture instead of asserting-then-re-reading, first-vs-all naming, the navigate-then-readiness-anchor shape (gate on the DOM, then read GetLocation), selecting elements (CSS targeting stable hooks as the default, semantic role/text/label locators, anchoring a locator scope so a negative assertion isn't vacuous, the >>> piercing combinator, XPath), the interaction vocabulary (click variants, drag, scroll, tap, text selection), realistic mode for occlusion/hover smoke tests, visual regression with b.HaveScreenshot against a committed baseline, hermetic tests via request stubbing/aborting/modifying/holding, the GetJSValue app-state barrier (and when it gates nothing), multi-tab flows, and seeding state. Use when writing or reviewing Biloba browser tests.
 ---
 
 # Writing Biloba specs
 
-Assume a **Go/Ginkgo** suite, wired with `setup`, and apply the principles in `overview`. Method list → `api`. XPath → `xpath`. Flakes → `flaky-specs`. Docs: <https://onsi.github.io/biloba/#working-with-the-dom>.
+Assume a **Go/Ginkgo** suite, wired with `setup`, and apply the principles in `overview`. Method list → `api`. XPath → `xpath`. Flakes → `flaky-specs`. Docs: <https://onsi.github.io/biloba/#working-with-the-dom>. Sibling skills are named here without a prefix; invoke one with the same plugin prefix you loaded this skill under.
 
 ## RULE — get these two right in the first draft
 

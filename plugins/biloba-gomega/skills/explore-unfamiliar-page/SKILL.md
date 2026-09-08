@@ -5,7 +5,7 @@ description: Orient to an unfamiliar page, then draft a starter Go/Ginkgo Biloba
 
 # Orienting to an unfamiliar page, then drafting a spec
 
-Drive the page once to see it (DOM outline + a11y tree + screenshot), then write the spec against what you actually saw. Assumes Biloba is wired in (`setup`); the draft follows `write-tests`.
+Drive the page once to see it (DOM outline + a11y tree + screenshot), then write the spec against what you actually saw. Assumes Biloba is wired in (`setup`); the draft follows `write-tests`. Sibling skills are named here without a prefix; invoke one with the same plugin prefix you loaded this skill under.
 
 ## 1. Drive the page once
 

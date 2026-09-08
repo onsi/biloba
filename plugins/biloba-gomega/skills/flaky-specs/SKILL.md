@@ -1,6 +1,6 @@
 ---
 name: flaky-specs
-description: Diagnose and prevent flaky Go/Ginkgo Biloba specs. Covers b.Immediate(), single-shot reads, gate-then-re-read pairs and .Capture, optimistic UI and app-state barriers, response ordering, async geometry, missing properties, accumulated network handlers, vacuous assertions, visual baseline hazards, and DOM readiness anchors. Use when a browser spec is intermittent, order-dependent, load-sensitive, CI-only, or being reviewed for latent races.
+description: Diagnose and prevent flaky Go/Ginkgo Biloba specs — specs that pass locally but fail in CI, fail intermittently under `-p` or load, or fail somewhere other than the line that is actually wrong. Biloba polls by default, so the headline rule is "don't reach for b.Immediate()". Covers the residual smells — single-shot `b.Run(expr,&x)` reads and gate-then-re-read pairs (fix with .Capture); the non-polling SendKeysToWindowImmediately and `*Immediately` verbs; optimistic-UI and server-reconciliation traps (barrier on app state with b.GetJSValue, force the arrival order with b.HoldResponse + Limit/ReleaseNext); async-settling geometry, layout, and document-order reads; AllowMissing for properties absent on the element type; network handlers accumulating across an Ordered container; vacuous assertions that can never fail (an unresolved locator scope, BeNetworkIdle before the request starts, an empty Current*ForEach under a negation, a visual baseline written without ever being reviewed, a screenshot tolerance widened until nothing can fail, BILOBA_UPDATE_SCREENSHOTS left set in CI); and gating on a DOM anchor instead of the URL. Use when a browser spec is flaky, nondeterministic, order-dependent, load-sensitive, or CI-only, or when reviewing a suite for latent races.
 ---
 
 # Flaky Biloba specs
@@ -9,7 +9,7 @@ Biloba polls by default: `b.Click(sel)`, `b.SetValue(sel, v)`, `b.GetProperty(se
 
 **Master rule: never assert on a value you read exactly once.** Poll it.
 
-Failure *artifacts* (outlines, screenshots, poll trajectory) → `debug-failures`. Authoring baseline → `write-tests`. Method surfaces → `api`.
+Failure *artifacts* (outlines, screenshots, poll trajectory) → `debug-failures`. Authoring baseline → `write-tests`. Method surfaces → `api`. Sibling skills are named here without a prefix; invoke one with the same plugin prefix you loaded this skill under.
 
 ## Triage
 
@@ -26,7 +26,7 @@ Failure *artifacts* (outlines, screenshots, poll trajectory) → `debug-failures
 | Click appears to do nothing | Overlay swallowed it (fast `Click` is occlusion-blind) | `b.BeClickable()` gate, or `b.Realistic()` | [2](#2-actions-that-dont-poll) |
 | Intermittent "could not find DOM element" on the line *after* a capture | The capture expanded the viewport; the page re-rendered on its breakpoint and unmounted the subject | capture something already in view (scroll, gate on `b.BeInViewport(b.Fully())`) | [7](#7-assertions-that-cannot-fail) |
 | Assertion passes but asserts the opposite of your intent | Inverted `BePrecededBy`/`BeFollowedBy` | also assert the inverse doesn't hold | [4](#4-layout-geometry-and-document-order) |
-| Suite ends on Ginkgo's `--timeout` with **no** failing spec | A CDP call blocked with no deadline — Gomega can't preempt a blocked callback, so no poll deadline fires | Biloba's own commands are bounded and now fail with `deadline_exceeded`/`page_crashed`/`browser_gone`; if you still hang, it's your own `chromedp` call on `b.Context` — give it a `context.WithTimeout` | `debug-failures` skill |
+| Suite ends on Ginkgo's `--timeout` with **no** failing spec | A CDP call blocked with no deadline — Gomega can't preempt a blocked callback, so no poll deadline fires | Biloba's own commands are bounded and now fail with `deadline_exceeded`/`page_crashed`/`browser_gone`; if you still hang, it's your own `chromedp` call on `b.Context` — give it a `context.WithTimeout` | `debug-failures` |
 
 ## 1. Reads you take yourself
 

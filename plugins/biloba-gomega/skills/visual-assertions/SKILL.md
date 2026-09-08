@@ -1,6 +1,6 @@
 ---
 name: visual-assertions
-description: Create and maintain Go/Gomega visual assertions with b.HaveScreenshot — committed baselines, update mode, masks, tolerances, animation freezing, color schemes, actual/diff artifacts, and textual mismatch diagnosis. Covers missing or unsettled baselines, clipped subjects, identical scheme captures, rendering noise, and CI hazards. Use when adding visual regression, reviewing baselines, or diagnosing a failed comparison.
+description: Assert that a page or element still looks right with Biloba's Go/Gomega visual regression matcher (b.HaveScreenshot) — writing the assertion, the golden-master workflow for creating and updating committed baselines with BILOBA_UPDATE_SCREENSHOTS=1 (review the .actual.png, update mode settles to three consecutive equal captures before writing so a write is not instantaneous, the actionable "never settled" warning, commit the baselines dir, never set the var in CI, nothing prunes orphaned baselines), reading the text diagnosis of a failed comparison without opening an image, and the determinism tools (b.Mask for timestamps/avatars, the automatic animation freeze and b.Animated() to opt out, b.Tolerance/b.ChannelTolerance, b.InColorSchemes for light+dark). Also covers the two directories (committed baselines vs gitignored actual/diff artifacts), the ways a visual assertion can go silently vacuous (a subject clipped out of its own capture by an inner scroll container, two colour schemes that render identically), and the hazards Biloba does not solve (scrollbars, cross-platform font rendering, closed shadow roots, a JS pulse with only two or three renderings, a late one-shot change that is not a web font). Use when a spec needs to assert appearance, when a HaveScreenshot comparison failed, or when setting up visual regression in a suite.
 ---
 
 # Visual assertions
@@ -13,7 +13,7 @@ Eventually(b).Should(b.HaveScreenshot("home-desktop"))               // the whol
 Eventually(".card").Should(SatisfyAll(b.BeInViewport(b.Fully()), b.HaveScreenshot("card")))
 ```
 
-Docs: <https://onsi.github.io/biloba/#visual-assertions>.
+Docs: <https://onsi.github.io/biloba/#visual-assertions>. Sibling skills are named here without a prefix; invoke one with the same plugin prefix you loaded this skill under.
 
 **Give it a real deadline.** Gomega's default `Eventually` is 1s and a capture-and-compare is not free:
 

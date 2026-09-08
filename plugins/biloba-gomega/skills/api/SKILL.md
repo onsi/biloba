@@ -1,11 +1,11 @@
 ---
 name: api
-description: One-line reference for every Biloba method and matcher, grouped by area — selectors/locators, lifecycle, poll-config (WithTimeout/WithPolling/WithContext/Immediate), capturing a matcher's observed value (.Capture), navigation (GetLocation/GetTitle), cookies/storage, tabs, DOM existence/visibility/contents/properties/forms, clicking and interactions (incl. drag/scroll/tap/modifiers/text-selection), realistic mode, keyboard, uploads, element JS, dialogs, downloads, arbitrary JS (incl. the GetJSValue app-state barrier), network stubbing/aborting/modifying/observing/holding (HoldResponse + Limit/ReleaseNext), screenshots/outline/window, and visual regression (HaveScreenshot + Mask/Tolerance/ChannelTolerance/Animated/InColorSchemes). Use to look up the exact method or matcher name and shape. Methods marked (dual) poll until they succeed when fully applied and return a pollable matcher when under-applied.
+description: One-line reference for every Biloba Go method and matcher, grouped by area — selectors/locators, lifecycle, poll-config (WithTimeout/WithPolling/WithContext/Immediate), capturing a matcher's observed value (.Capture), navigation (GetLocation/GetTitle), cookies/storage, tabs, DOM existence/visibility/contents/properties/forms, clicking and interactions (incl. drag/scroll/tap/modifiers/text-selection), realistic mode, keyboard, uploads, element JS, dialogs, downloads, arbitrary JS (incl. the GetJSValue app-state barrier), network stubbing/aborting/modifying/observing/holding (HoldResponse + Limit/ReleaseNext), screenshots/outline/window, and visual regression (HaveScreenshot + Mask/Tolerance/ChannelTolerance/Animated/InColorSchemes). Use to look up the exact Go method or matcher name and shape. Methods marked (dual) poll until they succeed when fully applied and return a pollable matcher when under-applied.
 ---
 
 # Biloba API reference
 
-Terse lookup for Biloba's Go API. Docs: <https://onsi.github.io/biloba/>.
+Terse lookup for Biloba's Go API. Docs: <https://onsi.github.io/biloba/>. Sibling skills are named here without a prefix; invoke one with the same plugin prefix you loaded this skill under.
 
 **Naming conventions — assume these, they're only restated where an entry breaks them:**
 
@@ -58,7 +58,7 @@ Shallow `*Biloba` clones (like `Realistic()`); not reset by `Prepare()`. Use per
 
 Configuring anything that resolves to a **bare matcher** — a `(matcher)` method (`b.HaveScreenshot(name)`, `b.Exist()`, …), or the under-applied dual form (`b.WithTimeout(d).Click()`) — is also a hard error. Configure the `Eventually`, not the matcher.
 
-**Separate from all four: the CDP backstop.** Every command Biloba sends Chrome carries a deadline (30s; 2min for `RunAsync`, whose length is set by the promise your page awaits) so an unresponsive Chrome fails the spec instead of hanging the suite. Not configurable and not a knob — `WithTimeout` bounds retries, not liveness, and does **not** shorten it. Every bucket gets it, including the two that reject every knob. Failures read `deadline_exceeded` / `page_crashed` / `browser_gone` → see the `debug-failures` skill.
+**Separate from all four: the CDP backstop.** Every command Biloba sends Chrome carries a deadline (30s; 2min for `RunAsync`, whose length is set by the promise your page awaits) so an unresponsive Chrome fails the spec instead of hanging the suite. Not configurable and not a knob — `WithTimeout` bounds retries, not liveness, and does **not** shorten it. Every bucket gets it, including the two that reject every knob. Failures read `deadline_exceeded` / `page_crashed` / `browser_gone` → `debug-failures`.
 
 ## `.Capture(&target)`
 
@@ -125,7 +125,7 @@ Eventually(".figure-frame").Should(b.HaveAttribute("data-block-id", Not(BeEmpty(
 
 **Two-axis polling:** the singular `Get*` getters poll until the element is present **AND** every named property/attribute is *defined*.
 
-- **Trap:** a property that doesn't exist on that element type (`disabled` on a `<div>`) blocks the poll to timeout. Wrap it — `b.GetProperty("div.card", b.AllowMissing("disabled"))` → `nil`, no wait. Name params take `string` or `AllowMissing`; `AllowMissing` applies to `GetProperty`/`GetProperties`/`GetAttribute`/`GetAttributes` only.
+- **Trap:** a property that doesn't exist on that element type (`disabled` on a `<div>`) blocks the poll to timeout. Wrap it — `b.GetProperty("div.card", b.AllowMissing("disabled"))` yields `nil`, no wait. Name params take `string` or `AllowMissing`; `AllowMissing` applies to `GetProperty`/`GetProperties`/`GetAttribute`/`GetAttributes` only.
 - `b.GetProperty(selector, name[, &ptr])` → any · `b.SetProperty(selector, name, value)` (dual) · `b.HaveProperty(name[, value|matcher])` (matcher).
 - `b.GetProperties(selector, ...names)` → `Properties`; `GetString/GetInt/GetFloat64/GetBool/GetStringSlice`.
 - `b.GetAttribute(selector, name[, &ptr])` → any (raw `getAttribute` markup, not the resolved property) · `b.GetAttributes(selector, ...names)` → `Properties`.

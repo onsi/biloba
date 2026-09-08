@@ -5,7 +5,7 @@ description: Wire Biloba into a Go Ginkgo/Gomega suite — go get, the bootstrap
 
 # Setting up Biloba in your suite
 
-One-time wiring for a **Go/Ginkgo** suite. Authoring model → `write-tests`. Mental model → `overview`. Docs: <https://onsi.github.io/biloba/#getting-started>.
+One-time wiring for a **Go/Ginkgo** suite. Authoring model → `write-tests`. Mental model → `overview`. Docs: <https://onsi.github.io/biloba/#getting-started>. Sibling skills are named here without a prefix; invoke one with the same plugin prefix you loaded this skill under.
 
 ## 1. Add Biloba and bootstrap a suite
 

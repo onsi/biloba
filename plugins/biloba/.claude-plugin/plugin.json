@@ -1,6 +1,6 @@
 {
   "name": "biloba",
-  "description": "Deprecated compatibility alias for Biloba's Go/Ginkgo/Gomega skills. Existing biloba:* invocations continue to work; new installations should use biloba-gomega.",
+  "description": "Deprecated compatibility alias for Biloba's Go/Ginkgo/Gomega skills. Existing biloba:* invocations continue to work. Do not install this alongside biloba-gomega: both serve the same ten skills, so installing both lists every skill twice with identical descriptions. New installations should use biloba-gomega instead.",
   "version": "0.15.4",
   "author": {
     "name": "Onsi Fakhouri",

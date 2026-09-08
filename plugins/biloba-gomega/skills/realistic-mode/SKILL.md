@@ -1,6 +1,6 @@
 ---
 name: realistic-mode
-description: Use Biloba's realistic interaction track (b.Realistic()) when a spec must exercise the realism the fast default trades away — clicking through/around an occluding overlay, a menu that opens on CSS :hover, scroll-into-view, a pointer drag (@dnd-kit/Sortable), real wheel scrolling, or touch. Covers what each interaction track actually does (the fast-vs-realistic capability matrix), the inline/per-spec/per-suite (Label) patterns, when NOT to use it, and BeClickable() as a cheaper occlusion guard. Use when testing occlusion/hover/drag/scroll-sensitive flows or deciding fast vs realistic.
+description: Use Biloba's realistic interaction track (b.Realistic()) in a Go Ginkgo/Gomega suite when a spec must exercise the realism the fast default trades away — clicking through/around an occluding overlay, a menu that opens on CSS :hover, scroll-into-view, a pointer drag (@dnd-kit/Sortable), real wheel scrolling, or touch. Covers what each interaction track actually does (the fast-vs-realistic capability matrix), the inline/per-spec/per-suite (Label) patterns, when NOT to use it, and BeClickable() as a cheaper occlusion guard. Use when testing occlusion/hover/drag/scroll-sensitive flows or deciding fast vs realistic.
 ---
 
 # Realistic interactions
@@ -16,7 +16,7 @@ rb.Click("#submit")                     // scrolls into view, waits for stabilit
 Eventually(".menu").Should(rb.Hover())  // moves the real pointer → CSS :hover activates
 ```
 
-Docs: <https://onsi.github.io/biloba/#realistic-interactions>.
+Docs: <https://onsi.github.io/biloba/#realistic-interactions>. Sibling skills are named here without a prefix; invoke one with the same plugin prefix you loaded this skill under.
 
 ## When to reach for it
 

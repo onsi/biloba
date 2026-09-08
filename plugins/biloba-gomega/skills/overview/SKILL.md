@@ -1,6 +1,6 @@
 ---
 name: overview
-description: The Biloba mental model for writing browser tests in a Go Ginkgo/Gomega suite — pragmatic simulation, poll-by-default, dropping to chromedp, and visual regression against committed baselines. Use first when starting with Biloba or deciding whether it fits a Go browser-testing task. Route to the other skills in this plugin.
+description: The Biloba mental model for writing browser tests in a Go Ginkgo/Gomega suite — pragmatic simulation, poll-by-default, dropping to chromedp, and visual regression against committed baselines. Use first when starting with Biloba or deciding whether it fits a Go browser-testing task. Routes to the other skills in this plugin.
 ---
 
 # Biloba: the mental model
@@ -64,6 +64,8 @@ chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
 Use it for geolocation, cross-origin frames, or any CDP feature without a native wrapper. (For real `:hover`/occlusion/scroll, prefer `b.Realistic()`.)
 
 ## Where to go next
+
+Sibling skills are named here without a prefix; invoke one with the same plugin prefix you loaded this skill under.
 
 | Task | Skill |
 |---|---|

@@ -1,11 +1,11 @@
 ---
 name: debug-failures
-description: See why a Go/Ginkgo Biloba spec failed or flaked — DOM outlines, screenshots, poll trajectories, visual-regression diagnosis, detached-node and occluded-click signals, adaptive human/CI/agent output, artifact environment variables and BilobaConfig options, app-state attachments, headless quirks, and b.Outline()/b.A11yOutline(). Use when a Gomega-based browser spec fails or when configuring failure output. For preventing flakes, use flaky-specs.
+description: See why a Go/Ginkgo Biloba spec failed or flaked — the on-failure artifacts (DOM outline + screenshots + poll trajectory of the timed-out read + the visual-regression diagnosis with its .actual.png/.diff.png, the "never settled" warning an update run prints + the detached-node "matched then stopped matching" signal + the occluded-click diagnosis naming what covered the target), how Biloba auto-adapts to humans vs CI vs AI agents, the env vars and config knobs that surface them (BILOBA_SCREENSHOTS_DIR, BILOBA_SCREENSHOT_BASELINES_DIR, BILOBA_UPDATE_SCREENSHOTS, BILOBA_INLINE_SCREENSHOTS, BILOBA_OUTLINE_MAX, BILOBA_INTERACTIVE, BilobaConfig*), attaching app/store state to a failure, headless quirks (stale innerText, unscheduled requestAnimationFrame), and using b.Outline()/b.A11yOutline() to understand why a selector did not match. Use when a browser spec is failing or flaky and you need visibility, or to configure failure output for CI/agents. For *preventing* flakes (single-shot reads, avoiding b.Immediate(), optimistic-UI) see this plugin's flaky-specs skill.
 ---
 
 # Debugging Biloba failures
 
-Reading artifacts after a spec failed. To *prevent* flakes → `flaky-specs`. Docs: <https://onsi.github.io/biloba/#failure-artifacts>.
+Reading artifacts after a spec failed. To *prevent* flakes → `flaky-specs`. Docs: <https://onsi.github.io/biloba/#failure-artifacts>. Sibling skills are named here without a prefix; invoke one with the same plugin prefix you loaded this skill under.
 
 ## Zero config: what you already get
 
@@ -65,7 +65,7 @@ screenshot "home-desktop" differs from baseline
 | `uniform shift of the whole image, 1px down` | something *above* the subject grew or moved — fix that, don't re-baseline. Never reported for an image thinner than ~16px on either axis (thin rule, focus ring, progress bar) — those get the box reading |
 | `baseline is 800x600, actual is 800x640 (40px taller)` | the box resized; no per-pixel story |
 
-What to do about each → see the `visual-assertions` skill.
+What to do about each → `visual-assertions`.
 
 `unchanged: everything below y=N` is the complement and usually the faster read. `max channel delta` counts every pixel, including those the channel tolerance absorbed — and when it is in the low single digits Biloba adds `every differing pixel differs by <= N — a rasterisation or compositing difference, not a content change`. Believe it: nothing moved, so look for a shadow or gradient compositing into the capture rather than for an element. A **missing** baseline is a different failure — it says to re-run with `BILOBA_UPDATE_SCREENSHOTS=1`; never script your way past it.
 

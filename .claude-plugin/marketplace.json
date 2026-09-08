@@ -21,7 +21,7 @@
     {
       "name": "biloba",
       "source": "./plugins/biloba",
-      "description": "Deprecated compatibility alias for existing biloba:* Go/Gomega skill installations. New users should install biloba-gomega instead."
+      "description": "Deprecated compatibility alias for existing biloba:* Go/Gomega skill installations. Superseded by biloba-gomega; install one or the other, never both. New users should install biloba-gomega instead."
     }
   ]
 }

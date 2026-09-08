@@ -1,13 +1,13 @@
 ---
 name: xpath
-description: Build XPath selectors with Biloba's b.XPath() mini-DSL — tag/id/class/text/attribute predicates, boolean logic with b.XPredicate(), tree navigation (Child/Descendant/Parent/Ancestor/siblings), WithChildMatching + b.RelativeXPath, indexing (Nth/First/Last), and the XPath().WithText text predicates. Use when constructing or debugging an XPath selector for a Biloba action or matcher — the rare power tool after CSS and semantic locators. Covers the common pitfalls (XPredicate, RelativeXPath, ancestor-or-self, no shadow/iframe crossing).
+description: Build XPath selectors with Biloba's Go b.XPath() mini-DSL — tag/id/class/text/attribute predicates, boolean logic with b.XPredicate(), tree navigation (Child/Descendant/Parent/Ancestor/siblings), WithChildMatching + b.RelativeXPath, indexing (Nth/First/Last), and the XPath().WithText text predicates. Use when constructing or debugging an XPath selector for a Biloba action or matcher — the rare power tool after CSS and semantic locators. Covers the common pitfalls (XPredicate, RelativeXPath, ancestor-or-self, no shadow/iframe crossing).
 ---
 
 # The Biloba XPath DSL
 
 XPath is the **rare power tool**, reached for after CSS and semantic locators (`write-tests`). Use it for axis/relationship/ordinal queries those can't express — an ancestor, a following-sibling, "the `ul` that has a child `li` saying X" — or exact `text()`-node matching. It is native and fast but verbose, and it does **not** pierce shadow roots or iframes (CSS `>>>` and locators do).
 
-`b.XPath()` returns `type XPath string` — chainable, printable (`fmt.Println(b.XPath("div").WithClass("c"))`), and accepted as the `selector` by any Biloba action or matcher. Docs: <https://onsi.github.io/biloba/#the-xpath-dsl>.
+`b.XPath()` returns `type XPath string` — chainable, printable (`fmt.Println(b.XPath("div").WithClass("c"))`), and accepted as the `selector` by any Biloba action or matcher. Docs: <https://onsi.github.io/biloba/#the-xpath-dsl>. Sibling skills are named here without a prefix; invoke one with the same plugin prefix you loaded this skill under.
 
 ## Starting a query
 
