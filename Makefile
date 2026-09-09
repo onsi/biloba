@@ -5,16 +5,31 @@
 
 GINKGO := go run github.com/onsi/ginkgo/v2/ginkgo
 
-.PHONY: test test-all stress-test update-chrome driver-test driver-parity driver-e2e check-plugins sync-plugin-versions
+.PHONY: test test-all stress-test update-chrome driver-test driver-parity driver-e2e check-plugins check-release npm-pack npm-publish sync-plugin-versions
 
 ## check-plugins: validate plugin manifests, versions, namespaces, skill names, and client separation.
 check-plugins:
 	./scripts/check-plugins.sh
 
-## sync-plugin-versions: release-tool hook; copy BILOBA_VERSION into every Biloba plugin manifest.
+## sync-plugin-versions: release-tool hook; copy BILOBA_VERSION into plugin and npm manifests.
 ## Onsi's shipit should run this after updating BILOBA_VERSION and before creating the release commit.
 sync-plugin-versions:
 	./scripts/sync-plugin-versions.sh
+
+## check-release: verify npm/package metadata and the optional TAG (for example TAG=v0.15.4).
+check-release:
+	node ./scripts/check-npm-release.mjs "$(TAG)"
+
+## npm-pack: build once and stage dry-run packages for both npm names under .release/npm.
+npm-pack: check-release
+	cd typescript && pnpm build
+	node ./scripts/prepare-npm-packages.mjs
+	cd .release/npm/scoped && npm pack --dry-run
+	cd .release/npm/unscoped && npm pack --dry-run
+
+## npm-publish: publish both npm names using the caller's npm credentials; safe to retry.
+npm-publish:
+	./scripts/publish-npm-packages.sh --publish
 
 ## test: standard headless (chrome-headless-shell) suite - parallel + randomized. Your default.
 test:
@@ -33,7 +48,7 @@ test-all:
 ## protocol/generated_test.go), which compare what is on disk against what the generator renders -
 ## so they are right on a dirty working tree too.  Run the generators yourself after editing
 ## biloba.js or the protocol wire structs.
-driver-test:
+driver-test: check-release
 	cd typescript && pnpm install --frozen-lockfile && pnpm test && pnpm typecheck && pnpm build
 	$(GINKGO) --randomize-all ./engine ./protocol ./cmd/bilobad
 

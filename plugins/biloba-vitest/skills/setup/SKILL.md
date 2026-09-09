@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Wire Biloba's TypeScript client into Vitest — build and locate bilobad, start one shared Chrome in global setup, provide its connection to workers, create one daemon and reusable root Session per test file, prepare between tests, close cleanly, and choose launch modes/options. Use when installing @onsi/biloba-vitest-prototype or changing suite-level browser/daemon lifecycle.
+description: Wire Biloba's TypeScript client into Vitest — build and locate bilobad, start one shared Chrome in global setup, provide its connection to workers, create one daemon and reusable root Session per test file, prepare between tests, close cleanly, and choose launch modes/options. Use when installing biloba or changing suite-level browser/daemon lifecycle.
 ---
 
 # Setting up Biloba for Vitest
@@ -16,7 +16,7 @@ Start one Chrome for the entire run:
 
 ```ts
 // global-setup.ts
-import {startSharedBrowser, type SharedBrowserProcess} from "@onsi/biloba-vitest-prototype";
+import {startSharedBrowser, type SharedBrowserProcess} from "biloba";
 import type {TestProject} from "vitest/node";
 
 const executable = process.env.BILOBA_DAEMON_EXECUTABLE;
@@ -38,7 +38,7 @@ Create one daemon and root session in each test file:
 
 ```ts
 import {inject} from "vitest";
-import {connect, type Browser, type Session} from "@onsi/biloba-vitest-prototype";
+import {connect, type Browser, type Session} from "biloba";
 
 let browser: Browser;
 let session: Session;

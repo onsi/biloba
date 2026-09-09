@@ -1,13 +1,13 @@
 ---
 name: write-tests
-description: Author Biloba browser tests in TypeScript/Vitest — sessions, tabs, frames, CSS/semantic/XPath locators, polling actions and assertions, realistic input, cookies/storage, dialogs/downloads/network, screenshots, and structured failures. Use when writing or reviewing tests against @onsi/biloba-vitest-prototype. For wiring the daemon and shared Chrome, use biloba-vitest:setup.
+description: Author Biloba browser tests in TypeScript/Vitest — sessions, tabs, frames, CSS/semantic/XPath locators, polling actions and assertions, realistic input, cookies/storage, dialogs/downloads/network, screenshots, and structured failures. Use when writing or reviewing tests against biloba. For wiring the daemon and shared Chrome, use biloba-vitest:setup.
 ---
 
 # Writing Biloba Vitest tests
 
 Assume the suite is wired with `biloba-vitest:setup` and apply the topology in `biloba-vitest:overview`. Visual assertions → `biloba-vitest:visual-assertions`. Failures → `biloba-vitest:debug-failures`. Flakes → `biloba-vitest:flaky-tests`. Docs: <https://onsi.github.io/biloba/vitest.html>.
 
-**Prototype.** The package (`@onsi/biloba-vitest-prototype`) is not on npm; it is built from the Biloba repo and its API will continue to shift before 1.0.
+**Prototype.** The `biloba` package is published in lockstep with the Go release and its API will continue to shift before 1.0.
 
 ## 1. The topology — know this before writing anything
 
@@ -38,7 +38,7 @@ One Chrome per run, in vitest's global setup:
 
 ```ts
 // global-setup.ts
-import {startSharedBrowser, type SharedBrowserProcess} from "@onsi/biloba-vitest-prototype";
+import {startSharedBrowser, type SharedBrowserProcess} from "biloba";
 import type {TestProject} from "vitest/node";
 
 const daemonExecutable = process.env.BILOBA_DAEMON_EXECUTABLE;
@@ -60,7 +60,7 @@ A daemon and session per test file:
 
 ```ts
 import {inject} from "vitest";
-import {connect, type Browser, type Session} from "@onsi/biloba-vitest-prototype";
+import {connect, type Browser, type Session} from "biloba";
 
 let browser: Browser;
 let session: Session;
@@ -102,7 +102,7 @@ Prefer `getByRole`/`getByTestId` over brittle styling classes.
 The XPath DSL is client-side. Build the expression, then bind it to the session:
 
 ```ts
-import {relativeXPath, xpath} from "@onsi/biloba-vitest-prototype";
+import {relativeXPath, xpath} from "biloba";
 
 const save = xpath("button").withClass("primary").withText("Save");
 await session.xpath(save).click();
@@ -244,4 +244,4 @@ The last three exist so a crash reports itself as a crash: Chrome does not fail 
 
 `session.captureDiagnostics()` captures every live page in the browser context and excludes frames, workers, and other contexts. `consoleMessages()`/`onConsoleMessage()` and `warnings()`/`onWarning()` provide bounded snapshots and live delivery. Pass `debugLog` to `connect` for structured driver/CDP records.
 
-In a Vitest setup file, import `installBilobaVitestHooks` from `@onsi/biloba-vitest-prototype/vitest`. It captures ordinary and Biloba test failures, supports timed and explicit progress capture, replays browser errors, and can fail the test boundary on `console.assert` without throwing from the protocol reader.
+In a Vitest setup file, import `installBilobaVitestHooks` from `biloba/vitest`. It captures ordinary and Biloba test failures, supports timed and explicit progress capture, replays browser errors, and can fail the test boundary on `console.assert` without throwing from the protocol reader.

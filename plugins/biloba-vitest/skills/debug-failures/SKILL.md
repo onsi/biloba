@@ -37,7 +37,7 @@ Do not turn crash codes into assertion timeouts. They identify which layer died 
 
 ## Runner-level diagnostics
 
-Install `installBilobaVitestHooks` from `@onsi/biloba-vitest-prototype/vitest` in a Vitest setup file. It captures live tabs after failures, can capture slow-test progress, replays browser errors, and reports `console.assert` at the test boundary.
+Install `installBilobaVitestHooks` from `biloba/vitest` in a Vitest setup file. It captures live tabs after failures, can capture slow-test progress, replays browser errors, and reports `console.assert` at the test boundary.
 
 - Call `session.captureDiagnostics()` for an explicit context-wide snapshot.
 - Use `consoleMessages()`/`onConsoleMessage()` and `warnings()`/`onWarning()` for history and live events.

@@ -1,6 +1,6 @@
 ---
 name: overview
-description: Explain Biloba's TypeScript/Vitest mental model — one shared Chrome, one bilobad process per Vitest worker, isolated reusable root sessions, server-side polling, fast versus realistic input, and structured diagnostics. Use first when adopting @onsi/biloba-vitest-prototype or deciding how to structure a Vitest browser suite. Route to the other biloba-vitest:* skills.
+description: Explain Biloba's TypeScript/Vitest mental model — one shared Chrome, one bilobad process per Vitest worker, isolated reusable root sessions, server-side polling, fast versus realistic input, and structured diagnostics. Use first when adopting biloba or deciding how to structure a Vitest browser suite. Route to the other biloba-vitest:* skills.
 ---
 
 # Biloba for Vitest

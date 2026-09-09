@@ -2,7 +2,11 @@
 
 A TypeScript client for [Biloba](https://onsi.github.io/biloba/) that lets a `vitest` suite drive Chrome through Biloba.
 
-**This is a prototype.**  The package is not published to npm, and its API will continue to shift before 1.0.
+**This is a prototype.** Its API will continue to shift before 1.0. Install it from npm:
+
+```bash
+pnpm add -D biloba
+```
 
 ## Claude Code skills
 

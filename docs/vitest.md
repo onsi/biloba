@@ -7,7 +7,8 @@ title: Biloba for Vitest
 
 Biloba's TypeScript client lets a `vitest` suite drive Biloba browser automation through a worker-local daemon and one shared Chrome.
 
-> **Status: prototype.**  The package (`@onsi/biloba-vitest-prototype`) is not published to npm yet - today you build it from this repo - and its API will continue to shift before 1.0.  See the [support policy](./#support-policy).  What follows describes what works today.
+> **Status: prototype.** The `biloba` package has an API that will continue to shift before 1.0.
+> See the [support policy](./#support-policy). What follows describes what works today.
 
 ### Claude Code skills
 
@@ -57,7 +58,7 @@ Start one Chrome for the whole run in vitest's global setup, and hand its websoc
 
 ```ts
 // global-setup.ts
-import {startSharedBrowser, type SharedBrowserProcess} from "@onsi/biloba-vitest-prototype";
+import {startSharedBrowser, type SharedBrowserProcess} from "biloba";
 import type {TestProject} from "vitest/node";
 
 const daemonExecutable = process.env.BILOBA_DAEMON_EXECUTABLE;
@@ -83,7 +84,7 @@ Then, in each test file, connect a daemon of your own and open a session:
 
 ```ts
 import {inject} from "vitest";
-import {connect, type Browser, type Session} from "@onsi/biloba-vitest-prototype";
+import {connect, type Browser, type Session} from "biloba";
 
 let browser: Browser;
 let session: Session;
@@ -148,7 +149,7 @@ Use semantic locators for user-facing behavior and stable CSS hooks for structur
 The XPath DSL is a runner-independent string builder.  Build an expression, then bind it to a session:
 
 ```ts
-import {relativeXPath, xpath} from "@onsi/biloba-vitest-prototype";
+import {relativeXPath, xpath} from "biloba";
 
 const save = xpath("button").withClass("primary").withText("Save");
 await session.xpath(save).click();
@@ -308,7 +309,7 @@ try {
 
 That trajectory records every polling attempt as structured data instead of reducing the failure to its final observation.  Pass `artifactDir` to `connect` to get screenshots written to disk.
 
-For runner-level capture, load `installBilobaVitestHooks` from `@onsi/biloba-vitest-prototype/vitest` in a Vitest setup file.  The hook captures every live tab after any failed test, can capture a slow test after `progressAfterMs`, replays browser errors, and turns `console.assert` into a test-boundary failure.  `session.captureDiagnostics()` provides the same context-wide capture on demand.  Configure screenshots, outlines, artifact paths, inline output, viewport, byte limits, and poll trajectories under `connect({diagnostics: {...}})`; explicit members override CI and interactive defaults independently.
+For runner-level capture, load `installBilobaVitestHooks` from `biloba/vitest` in a Vitest setup file.  The hook captures every live tab after any failed test, can capture a slow test after `progressAfterMs`, replays browser errors, and turns `console.assert` into a test-boundary failure.  `session.captureDiagnostics()` provides the same context-wide capture on demand.  Configure screenshots, outlines, artifact paths, inline output, viewport, byte limits, and poll trajectories under `connect({diagnostics: {...}})`; explicit members override CI and interactive defaults independently.
 
 Use `consoleMessages()` for bounded history and `onConsoleMessage()` for live delivery.  `warnings()` and `onWarning()` expose auto-handled dialog and dropped-event warnings.  Pass `debugLog` to `connect` for bounded structured daemon/CDP diagnostics; Biloba never mixes them into framed stdout.
 
