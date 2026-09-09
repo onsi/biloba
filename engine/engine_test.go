@@ -296,20 +296,26 @@ var (
 	server  *httptest.Server
 )
 
-// chromePath resolves Chrome the same way the Go suite and bilobad do.  It fails the suite rather
-// than skipping it: this suite is the only guard on engine/biloba.js matching the canonical
-// biloba.js, and a suite that quietly skips is a suite that stops protecting anything.
+// chromePath resolves Chrome the same way the Go suite and bilobad do, installing Chrome for
+// Testing's stable shell when the box has none.  It fails the suite rather than skipping it: this
+// suite is the only guard on engine/biloba.js matching the canonical biloba.js, and a suite that
+// quietly skips is a suite that stops protecting anything.  Resolving a shell here rather than
+// inheriting one is what makes `ginkgo -r` order-independent - suite order is randomized, so no
+// other suite is guaranteed to have installed one first.  Only process 1 runs this (see the
+// SynchronizedBeforeSuite below), so parallel processes never race on the same download.
 func chromePath() string {
 	GinkgoHelper()
-	path := engine.LocateChrome("")
-	Expect(path).NotTo(BeEmpty(),
-		"The engine suite needs a chrome-headless-shell binary.\n"+
+	path, _, err := engine.ResolveHeadlessShell(context.Background(), "", true)
+	Expect(err).NotTo(HaveOccurred(),
+		"The engine suite needs a chrome-headless-shell binary and could not install one.\n"+
 			"Install one with `make update-chrome` (or `npx @puppeteer/browsers install chrome-headless-shell@stable`),\n"+
 			"put it on your PATH, or set %s=/path/to/chrome-headless-shell.", engine.ChromeEnvVar)
 	return path
 }
 
-var _ = BeforeSuite(func() {
+var _ = SynchronizedBeforeSuite(func() []byte {
+	return []byte(chromePath())
+}, func(chromeExecutable []byte) {
 	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/socket" {
 			connection, readWriter, err := response.(http.Hijacker).Hijack()
@@ -402,7 +408,7 @@ var _ = BeforeSuite(func() {
 	}))
 	var err error
 	browser, err = engine.StartBrowser(context.Background(), engine.BrowserConfig{
-		ExecutablePath: chromePath(),
+		ExecutablePath: string(chromeExecutable),
 		ArtifactDir:    GinkgoT().TempDir(),
 	})
 	Expect(err).NotTo(HaveOccurred())

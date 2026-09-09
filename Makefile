@@ -18,13 +18,13 @@ sync-plugin-versions:
 
 ## test: standard headless (chrome-headless-shell) suite - parallel + randomized. Your default.
 test:
-	$(GINKGO) -r -p --randomize-all
+	$(GINKGO) -r -p --randomize-all --randomize-suites
 
 ## test-all: both fidelity lanes CI runs - the default headless-shell lane, then the full ("new")
 ## headless google-chrome lane. Run before changes that touch tab/Chrome lifecycle.
 test-all:
-	$(GINKGO) -r -p --randomize-all
-	BILOBA_TEST_HIGH_FIDELITY=true $(GINKGO) -r -p --randomize-all
+	$(GINKGO) -r -p --randomize-all --randomize-suites
+	BILOBA_TEST_HIGH_FIDELITY=true $(GINKGO) -r -p --randomize-all --randomize-suites
 
 ## driver-test: Go driver packages and TypeScript unit coverage.
 ## Deliberately does NOT regenerate anything: `go generate ./engine` here would silently repair the

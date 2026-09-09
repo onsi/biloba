@@ -46,7 +46,7 @@ jobs:
     # which Chrome's sandbox needs to start. Relax it so Chrome can launch with the sandbox intact.
     # https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md
     - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-    - run: go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --fail-on-pending --keep-going --race -procs=2 --poll-progress-after=30s --timeout=8m
+    - run: go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --randomize-suites --fail-on-pending --keep-going --race -procs=2 --poll-progress-after=30s --timeout=8m
 
   notify:
     needs: test

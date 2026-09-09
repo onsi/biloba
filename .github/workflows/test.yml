@@ -44,7 +44,7 @@ jobs:
     # default (pragmatic) mode: the suite auto-installs chrome-headless-shell via Chrome for Testing.
     # --poll-progress-after dumps the running spec's goroutine stack if a spec ever wedges, and
     # --timeout bounds the suite so a hang fails fast instead of burning the 1h default.
-    - run: go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --fail-on-pending --keep-going --race -procs=2 --poll-progress-after=30s --timeout=8m
+    - run: go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --randomize-suites --fail-on-pending --keep-going --race -procs=2 --poll-progress-after=30s --timeout=8m
 
   high-fidelity:
     runs-on: ubuntu-latest
@@ -63,16 +63,10 @@ jobs:
     # sandbox intact (rather than weakening Biloba's defaults with --no-sandbox).
     # https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md
     - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-    # This lane runs `-r`, which includes ./engine and ./cmd/bilobad. Those resolve Chrome through
-    # engine.LocateChrome and want chrome-headless-shell - and unlike the default lane they cannot
-    # rely on the suite's AutoInstallHeadlessShell side effect, because HighFidelityHeadless replaces
-    # that option. Without this step there is no headless-shell anywhere on the runner and the daemon
-    # specs fail for a reason that has nothing to do with high fidelity.
-    - run: npx -y @puppeteer/browsers install chrome-headless-shell@stable --path "$HOME/.cache/puppeteer"
     # Runs in parallel like the default lane. Concurrent remote-allocator attaches are handled by
     # ConnectToChrome's retry/backoff; the one-time full google-chrome launch gets a roomier
     # WSURLReadTimeout (see SpinUpChrome) since a cold runner can take >20s to expose DevTools.
-    - run: go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --fail-on-pending --keep-going --race -procs=2 --poll-progress-after=30s --timeout=8m
+    - run: go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --randomize-suites --fail-on-pending --keep-going --race -procs=2 --poll-progress-after=30s --timeout=8m
 
   driver:
     runs-on: ubuntu-latest
@@ -92,9 +86,9 @@ jobs:
         cache-dependency-path: typescript/pnpm-lock.yaml
     # See the note in the build job: Chrome's sandbox needs unprivileged user namespaces.
     - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-    # bilobad and the engine suite resolve Chrome through engine.LocateChrome, which searches the
-    # puppeteer cache this populates.  Installing it explicitly (rather than relying on the Go
-    # suite's auto-install side effect) keeps this job independent of job ordering.
+    # The Go suites provision their own shell, but driver-parity and driver-e2e start daemons from
+    # TypeScript, which does not.  Populating the puppeteer cache that engine.LocateChrome searches
+    # covers those, and lets the Go suites here skip the download entirely.
     - run: npx -y @puppeteer/browsers install chrome-headless-shell@stable --path "$HOME/.cache/puppeteer"
     # Regenerated protocol types/goldens must match what is committed, TypeScript must typecheck
     # and build, and the Go driver packages must pass - including the engine suite's guard that

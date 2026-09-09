@@ -26,6 +26,19 @@ func TestBilobad(t *testing.T) {
 	RunSpecs(t, "Bilobad Suite")
 }
 
+// The daemon specs below start the daemon without --chrome-path, so it resolves Chrome itself -
+// the path a TypeScript worker actually takes - which means the box needs a chrome-headless-shell
+// before they run.  Provision one here rather than inheriting whatever another suite happened to
+// install: `ginkgo -r` randomizes suite order, and this suite is also the first thing a fresh
+// clone can hit.  Only process 1 installs, so parallel processes never race on the same download.
+var _ = SynchronizedBeforeSuite(func() []byte {
+	_, _, err := engine.ResolveHeadlessShell(context.Background(), "", true)
+	Expect(err).NotTo(HaveOccurred(),
+		"bilobad's daemon specs need a chrome-headless-shell binary and one could not be installed.\n"+
+			"Install one with `make update-chrome`, put it on your PATH, or set %s=/path/to/chrome-headless-shell.", engine.ChromeEnvVar)
+	return nil
+}, func([]byte) {})
+
 var _ = Describe("bilobad", func() {
 	Describe("eventful binary wire bounds", func() {
 		It("accepts the decoded boundary and rejects one byte beyond it", func() {
