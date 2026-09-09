@@ -9,7 +9,7 @@ const sourceRoot = resolve(repoRoot, "typescript");
 const releaseRoot = resolve(repoRoot, ".release/npm");
 const sourceManifest = JSON.parse(await readFile(resolve(sourceRoot, "package.json"), "utf8"));
 const variants = [
-  {directory: "scoped", name: "@biloba/biloba"},
+  {directory: "scoped", name: "@onsi/biloba"},
   {directory: "unscoped", name: "biloba"},
 ];
 
@@ -29,4 +29,4 @@ for (const variant of variants) {
   await writeFile(resolve(destination, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
-console.log(`staged @biloba/biloba and biloba ${sourceManifest.version} in .release/npm`);
+console.log(`staged @onsi/biloba and biloba ${sourceManifest.version} in .release/npm`);

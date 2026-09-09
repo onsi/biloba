@@ -2,7 +2,7 @@
 
 Biloba uses `BILOBA_VERSION` in `biloba.go` as the version source for the Go module, Claude Code
 plugins, and TypeScript client. The same TypeScript build is published under the npm names `biloba`
-and `@biloba/biloba`.
+and `@onsi/biloba`.
 
 ## Hook for the existing release script
 
@@ -32,5 +32,8 @@ the tag from the current package version).
 ## Initial publication
 
 The first run claims each available package name. The publishing account must have 2FA enabled (or
-use an npm granular token allowed to publish) and must belong to the existing `biloba` npm
-organization to publish `@biloba/biloba`.
+use an npm granular token allowed to publish) and must belong to the `onsi` npm organization to
+publish `@onsi/biloba`.
+
+The `@biloba` scope is not an option: the `biloba` npm org/user already exists and belongs to another
+account (the registry reports the scope with no public members), so nobody else can publish there.

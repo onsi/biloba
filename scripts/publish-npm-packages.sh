@@ -22,7 +22,7 @@ make npm-pack TAG="$tag"
 if [[ "$mode" == "--dry-run" ]]; then
 	npm publish .release/npm/unscoped --access public --dry-run
 	npm publish .release/npm/scoped --access public --dry-run
-	printf 'npm publish dry run passed for @biloba/biloba and biloba %s\n' "$version"
+	printf 'npm publish dry run passed for @onsi/biloba and biloba %s\n' "$version"
 	exit 0
 fi
 
@@ -42,4 +42,4 @@ publish_if_missing() {
 # the generally available name lands even if the scoped organization needs separate access. A retry
 # skips either immutable version that already succeeded and continues with the missing one.
 publish_if_missing biloba .release/npm/unscoped
-publish_if_missing @biloba/biloba .release/npm/scoped
+publish_if_missing @onsi/biloba .release/npm/scoped
