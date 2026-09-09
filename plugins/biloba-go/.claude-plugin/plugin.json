@@ -1,5 +1,5 @@
 {
-  "name": "biloba-gomega",
+  "name": "biloba-go",
   "description": "Write fast, stable browser tests with Biloba in a Go Ginkgo/Gomega suite. Skills for setup, the dual immediate/matcher API, semantic locators, realistic interactions, visual regression, XPath, API lookup, failure diagnosis, and preventing flaky specs.",
   "version": "0.15.4",
   "author": {

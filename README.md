@@ -13,11 +13,11 @@ Biloba builds on top of [chromedp](https://github.com/chromedp/chromedp) to brin
   - Stability via pragmatism
   - Conciseness via Ginkgo and Gomega
 
-It's blazing fast and designed to work well with AI toolchains like Claude Code.  It's under active development and use as I build out a new feature-rich single-page app with Claude.
+It's blazing fast and designed to work _really_ well with AI toolchains like Claude Code.  
 
-Take a look at the [documentation](https://onsi.github.io/biloba) to learn more and get started!
+Take a look at the [documentation](https://onsi.github.io/biloba) to learn more and get started!  Biloba tests can be written in Go using Ginkgo, [and in typescript using vitest](#vitest-support).
 
-Here's a quick taste of what Biloba specs look like:
+Here's a quick taste of what Biloba specs look like in Ginkgo:
 
 ```go
 func login(tab *Biloba, user string, password string) {
@@ -159,7 +159,7 @@ Polling timeout, interval, and context are configurable Gomega-style with `tab.W
 
 By default Biloba interactions are **fast**: atomic JavaScript simulations (`el.click()`, value-set, synthetic events) that run as a single in-browser snippet — no scroll, no occlusion check, no real pointer.  This is what keeps Biloba quick and stable, and it's the right default for the vast majority of specs.
 
-For the handful of specs that need genuine input fidelity — real CSS `:hover`, occlusion-aware clicks, scroll-into-view, real keystrokes/drags/wheel/touch — `b.Realistic()` returns a view of the *same tab* whose interactions route through real Chrome DevTools Protocol input.  Same API, just a more faithful (and slightly slower) interaction engine.  See the [documentation](https://onsi.github.io/biloba) (and the `biloba-gomega:realistic-mode` Claude Code skill).
+For the handful of specs that need genuine input fidelity — real CSS `:hover`, occlusion-aware clicks, scroll-into-view, real keystrokes/drags/wheel/touch — `b.Realistic()` returns a view of the *same tab* whose interactions route through real Chrome DevTools Protocol input.  Same API, just a more faithful (and slightly slower) interaction engine.  See the [documentation](https://onsi.github.io/biloba) (and the `biloba-go:realistic-mode` Claude Code skill).
 
 ### Performance
 
@@ -187,13 +187,168 @@ Biloba ships separate [Claude Code](https://claude.com/claude-code) plugins for 
 
 ```
 /plugin marketplace add onsi/biloba
-/plugin install biloba-gomega@biloba
+/plugin install biloba-go@biloba
 /plugin install biloba-vitest@biloba
 ```
 
-(or use `claude plugin marketplace add onsi/biloba` followed by `claude plugin install biloba-gomega@biloba` or `claude plugin install biloba-vitest@biloba`.)
+(or use `claude plugin marketplace add onsi/biloba` followed by `claude plugin install biloba-go@biloba` or `claude plugin install biloba-vitest@biloba`.)
 
-The former `biloba@biloba` plugin remains as a deprecated compatibility alias for the Go/Gomega skills during the transition window. Existing `/biloba:*` invocations continue to work, but migrate to `biloba-gomega@biloba`; install both new client plugins only in repositories that genuinely exercise both clients.
+The former `biloba@biloba` plugin remains as a deprecated compatibility alias for the Go/Gomega skills during the transition window. Existing `/biloba:*` invocations continue to work, but migrate to `biloba-go@biloba`; install both new client plugins only in repositories that genuinely exercise both clients.
+
+### Vitest Support
+
+Biloba's TypeScript client lets a `vitest` suite drive Chrome through Biloba.  **It's a prototype**: the package (`@onsi/biloba-vitest-prototype`) isn't published to npm yet — you build it from this repo — and its API will keep shifting before 1.0.  [**Biloba for Vitest**](https://onsi.github.io/biloba/vitest.html) is the documentation: setup and the shared-browser topology, launch modes, locators, actions and assertions, network control, screenshots and visual assertions, and structured failures.
+
+Each `vitest` worker process spawns a small Go daemon (`bilobad`) and talks to it over framed JSON on stdin/stdout.  Every daemon attaches to one shared Chrome — the same "one browser, one isolated tab per parallel process" model that makes the Go suites fast.  Polling happens on the daemon, next to Chrome, so an assertion with a 1s timeout and a 5ms interval is *one* request rather than two hundred.
+
+Here's the chat app from the top of this README, in TypeScript.  Actions and assertions poll by default, exactly as they do in Go:
+
+```ts
+import {beforeEach, describe, it} from "vitest";
+import {contains, Keys, not, type Session} from "@onsi/biloba-vitest-prototype";
+
+async function login(tab: Session, user: string, password: string) {
+  await tab.navigate("/login");
+  await tab.getByLabel("Username").setValue(user);              // locator: a form control by its label
+  await tab.getByLabel("Password").setValue(password);
+  await tab.getByRole("button", {name: "Log in"}).click();      // locator: role + accessible name
+  await tab.locator(".chat-page").expectExists();
+}
+
+describe("a simple chat app", () => {
+  // session is a root Session opened in a beforeAll (not shown).  We open an isolated tab per
+  // user off of it, and generate reusable locators off each tab.
+  let tabSally: Session, tabJane: Session;
+  beforeEach(async () => {
+    tabSally = await session.newTab();
+    await login(tabSally, "sally", "yllas");
+    tabJane = await session.newTab();
+    await login(tabJane, "jane", "enaj");
+  });
+
+  it("shows all logged in users as present", async () => {
+    // both tabs should show both users online, by the names a user actually reads
+    for (const tab of [tabSally, tabJane]) {
+      await tab.getByText("Sally").within("#user-list").expectClass("online");
+      await tab.getByText("Jane").within("#user-list").expectClass("online");
+    }
+  });
+
+  it("shows Jane that Sally is typing", async () => {
+    const lastEntry = tabJane.getByRole("listitem").within("#conversation").last();
+    await tabSally.locator("#input").setValue("Hey Jane, how are you?");
+    await lastEntry.expectText("Sally is typing...");
+    await lastEntry.expectClass("typing");
+
+    await tabSally.locator("#input").setValue("");
+    await lastEntry.expectNotText("Sally is typing...");
+    await lastEntry.expectClass(not(contains("typing")));
+  });
+
+  it("delivers messages between Sally and Jane", async () => {
+    await tabSally.locator("#input").type("Hey Jane, how are you?"); // real keystrokes...
+    await tabSally.locator("#input").type(Keys.Enter);               // ...sent by pressing Enter
+    await tabJane.getByRole("listitem").within("#conversation").last()
+      .expectText("Hey Jane, how are you?");
+
+    await tabJane.locator("#input").type("I'm splendid, Sally!");
+    await tabJane.getByRole("button", {name: "Send"}).click();
+    await tabSally.getByRole("listitem").within("#conversation").last()
+      .expectText("I'm splendid, Sally!");
+  });
+
+  it("lets Sally share a document that Jane can download", async () => {
+    await tabSally.getByLabel("Attach a file").setUploadFiles(["./fixtures/report.pdf"]);
+    await tabSally.getByRole("button", {name: "Send"}).click();
+
+    const doc = tabJane.getByRole("link", {name: "report.pdf"});
+    await doc.expectVisible();                              // Jane sees the shared document...
+    await doc.click();                                      // ...and downloads it
+    await tabJane.expectDownload({filename: "report.pdf"});
+  });
+
+  it("reveals message actions on hover", async () => {
+    await tabSally.locator("#input").setValue("Hey Jane");
+    await tabSally.getByRole("button", {name: "Send"}).click();
+
+    const last = tabSally.getByRole("listitem").within("#conversation").last();
+    await last.realistic().hover(); // genuine CSS :hover — one of the few things the fast track can't do
+    await tabSally.getByRole("button", {name: "React"}).within(last).expectVisible();
+  });
+
+  it("renders a message bubble exactly as designed", async () => {
+    await tabSally.locator("#input").setValue("Hey Jane");
+    await tabSally.getByRole("button", {name: "Send"}).click();
+
+    // compare against a committed baseline — masking the volatile timestamp,
+    // in both themes.  A failure says what moved and where, in words.
+    await tabSally.getByRole("listitem").within("#conversation").last()
+      .expectScreenshot("message-bubble", {
+        mask: [tabSally.locator(".timestamp")],
+        colorSchemes: ["light", "dark"],
+      });
+  });
+
+  it("shows an error when a message fails to send", async () => {
+    await tabSally.abortRequest(contains("/messages")); // make the send fail, hermetically
+    await tabSally.locator("#input").setValue("Hey Jane");
+    await tabSally.getByRole("button", {name: "Send"}).click();
+    await tabSally.getByRole("alert").expectText("Message failed to send");
+  });
+
+  it("loads conversation history", async () => {
+    // stub the history response
+    await tabSally.stubRequest(contains("/history"), {
+      body: new TextEncoder().encode('[{"from":"Jane","text":"Welcome back!"}]'),
+    });
+    await tabSally.navigate("/chat");
+    await tabSally.getByRole("listitem").within("#conversation").expectText("Welcome back!");
+  });
+
+  it("tracks when users aren't online", async () => {
+    const jane = tabSally.getByText("Jane").within("#user-list");
+    await jane.expectClass("online");
+
+    await tabJane.close();
+    await jane.expectClass("offline");
+  });
+});
+```
+
+#### Running them
+
+Build the daemon and point the client at it:
+
+```bash
+go build -o .bin/bilobad ./cmd/bilobad
+export BILOBA_DAEMON_EXECUTABLE="$PWD/.bin/bilobad"
+```
+
+Start one Chrome for the whole run in vitest's global setup and hand its connection to the workers.  Register that setup — and a process pool, so each test file really is its own worker with its own daemon — in your vitest config:
+
+```ts
+// vitest.config.ts
+import {defineConfig} from "vitest/config";
+
+export default defineConfig({
+  test: {
+    environment: "node",
+    globalSetup: ["./test/global-setup.ts"],
+    pool: "forks",
+    fileParallelism: true,
+  },
+});
+```
+
+Then run the suite the way you run any other vitest suite:
+
+```bash
+npx vitest run       # the whole suite, files in parallel across worker processes
+npx vitest           # watch mode
+npx vitest run chat  # just the files whose path matches "chat"
+```
+
+Every worker shares the one Chrome that global setup started, so adding workers costs a daemon and a tab rather than a browser.  See the [setup section of the Vitest docs](https://onsi.github.io/biloba/vitest.html#getting-set-up) for the `global-setup.ts` and per-file `connect`/`openSession` boilerplate.
 
 ---
 

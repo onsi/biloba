@@ -521,27 +521,27 @@ Biloba ships a [Claude Code](https://claude.com/claude-code) plugin for its Go/G
 
 ```
 /plugin marketplace add onsi/biloba
-/plugin install biloba-gomega@biloba
+/plugin install biloba-go@biloba
 ```
 
-(The same can be done non-interactively with `claude plugin marketplace add onsi/biloba` and `claude plugin install biloba-gomega@biloba`.)
+(The same can be done non-interactively with `claude plugin marketplace add onsi/biloba` and `claude plugin install biloba-go@biloba`.)
 
-The former `biloba@biloba` plugin remains as a deprecated compatibility alias during the transition window, so existing `/biloba:*` invocations continue to work. Migrate by uninstalling it and installing `biloba-gomega@biloba` instead.
+The former `biloba@biloba` plugin remains as a deprecated compatibility alias during the transition window, so existing `/biloba:*` invocations continue to work. Migrate by uninstalling it and installing `biloba-go@biloba` instead.
 
-This installs a family of `biloba-gomega:*` skills that activate automatically while you write tests and can also be invoked explicitly (for example, `/biloba-gomega:explore-unfamiliar-page http://localhost:8080`):
+This installs a family of `biloba-go:*` skills that activate automatically while you write tests and can also be invoked explicitly (for example, `/biloba-go:explore-unfamiliar-page http://localhost:8080`):
 
 | Skill | What it's for |
 |---|---|
-| `biloba-gomega:overview` | The mental model — the three principles and how they shape your specs. |
-| `biloba-gomega:setup` | Wiring Biloba into your suite: bootstrap, `chrome-headless-shell`, the bootstrap variations. |
-| `biloba-gomega:write-tests` | Authoring specs: the dual immediate/matcher API, selecting elements, hermetic tests, multiple tabs. |
-| `biloba-gomega:realistic-mode` | The realistic interaction track (`b.Realistic()`) for occlusion/hover/drag/scroll/touch-sensitive flows. |
-| `biloba-gomega:visual-assertions` | Asserting appearance with [`b.HaveScreenshot`](#visual-assertions): baselines, masking, tolerance, and reading a failed comparison. |
-| `biloba-gomega:xpath` | Building selectors with the `b.XPath()` DSL. |
-| `biloba-gomega:api` | A one-line reference for every method and matcher. |
-| `biloba-gomega:explore-unfamiliar-page` | Orienting to a page you haven't seen, then drafting a starter spec. |
-| `biloba-gomega:debug-failures` | DOM outlines, screenshots, and the env/config knobs that surface them. |
-| `biloba-gomega:flaky-specs` | A spec that's flaky, order-dependent, or only fails under `-p`/CI — the smells and their polling fixes. |
+| `biloba-go:overview` | The mental model — the three principles and how they shape your specs. |
+| `biloba-go:setup` | Wiring Biloba into your suite: bootstrap, `chrome-headless-shell`, the bootstrap variations. |
+| `biloba-go:write-tests` | Authoring specs: the dual immediate/matcher API, selecting elements, hermetic tests, multiple tabs. |
+| `biloba-go:realistic-mode` | The realistic interaction track (`b.Realistic()`) for occlusion/hover/drag/scroll/touch-sensitive flows. |
+| `biloba-go:visual-assertions` | Asserting appearance with [`b.HaveScreenshot`](#visual-assertions): baselines, masking, tolerance, and reading a failed comparison. |
+| `biloba-go:xpath` | Building selectors with the `b.XPath()` DSL. |
+| `biloba-go:api` | A one-line reference for every method and matcher. |
+| `biloba-go:explore-unfamiliar-page` | Orienting to a page you haven't seen, then drafting a starter spec. |
+| `biloba-go:debug-failures` | DOM outlines, screenshots, and the env/config knobs that surface them. |
+| `biloba-go:flaky-specs` | A spec that's flaky, order-dependent, or only fails under `-p`/CI — the smells and their polling fixes. |
 
 ### `chromedp`: Breaking the Fourth Wall
 
@@ -1782,7 +1782,7 @@ p.Filter("id", Not(ContainSubstring("new-user"))) //returns `SliceOfProperties` 
 
 ### Geometry
 
-Some specs need to assert on **layout**: where an element ended up, how far it sits from the top of a scroll container, whether a panel scrolled to the bottom.  The temptation is to reach for `b.Run` and a hand-rolled `getBoundingClientRect()` blob — but that read happens *once*, and layout settles asynchronously, so it's the single most common residual flake source (see [`biloba-gomega:flaky-specs`](#claude-code-skills)).  Biloba's geometry getters fold readiness in and poll by default, exactly like [`GetProperty`](#properties): they wait until the element is present **and actually laid out** (a non-degenerate box, `width` and `height` > 0) before reading, so you never measure a zero box mid-layout.
+Some specs need to assert on **layout**: where an element ended up, how far it sits from the top of a scroll container, whether a panel scrolled to the bottom.  The temptation is to reach for `b.Run` and a hand-rolled `getBoundingClientRect()` blob — but that read happens *once*, and layout settles asynchronously, so it's the single most common residual flake source (see [`biloba-go:flaky-specs`](#claude-code-skills)).  Biloba's geometry getters fold readiness in and poll by default, exactly like [`GetProperty`](#properties): they wait until the element is present **and actually laid out** (a non-degenerate box, `width` and `height` > 0) before reading, so you never measure a zero box mid-layout.
 
 `b.GetBoundingBox(selector)` returns the first match's viewport-relative `Box` (`Top`, `Left`, `Width`, `Height`, `Bottom`, `Right`, `CenterX`, `CenterY` — all CSS pixels):
 

@@ -15,7 +15,7 @@ version=$(sed -n 's/^const BILOBA_VERSION = "\([^"]*\)"/\1/p' biloba.go)
 
 python3 -m json.tool .claude-plugin/marketplace.json >/dev/null
 
-for plugin in biloba-gomega biloba-vitest biloba; do
+for plugin in biloba-go biloba-vitest biloba; do
 	manifest="plugins/$plugin/.claude-plugin/plugin.json"
 	[[ -f "$manifest" ]] || fail "missing $manifest"
 	python3 -m json.tool "$manifest" >/dev/null
@@ -31,7 +31,7 @@ for plugin in biloba-gomega biloba-vitest biloba; do
 
 done
 
-for plugin in biloba-gomega biloba-vitest; do
+for plugin in biloba-go biloba-vitest; do
 	for skill_file in "plugins/$plugin"/skills/*/SKILL.md; do
 		[[ -f "$skill_file" ]] || continue
 		skill_dir=$(basename "$(dirname "$skill_file")")
@@ -68,11 +68,11 @@ done
 
 # A skill name unique to one client plugin must never be referenced from the other - it would
 # route a reader to a skill they do not have installed.
-for plugin in biloba-gomega biloba-vitest; do
-	if [[ "$plugin" == biloba-gomega ]]; then
+for plugin in biloba-go biloba-vitest; do
+	if [[ "$plugin" == biloba-go ]]; then
 		other=biloba-vitest
 	else
-		other=biloba-gomega
+		other=biloba-go
 	fi
 	for other_skill in "plugins/$other"/skills/*/; do
 		[[ -d "$other_skill" ]] || continue
@@ -85,11 +85,11 @@ for plugin in biloba-gomega biloba-vitest; do
 done
 
 canonical_count=0
-for canonical_skill in plugins/biloba-gomega/skills/*; do
+for canonical_skill in plugins/biloba-go/skills/*; do
 	[[ -d "$canonical_skill" ]] || continue
 	skill_name=$(basename "$canonical_skill")
 	compatibility_skill="plugins/biloba/skills/$skill_name"
-	expected_target="../../biloba-gomega/skills/$skill_name"
+	expected_target="../../biloba-go/skills/$skill_name"
 	[[ -L "$compatibility_skill" ]] || fail "$compatibility_skill must be a symlink"
 	actual_target=$(readlink "$compatibility_skill")
 	[[ "$actual_target" == "$expected_target" ]] || fail "$compatibility_skill points to $actual_target"
@@ -111,13 +111,13 @@ marketplace_count=$(grep -c '"source": "./plugins/biloba-' .claude-plugin/market
 total_plugin_count=$(grep -c '"source": "./plugins/biloba' .claude-plugin/marketplace.json)
 [[ "$total_plugin_count" == 3 ]] || fail "marketplace must contain two client plugins and one compatibility alias"
 
-if grep -RniE 'typescript|vitest|biloba-vitest|biloba-gomega:|`biloba:|/biloba:' plugins/biloba-gomega/skills >/dev/null; then
-	grep -RniE 'typescript|vitest|biloba-vitest|biloba-gomega:|`biloba:|/biloba:' plugins/biloba-gomega/skills >&2
+if grep -RniE 'typescript|vitest|biloba-vitest|biloba-go:|`biloba:|/biloba:' plugins/biloba-go/skills >/dev/null; then
+	grep -RniE 'typescript|vitest|biloba-vitest|biloba-go:|`biloba:|/biloba:' plugins/biloba-go/skills >&2
 	fail "canonical Gomega skills contain client-specific routing"
 fi
 
-if grep -RniE 'ginkgo|gomega|biloba-gomega:' plugins/biloba-vitest >/dev/null; then
-	grep -RniE 'ginkgo|gomega|biloba-gomega:' plugins/biloba-vitest >&2
+if grep -RniE 'ginkgo|gomega|biloba-go:' plugins/biloba-vitest >/dev/null; then
+	grep -RniE 'ginkgo|gomega|biloba-go:' plugins/biloba-vitest >&2
 	fail "Vitest plugin contains Gomega guidance or cross-plugin routing"
 fi
 
@@ -134,7 +134,7 @@ if grep -RniE 'biloba:typescript|biloba-from-typescript|plugin install biloba@bi
 fi
 
 grep -Fq 'Biloba for Vitest' docs/vitest.md || fail "Vitest docs page is missing"
-grep -Fq 'biloba-gomega@biloba' README.md || fail "README does not advertise the Gomega plugin"
+grep -Fq 'biloba-go@biloba' README.md || fail "README does not advertise the Gomega plugin"
 grep -Fq 'biloba-vitest@biloba' README.md || fail "README does not advertise the Vitest plugin"
 grep -Fq 'biloba-vitest@biloba' typescript/README.md || fail "TypeScript README does not advertise the Vitest plugin"
 
