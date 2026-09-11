@@ -41,8 +41,9 @@ jobs:
         go-version-file: 'go.mod'
     - run: go vet ./...
     # Ubuntu 23.10+ (the ubuntu-latest runner) restricts unprivileged user namespaces via
-    # AppArmor, which Chrome's sandbox needs to start. Relax it so Chrome can launch with the
-    # sandbox intact (rather than weakening Biloba's defaults with --no-sandbox).
+    # AppArmor, which Chrome's sandbox needs to start. Biloba itself now auto-adds --no-sandbox
+    # on a restricted host, but relaxing this here keeps this lane covering the sandbox-ON path -
+    # a real sandboxed Chrome, the same as most users' hosts.
     # https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md
     - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
     # default (pragmatic) mode: the suite auto-installs chrome-headless-shell via Chrome for Testing.
@@ -63,8 +64,9 @@ jobs:
       with:
         go-version-file: 'go.mod'
     # Ubuntu 23.10+ (the ubuntu-latest runner) restricts unprivileged user namespaces via
-    # AppArmor, which Chrome's sandbox needs to start. Relax it so Chrome can launch with the
-    # sandbox intact (rather than weakening Biloba's defaults with --no-sandbox).
+    # AppArmor, which Chrome's sandbox needs to start. Biloba itself now auto-adds --no-sandbox
+    # on a restricted host, but relaxing this here keeps this lane covering the sandbox-ON path -
+    # a real sandboxed Chrome, the same as most users' hosts.
     # https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md
     - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
     # Runs in parallel like the default lane. Concurrent remote-allocator attaches are handled by
@@ -88,7 +90,8 @@ jobs:
         node-version: 22
         cache: pnpm
         cache-dependency-path: typescript/pnpm-lock.yaml
-    # See the note in the build job: Chrome's sandbox needs unprivileged user namespaces.
+    # See the note in the build job: relaxing this keeps this lane covering the sandbox-ON path
+    # too, rather than Biloba's own auto --no-sandbox fallback.
     - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
     # The Go suites provision their own shell, but driver-parity and driver-e2e start daemons from
     # TypeScript, which does not.  Populating the puppeteer cache that engine.LocateChrome searches
@@ -135,7 +138,8 @@ jobs:
     # Installs biloba plus this runner's platform package into an empty project the way a user
     # would, type-checks it, runs `npx biloba install-chrome`, then one Vitest spec against a real
     # page.  Deliberately no AppArmor sysctl here (the other jobs have one): this job is a stock
-    # runner, like a user's, so it shows whether users need that step too.
+    # runner, like a user's, so it proves Biloba's own auto --no-sandbox fallback (see
+    # ChromeSandboxDisabled) is what lets Chrome launch here, with no sysctl step required.
     - run: scripts/packaging-check.sh "$VITEST"
       env:
         VITEST: ${{ matrix.vitest }}
