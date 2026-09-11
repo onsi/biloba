@@ -5,8 +5,18 @@ A TypeScript client for [Biloba](https://onsi.github.io/biloba/) that lets a `vi
 **This is a prototype.** Its API will continue to shift before 1.0. Install it from npm:
 
 ```bash
-pnpm add -D biloba
+npm install -D vitest biloba
 ```
+
+This pulls in `biloba` plus one small per-platform package that carries the `bilobad` daemon binary — `biloba-darwin-arm64`, `biloba-darwin-x64`, `biloba-linux-x64`, or `biloba-linux-arm64`, whichever matches the install machine. No Go toolchain required, no install scripts. Windows isn't supported yet; the daemon-resolution error there points at building `bilobad` from source and `BILOBA_DAEMON_EXECUTABLE`.
+
+Then, once per Chrome version:
+
+```bash
+npx biloba install-chrome
+```
+
+This downloads Chrome for Testing's current Stable `chrome-headless-shell` into a per-user cache and prints the resolved path — a no-op once that version is already cached.
 
 ## Claude Code skills
 

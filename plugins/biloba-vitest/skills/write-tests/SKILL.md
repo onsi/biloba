@@ -28,26 +28,32 @@ vitest worker 3  ──▶  bilobad  ──┘
 
 ## 2. Setup
 
-Build the daemon (from the Biloba repo):
+Install `biloba` (pulls in the `bilobad` daemon via a per-platform npm package — no Go toolchain needed) and fetch Chrome once:
 
 ```bash
-go build -o .bin/bilobad ./cmd/bilobad
+npm install -D vitest biloba
+npx biloba install-chrome
 ```
+
+Windows isn't supported yet (build `bilobad` from source and set `BILOBA_DAEMON_EXECUTABLE`); Linux arm64 has no `chrome-headless-shell` build, so launch a distro Chromium instead: `startSharedBrowser({mode: "headless", chromePath: "/usr/bin/chromium"})`. Full detail → `biloba-vitest:setup`.
 
 One Chrome per run, in vitest's global setup:
 
 ```ts
 // global-setup.ts
-import {startSharedBrowser, type SharedBrowserProcess} from "biloba";
+import {startSharedBrowser, type SharedBrowserConnection, type SharedBrowserProcess} from "biloba";
 import type {TestProject} from "vitest/node";
 
-const daemonExecutable = process.env.BILOBA_DAEMON_EXECUTABLE;
-if (!daemonExecutable) throw new Error("BILOBA_DAEMON_EXECUTABLE is not set");
+declare module "vitest" {
+  export interface ProvidedContext {
+    chromeConnection: SharedBrowserConnection;
+  }
+}
 
 let browser: SharedBrowserProcess | undefined;
 
 export async function setup(project: TestProject): Promise<void> {
-  browser = await startSharedBrowser({executable: daemonExecutable});
+  browser = await startSharedBrowser({mode: "headless-shell"});
   project.provide("chromeConnection", browser.connection);
 }
 
@@ -55,6 +61,8 @@ export async function teardown(): Promise<void> {
   await browser?.stop();
 }
 ```
+
+The `declare module "vitest"` augmentation is required for `project.provide`/`inject` to type-check.
 
 A daemon and session per test file:
 
@@ -73,7 +81,7 @@ beforeEach(async () => { await session.prepare(); });
 afterAll(async () => { await browser.close(); });
 ```
 
-- `connect` falls back to `BILOBA_DAEMON_EXECUTABLE` when `daemonExecutable` is omitted.
+- `connect`/`startSharedBrowser` resolve the daemon in order: an explicit `daemonExecutable`/`executable` option, `BILOBA_DAEMON_EXECUTABLE`, then the platform package alongside `biloba`.
 - Omit `chromeConnection` and the daemon launches its own Chrome — fine for one file, wasteful for a suite. Legacy `chromeWsUrl` works but cannot preserve honest host launch metadata.
 - `startSharedBrowser` and self-launching `connect` accept `mode`, `chromePath`, `autoInstall`, ordered `chromeArgs`, and `windowSize`. The mode is `"headless-shell"`, `"headless"`, or `"headful"`; the default size is 1024×768.
 - Configure failure/progress/on-demand capture with `diagnostics`; `artifactDir` remains a compatibility alias.

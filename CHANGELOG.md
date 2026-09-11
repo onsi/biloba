@@ -2,9 +2,14 @@
 
 ### Features
 
+- `biloba` is now on npm: `npm install -D vitest biloba` installs the TypeScript client and, via a per-platform optional dependency, the `bilobad` daemon for macOS and Linux (x64 and arm64) — no Go toolchain required.
+- `npx biloba install-chrome` (and `bilobad install-chrome` directly) downloads and caches the `chrome-headless-shell` build the daemon needs. `bilobad version` reports the daemon's own version.
+- The TypeScript client supports Vitest 3, 4, and 5.
+- The "Chrome not found" error now names `npx biloba install-chrome` as the fix.
+
 ### Fixes
 
-- When several cached `chrome-headless-shell` builds are present (the puppeteer cache and Biloba's own), Biloba now uses the newest one instead of the first cache it finds. Versions are compared numerically, not lexically, so this also fixes a latent ordering bug between versions of different digit widths (e.g. `99.x` vs `150.x`).
+- When several cached `chrome-headless-shell` builds are present, Biloba now uses the newest one instead of the first cache it finds, comparing versions numerically rather than lexically.
 
 ## 0.15.4
 

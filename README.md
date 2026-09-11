@@ -203,6 +203,11 @@ install the `biloba` package from npm, and expect its API to keep shifting befor
 the shared-browser topology, launch modes, locators, actions and assertions, network control,
 screenshots and visual assertions, and structured failures.
 
+`npm install -D vitest biloba` pulls in the daemon binary too — no Go toolchain required. It installs
+`biloba` plus one small per-platform package (macOS/Linux, x64/arm64; Windows isn't supported yet).
+`npx biloba install-chrome` then fetches the `chrome-headless-shell` build the daemon drives, once per
+Chrome version.
+
 Each `vitest` worker process spawns a small Go daemon (`bilobad`) and talks to it over framed JSON on stdin/stdout.  Every daemon attaches to one shared Chrome — the same "one browser, one isolated tab per parallel process" model that makes the Go suites fast.  Polling happens on the daemon, next to Chrome, so an assertion with a 1s timeout and a 5ms interval is *one* request rather than two hundred.
 
 Here's the chat app from the top of this README, in TypeScript.  Actions and assertions poll by default, exactly as they do in Go:
@@ -321,11 +326,11 @@ describe("a simple chat app", () => {
 
 #### Running them
 
-Build the daemon and point the client at it:
+Install `biloba`, which pulls in the daemon for you — no Go toolchain needed on macOS or Linux (x64 or arm64; Windows isn't supported yet):
 
 ```bash
-go build -o .bin/bilobad ./cmd/bilobad
-export BILOBA_DAEMON_EXECUTABLE="$PWD/.bin/bilobad"
+npm install -D vitest biloba
+npx biloba install-chrome   # once per Chrome version
 ```
 
 Start one Chrome for the whole run in vitest's global setup and hand its connection to the workers.  Register that setup — and a process pool, so each test file really is its own worker with its own daemon — in your vitest config:

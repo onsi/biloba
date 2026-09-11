@@ -35,6 +35,14 @@ The trajectory tells you what the daemon observed on every attempt. A flat traje
 
 Do not turn crash codes into assertion timeouts. They identify which layer died and whether recovery is possible.
 
+## Setup-time failures
+
+These happen before any test runs, so look at the error text, not `BilobaError.code`:
+
+- **Missing platform package** — `resolveDaemonExecutable` throws when the per-platform `bilobad` package (`biloba-darwin-arm64`, etc.) isn't installed. The message names likely causes: an `--omit=optional`/`--no-optional` install, or `node_modules` built on a different OS/arch than it's running on (a lockfile from macOS reused in a Linux container, say). Reinstall with optional dependencies, or set `daemonExecutable`/`BILOBA_DAEMON_EXECUTABLE`.
+- **Chrome not found** — `ResolveHeadlessShell` fails when no `chrome-headless-shell` is on `PATH`, cached, or given explicitly. The error names `npx biloba install-chrome` as the fix.
+- **`BILOBA_VERSION_MISMATCH`** — a `process.emitWarning`, not a thrown error, raised by `connect` when an overridden daemon's version doesn't match the `biloba` package's. It means the two were mixed by accident (an old `BILOBA_DAEMON_EXECUTABLE` after an upgrade, say); it doesn't fail the run.
+
 ## Runner-level diagnostics
 
 Install `installBilobaVitestHooks` from `biloba/vitest` in a Vitest setup file. It captures live tabs after failures, can capture slow-test progress, replays browser errors, and reports `console.assert` at the test boundary.

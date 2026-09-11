@@ -48,30 +48,64 @@ This has a consequence worth internalizing early: **polling happens on the daemo
 
 ### Getting set up
 
-You need the daemon binary.  It builds out of this repo:
-
 ```bash
-go build -o .bin/bilobad ./cmd/bilobad
+npm install -D vitest biloba
 ```
 
-Start one Chrome for the whole run in vitest's global setup, and hand its websocket url to the workers:
+This pulls in `biloba` plus exactly one platform package - `biloba-darwin-arm64`, `biloba-darwin-x64`, `biloba-linux-x64`, or `biloba-linux-arm64` - chosen by npm for the machine running the install. That package carries the `bilobad` daemon binary (a few MB, no install scripts). Windows isn't supported yet: `biloba` has nothing to resolve there, and the error names the fallback, `go install github.com/onsi/biloba/cmd/bilobad@vX.Y.Z` plus `BILOBA_DAEMON_EXECUTABLE`.
+
+Then, once per Chrome version, fetch the browser build the daemon drives:
+
+```bash
+npx biloba install-chrome
+```
+
+This runs `bilobad install-chrome`, which downloads Chrome for Testing's current Stable `chrome-headless-shell` into a per-user cache (`~/Library/Caches/biloba/…` on macOS, `~/.cache/biloba/…` on Linux) and prints the path it resolved to. Re-running it is a no-op once that version is already cached. Biloba never downloads Chrome on its own outside this command - `autoInstall: true` on `startSharedBrowser`/`connect` is the explicit opt-in for that - so run it once locally and again in CI (see below).
+
+Chrome lookup, in order: an explicit `chromePath`, `BILOBA_CHROME_HEADLESS_SHELL`, `chrome-headless-shell` on `PATH`, then the newest build cached across the puppeteer and Biloba caches. When none of those find anything, the error names `npx biloba install-chrome`.
+
+Linux on arm64 (including Docker on Apple silicon) is a partial case: `bilobad` installs and runs there, but Chrome for Testing does not publish a `chrome-headless-shell` build for that platform, so `install-chrome` can't help. Install your distro's Chromium package instead and point a full-Chrome launch at it:
 
 ```ts
-// global-setup.ts
-import {startSharedBrowser, type SharedBrowserProcess} from "biloba";
+await startSharedBrowser({mode: "headless", chromePath: "/usr/bin/chromium"});
+```
+
+The path varies by distro - check where your package manager put it.
+
+`biloba` supports Vitest 3, 4, and 5 (peer range `>=3 <6`). Vitest 5 requires Node 22.12 or later; `biloba` itself needs Node 20 or later. If you're on an older config with `poolOptions`/`minWorkers`, note those were removed in Vitest 4 - use top-level `maxWorkers`/`isolate` instead.
+
+Wire the vitest config:
+
+```ts
+// vitest.config.ts
+import {defineConfig} from "vitest/config";
+export default defineConfig({
+  test: {
+    globalSetup: ["./test/global-setup.ts"],
+    pool: "forks",
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
+  },
+});
+```
+
+Start one Chrome for the whole run in vitest's global setup, and hand its connection to the workers:
+
+```ts
+// test/global-setup.ts
+import {startSharedBrowser, type SharedBrowserConnection, type SharedBrowserProcess} from "biloba";
 import type {TestProject} from "vitest/node";
 
-const daemonExecutable = process.env.BILOBA_DAEMON_EXECUTABLE;
-if (!daemonExecutable) throw new Error("BILOBA_DAEMON_EXECUTABLE is not set");
+declare module "vitest" {
+  export interface ProvidedContext {
+    chromeConnection: SharedBrowserConnection;
+  }
+}
 
 let browser: SharedBrowserProcess | undefined;
 
 export async function setup(project: TestProject): Promise<void> {
-  browser = await startSharedBrowser({
-    executable: daemonExecutable,
-    mode: "headless-shell",
-    windowSize: {width: 1024, height: 768},
-  });
+  browser = await startSharedBrowser({mode: "headless-shell"});
   project.provide("chromeConnection", browser.connection);
 }
 
@@ -79,6 +113,8 @@ export async function teardown(): Promise<void> {
   await browser?.stop();
 }
 ```
+
+The `declare module "vitest"` block augments Vitest's `ProvidedContext` type; without it, `project.provide` and `inject` below don't type-check. Declare it once, in the global setup file - Vitest picks it up for every test file in the run.
 
 Then, in each test file, connect a daemon of your own and open a session:
 
@@ -97,9 +133,25 @@ beforeAll(async () => {
 afterAll(async () => { await browser.close(); });
 ```
 
-`connect` reads the daemon's path from `BILOBA_DAEMON_EXECUTABLE` when you don't pass `daemonExecutable`, which is usually how you'll wire it up; pass it explicitly when you'd rather not depend on the environment.  Omit `chromeConnection` and the daemon launches Chrome itself - fine for a single file, wasteful for a suite.  The older `chromeWsUrl` attachment remains available, but it cannot report how an external Chrome was launched; prefer `chromeConnection` so every worker receives the host's validated launch metadata.
+`connect` and `startSharedBrowser` resolve the daemon executable the same way, in order: an explicit `daemonExecutable`/`executable` option, then `BILOBA_DAEMON_EXECUTABLE`, then the platform package installed alongside `biloba`. You normally don't pass either option - the platform package covers it. Reach for `BILOBA_DAEMON_EXECUTABLE` (or the option) to point at a daemon built from source, which is the path for Windows and for any platform npm doesn't ship a package for yet. If the platform package is missing at run time, the error calls out `--omit=optional`/`--no-optional` installs and a lockfile or `node_modules` moved between operating systems (a Mac install reused inside a Linux container, say) as the likely causes.
+
+`bilobad version` reports the daemon's own version; when you've overridden the daemon and its version differs from the `biloba` package's, `connect` emits a `BILOBA_VERSION_MISMATCH` process warning (skipped for `dev` builds, which don't carry a comparable version).
+
+Omit `chromeConnection` and the daemon launches Chrome itself - fine for a single file, wasteful for a suite.  The older `chromeWsUrl` attachment remains available, but it cannot report how an external Chrome was launched; prefer `chromeConnection` so every worker receives the host's validated launch metadata.
 
 Both `startSharedBrowser` and a self-launching `connect` accept `mode: "headless-shell" | "headless" | "headful"`, `chromePath`, `autoInstall`, ordered `chromeArgs`, and `windowSize`.  The default is the fast headless shell at 1024×768.  `browser.launch` reports the resolved executable, mode, arguments, size, and whether Biloba installed the shell.  Set `BILOBA_INTERACTIVE=true` for the headful interactive default, or select a mode explicitly.
+
+In CI, cache the Chrome download across runs and install it before the suite:
+
+```yaml
+- uses: actions/setup-node@v4
+  with: {node-version: 22, cache: npm}
+- uses: actions/cache@v4
+  with: {path: ~/.cache/biloba, key: biloba-chrome-${{ runner.os }}}
+- run: npm ci
+- run: npx biloba install-chrome
+- run: npx vitest run
+```
 
 A `Session` is the TypeScript analogue of a Biloba tab.  A session returned by `browser.openSession()` owns its own browser context, so its cookies and storage are isolated from every other root session.  `session.prepare()` is `b.Prepare()` - it resets the session between tests and is what makes reuse cheap:
 
