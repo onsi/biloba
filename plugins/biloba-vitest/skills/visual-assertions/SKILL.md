@@ -16,7 +16,7 @@ const result = await session.getByTestId("chart").expectScreenshot("revenue-char
 expect(result.match).toBe(true);
 ```
 
-The first run must fail when the baseline is missing. Review the actual image, enable update mode deliberately, write the baseline, then commit it. Never leave update mode enabled in CI: it turns comparisons into writes and makes the suite pass without checking regressions.
+The first run must fail when the baseline is missing. Review the actual image, enable update mode deliberately (`BILOBA_UPDATE_SCREENSHOTS=1`, or `updateScreenshots: true` on `connect`), write the baseline, then commit it. Never leave update mode enabled in CI: it turns comparisons into writes and makes the suite pass without checking regressions.
 
 ## Keep the comparison meaningful
 

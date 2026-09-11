@@ -23,48 +23,11 @@ vitest worker 3  ──▶  bilobad  ──┘
 
 - Never write a client-side retry loop (`await expect.poll(...)` around a Biloba assertion, `waitFor`, a `for` loop with sleeps). You are re-polling a poll; the failure you get is the inner one, and you pay a round trip per attempt.
 - The default mode is `"eventually"`. Use `{mode: "immediate"}` for one attempt or `{mode: "consistently"}` to require the condition to remain true for the timeout. On actions, `{immediate: true}` is shorthand for `{mode: "immediate"}`.
-- Call Biloba actions and assertions directly. Do not wrap them in another polling abstraction.
 - Tune with `{timeoutMs, intervalMs, signal, mode}` on actions and assertions.
 
-## 2. Setup
+## 2. Sessions and tabs
 
-Install `biloba` (pulls in the `bilobad` daemon via a per-platform npm package — no Go toolchain needed) and fetch Chrome once:
-
-```bash
-npm install -D vitest biloba
-npx biloba install-chrome
-```
-
-Windows isn't supported yet (build `bilobad` from source and set `BILOBA_DAEMON_EXECUTABLE`); Linux arm64 has no `chrome-headless-shell` build, so launch a distro Chromium instead: `startSharedBrowser({mode: "headless", chromePath: "/usr/bin/chromium"})`. Full detail → `biloba-vitest:setup`.
-
-One Chrome per run, in vitest's global setup:
-
-```ts
-// global-setup.ts
-import {startSharedBrowser, type SharedBrowserConnection, type SharedBrowserProcess} from "biloba";
-import type {TestProject} from "vitest/node";
-
-declare module "vitest" {
-  export interface ProvidedContext {
-    chromeConnection: SharedBrowserConnection;
-  }
-}
-
-let browser: SharedBrowserProcess | undefined;
-
-export async function setup(project: TestProject): Promise<void> {
-  browser = await startSharedBrowser({mode: "headless-shell"});
-  project.provide("chromeConnection", browser.connection);
-}
-
-export async function teardown(): Promise<void> {
-  await browser?.stop();
-}
-```
-
-The `declare module "vitest"` augmentation is required for `project.provide`/`inject` to type-check.
-
-A daemon and session per test file:
+Wiring (install, `npx biloba install-chrome`, global setup, launch options) → `biloba-vitest:setup`. Each test file holds one daemon and one reusable root session:
 
 ```ts
 import {inject} from "vitest";
@@ -81,11 +44,7 @@ beforeEach(async () => { await session.prepare(); });
 afterAll(async () => { await browser.close(); });
 ```
 
-- `connect`/`startSharedBrowser` resolve the daemon in order: an explicit `daemonExecutable`/`executable` option, `BILOBA_DAEMON_EXECUTABLE`, then the platform package alongside `biloba`.
-- Omit `chromeConnection` and the daemon launches its own Chrome — fine for one file, wasteful for a suite. Legacy `chromeWsUrl` works but cannot preserve honest host launch metadata.
-- `startSharedBrowser` and self-launching `connect` accept `mode`, `chromePath`, `autoInstall`, ordered `chromeArgs`, and `windowSize`. The mode is `"headless-shell"`, `"headless"`, or `"headful"`; the default size is 1024×768.
-- Configure failure/progress/on-demand capture with `diagnostics`; `artifactDir` remains a compatibility alias.
-- A root `Session` has its own browser context, so cookies and storage are isolated. `session.prepare()` is `b.Prepare()` — reset between tests rather than opening a new session.
+- A root `Session` has its own browser context, so cookies and storage are isolated. `session.prepare()` resets it cheaply — call it between tests rather than opening a new session.
 - `await session.newTab()` opens a sibling tab in the same context. Use `tabs()`/`spawnedTabs()` for snapshots, `findTab()`/`waitForTab()` for popup workflows, and `frames()`/`waitForFrame()` for cross-origin frame targets.
 
 ## 3. Locators
@@ -230,26 +189,8 @@ expect(result.match).toBe(true);
 
 ## 9. Failures and diagnostics
 
-Everything rejects with a `BilobaError` carrying `code`, `locator`, `expected`, `observed`, `trajectory`, `domOutline`, `screenshotPath`, `diagnostics`, `visual`, `artifactPaths`, and `daemonDetail` as applicable.
+Everything rejects with a `BilobaError` carrying `code`, `locator`, `expected`, `observed`, `trajectory`, `domOutline`, `screenshotPath`, `diagnostics`, `visual`, `artifactPaths`, and `daemonDetail` as applicable. Narrow on `code`: `NAVIGATION` and the crash codes (`PAGE_CRASHED`, `BROWSER_GONE`, `DRIVER_CLOSED`) mean something specific that waiting will not fix.
 
 `trajectory` records every polling attempt, what it observed, and why it retried. Read it before widening a timeout: a flat line is a product bug, while a monotone approach suggests latency.
 
-Narrow on `code` — several are specific and actionable:
-
-| Code | Meaning |
-|---|---|
-| `TIMEOUT` | Poll ran out of time. The ordinary assertion failure. |
-| `TARGET_NOT_FOUND` | Nothing matched the locator. |
-| `TARGET_NOT_READY` | Matched but refused — hidden, disabled. Means *not yet*; a retry may succeed. |
-| `NAVIGATION` | Page loaded with a status you did not ask for. Waiting will not fix it — see `navigateWithStatus`. |
-| `JAVASCRIPT_ERROR` | Your expression threw in the page. |
-| `INVALID_ARGUMENT` | Malformed request — e.g. a cookie with no domain and no navigated origin. |
-| `PAGE_CRASHED` | This session's renderer died; browser is fine. Navigate again to recover. |
-| `BROWSER_GONE` | The shared Chrome exited or crashed. |
-| `DRIVER_CLOSED` | This worker's daemon died. `daemonDetail` holds its stderr. |
-
-The last three exist so a crash reports itself as a crash: Chrome does not fail calls to a dead renderer, it stops answering them, so without a dedicated code a crashed page is indistinguishable from an assertion that never came true.
-
-`session.captureDiagnostics()` captures every live page in the browser context and excludes frames, workers, and other contexts. `consoleMessages()`/`onConsoleMessage()` and `warnings()`/`onWarning()` provide bounded snapshots and live delivery. Pass `debugLog` to `connect` for structured driver/CDP records.
-
-In a Vitest setup file, import `installBilobaVitestHooks` from `biloba/vitest`. It captures ordinary and Biloba test failures, supports timed and explicit progress capture, replays browser errors, and can fail the test boundary on `console.assert` without throwing from the protocol reader.
+The full code table, `installBilobaVitestHooks`, `session.captureDiagnostics()`, and the console/warning streams → `biloba-vitest:debug-failures`.

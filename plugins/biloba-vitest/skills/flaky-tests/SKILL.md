@@ -29,7 +29,7 @@ Do not wrap these calls in `expect.poll`, `waitFor`, sleeps, or a loop. Outer po
 ## Visual traps
 
 - A missing baseline must fail until a human reviews and writes it.
-- Never enable screenshot update mode in CI.
+- Never enable screenshot update mode (`BILOBA_UPDATE_SCREENSHOTS`, `updateScreenshots`) in CI.
 - Mask deterministic dynamic regions; do not widen tolerances until the assertion cannot fail.
 - Treat byte-identical light/dark captures as suspicious when the test intended two schemes.
 

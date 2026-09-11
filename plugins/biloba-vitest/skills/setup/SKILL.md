@@ -19,7 +19,7 @@ Then fetch the Chrome build the daemon drives, once per Chrome version:
 npx biloba install-chrome
 ```
 
-This runs `bilobad install-chrome`: downloads Chrome for Testing's current Stable `chrome-headless-shell` into a per-user cache (`~/Library/Caches/biloba` on macOS, `~/.cache/biloba` on Linux) and prints the path. A no-op once that version is cached. Biloba never downloads Chrome silently — `autoInstall: true` is the opt-in. On Linux arm64, Chrome for Testing ships no `chrome-headless-shell` build at all; install a distro Chromium and launch it explicitly: `startSharedBrowser({mode: "headless", chromePath: "/usr/bin/chromium"})` (path varies by distro; on Debian-based images such as the official `node` images, `apt-get install -y chromium`; Ubuntu's `chromium` is a snap that doesn't run in containers).
+This runs `bilobad install-chrome`: downloads Chrome for Testing's current Stable `chrome-headless-shell` into a per-user cache (`~/Library/Caches/biloba` on macOS, `~/.cache/biloba` on Linux) and prints the path. A no-op once that version is cached. Biloba never downloads Chrome silently — `autoInstall: true` is the opt-in. Chrome lookup order: an explicit `chromePath`, `BILOBA_CHROME_HEADLESS_SHELL`, `chrome-headless-shell` on `PATH`, then the newest build across the puppeteer and Biloba caches. On Linux arm64, Chrome for Testing ships no `chrome-headless-shell` build at all; install a distro Chromium and launch it explicitly: `startSharedBrowser({mode: "headless", chromePath: "/usr/bin/chromium"})` (path varies by distro; on Debian-based images such as the official `node` images, `apt-get install -y chromium`; Ubuntu's `chromium` is a snap that doesn't run in containers).
 
 Start one Chrome for the entire run:
 
