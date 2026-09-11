@@ -71,6 +71,10 @@ done
 
 `biloba`'s `optionalDependencies` pin exact versions, so nothing ever installs `0.0.0`.
 
+`biloba-win32-x64` and `biloba-win32-arm64` are reserved the same way for a future Windows build.
+The release workflow doesn't publish them and `biloba` doesn't depend on them, so they need no
+trusted publisher until Windows ships.
+
 Then, for each of the five packages (`biloba` and the four above), on npmjs.com → the package →
 **Settings**:
 
