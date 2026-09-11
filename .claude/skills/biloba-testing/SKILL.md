@@ -235,6 +235,14 @@ for b.GetAttribute("html", "data-theme") != "dark" {
 }
 ```
 
+## On-failure artifacts adapt to the environment
+
+Resolved in `ConnectToChrome`. Interactive human → inline screenshot, no outline, no disk. Automation (`automationDetected()` = `CI` set OR `agentdetection.IsAgent()`) → outlines on, inline off, screenshots to `defaultAutomationScreenshotsDir` (`./biloba-screenshots`) or `BILOBA_SCREENSHOTS_DIR`.
+
+**Explicit `ConnectToChrome` options always win, per knob** — automation only fills knobs the suite left untouched (`failureOutlinesSet`/`inlineScreenshotsSet` track explicit). The boolean options are variadic positive-sense (`BilobaConfigFailureScreenshots`, `BilobaConfigFailureOutlines`, `BilobaConfigInlineScreenshots`, `BilobaConfigProgressReportScreenshots`, `BilobaConfigDebugLogging`) — no arg = `true`, pass `false` to disable (see `boolArg`). The struct fields are positive-sense too (`failureScreenshots`/`progressReportScreenshots`/`inlineScreenshots` default `true`, initialized in `newBiloba`).
+
+Inline protocol is env-selected via `BILOBA_INLINE_SCREENSHOTS=iterm|kitty|sixel|none`. The gating lives in `attachFailureArtifactsIfFailed` (`biloba.go`); the detection seam is the `automationDetected` package var (override in tests via `SetAutomationDetectedForTest`). This suite pins it false in `biloba_suite_test.go` so inline specs are deterministic.
+
 ## Other conventions
 
 - **Internal tests are Ginkgo specs too.** Specs in package `biloba` (the ones that reflect over unexported fields or exercise a pure function) import Ginkgo and Gomega under their **package names** rather than dot-importing, which is all it takes to avoid colliding with biloba's own exported names: `ginkgo "github.com/onsi/ginkgo/v2"` / `gomega "github.com/onsi/gomega"`, then `ginkgo.Describe`/`ginkgo.It`/`gomega.Expect`. Both test packages compile into one binary, so these run under the same `RunSpecs`. Label them `no-browser` if they don't need a tab. `tab_state_internal_test.go` is the model.
