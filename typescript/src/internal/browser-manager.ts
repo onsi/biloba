@@ -3,9 +3,12 @@ import {platform} from "node:os";
 import type {Readable, Writable} from "node:stream";
 
 import {BilobaError} from "../index.js";
+import {resolveDaemonExecutable} from "./daemon-resolver.js";
 
 export interface StartSharedBrowserOptions {
-  executable: string;
+  /** Defaults, in order, to `BILOBA_DAEMON_EXECUTABLE` and then the per-platform bilobad npm
+   *  package installed alongside `biloba` - see `resolveDaemonExecutable`. */
+  executable?: string | undefined;
   chromePath?: string | undefined;
   mode?: "headless-shell" | "headless" | "headful" | undefined;
   chromeArgs?: readonly string[] | undefined;
@@ -28,7 +31,8 @@ export interface SharedBrowserConnection { readonly wsURL: string; readonly laun
 type BrowserChild = ChildProcessByStdio<Writable, Readable, Readable>;
 
 export async function startSharedBrowser(options: StartSharedBrowserOptions): Promise<SharedBrowserProcess> {
-  const child = spawn(options.executable, [
+  const executable = await resolveDaemonExecutable({explicit: options.executable});
+  const child = spawn(executable, [
     "serve-browser",
     ...(options.chromePath ? [`--chrome-path=${options.chromePath}`] : []),
     ...(options.mode ? [`--chrome-mode=${options.mode}`] : []),

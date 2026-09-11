@@ -1,4 +1,5 @@
 import {automationDetected, booleanEnvironment, connectWithTransport, resolveDiagnosticsPolicy, resolveVisualConnectOptions, stripStackHeader} from "./internal/client.js";
+import {resolveDaemonExecutable} from "./internal/daemon-resolver.js";
 import {
   startSharedBrowser as spawnSharedBrowser,
   type SharedBrowserProcess,
@@ -775,13 +776,7 @@ export interface ConnectOptions extends ChromeLaunchOptions {
 }
 
 export async function connect(options: ConnectOptions = {}): Promise<Browser> {
-  const executable = options.daemonExecutable ?? process.env.BILOBA_DAEMON_EXECUTABLE;
-  if (!executable) {
-    throw new BilobaError({
-      code: "INVALID_ARGUMENT",
-      message: "connect requires daemonExecutable",
-    });
-  }
+  const executable = await resolveDaemonExecutable({explicit: options.daemonExecutable});
   validateLaunchOptions(options);
   if (options.artifactDir !== undefined && options.diagnostics?.artifactDir !== undefined && options.artifactDir !== options.diagnostics.artifactDir) throw new BilobaError({code: "INVALID_ARGUMENT", message: "artifactDir conflicts with diagnostics.artifactDir"});
   const diagnostics = resolveDiagnosticsPolicy({...options.diagnostics, ...(options.artifactDir !== undefined && {artifactDir: options.artifactDir})}, process.env, automationDetected(process.env));
