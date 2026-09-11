@@ -2,6 +2,12 @@
 
 ### Features
 
+### Fixes
+
+## 0.16.0
+
+### Features
+
 - `biloba` is now on npm: `npm install -D vitest biloba` installs the TypeScript client and, via a per-platform optional dependency, the `bilobad` daemon for macOS and Linux (x64 and arm64) — no Go toolchain required.
 - `npx biloba install-chrome` (and `bilobad install-chrome` directly) downloads and caches the `chrome-headless-shell` build the daemon needs. `bilobad version` reports the daemon's own version.
 - The TypeScript client supports Vitest 3, 4, and 5.
