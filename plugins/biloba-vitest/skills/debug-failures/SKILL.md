@@ -41,6 +41,7 @@ These happen before any test runs, so look at the error text, not `BilobaError.c
 
 - **Missing platform package** — `resolveDaemonExecutable` throws when the per-platform `bilobad` package (`biloba-darwin-arm64`, etc.) isn't installed. The message names likely causes: an `--omit=optional`/`--no-optional` install, or `node_modules` built on a different OS/arch than it's running on (a lockfile from macOS reused in a Linux container, say). Reinstall with optional dependencies, or set `daemonExecutable`/`BILOBA_DAEMON_EXECUTABLE`.
 - **Chrome not found** — `ResolveHeadlessShell` fails when no `chrome-headless-shell` is on `PATH`, cached, or given explicitly. The error names `npx biloba install-chrome` as the fix.
+- **"No usable sandbox"** — on Linux, `bilobad` auto-adds `--no-sandbox` in a headless mode when it's running as root or AppArmor is restricting unprivileged user namespaces (the default on Ubuntu 23.10+, including `ubuntu-latest`), so this should now only happen with `chromeSandbox: true` forcing the sandbox on. Drop that override, or set `chromeSandbox: false` to force it off yourself.
 - **`BILOBA_VERSION_MISMATCH`** — a `process.emitWarning`, not a thrown error, raised by `connect` when an overridden daemon's version doesn't match the `biloba` package's. It means the two were mixed by accident (an old `BILOBA_DAEMON_EXECUTABLE` after an upgrade, say); it doesn't fail the run.
 
 ## Runner-level diagnostics

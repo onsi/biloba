@@ -377,6 +377,21 @@ biloba.SpinUpChrome(GinkgoT(), biloba.AutoInstallHeadlessShell())
 
 `AutoInstallHeadlessShell` fetches the current Stable `chrome-headless-shell` from Chrome for Testing into Biloba's cache.  It's opt-in precisely because "a test run quietly reaching out to the network" should be a choice you make, not a surprise.
 
+##### Running Chrome without its sandbox on Linux CI
+
+Ubuntu 23.10 and later - including GitHub's `ubuntu-latest` runner - restrict unprivileged user namespaces via AppArmor for any binary that ships no AppArmor profile.  `chrome-headless-shell`, pulled into a cache directory, is one of those binaries, and without the namespaces its own sandbox needs it fails to start with "No usable sandbox".  Chrome run as root has the same problem: its sandbox refuses to start at all unless you pass `--no-sandbox`.
+
+`SpinUpChrome` handles both cases for you.  On Linux, in a headless mode (the default `chrome-headless-shell`, or `HighFidelityHeadless`), it adds `--no-sandbox` automatically when the process is running as root, or when the kernel reports AppArmor is restricting unprivileged user namespaces.  Headful Chrome is left alone either way - `--no-sandbox` shows an "unsupported command-line flag" infobar there, which changes the viewport - and so is every other OS.  This is why Biloba's own CI no longer needs `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` in every job; a couple of jobs still set it deliberately, to keep exercising Chrome with its sandbox intact.
+
+If you need to override the automatic behavior, pass `biloba.ChromeSandbox`:
+
+```go
+biloba.SpinUpChrome(GinkgoT(), biloba.ChromeSandbox(true))  // never add --no-sandbox, even as root
+biloba.SpinUpChrome(GinkgoT(), biloba.ChromeSandbox(false)) // always add --no-sandbox
+```
+
+Attaching to an already-running Chrome (a shared browser, or a WebSocket URL) launches nothing, so none of this applies - there's no process to add a flag to.
+
 #### Bootstrapping: Three Ways
 
 We'll close out this section on performance and stability with one last deep-dive into how Biloba suites are bootstrapped - and we'll discuss some options you have to trade-off between additional stability/isolation and performance:

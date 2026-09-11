@@ -6,6 +6,7 @@
 - `npx biloba install-chrome` (and `bilobad install-chrome` directly) downloads and caches the `chrome-headless-shell` build the daemon needs. `bilobad version` reports the daemon's own version.
 - The TypeScript client supports Vitest 3, 4, and 5.
 - The "Chrome not found" error now names `npx biloba install-chrome` as the fix.
+- On Linux, in a headless mode, Biloba now launches Chrome with `--no-sandbox` automatically when it's running as root or the kernel reports AppArmor is restricting unprivileged user namespaces — the state Ubuntu 23.10+ (including GitHub's `ubuntu-latest`) ships by default, where a cached `chrome-headless-shell` otherwise fails to start with "No usable sandbox". Headful Chrome and every other OS are untouched. Override with `biloba.ChromeSandbox(enabled)` in Go, `--chrome-sandbox=true|false` on `bilobad`, or `chromeSandbox` in TypeScript.
 
 ### Fixes
 

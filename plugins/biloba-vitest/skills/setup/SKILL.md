@@ -75,8 +75,9 @@ Register `globalSetup` in the Vitest config. Keep test files parallel: the archi
 - `bilobad version` reports the daemon's own version. If an overridden daemon's version differs from the `biloba` package's, `connect` emits a `BILOBA_VERSION_MISMATCH` process warning (skipped for `dev` builds).
 - Pass `chromeConnection` from global setup for a suite. Omitting it launches one Chrome per daemon and is suitable only for a single file or isolated debugging.
 - Prefer `chromeConnection` over the legacy `chromeWsUrl`; the structured connection retains validated launch metadata.
-- `startSharedBrowser` and a self-launching `connect` accept `mode`, `chromePath`, `autoInstall`, ordered `chromeArgs`, and `windowSize`.
+- `startSharedBrowser` and a self-launching `connect` accept `mode`, `chromePath`, `autoInstall`, `chromeSandbox`, ordered `chromeArgs`, and `windowSize`.
 - Modes are `"headless-shell"`, `"headless"`, and `"headful"`; the default viewport is 1024×768.
+- **Linux sandbox:** on Linux, in a headless mode, `bilobad` auto-adds `--no-sandbox` when running as root or when the kernel reports AppArmor is restricting unprivileged user namespaces (the default on Ubuntu 23.10+/`ubuntu-latest`, where a cached `chrome-headless-shell` otherwise fails with "No usable sandbox"). Headful and every other OS are untouched. `chromeSandbox: true`/`false` overrides the automatic decision; unset it to leave it automatic. Doesn't apply when attaching via `chromeConnection`/`chromeWsUrl` — attaching launches nothing.
 - Use `diagnostics` to configure failure, progress, and on-demand capture. `artifactDir` is a compatibility alias.
 - `biloba` supports Vitest 3, 4, and 5 (peer range `>=3 <6`); Vitest 5 needs Node ≥22.12, `biloba` itself needs Node ≥20. `poolOptions`/`minWorkers` are gone as of Vitest 4 — use top-level `maxWorkers`/`isolate`.
 

@@ -139,7 +139,9 @@ afterAll(async () => { await browser.close(); });
 
 Omit `chromeConnection` and the daemon launches Chrome itself - fine for a single file, wasteful for a suite.  The older `chromeWsUrl` attachment remains available, but it cannot report how an external Chrome was launched; prefer `chromeConnection` so every worker receives the host's validated launch metadata.
 
-Both `startSharedBrowser` and a self-launching `connect` accept `mode: "headless-shell" | "headless" | "headful"`, `chromePath`, `autoInstall`, ordered `chromeArgs`, and `windowSize`.  The default is the fast headless shell at 1024×768.  `browser.launch` reports the resolved executable, mode, arguments, size, and whether Biloba installed the shell.  Set `BILOBA_INTERACTIVE=true` for the headful interactive default, or select a mode explicitly.
+Both `startSharedBrowser` and a self-launching `connect` accept `mode: "headless-shell" | "headless" | "headful"`, `chromePath`, `autoInstall`, `chromeSandbox`, ordered `chromeArgs`, and `windowSize`.  The default is the fast headless shell at 1024×768.  `browser.launch` reports the resolved executable, mode, arguments, size, and whether Biloba installed the shell.  Set `BILOBA_INTERACTIVE=true` for the headful interactive default, or select a mode explicitly.
+
+On Linux, in a headless mode, `bilobad` automatically launches Chrome with `--no-sandbox` when the process is running as root, or when the kernel reports AppArmor is restricting unprivileged user namespaces - the default on Ubuntu 23.10+, including GitHub's `ubuntu-latest` runner, which is otherwise where `chrome-headless-shell` fails to start with "No usable sandbox". Headful Chrome, and every other OS, are left alone. `chromeSandbox: true` forces the sandbox on, `chromeSandbox: false` forces it off (on any OS or mode); leave it unset for the automatic behavior. `browser.launch.chromeArgs` includes `--no-sandbox` whenever it was added, so you can see it happened. None of this applies when you attach to an existing browser via `chromeConnection` or `chromeWsUrl` - attaching launches nothing.
 
 In CI, cache the Chrome download across runs and install it before the suite:
 

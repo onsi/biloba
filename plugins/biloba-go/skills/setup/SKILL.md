@@ -73,6 +73,8 @@ biloba.SpinUpChrome(GinkgoT(), biloba.AutoInstallHeadlessShell())
 
 **Full-browser realism:** `biloba.SpinUpChrome(GinkgoT(), biloba.HighFidelityHeadless())` runs the full ("new") headless Chrome — pixel-accurate, extensions — but markedly slower, and it serializes parallel work. Keep the bulk of the suite on the shell and run a focused high-fidelity lane where it earns its keep.
 
+**Linux sandbox:** Ubuntu 23.10+ (including `ubuntu-latest`) restricts unprivileged user namespaces via AppArmor for binaries with no AppArmor profile, which is why a cached `chrome-headless-shell` can fail with "No usable sandbox" there. `SpinUpChrome` handles it for you: on Linux, in a headless mode, it adds `--no-sandbox` automatically when running as root or when the kernel reports that restriction — headful and every other OS are untouched. Override with `biloba.ChromeSandbox(true)` (force it on) or `biloba.ChromeSandbox(false)` (force it off).
+
 ## 3. Choose a bootstrap variation
 
 Trade isolation against performance. All three are small edits — try them on your suite.
@@ -139,6 +141,7 @@ Then pick one of two shapes deliberately — different trades, not better and wo
 - `biloba.HeadlessShellPath(path)` — point at a specific shell binary.
 - `biloba.StartingWindowSize(w, h)` — default tab size (default `1024x768`); process-wide. Per-spec override: `b.SetWindowSize(w, h)` (self-restoring).
 - `biloba.ChromeFlags(...)` — raw `chromedp.ExecAllocatorOption`s (e.g. `chromedp.Flag("headless", false)` to watch).
+- `biloba.ChromeSandbox(enabled)` — override the automatic Linux `--no-sandbox` decision (see above).
 
 `ConnectToChrome(GinkgoT(), ...)` carries Biloba-specific config — mostly failure artifacts (outlines, screenshots, inline images) → `debug-failures`. Under CI or an AI agent, **failure artifacts need zero config**: Biloba auto-detects and emits a DOM outline plus screenshot files on disk.
 
