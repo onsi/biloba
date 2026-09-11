@@ -13,6 +13,7 @@ export interface StartSharedBrowserOptions {
   mode?: "headless-shell" | "headless" | "headful" | undefined;
   chromeArgs?: readonly string[] | undefined;
   autoInstall?: boolean | undefined;
+  chromeSandbox?: boolean | undefined;
   windowSize?: {readonly width: number; readonly height: number} | undefined;
   readyTimeoutMs?: number | undefined;
 }
@@ -38,6 +39,7 @@ export async function startSharedBrowser(options: StartSharedBrowserOptions): Pr
     ...(options.mode ? [`--chrome-mode=${options.mode}`] : []),
     ...(options.chromeArgs ?? []).map((argument) => `--chrome-arg=${argument}`),
     ...(options.autoInstall !== undefined ? [`--auto-install=${String(options.autoInstall)}`] : []),
+    ...(options.chromeSandbox !== undefined ? [`--chrome-sandbox=${String(options.chromeSandbox)}`] : []),
     ...(options.windowSize ? [`--window-width=${options.windowSize.width}`, `--window-height=${options.windowSize.height}`] : []),
   ], {stdio: ["pipe", "pipe", "pipe"], detached: platform() !== "win32"});
   const stop = createStop(child);

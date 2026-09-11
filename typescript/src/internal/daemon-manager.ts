@@ -12,6 +12,7 @@ export interface StartDaemonOptions {
   mode?: "headless-shell" | "headless" | "headful" | undefined;
   chromeArgs?: readonly string[] | undefined;
   autoInstall?: boolean | undefined;
+  chromeSandbox?: boolean | undefined;
   windowSize?: {readonly width: number; readonly height: number} | undefined;
   attachedLaunchMetadata?: string | undefined;
   debugLog?: boolean | undefined;
@@ -43,6 +44,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<ManagedD
     ...(options.mode ? [`--chrome-mode=${options.mode}`] : []),
     ...(options.chromeArgs ?? []).map((argument) => `--chrome-arg=${argument}`),
     ...(options.autoInstall !== undefined ? [`--auto-install=${String(options.autoInstall)}`] : []),
+    ...(options.chromeSandbox !== undefined ? [`--chrome-sandbox=${String(options.chromeSandbox)}`] : []),
     ...(options.windowSize ? [`--window-width=${options.windowSize.width}`, `--window-height=${options.windowSize.height}`] : []),
     ...(options.attachedLaunchMetadata ? [`--attached-launch-metadata=${options.attachedLaunchMetadata}`] : []),
     ...(options.debugLog ? ["--debug-log"] : []),

@@ -346,7 +346,7 @@ export interface TabQuery {
 }
 export interface WindowSize {readonly width: number; readonly height: number}
 export type ChromeMode = "headless-shell" | "headless" | "headful";
-export interface ChromeLaunchOptions {mode?: ChromeMode | undefined; chromePath?: string | undefined; autoInstall?: boolean | undefined; chromeArgs?: readonly string[] | undefined; windowSize?: WindowSize | undefined}
+export interface ChromeLaunchOptions {mode?: ChromeMode | undefined; chromePath?: string | undefined; autoInstall?: boolean | undefined; chromeArgs?: readonly string[] | undefined; windowSize?: WindowSize | undefined; chromeSandbox?: boolean | undefined}
 export type LaunchMetadata = (ResolvedLaunchMetadata & {readonly attached: false}) | (ResolvedLaunchMetadata & {readonly attached: true; readonly source: "shared-host"}) | {readonly attached: true; readonly source: "external"; readonly chromeArgs: readonly []; readonly windowSize: WindowSize; readonly autoInstalled: false};
 export type DiagnosticsPurpose = "failure" | "progress" | "on-demand";
 export interface DriverDebugEntry {readonly timestamp: string; readonly direction: "send" | "receive" | "internal"; readonly message: string; readonly truncated?: boolean}
@@ -793,6 +793,7 @@ export async function connect(options: ConnectOptions = {}): Promise<Browser> {
     ...(launchMode && {mode: launchMode}),
     ...(options.chromeArgs && {chromeArgs: options.chromeArgs}),
     ...(options.autoInstall !== undefined && {autoInstall: options.autoInstall}),
+    ...(options.chromeSandbox !== undefined && {chromeSandbox: options.chromeSandbox}),
     ...(options.windowSize && {windowSize: options.windowSize}),
     ...(options.debugLog && {debugLog: true}),
     ...(diagnostics.artifactDir && {artifactDir: diagnostics.artifactDir}),
@@ -809,7 +810,7 @@ function validateLaunchOptions(options: ConnectOptions): void {
   if (options.windowSize && (!Number.isInteger(options.windowSize.width) || !Number.isInteger(options.windowSize.height) || options.windowSize.width <= 0 || options.windowSize.height <= 0)) throw new BilobaError({code: "INVALID_ARGUMENT", message: "windowSize dimensions must be positive integers"});
   if (options.autoInstall && options.mode !== undefined && options.mode !== "headless-shell") throw new BilobaError({code: "INVALID_ARGUMENT", message: "autoInstall is only valid in headless-shell mode"});
   for (const argument of options.chromeArgs ?? []) if (!/^--[A-Za-z0-9][A-Za-z0-9-]*(=.*)?$/.test(argument)) throw new BilobaError({code: "INVALID_ARGUMENT", message: `invalid Chrome argument ${JSON.stringify(argument)}`});
-  if (options.chromeConnection && (options.chromeWsUrl !== undefined || options.mode !== undefined || options.chromePath !== undefined || options.autoInstall !== undefined || options.chromeArgs !== undefined || options.windowSize !== undefined)) throw new BilobaError({code: "INVALID_ARGUMENT", message: "chromeConnection conflicts with process launch options"});
+  if (options.chromeConnection && (options.chromeWsUrl !== undefined || options.mode !== undefined || options.chromePath !== undefined || options.autoInstall !== undefined || options.chromeArgs !== undefined || options.windowSize !== undefined || options.chromeSandbox !== undefined)) throw new BilobaError({code: "INVALID_ARGUMENT", message: "chromeConnection conflicts with process launch options"});
 }
 
 export async function startDaemon(options: StartDaemonOptions): Promise<DaemonProcess> {

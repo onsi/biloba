@@ -37,6 +37,7 @@ setInterval(() => {}, 1000);
       mode: "headless",
       chromeArgs: ["--site-per-process", "--lang=en-US"],
       autoInstall: true,
+      chromeSandbox: false,
       windowSize: {width: 640, height: 480},
       artifactDir: "/tmp/biloba-artifacts",
       screenshotBaselinesDir: "/tmp/biloba-baselines",
@@ -53,6 +54,7 @@ setInterval(() => {}, 1000);
       "--chrome-arg=--site-per-process",
       "--chrome-arg=--lang=en-US",
       "--auto-install=true",
+      "--chrome-sandbox=false",
       "--window-width=640",
       "--window-height=480",
       "--artifact-dir=/tmp/biloba-artifacts",
@@ -158,6 +160,25 @@ setInterval(() => {}, 1000);
     expect(browser.wsURL).toBe("ws://127.0.0.1:43123/devtools/browser/test");
     expect(browser.connection.launch).toEqual({mode: "headless", executablePath: "/opt/chrome", chromeArgs: ["--site-per-process"], windowSize: {width: 640, height: 480}, autoInstalled: false});
     expect(browser.pid).toBeGreaterThan(0);
+  });
+
+  it("passes chromeSandbox through to the shared-browser host as --chrome-sandbox", async () => {
+    directory = await mkdtemp(join(tmpdir(), "biloba-browser-test-"));
+    const executable = join(directory, "fake-bilobad");
+    const argumentsPath = join(directory, "arguments.json");
+    await writeFile(executable, `#!/usr/bin/env node
+const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(argumentsPath)}, JSON.stringify(process.argv.slice(2)));
+console.log(JSON.stringify({wsURL: "ws://127.0.0.1:43123/devtools/browser/test", pid: process.pid, launch: {mode: "headless-shell", executablePath: "/opt/chrome-headless-shell", chromeArgs: ["--no-sandbox"], windowSize: {width: 1024, height: 768}, autoInstalled: false}}));
+process.stdin.resume();
+process.stdin.on("end", () => process.exit(0));
+setInterval(() => {}, 1000);
+`);
+    await chmod(executable, 0o755);
+
+    browser = await startSharedBrowser({executable, chromeSandbox: false});
+    expect(JSON.parse(await readFile(argumentsPath, "utf8"))).toEqual(["serve-browser", "--chrome-sandbox=false"]);
+    expect(browser.connection.launch.chromeArgs).toEqual(["--no-sandbox"]);
   });
 
   it("rejects and reaps a host that writes malformed ready metadata", async () => {
