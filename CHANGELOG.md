@@ -4,6 +4,8 @@
 
 ### Fixes
 
+- When several cached `chrome-headless-shell` builds are present (the puppeteer cache and Biloba's own), Biloba now uses the newest one instead of the first cache it finds. Versions are compared numerically, not lexically, so this also fixes a latent ordering bug between versions of different digit widths (e.g. `99.x` vs `150.x`).
+
 ## 0.15.4
 
 ### Fixes

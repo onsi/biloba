@@ -72,12 +72,13 @@ driver-e2e:
 	go build -o .bin/bilobad ./cmd/bilobad
 	cd typescript && pnpm install --frozen-lockfile && BILOBA_DAEMON_EXECUTABLE="$(CURDIR)/.bin/bilobad" pnpm test:e2e
 
-## update-chrome: pull the latest stable chrome-headless-shell into the puppeteer cache Biloba
-## searches first (~/.cache/puppeteer), so `make test` exercises the same Chrome CI auto-installs.
-## Biloba reuses any cached binary rather than phoning home each run (offline-friendly + fast), so a
-## stale local cache can hide a breakage that CI - which always tracks latest - catches. Run this
-## periodically (or when CI goes red on a Chrome bump) to resync. The chrome-tracking workflow is
-## the canonical "latest is green" signal.
+## update-chrome: pull the latest stable chrome-headless-shell into the puppeteer cache
+## (~/.cache/puppeteer), one of the cache roots Biloba searches - it picks the newest version found
+## across all of them - so `make test` exercises the same Chrome CI auto-installs. Biloba reuses any
+## cached binary rather than phoning home each run (offline-friendly + fast), so a stale local cache
+## can hide a breakage that CI - which always tracks latest - catches. Run this periodically (or
+## when CI goes red on a Chrome bump) to resync. The chrome-tracking workflow is the canonical
+## "latest is green" signal.
 update-chrome:
 	npx -y @puppeteer/browsers install chrome-headless-shell@stable --path "$$HOME/.cache/puppeteer"
 

@@ -52,7 +52,7 @@ func chromeOverrideReason(resolved string) string {
 	if onPath, err := exec.LookPath("chrome-headless-shell"); err == nil && onPath == resolved {
 		return "it is on PATH"
 	}
-	return "an existing chrome-headless-shell was found first in Biloba's cache search order"
+	return "a newer chrome-headless-shell is already cached"
 }
 
 // augmentChromeNotFoundError adds a next step to a "could not find chrome-headless-shell" failure

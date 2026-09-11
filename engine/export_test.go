@@ -61,3 +61,12 @@ func SetChromeLocatorForTest(locator func(string) string) func() {
 func InstallHeadlessShellArchiveForTest(archivePath, destination, platform string) error {
 	return installHeadlessShellArchive(archivePath, destination, platform)
 }
+
+// SetChromeCacheRootsForTest replaces the cache roots LocateChrome searches for a cached
+// chrome-headless-shell, letting specs point it at hermetic fixture directories instead of
+// whatever puppeteer/Biloba caches happen to exist on the host.
+func SetChromeCacheRootsForTest(roots []string) func() {
+	previous := chromeCacheRoots
+	chromeCacheRoots = func() []string { return roots }
+	return func() { chromeCacheRoots = previous }
+}
