@@ -12,7 +12,8 @@ import {defineConfig} from "vitest/config";
 //                    run has not exercised concurrent workers at all.
 //
 // The pool knobs are top-level rather than under `poolOptions.forks`: Vitest 4 removed
-// `poolOptions`, and the top-level spellings mean the same thing on Vitest 3, 4 and 5.
+// `poolOptions` (and `minWorkers`), and the top-level spellings mean the same thing on Vitest
+// 3.2.4+, 4 and 5.  Earlier 3.x releases reject a bare `maxWorkers` below their default minimum.
 export default defineConfig({
   test: {
     environment: "node",
