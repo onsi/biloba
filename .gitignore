@@ -18,9 +18,8 @@ TODO
 browser
 /.bin/
 /.release/
-# Process artifacts from the agent-improvement work (kept locally, not tracked)
+# Process artifact from the agent-improvement work (kept locally, not tracked)
 report.md
-CHANGELOG-TMP.md
 /comparison/
 # Failure artifacts - screenshots on failure, plus the .actual/.diff pair a failed
 # visual assertion writes.  Baselines live in a SEPARATE directory and ARE committed.

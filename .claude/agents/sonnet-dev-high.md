@@ -17,13 +17,13 @@ your brief points you to before starting — `docs/index.md` is the narrative so
 user-facing behavior.
 
 If your change affects user-facing behavior, update `docs/index.md`, the relevant godoc comments,
-and stage a brief entry in `CHANGELOG-TMP.md`. If it touches a method family, option, convention,
+and add a brief entry under `## Unreleased` in `CHANGELOG.md`. If it touches a method family, option, convention,
 or env knob documented in a skill, update that skill in the same change — both the repo skills
 under `.claude/skills/` and, if the change is user-visible, the shipped plugin skills under
 `plugins/biloba/skills/`.
 
-**Never release.** Do not bump `BILOBA_VERSION`, do not edit `CHANGELOG.md` (the released log,
-distinct from `CHANGELOG-TMP.md`), do not tag or publish, and never run `shipit`.
+**Never release.** Do not bump `BILOBA_VERSION`, do not edit a released section of `CHANGELOG.md`,
+do not tag or publish, and never trigger the Release workflow (`release.yml`).
 
 Run the tests that gate your change (`make test` at minimum) before reporting done, and report
 what you actually did and verified — not what you intended.

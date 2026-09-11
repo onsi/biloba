@@ -118,10 +118,10 @@ move together).
 
 ## Never release
 
-Onsi releases, using a `shipit` binary neither you nor any subagent may run. Confirm no subagent
-bumped `BILOBA_VERSION`, edited `CHANGELOG.md` (the released log — `CHANGELOG-TMP.md` is where
-staged notes belong), or tagged/published anything. Your job, and every subagent's, ends at
-staging notes in `CHANGELOG-TMP.md`.
+Onsi releases via the Release workflow (`release.yml`), which neither you nor any subagent may
+trigger. Confirm no subagent bumped `BILOBA_VERSION`, edited a released section of `CHANGELOG.md`,
+triggered the Release workflow, tagged, or published anything. Your job, and every subagent's,
+ends at entries under `## Unreleased` in `CHANGELOG.md`.
 
 ## Keep the skills in sync
 
