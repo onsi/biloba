@@ -361,7 +361,7 @@ try {
 }
 ```
 
-That trajectory records every polling attempt as structured data instead of reducing the failure to its final observation.  Pass `artifactDir` to `connect` to get screenshots written to disk.
+That trajectory records every polling attempt as structured data instead of reducing the failure to its final observation.  Pass `diagnostics: {artifactDir}` to `connect` to get screenshots written to disk.
 
 For runner-level capture, load `installBilobaVitestHooks` from `biloba/vitest` in a Vitest setup file.  The hook captures every live tab after any failed test, can capture a slow test after `progressAfterMs`, replays browser errors, and turns `console.assert` into a test-boundary failure.  `session.captureDiagnostics()` provides the same context-wide capture on demand.  Configure screenshots, outlines, artifact paths, inline output, viewport, byte limits, and poll trajectories under `connect({diagnostics: {...}})`; explicit members override CI and interactive defaults independently.
 
