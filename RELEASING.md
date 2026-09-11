@@ -79,7 +79,8 @@ Then, for each of the five packages (`biloba` and the four above), on npmjs.com 
 **Settings**:
 
 1. **Trusted Publisher** → GitHub Actions: organization or user `onsi`, repository `biloba`,
-   workflow filename `release.yml`, environment left blank.
+   workflow filename `release.yml`, environment left blank. Check **Allow `npm publish`**: without
+   it the publisher can only `npm stage publish`, and `release.sh` publishes directly.
 2. **Publishing access** → "Require two-factor authentication and disallow tokens".
 
 Trusted publishing needs npm 11.5.1 or later; the workflow uses Node 24, which ships it.
