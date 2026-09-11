@@ -1,9 +1,10 @@
 import {constants as fsConstants} from "node:fs";
-import {access, chmod, readFile} from "node:fs/promises";
+import {access, chmod} from "node:fs/promises";
 import {createRequire} from "node:module";
 import {dirname, join} from "node:path";
 
 import {BilobaError} from "../index.js";
+import {packageVersion} from "./package-version.js";
 
 /** The npm package that ships the bilobad binary for a given `process.platform`/`process.arch`
  *  pair. Windows and every architecture other than x64/arm64 are unsupported: `go install` (see
@@ -49,13 +50,12 @@ export async function resolveDaemonExecutable(options: ResolveDaemonExecutableOp
   const platform = options.platform ?? process.platform;
   const arch = options.arch ?? process.arch;
   const packageName = PLATFORM_PACKAGES[platform]?.[arch];
-  const goInstall = await goInstallHint();
 
   if (!packageName) {
     throw new BilobaError({
       code: "DRIVER_ERROR",
       message: `Biloba does not ship a bilobad daemon for ${platform}-${arch} yet (only darwin/linux on x64 or arm64; Windows is not supported yet). ` +
-        `Install Go and run \`${goInstall}\` to build one, then point at it with the daemonExecutable option or the BILOBA_DAEMON_EXECUTABLE environment variable.`,
+        `Install Go and run \`${goInstallHint()}\` to build one, then point at it with the daemonExecutable option or the BILOBA_DAEMON_EXECUTABLE environment variable.`,
     });
   }
 
@@ -69,18 +69,18 @@ export async function resolveDaemonExecutable(options: ResolveDaemonExecutableOp
       message: `Could not find the ${packageName} package, which provides the bilobad daemon for ${platform}-${arch}. Likely causes: ` +
         `it was excluded from the install (for example \`npm install --omit=optional\`, \`npm install --no-optional\`, or pnpm/bun pruning optional dependencies), ` +
         `or node_modules was installed on a different OS/architecture than this one and reused here (for example a lockfile generated on macOS and installed inside a Linux container). ` +
-        `Reinstall with optional dependencies included, point at an existing binary with the daemonExecutable option or BILOBA_DAEMON_EXECUTABLE, or install Go and run \`${goInstall}\`.`,
+        `Reinstall with optional dependencies included, point at an existing binary with the daemonExecutable option or BILOBA_DAEMON_EXECUTABLE, or install Go and run \`${goInstallHint()}\`.`,
     });
   }
 
   const executablePath = join(dirname(manifestPath), "bin", "bilobad");
-  await ensureExecutable(executablePath, packageName, goInstall);
+  await ensureExecutable(executablePath, packageName);
   return executablePath;
 }
 
 /** `access`+`chmod` fallback for a packaging slip that ships `bin/bilobad` without the executable
  *  bit set (for example a tarball built on a filesystem that doesn't preserve permissions). */
-async function ensureExecutable(executablePath: string, packageName: string, goInstall: string): Promise<void> {
+async function ensureExecutable(executablePath: string, packageName: string): Promise<void> {
   try {
     await access(executablePath, fsConstants.X_OK);
     return;
@@ -88,7 +88,7 @@ async function ensureExecutable(executablePath: string, packageName: string, goI
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       throw new BilobaError({
         code: "DRIVER_ERROR",
-        message: `The ${packageName} package is installed but is missing its bilobad binary at ${executablePath}. This looks like a broken install - try reinstalling ${packageName}, or install Go and run \`${goInstall}\`.`,
+        message: `The ${packageName} package is installed but is missing its bilobad binary at ${executablePath}. This looks like a broken install - try reinstalling ${packageName}, or install Go and run \`${goInstallHint()}\`.`,
       });
     }
   }
@@ -99,23 +99,15 @@ async function ensureExecutable(executablePath: string, packageName: string, goI
   } catch (error) {
     throw new BilobaError({
       code: "DRIVER_ERROR",
-      message: `${executablePath} (from ${packageName}) exists but is not executable, and Biloba could not make it executable: ${(error as Error).message}. Try reinstalling ${packageName}, or install Go and run \`${goInstall}\`.`,
+      message: `${executablePath} (from ${packageName}) exists but is not executable, and Biloba could not make it executable: ${(error as Error).message}. Try reinstalling ${packageName}, or install Go and run \`${goInstallHint()}\`.`,
     });
   }
 }
 
-/** Reads this package's own version so the "no daemon available" errors can point at the matching
- *  `go install …@vX.Y.Z`. `package.json` sits two directories above both `src/internal` (source)
- *  and `dist/internal` (build output), so the relative path resolves the same way in either. */
-async function goInstallHint(): Promise<string> {
-  const packageJsonUrl = new URL("../../package.json", import.meta.url);
-  let version = "latest";
-  try {
-    const manifest = JSON.parse(await readFile(packageJsonUrl, "utf8")) as {version?: unknown};
-    if (typeof manifest.version === "string" && manifest.version) version = `v${manifest.version}`;
-  } catch {
-    // Fall back to "latest" - this is a best-effort hint inside an error message, not something
-    // worth failing over.
-  }
-  return `go install github.com/onsi/biloba/cmd/bilobad@${version}`;
+/** Builds the `go install …@vX.Y.Z` hint from this package's own version (falling back to
+ *  `@latest` when the version can't be read), for the "no daemon available" error messages. Called
+ *  only when one of those errors is about to be thrown, not on the success path. */
+function goInstallHint(): string {
+  const version = packageVersion();
+  return `go install github.com/onsi/biloba/cmd/bilobad@${version ? `v${version}` : "latest"}`;
 }

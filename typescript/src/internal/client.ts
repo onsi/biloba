@@ -12,7 +12,6 @@ import type {
   SetUploadRequest,
   TypeRequest,
 } from "../generated/protocol.js";
-import {createRequire} from "node:module";
 import {resolve} from "node:path";
 import {
   BilobaError,
@@ -74,6 +73,7 @@ import {
   type DriverDebugEvent,
   type BilobaWarning,
 } from "../index.js";
+import {packageVersion} from "./package-version.js";
 import {StdioTransport} from "./stdio-transport.js";
 
 type DriverTransport = StdioTransport;
@@ -118,22 +118,6 @@ export function resolveDiagnosticsPolicy(options: import("../index.js").Diagnost
 
 export function automationDetected(environment: NodeJS.ProcessEnv): boolean {
   return Boolean(environment.CI || environment.AI_AGENT || environment.CLAUDECODE || environment.CURSOR_AGENT || environment.GEMINI_CLI || environment.CODEX_SANDBOX);
-}
-
-// clientPackageVersion reads the biloba npm package's own version out of its package.json at
-// runtime rather than hard-coding it, so it never drifts from what actually shipped.  A relative
-// path works from both locations this module is loaded from: src/internal/client.ts (running
-// under vitest, which transpiles TS in place) and dist/internal/client.js (tsconfig.build.json's
-// rootDir src / outDir dist) - both are exactly two directories below the package root.  Returns
-// "" on any failure (an unreadable or malformed package.json) so a version check that cannot
-// resolve a version simply skips rather than throwing during connect.
-function clientPackageVersion(): string {
-  try {
-    const packageJSON = createRequire(import.meta.url)("../../package.json") as {version?: unknown};
-    return typeof packageJSON.version === "string" ? packageJSON.version : "";
-  } catch {
-    return "";
-  }
 }
 
 const releaseVersionPattern = /^\d+\.\d+\.\d+$/;
@@ -1777,7 +1761,7 @@ export async function connectWithTransport(
         message: `Biloba protocol mismatch: client 2, daemon ${handshake.protocolVersion}`,
       });
     }
-    warnOnDaemonVersionMismatch(handshake.daemonVersion, clientPackageVersion());
+    warnOnDaemonVersionMismatch(handshake.daemonVersion, packageVersion());
     return new ClientBrowser(
       transport,
       handshake.protocolVersion ?? "",
