@@ -101,6 +101,13 @@ first attempt and computes the same version. It resumes based on what already ex
 The commit and the tag are pushed together, so the tag being on GitHub means the release commit is
 on master too.
 
+Before publishing `biloba`, the script waits (up to 30 minutes) for npm's registry to actually
+serve each platform package, so `biloba`'s exact-version optional dependencies resolve as soon as
+`biloba` itself is visible. npm sometimes holds a freshly-published package server-side for a few
+minutes ("your package is being processed") on top of the usual registry lag, so this wait can be
+the slow part of a run. If it times out, re-running resumes cleanly: already-published platform
+packages are skipped, the wait runs again, and `biloba` publishes once they resolve.
+
 Running the workflow again after a successful release changes nothing: it finds an empty
 `## Unreleased` and fails with "nothing to release".
 

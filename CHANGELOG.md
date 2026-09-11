@@ -4,6 +4,8 @@
 
 ### Fixes
 
+- The Release workflow now waits until npm serves each platform package before publishing `biloba`, so an install right after a release no longer skips the daemon.
+
 ## 0.16.0
 
 ### Features

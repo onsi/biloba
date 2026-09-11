@@ -21,6 +21,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 say() { printf '\n==> %s\n' "$*"; }
 fail() { printf 'release failed: %s\n' "$*" >&2; exit 1; }
 tool() { .release/release-tool "$@"; }
+# shellcheck source=release-npm-wait.sh
+source "$(dirname "${BASH_SOURCE[0]}")/release-npm-wait.sh"
 
 [[ "$(git rev-parse --abbrev-ref HEAD)" == master ]] || fail "releases are cut from master"
 [[ -z "$(git status --porcelain)" ]] || fail "the working tree is not clean"
@@ -88,12 +90,21 @@ fi
 say "Publishing to npm"
 (cd typescript && pnpm install --frozen-lockfile && pnpm build)
 node scripts/prepare-npm-packages.mjs .release/bin
+platform_packages=(biloba-darwin-arm64 biloba-darwin-x64 biloba-linux-arm64 biloba-linux-x64)
 # The platform packages go first: biloba's exact-version optionalDependencies must resolve the
 # moment it is published.
-for package in biloba-darwin-arm64 biloba-darwin-x64 biloba-linux-arm64 biloba-linux-x64 biloba; do
+for package in "${platform_packages[@]}" biloba; do
 	if [[ "$(npm view "$package@$version" version 2>/dev/null)" == "$version" ]]; then
 		echo "$package@$version is already on npm - skipping"
 		continue
+	fi
+	if [[ "$package" == biloba ]]; then
+		if [[ -n "$dry_run" ]]; then
+			say "dry run: not waiting for the registry to serve the platform packages"
+		else
+			say "Waiting for npm to serve the platform packages"
+			wait_for_npm_packages "$version" "${platform_packages[@]}"
+		fi
 	fi
 	# Trusted publishing attaches provenance on its own; no --provenance needed.
 	npm publish ${dry_run:+--dry-run} --access public ".release/npm/$package"
