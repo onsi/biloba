@@ -19,18 +19,15 @@ so you can supervise effectively, not just relay briefs you don't understand.
 **You control both MODEL and EFFORT per subagent, but only through one of four pre-configured
 agent profiles** — `opus-dev-high`, `opus-dev-medium`, `sonnet-dev-high`, `sonnet-dev-medium`
 (`.claude/agents/*.md`). Dispatch developer subagent work through the `subagent_type` that
-matches the combination you want, rather than a bare `general-purpose`/`claude` type with a
-`model` override — the `Agent` tool's `model` override alone cannot set effort (there is no
-`effort` parameter on the tool), which is exactly why these four profiles exist: each pins both
-dials via the frontmatter `effort:` key. Going through `model:` + a bare type still only gets you
-Sonnet-or-Opus at the session's ambient effort — use that path only for a task where effort
-genuinely doesn't matter (a mechanical sweep, or `Explore`/`Plan`-shaped research where you want a
-fresh non-dev agent type). You will always be an Opus-high agent yourself, and remain responsible
-for checking and confirming every subagent's work.
+matches the combination you want. The `Agent` tool's `model` override cannot set effort, which is
+why each profile pins both dials in its frontmatter; a bare `general-purpose`/`claude` type with a
+`model` override runs at the session's ambient effort, so use it only where effort doesn't matter
+(a mechanical sweep, or `Explore`/`Plan`-shaped research). You will always be an Opus-high agent
+yourself, and remain responsible for checking and confirming every subagent's work.
 
 **Prefer the cheapest combination that is viable, and it is viable more often than instinct
-suggests.** The test is not task size — it is whether the answer is already specified, and how
-much load-bearing thinking the task needs on top of that.
+suggests.** The test is whether the answer is already specified and how much thinking remains on
+top of it; task size matters less.
 
 - **`sonnet-dev-medium`** for genuinely mechanical, unambiguous work: a rename across known sites,
   a fixture regeneration, a narrowly-scoped one-file fix where the brief already names the change.
@@ -76,14 +73,12 @@ consciously deferred, and an issue filed but never followed up on is exactly tha
 
 ## Dividing the testing
 
-Subagents run the suites that gate their own work: `make test` at minimum, and `make test-all`
-(adds the high-fidelity google-chrome lane) when the change touches DOM interaction, focus,
-input, viewport, or scrolling — real behavior differs between lanes (see the `biloba-testing`
-skill). **When a subagent's change adds specs that drive asynchronous page state** (network
-interception, fetch-then-render fixtures, anything with two DOM writes), have it also run `make
-stress-test` itself before reporting done — this repo has caught races in newly-written specs
-this way even when both normal lanes were green, and it's a cheap, precisely-targeted check of
-exactly the axis that subagent touched.
+Subagents run the suites that gate their own work, per the `biloba-testing` skill: `make test`
+at minimum; `make test-all` when the change touches Chrome lifecycle, DOM interaction, focus,
+input, viewport, or scrolling; the driver/packaging lanes when it touches `engine/`, `protocol/`,
+`cmd/bilobad/`, or `typescript/`. **When a subagent's change adds specs that drive asynchronous
+page state**, have it also run `make stress-test` itself before reporting done — it catches races
+in newly written specs that both normal lanes pass, on exactly the axis that subagent touched.
 
 Beyond that, **you own the broader flake hunts and never trust a subagent's "tests pass."**
 Re-run suites yourself, and check the claim covers the *current* tree. Batch a handful of landed
@@ -103,13 +98,14 @@ races are hard to repro and the recorded seed is rarely definitive, so re-runnin
 usually costs many minutes and comes back green, which proves nothing. Use `--json-report` and
 inspect the failed spec's `CapturedGinkgoWriterOutput` and message, alongside the on-failure
 artifacts Biloba itself produces (DOM outline, screenshots, the poll trajectory of the timed-out
-read — see `biloba:debug-failures`). Form a hypothesis about the mechanism from those, and make a
-reason-based fix with a written root cause. Re-stress afterwards — a fix can unmask a downstream
-race. Send the flake back to the agent whose work introduced it, via `SendMessage`, with your
-diagnosis pasted in — it still holds the context, and a fresh agent would only re-derive it; a
-cross-cutting or pre-existing flake goes to a *different* agent. When you hand off a hypothesis,
-give the subagent your mechanism guess *and* explicit permission to disagree with evidence — a
-wrong hypothesis costs nothing when the reasoning behind it is exposed and open to refutation.
+read — see `plugins/biloba-go/skills/debug-failures`). Form a hypothesis about the mechanism from
+those, and make a reason-based fix with a written root cause. Re-stress afterwards — a fix can
+unmask a downstream race. Send the flake back to the agent whose work introduced it, via
+`SendMessage`, with your diagnosis pasted in — it still holds the context, and a fresh agent would
+only re-derive it; a cross-cutting or pre-existing flake goes to a *different* agent. When you hand
+off a hypothesis, give the subagent your mechanism guess *and* explicit permission to disagree with
+evidence — a wrong hypothesis costs nothing when the reasoning behind it is exposed and open to
+refutation.
 
 If a scope change lands mid-flight, send it to the agent that already owns that file via
 `SendMessage` rather than spinning up a second writer for it — one writer at a time per file (and
@@ -128,18 +124,20 @@ ends at entries under `## Unreleased` in `CHANGELOG.md`.
 Whenever a landed change adds or alters a method family, an option, a convention, or an env
 knob, confirm the relevant skill was updated in the *same* change — both the repo skills under
 `.claude/skills/` (which teach future work *on* Biloba) and, if the change is user-visible, the
-shipped plugin skills under `plugins/biloba/skills/` (which teach users' agents how to *write
-tests with* Biloba). Cross-references should stay consistent (a fact stated in one skill should
-agree with the others that touch it).
+shipped plugin skills (which teach users' agents how to *write tests with* Biloba):
+`plugins/biloba-go/skills/` for the Go API, `plugins/biloba-vitest/skills/` for the TypeScript
+client. Never add files under the deprecated `plugins/biloba/skills/`, which only links to
+`biloba-go`. A fact stated in one skill should agree with the others that touch it; `make
+check-plugins` checks the mechanical parts.
 
 **At the end of a session, ask the owner whether they'd like to perform a prompt audit.** Ask —
 don't assume, and don't run one silently. The audit's goals are to keep the corpus (`CLAUDE.md`,
-both skill surfaces above) free of **contradiction**, **unnecessary duplication**, **excessive
-verbosity**, and **over-rotation onto incident-specific details where generalized guidance
-belongs**. That last one is the failure mode that accumulates fastest: a rule written in the heat
-of one incident tends to encode that incident's particulars — a file name, a spec, a specific
-wrong turn — when what the next reader needs is the shape. Prefer the general statement, and keep
-the incident only where it is the evidence that makes the rule credible.
+`.claude/agents/`, and the skill surfaces above) free of **contradiction**, **unnecessary
+duplication**, **excessive verbosity**, and **over-rotation onto incident-specific details where
+generalized guidance belongs**. That last one is the failure mode that accumulates fastest: a rule
+written in the heat of one incident tends to encode that incident's particulars — a file name, a
+spec, a specific wrong turn — when what the next reader needs is the shape. Prefer the general
+statement, and keep the incident only where it is the evidence that makes the rule credible.
 
 Commit to master incrementally. Only use branches for riskier feature work or if the user
 explicitly asks you to.
