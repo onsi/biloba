@@ -4,15 +4,16 @@
 # `go run` is used so no global ginkgo install is needed (matches how CI invokes it).
 
 GINKGO := go run github.com/onsi/ginkgo/v2/ginkgo
+BILOBA_VERSION := $(shell sed -n 's/^const BILOBA_VERSION = "\([^"]*\)"/\1/p' biloba.go)
 
-.PHONY: test test-all stress-test update-chrome driver-test driver-parity driver-e2e check-plugins check-release npm-pack npm-publish sync-plugin-versions
+.PHONY: test test-all stress-test update-chrome driver-test driver-parity driver-e2e check-plugins check-release npm-pack sync-plugin-versions
 
 ## check-plugins: validate plugin manifests, versions, namespaces, skill names, and client separation.
 check-plugins:
 	./scripts/check-plugins.sh
 
 ## sync-plugin-versions: release-tool hook; copy BILOBA_VERSION into plugin and npm manifests.
-## Onsi's shipit should run this after updating BILOBA_VERSION and before creating the release commit.
+## The Release workflow runs this after bumping BILOBA_VERSION and before creating the release commit.
 sync-plugin-versions:
 	./scripts/sync-plugin-versions.sh
 
@@ -20,16 +21,17 @@ sync-plugin-versions:
 check-release:
 	node ./scripts/check-npm-release.mjs "$(TAG)"
 
-## npm-pack: build once and stage dry-run packages for both npm names under .release/npm.
+## npm-pack: build the TS client and the four bilobad binaries, stage all five npm packages under
+## .release/npm (see scripts/prepare-npm-packages.mjs), and pack real tarballs into
+## .release/tarballs - a CI packaging check installs these, so this is not a dry run.
 npm-pack: check-release
 	cd typescript && pnpm build
-	node ./scripts/prepare-npm-packages.mjs
-	cd .release/npm/scoped && npm pack --dry-run
-	cd .release/npm/unscoped && npm pack --dry-run
-
-## npm-publish: publish both npm names using the caller's npm credentials; safe to retry.
-npm-publish:
-	./scripts/publish-npm-packages.sh --publish
+	./scripts/build-bilobad.sh "$(BILOBA_VERSION)" .release/bin
+	node ./scripts/prepare-npm-packages.mjs .release/bin
+	mkdir -p .release/tarballs
+	for package in .release/npm/*/; do \
+		npm pack "$$package" --pack-destination "$(CURDIR)/.release/tarballs" || exit 1; \
+	done
 
 ## test: standard headless (chrome-headless-shell) suite - parallel + randomized. Your default.
 test:

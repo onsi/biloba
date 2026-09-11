@@ -24,6 +24,15 @@ if (packageJSON.publishConfig?.access !== "public") {
 if (packageJSON.repository?.url !== "git+https://github.com/onsi/biloba.git") {
   throw new Error("typescript/package.json repository must match github.com/onsi/biloba for npm provenance");
 }
+if (packageJSON.bin?.biloba !== "dist/cli.js") {
+  throw new Error("typescript/package.json bin.biloba must point at dist/cli.js");
+}
+if (packageJSON.optionalDependencies !== undefined) {
+  throw new Error("typescript/package.json must not commit optionalDependencies - they are injected only into the staged .release/npm/biloba manifest, or `pnpm install --frozen-lockfile` will try to fetch unpublished platform-package versions");
+}
+for (const name of Object.keys({...packageJSON.dependencies, ...packageJSON.devDependencies, ...packageJSON.peerDependencies})) {
+  if (name.startsWith("@onsi/")) throw new Error(`typescript/package.json must not depend on a scoped @onsi/ package (${name}) - @onsi is not ours`);
+}
 
 const tag = process.env.GITHUB_REF_TYPE === "tag" ? process.env.GITHUB_REF_NAME : process.argv[2];
 if (tag && tag !== `v${version}`) throw new Error(`release tag ${tag} does not match Biloba v${version}`);
