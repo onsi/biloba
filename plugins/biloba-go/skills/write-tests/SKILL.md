@@ -118,13 +118,9 @@ Eventually(".figure-frame").Should(b.HaveAttribute("data-block-id", Not(BeEmpty(
 b.Click("#block-" + blockID)
 ```
 
-Asserting and *then* calling the getter is two reads of a page that may have changed in between. `Capture` hands you the value from the winning read, decoded into your Go type (a JS number lands in an `*int` as `3`, not `float64(3)`).
+Asserting and *then* calling the getter is two reads of a page that may have changed in between. `Capture` hands you the value from the winning read, decoded into your Go type, and writes only on a match (`ShouldNot` captures nothing). Value-less matchers (`Exist`, `BeVisible`, `BeInViewport`, the relational ones) and actions-as-matchers deliberately don't compile with it.
 
-- Writes **only on a match** — `ShouldNot` captures nothing; use a `Should` when you need the value.
-- Returns a **new** matcher and leaves the receiver alone, so a matcher in a variable is reusable with different targets (`m.Capture(&idA)`, then `m.Capture(&idB)`).
-- Narrowing a JS object into a struct with a subset of its fields is fine; capture Biloba's own structs (`Box`, `ScrollOffset`, `BoxDelta`, `Cookie`) into the matching type or an `any` — a different struct is rejected, not half-filled.
-- A JS `null`/`undefined` decodes to the Go zero value, so a plain `*string` target can't tell "absent" from "present but empty." Decode into a `**T` instead — absent leaves it `nil`, present allocates. Same rule for the getters' trailing decode pointer. Matters most under `AllowMissing` (`api`), whose whole point is making absence a value rather than a timeout.
-- Value-less matchers (`Exist`, `BeVisible`, `BeInViewport`, the relational ones) and actions-as-matchers deliberately don't compile with it. Full capturable list → `api`.
+Decode rules (typed-decode mismatches, absent-vs-zero via `**T`, the new-matcher-each-time behavior, narrowing a JS object vs. a Biloba struct) → `flaky-specs` §1. Full capturable list → `api`.
 
 ## Selecting elements — the vocabulary
 
@@ -285,9 +281,7 @@ hold.Release()                 // now let the stale response land
 Ω(hold.Count()).Should(Equal(1))
 ```
 
-**By default a hold freezes *every* matching response**, and a bare `Release()` frees them all and disarms the hold. `.Limit(n)` caps how many are held at once — overflow matches fly straight past, which is how you express "hold save #1 while save #2 lands". `Await()` returns the **oldest response still held**; `hold.Release(r)` releases just that one and `hold.ReleaseNext()` releases the oldest, both keeping the hold **armed** (`ReleaseNext` fails loudly if nothing is held). `Await` has its own 30s deadline (`b.WithTimeout(d).HoldResponse(url)`); holds are force-released at spec end and by `Prepare()`. Matching is **tab-wide and URL-based**, so a hold can catch a response from an earlier page load — scope the flow to a `b.NewTab()` when that matters. Full semantics → `api`; worked orderings → `flaky-specs`.
-
-`hold.Held()`/`hold.PassedThrough()` split `Count()` into what the hold froze vs. what flew past — with `.Limit(1)`, assert `PassedThrough` directly. `Count`/`Release` are facts about the network, not the page: pair them with an app-state barrier when the assertion is about what the app *did* with the response (`flaky-specs` §3).
+By default a hold freezes *every* matching response; `.Limit(n)` caps how many are held at once so a later match can fly straight past instead — how you express "hold save #1 while save #2 lands". Method shapes (`Await`/`Limit`/`Release`/`ReleaseNext`/`Count`/`Held`/`PassedThrough`) → `api`. The Limit/Release/ReleaseNext semantics, why `Count`/`Release` are facts about the network and not the page, and the tab-wide/URL-based sharp edge → `flaky-specs` §3.
 
 ## Seed state to skip slow flows
 
@@ -321,7 +315,7 @@ For an interpolated/multi-line expr, pre-build the string (`expr := fmt.Sprintf(
 
 ## The app-state barrier: `b.GetJSValue`
 
-`b.GetJSValue(expr[, &ptr])` polls `expr` until it is *defined* and returns it, retrying through both `undefined` and a thrown error (a `ReferenceError` for a not-yet-created global is a not-ready condition); `null` is a legitimate value and returns immediately. Point it at a path the app writes — the only signal that proves the **browser** processed a response (the DOM may be the optimistic copy; a Go-side HTTP read bypasses the tab entirely).
+`b.GetJSValue(expr[, &ptr])` polls `expr` until it is *defined* and returns it, retrying through both `undefined` and a thrown error; `null` is a legitimate value and returns immediately. Point it at a path the app writes — the only signal that proves the **browser** processed a response (the DOM may be the optimistic copy; a Go-side HTTP read bypasses the tab entirely).
 
 ```go
 b.Run(`app.store.on("update", () => { window.__storeLog ??= []; window.__storeLog.push(app.store.state) })`)
@@ -331,18 +325,7 @@ b.GetJSValue("window.__storeLog", &log)   // blocks until the update actually la
 Ω(log).Should(HaveExactElements("saving", "saved"))
 ```
 
-**The `??=` is what makes this a barrier.** `GetJSValue` gates on *definedness* and nothing else, so this works only because the subscriber creates the log **lazily** — "defined" and "an update landed" are the same event. Against a log the app creates **eagerly** (`this.__log = []` at construction) it is defined from page load, returns `[]` on the first tick, gates nothing, and never flakes: permanently vacuous.
-
-**For an eagerly-created path, poll the *predicate*** — one read, one poll, typed result:
-
-```go
-var log []SaveEntry
-Eventually(`window.__storeLog`).Should(b.EvaluateTo(ContainElement(HaveKeyWithValue("state", "saved"))).Capture(&log))
-```
-
-Asymmetry: `EvaluateTo` hands its sub-matcher the **raw JSON-decoded** value (`[]any` of `map[string]any` — `HaveKeyWithValue`, not `HaveField`); `Capture` gives you the typed `[]SaveEntry`.
-
-**`GetJSValue` is wrong wherever *absence* is meaningful** — a ledger absent on `about:blank` means *quiet*; `window.__renderErrors` absent means *no errors*; a flag planted before a JS-only tab switch must have *survived* (waiting inverts the test); a pre-action baseline count. Those stay `b.Run` with a coalesce (`b.Run("window.__ledger ?? null")`) — correct, not a smell. → `flaky-specs` §3
+It gates on *definedness* and nothing else, so it barriers correctly here only because the subscriber creates the log **lazily** (the `??=`) — against a log the app creates **eagerly**, it's permanently vacuous. The eager-path fix (poll the predicate with `b.EvaluateTo`), the `EvaluateTo`/`Capture` decode asymmetry, and the cases where absence itself is meaningful (so `GetJSValue` is the wrong tool) → `flaky-specs` §3.
 
 ## Multi-tab flows
 

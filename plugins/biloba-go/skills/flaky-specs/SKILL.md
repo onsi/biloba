@@ -64,7 +64,7 @@ var blockID string
 Eventually(".figure-frame").Should(b.HaveAttribute("data-block-id", Not(BeEmpty())).Capture(&blockID))
 ```
 
-`.Capture` decodes into your Go type and writes only on a match (so `ShouldNot` captures nothing). The `any`-returning getters take the same optional trailing pointer: `b.GetProperty("#row", "offsetWidth", &n)`.
+`.Capture` decodes into your Go type and writes only on a match (so `ShouldNot` captures nothing). Decoding is à la `encoding/json` — an impossible mismatch (a string into `*int`) fails **immediately** rather than waiting out the timeout. It returns a **new** matcher and leaves the receiver alone, so a matcher held in a variable is reusable with different targets (`m.Capture(&idA)`, then `m.Capture(&idB)`). A JS object narrows into a struct naming a subset of its fields; Biloba's own structs (`Box`, `ScrollOffset`, `BoxDelta`, `Cookie`) only decode into the matching type or an `any` — a different struct is rejected, not half-filled. Absent-vs-zero decoding (`**T`) is the same rule as `AllowMissing`, below (§5). The `any`-returning getters take the same optional trailing pointer: `b.GetProperty("#row", "offsetWidth", &n)`.
 
 **Don't null-guard against a remount in a matcher.** A matcher poll re-resolves the selector from scratch every tick, so it retries straight through a portal migration or list re-key. `document.querySelector(sel)?.x ?? ''` guards belong only inside your own `b.Run` closure, where you hold a node reference.
 
@@ -174,6 +174,8 @@ b.GetJSValue("window.__storeLog", &log)
   ```
   Assert `PassedThrough`, not `Count` — the fixture under test is "#2 was NOT held," and `Count()==2` only says that by inference from the limit. A regression that raises the limit to 2 keeps `Count()==2` green while quietly destroying the ordering you pinned. `hold.Held()` is the other half — `Held()+PassedThrough()==Count()` always, and both are snapshots safe to poll.
 - `hold.ReleaseNext()` releases the oldest still held and **stays armed** (fails loudly with nothing held — that means your sequencing is off). `Await()` always returns the oldest still held, so `Await`/`ReleaseNext`/`Await` walks arrival order.
+- `hold.Release(r)` releases just the response `Await()` gave you and keeps the hold armed; releasing a response this hold isn't holding fails the spec. A bare `hold.Release()` is idempotent.
+- `Limit(n)` is consulted **only as each response arrives** — set it when you build the hold; lowering it later releases nothing, raising it retro-holds nothing. Responses that passed through at the limit were never held, so `Await()` skips them; after a bare `Release()`, `Await()` returns the first response the hold intercepted rather than blocking.
 - `Await` honors `WithTimeout`/`WithContext` set on the tab you built the hold from (`b.WithTimeout(d).HoldResponse(url)`); otherwise 30s. `Count()`/`Held()`/`PassedThrough()` are snapshots but safe to poll. Holds are force-released at spec end and by `Prepare()`.
 - **Sharp edge: matching is tab-wide and URL-based**, so a hold can catch a response from an *earlier page load*. If the flow navigates, scope it to a `b.NewTab()` or assert `Count()`. And handlers are first-match-wins, so a **second `HoldResponse` for a URL an earlier one already claims is dead code** — re-arm the one you have with `ReleaseNext` (§6).
 

@@ -62,18 +62,13 @@ Configuring anything that resolves to a **bare matcher** — a `(matcher)` metho
 
 ## `.Capture(&target)`
 
-Every matcher that **reads a value off the page** returns a `*ValueMatcher` with `.Capture(&x)`: it writes what it observed on a *successful* match, so the gate and the read are one read (asserting then re-reading with a getter is two reads of a page that may have changed — TOCTOU).
+Every matcher that **reads a value off the page** returns a `*ValueMatcher` with `.Capture(&x)`: it writes what it observed on a *successful* match (nothing on `ShouldNot`), so the gate and the read are one read (asserting then re-reading with a getter is two reads of a page that may have changed — TOCTOU). Decoded into your Go type, à la `encoding/json`. Full rules — typed decode, absent-vs-zero (`**T`), returns-a-new-matcher, narrowing JS objects vs. Biloba structs — → `flaky-specs` §1.
 
 ```go
 var blockID string
 Eventually(".figure-frame").Should(b.HaveAttribute("data-block-id", Not(BeEmpty())).Capture(&blockID))
 ```
 
-- **Typed decode:** any non-nil pointer, decoded à la `encoding/json` — a JS number lands in an `*int` as `3`, not `float64(3)`; a JS object lands in your struct. An impossible mismatch (string into `*int`) fails **immediately** instead of waiting out the timeout.
-- **Absent vs. zero:** a JS `null`/`undefined` decodes to the Go zero value, so a plain `*string` target can't tell "absent" apart from "present but empty." Decode into a `**T` instead — absent leaves it `nil`, present allocates: `var key *string; b.GetAttribute(".mark", b.AllowMissing("data-key"), &key)`. Re-evaluated on every observation, so a poll watching an absent→present transition stays honest. Matters most under `AllowMissing` (below), whose whole point is making absence a value rather than a timeout.
-- **Only on a match:** `ShouldNot`/`NotTo` captures nothing. While polling the target is overwritten each successful attempt; it holds the value from the attempt that passed.
-- **Returns a NEW matcher, leaves the receiver alone** — `m.Capture(&idA)` then `m.Capture(&idB)` is safe. `HaveCookie`'s `.Capture` copies too and composes with `.With*` in either order.
-- **Narrowing works for JS objects, not Biloba structs.** A struct naming a subset of a JS object's fields is fine (`HaveJSONAttribute`). `Box`/`ScrollOffset`/`BoxDelta`/`Cookie` into a *different* struct is rejected rather than half-filled — capture into the matching type or an `any`.
 - **Capturable:** `HaveAttribute`, `HaveProperty` (both forms incl. existence-only), `HaveValue`, `HaveInnerText`, `HaveTextContent`, `HaveText`, `HaveClass`, `HaveCount`, `HaveDistinctCount`, `HaveJSONAttribute`, `HaveComputedStyle`, `HaveComputedStyleNumeric`, `EachHaveInnerText`, `EachHaveTextContent`, `EachHaveClass`, `EachHaveProperty` (both forms — the existence-only form reads values in the same round-trip, so no-arg `EachHaveInnerText()`/`EachHaveTextContent()` capture too), `HaveBoundingBox`, `HaveScrollOffset`, `HaveOffsetTopWithin`/`HaveOffsetLeftWithin` (both forms incl. existence-only), `HaveGapBetween` (both forms incl. existence-only), `EvaluateTo`, `HaveURL`, `HaveTitle`, `HaveLocalStorageItem`/`HaveSessionStorageItem`, `HaveNumLocalStorageItems`/`HaveNumSessionStorageItems`, `HaveNumCookies`, `HaveCookie`.
 - **Not capturable (won't compile):** value-less matchers — `Exist`, `BeVisible`, `BeEnabled`, `BeClickable`, `BeFocused`, `BeChecked`, `BeInViewport`, `BeAbove`/`BeBelow`/`BeLeftOf`/`BeRightOf`/`Encloses`/`Overlaps`/`BePrecededBy`/`BeFollowedBy`, `BeNetworkIdle`, `HaveScreenshot` — and the actions-as-matchers (`Click`, `SetValue`, `Type`, …). Two read something but stay bare on purpose: **`MatchColor`** (a sub-matcher — capture off the `HaveComputedStyle` you hand it to) and **`HaveMadeRequest`** (a `*RequestQuery` builder; it renders observed requests in its failure message, and the request object comes from `b.AllRequests().Find(b.RequestMatching(...))`).
 - **Getter counterpart:** the `any`-returning getters take an optional trailing pointer with the same decode rules — `b.GetProperty("#row", "offsetWidth", &n)`, `b.GetAttribute`, `b.GetValue`, `b.CurrentPropertyForEach`, `b.CurrentAttributeForEach`, `b.CurrentValueForEach`. The value is still returned.
@@ -81,7 +76,7 @@ Eventually(".figure-frame").Should(b.HaveAttribute("data-block-id", Not(BeEmpty(
 ## Navigation
 
 - `b.Navigate(url)` — navigate, assert `200`. / `b.NavigateWithStatus(url, code)`.
-- `b.GetLocation()` / `b.GetTitle()` → string — **polling getters**, all four knobs. A transient CDP error mid-navigation (`Inspected target navigated or closed (-32000)`) is a retryable miss. (**Breaking rename** — bare `Location`/`Title` are gone.)
+- `b.GetLocation()` / `b.GetTitle()` → string — **polling getters**, all four knobs. A transient CDP error mid-navigation (`Inspected target navigated or closed (-32000)`) is a retryable miss.
 - `b.HaveURL(string|matcher)` / `b.HaveTitle(string|matcher)` — same transient-error behavior.
 - **Gate on a DOM anchor, not the URL** — `Eventually("#dashboard-root").Should(b.Exist())` proves the navigation landed; a `GetLocation()` read is then a formality.
 
@@ -225,10 +220,7 @@ Each produces a genuine `window.getSelection()` range and dispatches `mouseup` (
 - `b.RunErr(script, ...args)` / `b.RunErrAsync(...)` → `(any, error)` — error-returning siblings; handle the error yourself instead of failing the spec.
 - `b.EvaluateTo(value|matcher)` — assert a JS expression's result. Numbers decode to `float64` — `BeNumerically`, not `Equal(intLiteral)`. **Asymmetry:** the sub-matcher sees the **raw JSON-decoded** value (`[]any` of `map[string]any` — `HaveKeyWithValue`, not `HaveField`); `.Capture(&typed)` hands you the value decoded into your struct.
 - `b.JSFunc(script)` → `.Invoke(...args)` string — JSON-encodes args into an invocable snippet. · `b.JSVar(nameOrExpr)` — reference a JS variable/expression as a `JSFunc` argument (don't quote it).
-- `b.GetJSValue(expression[, &ptr])` → any — **polls** until `expression` is *defined*, then returns it. The **app-state barrier**: point it at a global the app writes (`window.__storeLog`) to prove the *browser* processed something. Retries through `undefined` **and** a thrown error (a `ReferenceError` for a not-yet-created global is "not ready"); `null` is a legitimate value and returns immediately. The pointer decodes into a concrete type (dodges the `float64` gotcha).
-  - **It gates on definedness and nothing else** — it only barriers on a path created **lazily by the event you're waiting for** (`window.__log ??= []` inside the subscriber). Against an **eagerly**-created log it returns `[]` on the first tick and gates nothing.
-  - **Wrong wherever absence is meaningful** (a ledger absent on `about:blank` means *quiet*; `window.__renderErrors` absent means *no errors*; a flag that must have *survived*; a pre-action baseline). Those stay `b.Run` with a coalesce (`window.__x ?? null`).
-  - For a *condition* rather than a value: `Eventually(expr).Should(b.EvaluateTo(matcher).Capture(&typed))`. → `flaky-specs` §3
+- `b.GetJSValue(expression[, &ptr])` → any — **polls** until `expression` is *defined* (retries through `undefined` and a thrown error; `null` returns immediately), then returns it, decoded into a concrete type. The **app-state barrier**: point it at a global the app writes to prove the browser processed something — but it gates on definedness only, so it's vacuous against an eagerly-created path. Rules, the eager-path fix, and when absence itself is meaningful → `flaky-specs` §3.
 
 ## Network  (per-tab; reset by `Prepare`)
 
@@ -245,19 +237,16 @@ Each produces a genuine `window.getSelection()` range and dispatches `mouseup` (
 
 ### `b.HoldResponse(url string|matcher)` → `*ResponseHold`
 
-Intercepts the **real** response and holds it in flight until you release it (then it passes through unchanged). Builds on `ModifyResponse` — same tab scoping, same first-match-wins list. The tool for forcing arrival order in optimistic-UI reconciliation → `flaky-specs`.
+Intercepts the **real** response and holds it in flight until you release it (then it passes through unchanged). Builds on `ModifyResponse` — same tab scoping, same first-match-wins list. Holds **every** matching response by default. The tool for forcing arrival order in optimistic-UI reconciliation; full rules and reasoning (Limit/Release/ReleaseNext semantics, why `Count`/`Release` are network facts not app facts, the tab-wide/URL-based sharp edge) → `flaky-specs` §3.
 
-- **A hold freezes EVERY matching response by default**, not just the first. That's right for "nothing lands until I say so"; use `Limit` for "hold #1 while #2 flies past".
-- `hold.Await()` → `InterceptedResponse` — blocks until a match is actually held, then returns the **oldest one still held** (immediately if one already arrived). Responses that passed through at `Limit` were never held, so `Await` skips them; after a bare `Release()` it returns the first response the hold intercepted rather than blocking. Waiting command: own 30s default, honors `WithTimeout`/`WithContext` set on **the tab you build the hold from** (`b.WithTimeout(d).HoldResponse(u)`); `WithPolling`/`Immediate` are a hard error.
-- `hold.Limit(n)` → `*ResponseHold` — hold at most `n` concurrently; while `n` are held, further matches **pass straight through untouched** (they still count). Releasing frees capacity. `n ≥ 1`; unlimited by default. The limit is consulted **only as each response arrives** — set it when you build the hold (lowering it later releases nothing; raising it retro-holds nothing).
-- `hold.Release()` — **terminal**: everything held goes through AND the hold stops holding future matches. Idempotent.
-- `hold.Release(r)` — release just the response `Await()` gave you; the hold **stays armed**. Releasing something this hold isn't holding fails the spec (matched by value, oldest first).
-- `hold.ReleaseNext()` — release the oldest still-held response and stay armed (`Await(); ReleaseNext(); Await()` steps through them). **Fails the spec when nothing is held.**
-- `hold.Count()` → int — **every** match intercepted so far, held or passed through. A snapshot (no knobs) but safe to poll: `Eventually(hold.Count).Should(Equal(1))`. Assert it — it's the only proof the interception you think happened actually did.
-- `hold.Held()` / `hold.PassedThrough()` → int — split `Count()`: `Held` is how many this hold actually froze (cumulative, including ones since released); `PassedThrough` is how many arrived and were never frozen (at `Limit`, or after a bare `Release()`). `Held()+PassedThrough()==Count()` always; both snapshots, safe to poll. With `Limit(1)` the fixture under test is usually "response #2 was NOT held" — assert `Eventually(hold.PassedThrough).Should(Equal(1))` directly rather than `Count()==2`, which only implies it by inference from the limit (a regression that raises the limit keeps `Count` green while destroying the ordering under test).
-- **`Count`/`Release` are facts about the network, not the page** — `Count` says a response reached the tab's interceptor, `Release` returns when the release is signalled; neither says the renderer did anything with it. When the assertion is about what the *app* did with the response, pair them with an app-state barrier (`b.GetJSValue`, or the DOM the response produces), not a sleep.
-- Held responses are **force-released at spec end and by `Prepare()`**.
-- **Sharp edge:** matching is **tab-wide and URL-based**, so a hold can catch a response from an *earlier* page load. Scope to a dedicated `b.NewTab()`, or assert `Count()`. A **second `HoldResponse` for a URL an earlier one already claims is dead code** — re-arm the hold you have with `ReleaseNext`.
+- `hold.Await()` → `InterceptedResponse` — blocks until a match is held, returns the **oldest one still held**. Waiting command: own 30s default, honors `WithTimeout`/`WithContext` set on the tab you build the hold from; `WithPolling`/`Immediate` are a hard error.
+- `hold.Limit(n)` → `*ResponseHold` — hold at most `n` concurrently; further matches **pass straight through untouched** (still counted).
+- `hold.Release()` — terminal: releases everything held and disarms the hold.
+- `hold.Release(r)` — release just that response; the hold stays armed.
+- `hold.ReleaseNext()` — release the oldest still-held response and stay armed. Fails the spec when nothing is held.
+- `hold.Count()` → int — every match intercepted so far, held or passed through. Snapshot, safe to poll.
+- `hold.Held()` / `hold.PassedThrough()` → int — split of `Count()`; both snapshots, safe to poll.
+- Held responses are force-released at spec end and by `Prepare()`.
 
 ## Screenshots, outline, window → `debug-failures`
 
