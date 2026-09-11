@@ -6,7 +6,7 @@
 GINKGO := go run github.com/onsi/ginkgo/v2/ginkgo
 BILOBA_VERSION := $(shell sed -n 's/^const BILOBA_VERSION = "\([^"]*\)"/\1/p' biloba.go)
 
-.PHONY: test test-all stress-test update-chrome driver-test driver-parity driver-e2e check-plugins check-release npm-pack sync-plugin-versions
+.PHONY: test test-all stress-test update-chrome driver-test driver-parity driver-e2e check-plugins check-release npm-pack packaging-check sync-plugin-versions
 
 ## check-plugins: validate plugin manifests, versions, namespaces, skill names, and client separation.
 check-plugins:
@@ -25,13 +25,21 @@ check-release:
 ## .release/npm (see scripts/prepare-npm-packages.mjs), and pack real tarballs into
 ## .release/tarballs - a CI packaging check installs these, so this is not a dry run.
 npm-pack: check-release
-	cd typescript && pnpm build
+	cd typescript && pnpm install --frozen-lockfile && pnpm build
 	./scripts/build-bilobad.sh "$(BILOBA_VERSION)" .release/bin
 	node ./scripts/prepare-npm-packages.mjs .release/bin
+	rm -rf .release/tarballs
 	mkdir -p .release/tarballs
 	for package in .release/npm/*/; do \
 		npm pack "$$package" --pack-destination "$(CURDIR)/.release/tarballs" || exit 1; \
 	done
+
+## packaging-check: `make npm-pack`, then install the tarballs into an empty project the way a user
+## would (`npm install -D`, `npx biloba install-chrome`) and run one Vitest spec against a real page.
+## VITEST picks the vitest to install (default vitest@latest).  See scripts/packaging-check.sh.
+## CI runs this, and the Release workflow runs CI first.
+packaging-check: npm-pack
+	./scripts/packaging-check.sh "$(or $(VITEST),vitest@latest)"
 
 ## test: standard headless (chrome-headless-shell) suite - parallel + randomized. Your default.
 test:

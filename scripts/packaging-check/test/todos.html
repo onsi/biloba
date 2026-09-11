@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+  <head><title>Todos</title></head>
+  <body>
+    <form id="new-todo">
+      <input placeholder="What needs doing?">
+      <button type="submit">Add</button>
+    </form>
+    <ul id="todos"></ul>
+    <script>
+      document.getElementById("new-todo").addEventListener("submit", (event) => {
+        event.preventDefault();
+        const input = event.target.querySelector("input");
+        const item = document.createElement("li");
+        item.textContent = input.value;
+        document.getElementById("todos").append(item);
+        input.value = "";
+      });
+    </script>
+  </body>
+</html>

@@ -1,6 +1,10 @@
 name: test
 
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  # The Release workflow calls this one, so nothing is released unless all of it passes.
+  workflow_call:
 
 jobs:
   mod:
@@ -99,3 +103,39 @@ jobs:
     - run: make driver-parity
     # The shipping topology: three worker processes, one daemon each, one shared Chrome.
     - run: make driver-e2e
+
+  packaging:
+    runs-on: ubuntu-latest
+    name: Packaging check (Node ${{ matrix.node }}, ${{ matrix.vitest }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        # The floor biloba supports, and what `npm install -D vitest biloba` gives a user today.
+        - {node: 20, vitest: vitest@3}
+        - {node: 22, vitest: vitest@latest}
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/setup-go@v6
+      with:
+        go-version-file: 'go.mod'
+    - uses: pnpm/action-setup@v4
+      with:
+        package_json_file: typescript/package.json
+    # pnpm 11 needs Node >= 22.13 to build the packages; the matrix Node only installs and runs them.
+    - uses: actions/setup-node@v5
+      with:
+        node-version: 22
+        cache: pnpm
+        cache-dependency-path: typescript/pnpm-lock.yaml
+    - run: make npm-pack
+    - uses: actions/setup-node@v5
+      with:
+        node-version: ${{ matrix.node }}
+    # Installs biloba plus this runner's platform package into an empty project the way a user
+    # would, type-checks it, runs `npx biloba install-chrome`, then one Vitest spec against a real
+    # page.  Deliberately no AppArmor sysctl here (the other jobs have one): this job is a stock
+    # runner, like a user's, so it shows whether users need that step too.
+    - run: scripts/packaging-check.sh "$VITEST"
+      env:
+        VITEST: ${{ matrix.vitest }}
