@@ -7,7 +7,7 @@ title: Biloba for Vitest
 
 Biloba's TypeScript client lets a `vitest` suite drive Biloba browser automation through a worker-local daemon and one shared Chrome.
 
-> **Status: prototype.** The `biloba` package has an API that will continue to shift before 1.0.
+> **Status: pre-1.0.** The `biloba` package has an API that will continue to shift before 1.0.
 > See the [support policy](./#support-policy). What follows describes what works today.
 
 ### Claude Code skills

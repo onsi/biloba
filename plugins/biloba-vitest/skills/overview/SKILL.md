@@ -33,4 +33,4 @@ This preserves parallelism without launching a browser per test file. Each root 
 | Read a failure, console output, artifacts, or crash code | `biloba-vitest:debug-failures` |
 | Remove races, order dependence, or redundant polling | `biloba-vitest:flaky-tests` |
 
-Canonical docs: <https://onsi.github.io/biloba/vitest.html>. `npm install -D vitest biloba` also pulls in the `bilobad` daemon via a per-platform package — no Go toolchain needed (macOS/Linux, x64/arm64; Windows isn't supported yet). The package is still a prototype; pin the plugin and client to the same Biloba version.
+Canonical docs: <https://onsi.github.io/biloba/vitest.html>. `npm install -D vitest biloba` also pulls in the `bilobad` daemon via a per-platform package — no Go toolchain needed (macOS/Linux, x64/arm64; Windows isn't supported yet). The package is pre-1.0; pin the plugin and client to the same Biloba version.

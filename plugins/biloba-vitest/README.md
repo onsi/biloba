@@ -26,4 +26,4 @@ All skills are namespaced under `biloba-vitest:` and use the TypeScript client A
 
 ## Versioning
 
-These skills track the TypeScript client in the same Biloba release. Pin the plugin and client to the same version. The client is still a prototype, and its API may move before 1.0. The narrative docs live at <https://onsi.github.io/biloba/vitest.html>.
+These skills track the TypeScript client in the same Biloba release. Pin the plugin and client to the same version. The client is pre-1.0, and its API may move before 1.0. The narrative docs live at <https://onsi.github.io/biloba/vitest.html>.

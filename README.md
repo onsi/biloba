@@ -197,7 +197,7 @@ The former `biloba@biloba` plugin remains as a deprecated compatibility alias fo
 
 ### Vitest Support
 
-Biloba's TypeScript client lets a `vitest` suite drive Chrome through Biloba. **It's a prototype**:
+Biloba's TypeScript client lets a `vitest` suite drive Chrome through Biloba. **It's pre-1.0**:
 install the `biloba` package from npm, and expect its API to keep shifting before 1.0.
 [**Biloba for Vitest**](https://onsi.github.io/biloba/vitest.html) is the documentation: setup and
 the shared-browser topology, launch modes, locators, actions and assertions, network control,

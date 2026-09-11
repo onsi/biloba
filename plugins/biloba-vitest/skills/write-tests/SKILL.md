@@ -7,7 +7,7 @@ description: Author Biloba browser tests in TypeScript/Vitest — sessions, tabs
 
 Assume the suite is wired with `biloba-vitest:setup` and apply the topology in `biloba-vitest:overview`. Visual assertions → `biloba-vitest:visual-assertions`. Failures → `biloba-vitest:debug-failures`. Flakes → `biloba-vitest:flaky-tests`. Docs: <https://onsi.github.io/biloba/vitest.html>.
 
-**Prototype.** The `biloba` package is published in lockstep with the Go release and its API will continue to shift before 1.0.
+**Pre-1.0.** The `biloba` package is published in lockstep with the Go release and its API will continue to shift before 1.0.
 
 ## 1. The topology — know this before writing anything
 
