@@ -287,7 +287,7 @@ hold.Release()                 // now let the stale response land
 
 **By default a hold freezes *every* matching response**, and a bare `Release()` frees them all and disarms the hold. `.Limit(n)` caps how many are held at once — overflow matches fly straight past, which is how you express "hold save #1 while save #2 lands". `Await()` returns the **oldest response still held**; `hold.Release(r)` releases just that one and `hold.ReleaseNext()` releases the oldest, both keeping the hold **armed** (`ReleaseNext` fails loudly if nothing is held). `Await` has its own 30s deadline (`b.WithTimeout(d).HoldResponse(url)`); holds are force-released at spec end and by `Prepare()`. Matching is **tab-wide and URL-based**, so a hold can catch a response from an earlier page load — scope the flow to a `b.NewTab()` when that matters. Full semantics → `api`; worked orderings → `flaky-specs`.
 
-`hold.Held()`/`hold.PassedThrough()` split `Count()` into what the hold actually froze vs. what arrived and flew past (at `Limit`, or after a bare `Release()`) — with `.Limit(1)`, assert `Eventually(hold.PassedThrough).Should(Equal(1))` directly rather than inferring "not held" from `Count()` and the limit. And `Count`/`Release` are facts about the network, not the page — pair them with an app-state barrier (`b.GetJSValue`, or the DOM the response produces) when the assertion is about what the app *did* with the response.
+`hold.Held()`/`hold.PassedThrough()` split `Count()` into what the hold froze vs. what flew past — with `.Limit(1)`, assert `PassedThrough` directly. `Count`/`Release` are facts about the network, not the page: pair them with an app-state barrier when the assertion is about what the app *did* with the response (`flaky-specs` §3).
 
 ## Seed state to skip slow flows
 
@@ -336,11 +336,11 @@ b.GetJSValue("window.__storeLog", &log)   // blocks until the update actually la
 **For an eagerly-created path, poll the *predicate*** — one read, one poll, typed result:
 
 ```go
-var log []FoldEntry
+var log []SaveEntry
 Eventually(`window.__storeLog`).Should(b.EvaluateTo(ContainElement(HaveKeyWithValue("state", "saved"))).Capture(&log))
 ```
 
-Asymmetry: `EvaluateTo` hands its sub-matcher the **raw JSON-decoded** value (`[]any` of `map[string]any` — `HaveKeyWithValue`, not `HaveField`); `Capture` gives you the typed `[]FoldEntry`.
+Asymmetry: `EvaluateTo` hands its sub-matcher the **raw JSON-decoded** value (`[]any` of `map[string]any` — `HaveKeyWithValue`, not `HaveField`); `Capture` gives you the typed `[]SaveEntry`.
 
 **`GetJSValue` is wrong wherever *absence* is meaningful** — a ledger absent on `about:blank` means *quiet*; `window.__renderErrors` absent means *no errors*; a flag planted before a JS-only tab switch must have *survived* (waiting inverts the test); a pre-action baseline count. Those stay `b.Run` with a coalesce (`b.Run("window.__ledger ?? null")`) — correct, not a smell. → `flaky-specs` §3
 

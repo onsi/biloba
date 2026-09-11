@@ -26,7 +26,7 @@ Failure *artifacts* (outlines, screenshots, poll trajectory) → `debug-failures
 | Click appears to do nothing | Overlay swallowed it (fast `Click` is occlusion-blind) | `b.BeClickable()` gate, or `b.Realistic()` | [2](#2-actions-that-dont-poll) |
 | Intermittent "could not find DOM element" on the line *after* a capture | The capture expanded the viewport; the page re-rendered on its breakpoint and unmounted the subject | capture something already in view (scroll, gate on `b.BeInViewport(b.Fully())`) | [7](#7-assertions-that-cannot-fail) |
 | Assertion passes but asserts the opposite of your intent | Inverted `BePrecededBy`/`BeFollowedBy` | also assert the inverse doesn't hold | [4](#4-layout-geometry-and-document-order) |
-| Suite ends on Ginkgo's `--timeout` with **no** failing spec | A CDP call blocked with no deadline — Gomega can't preempt a blocked callback, so no poll deadline fires | Biloba's own commands are bounded and now fail with `deadline_exceeded`/`page_crashed`/`browser_gone`; if you still hang, it's your own `chromedp` call on `b.Context` — give it a `context.WithTimeout` | `debug-failures` |
+| Suite ends on Ginkgo's `--timeout` with **no** failing spec | A CDP call blocked with no deadline — Gomega can't preempt a blocked callback, so no poll deadline fires | Biloba's own commands are bounded and fail with `deadline_exceeded`/`page_crashed`/`browser_gone`; a hang is your own `chromedp` call on `b.Context` — give it a `context.WithTimeout` | `debug-failures` |
 
 ## 1. Reads you take yourself
 
@@ -302,29 +302,15 @@ Eventually("#toast").Should(b.HaveCount(0))        // RIGHT
 
 Same for `HaveBoundingBox`, `HaveScrollOffset`, `HaveOffsetTopWithin`/`HaveOffsetLeftWithin`, `HaveGapBetween`, the pairwise matchers, and any `Consistently(sel).ShouldNot(...)` on a conditionally-rendered `sel`. **`Exist`/`HaveCount` answer "is it there?"; geometry matchers answer "where is it?" and presuppose it's there** — same as `BeVisible`/`BeEnabled`/`BeClickable` always have.
 
-**A visual baseline that was never reviewed asserts nothing.** If a missing baseline were written on first sight and the spec passed, the very first run would certify whatever the page happened to look like — a broken page included — and the assertion would be green from birth, so nobody would ever open the image. Biloba refuses: a missing baseline is a **failure** that writes the captured `.actual.png` and tells you to re-run with `BILOBA_UPDATE_SCREENSHOTS=1`.
+**Visual assertions have their own vacuous shapes** (workflow and fixes → `visual-assertions`):
 
-Don't work around it. Pre-writing baselines blind — a scripted "run with update until it's green", or committing whatever the first run produced without looking — recreates exactly the vacuous assertion the refusal exists to prevent. Read the `.actual.png`, then update.
+- **A baseline nobody reviewed.** A missing baseline fails and writes the captured `.actual.png` so that someone looks at it before `BILOBA_UPDATE_SCREENSHOTS=1` writes the baseline. Scripting "update until green", or committing the first run's output unopened, certifies whatever the page drew, a broken page included.
+- **`BILOBA_UPDATE_SCREENSHOTS` set in CI.** Update mode captures, writes, and passes with no comparison, so the whole visual suite goes green. It tends to get added during one legitimate refresh and stay. Grep the CI config for it before trusting a green visual run, and keep it to local `--focus`-scoped runs.
+- **A tolerance widened until nothing can fail.** `b.Tolerance(0.05)` on a small element can absorb a whole component; `b.ChannelTolerance(60)` absorbs a colour change. Set the suite-wide default (`BilobaConfigScreenshotTolerance` / `BilobaConfigScreenshotChannelTolerance`) once against real evidence. A per-assertion tolerance that keeps growing means the subject is nondeterministic: `b.Mask` the region instead.
+- **A subject clipped by an inner scroll pane.** An element outside an inner `overflow: auto` pane's visible band was never painted, and a blank capture is a stable one. Biloba refuses the comparison and names the clipping ancestor; scroll the pane first (`b.ScrollIntoView(sel, b.WithinScroller(pane))`, then gate on `b.BeInViewport(b.Fully())`). Structural gates (`[data-rendered]` present, `svg` present) pass while the capture is blank.
+- **Two colour schemes that render identically.** `b.InColorSchemes("light","dark")` drives `prefers-color-scheme`; an app whose theme was pinned (directly, via a helper, or by a leftover stored preference) ignores it and writes the same pixels to both baselines. Biloba warns when two schemes capture byte-identical images. Treat the warning as a finding.
 
-**`BILOBA_UPDATE_SCREENSHOTS` set in CI turns the entire visual suite green.** In update mode every visual assertion captures, writes its baseline, and passes — no comparison happens at all. It's an environment variable, so it gets added to a CI config once, during a legitimate baseline refresh, and then stays. Nothing fails, nothing looks wrong, and the suite reads as coverage while proving nothing. Grep the CI config for it before trusting a green visual run, and keep the variable to local, scoped invocations (`ginkgo --focus=…`).
-
-**And a tolerance widened until nothing can fail is the same bug with pixels.** `b.Tolerance(0.05)` on a small element can absorb an entire component; `b.ChannelTolerance(60)` absorbs a color change. Tune the suite-wide default (`BilobaConfigScreenshotTolerance` / `BilobaConfigScreenshotChannelTolerance`) once against real evidence, and treat a per-assertion tolerance that keeps growing as a signal the subject is nondeterministic — mask the region (`b.Mask`) instead of blurring the whole comparison. → `visual-assertions`
-
-**A capture that expands the viewport can destroy its own subject.** Reaching content outside the viewport means expanding it, and a responsive page observes that — `matchMedia` flips, `resize` fires, and an app that re-renders on its breakpoint unmounts the subtree being captured, taking component-local state with it. The spec then fails on the line *after* the capture, polling for an element that was there a moment ago. Biloba now expands the viewport only when it has to (a subject outside the viewport, or a document bigger than the viewport) and says so when a subject vanishes across a capture: `the element matching X was present before this capture and gone after it`.
-
-If you see that message, or an intermittent "could not find DOM element" on the line following a capture: **capture something already in view**. `b.ScrollIntoView(sel)`, gate on `b.BeInViewport(b.Fully())`, then capture — Biloba touches nothing.
-
-**A blank capture is a stable capture.** An element capture works below the *document* fold — Biloba expands the main frame's viewport — but an element scrolled out of an **inner** `overflow: auto` pane was never painted, and comes back as a flat rectangle of the pane's background. Baseline that and it matches itself forever. This is the normal shape of any app-shell layout (fixed chrome, inner scrolling pane), so it is not exotic. Biloba now refuses the comparison and names the clipping ancestor; the fix is to scroll the pane first:
-
-```go
-b.ScrollIntoView(".figure", b.WithinScroller("#reader-pane"))
-Eventually(".figure").Should(b.BeInViewport(b.Fully()))
-Eventually(".figure").Should(b.HaveScreenshot("figure"))
-```
-
-Every structural gate in front of such a capture (`[data-rendered]` present, `svg` present) passes while the capture is blank — presence is not paintedness.
-
-**Two colour schemes that render identically assert one thing, not two.** `b.InColorSchemes("light","dark")` drives `prefers-color-scheme`, and an app with a manual theme override only follows that media query while it is in its follow-the-system state. A spec that pinned the theme (directly, via a helper, or via a leftover stored preference) writes the same pixels to `home-light.png` and `home-dark.png`. Both look right, both pass, and the dark assertion cannot fail. Biloba warns when two schemes in one assertion capture byte-identical images — treat that warning as a finding, not noise.
+**A capture that expands the viewport can destroy its own subject.** Reaching content outside the viewport means expanding it; a responsive page re-renders on its breakpoint and can unmount the subtree being captured, so the spec fails on the line *after* the capture. Biloba expands only when it has to (a subject outside the viewport, or a document bigger than it) and reports `the element matching X was present before this capture and gone after it`. On that message, or an intermittent "could not find DOM element" right after a capture, **capture something already in view**: `b.ScrollIntoView(sel)`, gate on `b.BeInViewport(b.Fully())`, then capture.
 
 Three more vacuous shapes live with their smell and are covered above: the **eagerly-created app-state barrier** (§3), the **inverted document-order assertion** (§4), the **shadowed stateful handler** (§6).
 

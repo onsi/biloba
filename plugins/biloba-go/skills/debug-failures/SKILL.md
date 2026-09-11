@@ -5,7 +5,7 @@ description: See why a Go/Ginkgo Biloba spec failed or flaked — the on-failure
 
 # Debugging Biloba failures
 
-Reading artifacts after a spec failed. To *prevent* flakes → `flaky-specs`. Docs: <https://onsi.github.io/biloba/#failure-artifacts>. Sibling skills are named here without a prefix; invoke one with the same plugin prefix you loaded this skill under.
+Reading artifacts after a spec failed. To *prevent* flakes → `flaky-specs`. Docs: <https://onsi.github.io/biloba/#failure-artifacts-humans-ci-and-agents>. Sibling skills are named here without a prefix; invoke one with the same plugin prefix you loaded this skill under.
 
 ## Zero config: what you already get
 
@@ -56,30 +56,9 @@ screenshot "home-desktop" differs from baseline
   diff:     /Users/you/app/biloba-screenshots/home-desktop.diff.png
 ```
 
-| Shape line | Means |
-|---|---|
-| `one box`, full width, top edge | the header/banner changed |
-| `one box`, small, mid-image | the component you touched |
-| `changed regions: N boxes` (largest first, capped at 5) | several independent changes |
-| `scattered — N regions spread across the image` | a web font failed to load or rendered differently |
-| `uniform shift of the whole image, 1px down` | something *above* the subject grew or moved — fix that, don't re-baseline. Never reported for an image thinner than ~16px on either axis (thin rule, focus ring, progress bar) — those get the box reading |
-| `baseline is 800x600, actual is 800x640 (40px taller)` | the box resized; no per-pixel story |
+The shape line (`one box`, `changed regions: N boxes`, `scattered`, `uniform shift`, a size change) and what to do about each → `visual-assertions`. When every differing pixel is off by only a few levels Biloba says `a rasterisation or compositing difference, not a content change` — nothing moved, so look for a shadow or gradient compositing into the capture. A **missing** baseline is a different failure: it says to re-run with `BILOBA_UPDATE_SCREENSHOTS=1`; never script your way past it. `Read` the `.diff.png` when the words aren't enough (inline images are off under an agent, so you get the path).
 
-What to do about each → `visual-assertions`.
-
-`unchanged: everything below y=N` is the complement and usually the faster read. `max channel delta` counts every pixel, including those the channel tolerance absorbed — and when it is in the low single digits Biloba adds `every differing pixel differs by <= N — a rasterisation or compositing difference, not a content change`. Believe it: nothing moved, so look for a shadow or gradient compositing into the capture rather than for an element. A **missing** baseline is a different failure — it says to re-run with `BILOBA_UPDATE_SCREENSHOTS=1`; never script your way past it.
-
-`Read` the `.diff.png` when the words aren't enough. A human at a terminal that renders images also gets it drawn under the diagnosis; you get the path instead, since inline images are off under an agent.
-
-**"never settled" — printed during an update run, not on a failure.** Update mode captures until three in a row match before writing. When that never happens it writes the last capture anyway and prints:
-
-```
-The screenshot for home-desktop never settled: no 3 captures in a row matched, across 8 captures over 2.6s.
-Biloba wrote the last one, but a baseline captured from a page that is still changing will fail on every later run.
-Mask the changing region with b.Mask(...), or track down what is still moving.
-```
-
-The run stays green, so this is easy to scroll past — don't. The baseline just written is unsettled and the next normal run will fail against it. Add a `b.Mask(...)` for the moving region (or stop the page moving), then re-run the update. Re-running the update alone changes nothing. → `visual-assertions`
+**"never settled" is printed during an update run, not on a failure.** The run stays green, but the baseline it just wrote was captured from a page still changing and the next normal run will fail against it. Mask the moving region (or stop it moving) and re-run the update; re-running alone changes nothing. → `visual-assertions`
 
 **"Failed to clear the emulated prefers-color-scheme"** — a dropped `b.InColorSchemes` teardown. The override is target-level and survives navigation, so `b.Prepare()` clears the leak before the next spec; the spec that printed the warning, though, finished rendering in the emulated scheme. Read any odd-looking screenshot from that spec with that in mind.
 
@@ -121,7 +100,7 @@ Every command Biloba sends Chrome runs under a deadline, so an unresponsive brow
 
 The deadline is generous on purpose (a healthy command answers in milliseconds), so hitting it is a real signal, not a tight-timeout artifact. `WithTimeout` doesn't move it: that knob bounds how long Biloba keeps *retrying*, which is a different question from whether Chrome is alive.
 
-**A suite that ends on Ginkgo's `--timeout` with no failing spec** used to be this class — a command blocked inside a poll's callback, where Gomega can't interrupt it, so the poll deadline never fired. If you still see that shape, it is not this: look for a `chromedp` call of your own on `b.Context` without a deadline.
+**A suite that ends on Ginkgo's `--timeout` with no failing spec** is a command blocked inside a poll's callback, where Gomega can't interrupt it. Biloba's own commands can't do that, so look for a `chromedp` call of your own on `b.Context` without a deadline.
 
 ### Two failure *messages* that self-explain
 

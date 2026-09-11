@@ -36,7 +36,7 @@ Selectors: CSS strings, `XPath` (`xpath`), or `Locator`s. `b.Immediate()` opts o
 
 ## Lifecycle
 
-- `biloba.SpinUpChrome(GinkgoT(), ...SpinUpOption)` — start Chrome (process 1). Options: `HighFidelityHeadless()`, `AutoInstallHeadlessShell()`, `HeadlessShellPath(p)`, `StartingWindowSize(w,h)`, `ChromeFlags(...)`. → `setup`
+- `biloba.SpinUpChrome(GinkgoT(), ...SpinUpOption)` — start Chrome (process 1). Options: `HighFidelityHeadless()`, `AutoInstallHeadlessShell()`, `HeadlessShellPath(p)`, `StartingWindowSize(w,h)`, `ChromeFlags(...)`, `ChromeSandbox(enabled)` (overrides the automatic Linux `--no-sandbox`). → `setup`
 - `biloba.ConnectToChrome(GinkgoT(), ...BilobaConfig)` — open this process's root tab `b`. Config → `debug-failures`
 - `b.Prepare()` — reset the root tab between specs (`BeforeEach`, `OncePerOrdered`).
 - `b.Context` — the tab's `chromedp` context (escape hatch).
