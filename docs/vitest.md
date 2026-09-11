@@ -70,7 +70,7 @@ Linux on arm64 (including Docker on Apple silicon) is a partial case: `bilobad` 
 await startSharedBrowser({mode: "headless", chromePath: "/usr/bin/chromium"});
 ```
 
-The path varies by distro - check where your package manager put it.
+The path varies by distro - check where your package manager put it. On Debian-based images, including the official `node` images, `apt-get install -y chromium` puts it at `/usr/bin/chromium`. Ubuntu's `chromium` package installs a snap, which doesn't run inside a container.
 
 `biloba` supports Vitest 3, 4, and 5 (peer range `>=3 <6`). Vitest 5 requires Node 22.12 or later; `biloba` itself needs Node 20 or later. If you're on an older config with `poolOptions`/`minWorkers`, note those were removed in Vitest 4 - use top-level `maxWorkers`/`isolate` instead.
 
