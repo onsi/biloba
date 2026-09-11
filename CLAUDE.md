@@ -59,19 +59,32 @@ Repo-specific testing conventions (see `biloba_suite_test.go`):
 | Concern | Go | Test |
 |---|---|---|
 | Setup, config, Chrome lifecycle | `biloba.go` | `biloba_suite_test.go` |
+| CDP dispatch, the `runCDP` deadline backstop | `cdp.go` | `cdp_test.go`, `cdp_internal_test.go` |
+| Poll config (`WithTimeout`/`WithPolling`/`WithContext`/`Immediate`) and `pollOrImmediate`; the four-bucket guards | `polling.go` | `polling_guards_test.go` |
 | DOM query/interaction methods & matchers | `dom.go` | `dom_test.go` |
+| Clicking, pointer interactions (buttons, modifiers, `At`), keyboard input, uploads | `clicks.go`, `keyboard.go`, `upload.go` | `interactions_test.go`, `keyboard_test.go` |
+| Element/selector locators (`ByCSS`/`ByRole`/`ByText`/...) | `locator.go` | `locator_test.go` |
+| Realistic interaction track (`Realistic`, scroll-into-view, real pointer/wheel events) | `realistic.go` | `realistic_test.go` |
 | Property get/set/match | `properties.go` | `properties_test.go` |
 | Geometry getters/matchers (GetBoundingBox/GetScrollOffset/GetOffsetTopWithin, pairwise/viewport/document-order, GetComputedStyle) | `geometry.go` | `geometry_test.go` |
 | Capturing a matcher's observed value (`*ValueMatcher`/`.Capture`) | `capture.go` | (exercised from each matcher's `*_test.go`) |
 | Poll-trajectory failure artifact | `probe_trajectory.go` | `probe_trajectory_internal_test.go` |
+| Accessibility tree outline (`A11yOutline`) | `a11y.go` | `a11y_test.go` |
+| DOM outline failure artifact | `outline.go` | `outline_test.go` |
 | Visual regression (`HaveScreenshot`, baselines, masking, the freeze) | `visual.go` | `visual_test.go` |
 | Image diff + the failure diagnosis it renders | `visual_diff.go` | `visual_diff_internal_test.go` |
+| Screenshots (capture, inline protocols, to-file) | `screenshots.go` | `screenshots_test.go` |
+| Window size | `windows.go` | `windows_test.go` |
 | XPath DSL | `xpath.go` | `xpath_test.go` |
-| Tabs / spawned tabs | `tabs.go` | `tabs_test.go` |
+| Tabs / spawned tabs, per-tab listener setup | `tabs.go`, `listeners.go` | `tabs_test.go` |
 | Dialogs | `dialog_handling.go` | `dialog_handling_test.go` |
 | Downloads | `downloads.go` | `downloads_test.go` |
+| Cookies (get/set/clear) and cookie matchers (`HaveCookie`, `HaveNumCookies`) | `cookies.go`, `cookie_matchers.go` | `cookies_test.go` |
+| Local/session storage | `storage.go` | `storage_test.go` |
+| Network requests/stubbing/matchers | `network.go` | `network_test.go` |
 | Arbitrary JS (`Run`, `JSFunc`, `JSVar`, `EvaluateTo`) | `javascript.go` | `javascript_test.go` |
-| Navigation, logging, screenshots, window size | `navigation.go`, `logging.go`, `screenshots.go`, `windows.go` | `*_test.go` |
+| Navigation, console/stack-trace logging | `navigation.go`, `logging.go` | `navigation_test.go`, `logging_test.go` |
+| chrome-headless-shell resolution (`BILOBA_CHROME_HEADLESS_SHELL`) | `headless_shell.go` | `headless_shell_test.go` |
 | Browser-side primitives | `biloba.js` (copied to `engine/biloba.js` by `go generate ./engine`) | (exercised via Go tests) |
 | TypeScript client, daemon, engine, wire protocol | `typescript/`, `cmd/bilobad/`, `engine/`, `protocol/` | `typescript/test/`, each package's `*_test.go` (`make driver-test`) |
 
