@@ -289,6 +289,29 @@ var _ = Describe("runner-neutral engine primitives", func() {
 			Expect(engine.SetCookiesContext(context.Background(), "", "http://example.com", []engine.Cookie{{Name: "a", Value: "b"}})).To(MatchError(chromedp.ErrInvalidContext))
 		}).NotTo(Panic())
 	})
+
+	// ErrChromeNotFound is the sentinel a caller across the runner-neutral boundary (the bilobad
+	// daemon, in particular) detects with errors.Is to add its own remedy - see
+	// cmd/bilobad's augmentChromeNotFoundError.  Forces the "not found" branch via the locator seam
+	// rather than a real missing-Chrome scenario: this suite's own SynchronizedBeforeSuite
+	// guarantees a real chrome-headless-shell is on PATH or in a cache root, so nothing short of
+	// that seam can make the search actually fail here.
+	It("wraps ErrChromeNotFound, rather than a bare message, when a Chrome cannot be found and auto-install is declined", func() {
+		restore := engine.SetChromeLocatorForTest(func(string) string { return "" })
+		defer restore()
+		_, _, err := engine.ResolveHeadlessShell(context.Background(), "", false)
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, engine.ErrChromeNotFound)).To(BeTrue())
+		Expect(err).To(MatchError(ContainSubstring(engine.ChromeEnvVar)))
+	})
+
+	It("reports whether Chrome for Testing publishes a build for the platform this suite is running on", func() {
+		// Every platform the Go module actually builds for (darwin/linux/windows amd64, plus
+		// darwin/windows arm variants CI does not run this suite on) has a Chrome for Testing
+		// build; this pins that rather than the impossible-to-exercise-here false branch (Linux
+		// on arm64).
+		Expect(engine.SupportsCurrentPlatform()).To(BeTrue())
+	})
 })
 
 var (

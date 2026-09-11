@@ -47,6 +47,7 @@ export interface HandshakeResponse {
   protocolVersion: string;
   capabilities: string[];
   launch: LaunchMetadata;
+  daemonVersion?: string;
 }
 
 export interface LaunchMetadata {

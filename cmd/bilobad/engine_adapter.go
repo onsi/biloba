@@ -369,10 +369,15 @@ func shadowsToWire(values []engine.NetworkShadowDiagnostic) []map[string]any {
 type engineBackend struct {
 	browser            *engine.Browser
 	launch             protocol.WireLaunchMetadata
+	daemonVersion      string
 	visual             engine.VisualOptions
 	maxScreenshotBytes int
 	debug              *debugHub
 }
+
+// DaemonVersion implements protocol.DaemonVersionProvider so the handshake response can report
+// bilobad's own build version, resolved once in main and stored here at construction.
+func (b *engineBackend) DaemonVersion() string { return b.daemonVersion }
 
 type debugHub struct {
 	mu          sync.Mutex

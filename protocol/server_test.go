@@ -36,6 +36,24 @@ var _ = Describe("driver protocol", func() {
 		Expect(err.Code).To(Equal(protocol.CodeProtocolMismatch))
 	})
 
+	It("reports the daemon version when the backend implements DaemonVersionProvider", func() {
+		client, cleanup := startTestServer(&daemonVersionBackend{})
+		DeferCleanup(cleanup)
+
+		var response protocol.HandshakeResponse
+		Expect(client.call("handshake", protocol.HandshakeRequest{ProtocolVersion: protocol.Version}, &response)).To(Succeed())
+		Expect(response.DaemonVersion).To(Equal("1.2.3"))
+	})
+
+	It("omits the daemon version from the wire, rather than sending an empty string, when the backend does not implement DaemonVersionProvider", func() {
+		server := protocol.NewServer(&fakeBackend{})
+		response, dispatchErr := server.Dispatch(context.Background(), "handshake", json.RawMessage(`{"protocolVersion":"2"}`))
+		Expect(dispatchErr).To(BeNil())
+		encoded, err := json.Marshal(response)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(encoded)).NotTo(ContainSubstring("daemonVersion"))
+	})
+
 	It("keeps empty launch arguments an array on the handshake wire", func() {
 		server := protocol.NewServer(&launchBackend{})
 		response, dispatchErr := server.Dispatch(context.Background(), "handshake", json.RawMessage(`{"protocolVersion":"2"}`))
@@ -783,6 +801,10 @@ type launchBackend struct{ fakeBackend }
 func (*launchBackend) LaunchMetadata() protocol.WireLaunchMetadata {
 	return protocol.WireLaunchMetadata{Attached: true}
 }
+
+type daemonVersionBackend struct{ fakeBackend }
+
+func (*daemonVersionBackend) DaemonVersion() string { return "1.2.3" }
 
 func (b *fakeBackend) OpenSession(context.Context) (protocol.Session, error) {
 	b.mu.Lock()

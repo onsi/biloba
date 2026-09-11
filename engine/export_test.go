@@ -47,6 +47,16 @@ func SetHeadlessShellInstallerForTest(installer func(context.Context) (string, e
 	return func() { headlessShellInstaller = previous }
 }
 
+// SetChromeLocatorForTest replaces the local-binary search ResolveHeadlessShell consults before
+// installing, letting specs force the "not found" branch deterministically instead of depending on
+// whether the host happens to have a real chrome-headless-shell on PATH or in a cache root - which
+// this suite's own SynchronizedBeforeSuite guarantees it does.
+func SetChromeLocatorForTest(locator func(string) string) func() {
+	previous := locateChromeForResolve
+	locateChromeForResolve = locator
+	return func() { locateChromeForResolve = previous }
+}
+
 // InstallHeadlessShellArchiveForTest exercises atomic cache publication without network access.
 func InstallHeadlessShellArchiveForTest(archivePath, destination, platform string) error {
 	return installHeadlessShellArchive(archivePath, destination, platform)

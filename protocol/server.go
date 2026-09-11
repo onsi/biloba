@@ -86,6 +86,13 @@ type LaunchMetadataProvider interface {
 	LaunchMetadata() WireLaunchMetadata
 }
 
+// DaemonVersionProvider is an optional Backend capability, mirroring LaunchMetadataProvider: a
+// backend that knows its own daemon build's version (cmd/bilobad does; a test double need not)
+// reports it here, and the handshake response includes it when present.
+type DaemonVersionProvider interface {
+	DaemonVersion() string
+}
+
 type Session interface {
 	Prepare(context.Context) error
 	Execute(context.Context, Operation) (Result, error)
@@ -571,6 +578,11 @@ type HandshakeResponse struct {
 	ProtocolVersion string             `json:"protocolVersion"`
 	Capabilities    []string           `json:"capabilities"`
 	Launch          WireLaunchMetadata `json:"launch"`
+	// DaemonVersion is bilobad's own release version (distinct from ProtocolVersion, which is the
+	// wire contract's version).  Omitted when the backend does not implement DaemonVersionProvider,
+	// so an older daemon's absence of the field is not itself a client-visible error - the client
+	// treats a missing DaemonVersion as unknown rather than mismatched.
+	DaemonVersion string `json:"daemonVersion,omitempty"`
 }
 
 type WireLaunchMetadata struct {
@@ -1110,7 +1122,11 @@ func (s *Server) Dispatch(ctx context.Context, method string, params json.RawMes
 			copy(arguments, launch.Arguments)
 			launch.Arguments = arguments
 		}
-		return HandshakeResponse{ProtocolVersion: Version, Capabilities: append([]string(nil), Capabilities...), Launch: launch}, nil
+		response := HandshakeResponse{ProtocolVersion: Version, Capabilities: append([]string(nil), Capabilities...), Launch: launch}
+		if provider, ok := s.backend.(DaemonVersionProvider); ok {
+			response.DaemonVersion = provider.DaemonVersion()
+		}
+		return response, nil
 	case "openSession":
 		session, err := s.backend.OpenSession(ctx)
 		if err != nil {

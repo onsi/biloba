@@ -86,6 +86,124 @@ var _ = Describe("bilobad", func() {
 		_, err = hub.subscribe()
 		Expect(err).To(MatchError(ContainSubstring("debug stream is closed")))
 	})
+	Describe("bilobad's own version", func() {
+		var originalVersion string
+		BeforeEach(func() { originalVersion = version })
+		AfterEach(func() { version = originalVersion })
+
+		It("prefers the ldflags-stamped version over build info", func() {
+			version = "9.9.9"
+			Expect(resolveVersion()).To(Equal("9.9.9"))
+		})
+
+		It("falls back to dev without a stamped version or an installed module version", func() {
+			// go test/ginkgo build this binary the same way `go build`/`go run` from a checkout
+			// would - runtime/debug reports "(devel)", not a real module version - so this also
+			// covers that branch of resolveVersion without needing a seam over debug.ReadBuildInfo.
+			version = ""
+			Expect(resolveVersion()).To(Equal("dev"))
+		})
+
+		It("prints its own version and exits cleanly", func() {
+			version = "1.2.3"
+			var stdout strings.Builder
+			Expect(runVersion(&stdout)).To(Succeed())
+			Expect(stdout.String()).To(Equal("1.2.3\n"))
+		})
+	})
+
+	Describe("install-chrome", func() {
+		var originalInstaller func(context.Context) (string, error)
+		var originalLocator func(string) string
+		var originalPlatformSupport func() bool
+		BeforeEach(func() {
+			originalInstaller, originalLocator, originalPlatformSupport = chromeInstaller, chromeLocator, platformSupportsAutoInstall
+		})
+		AfterEach(func() {
+			chromeInstaller, chromeLocator, platformSupportsAutoInstall = originalInstaller, originalLocator, originalPlatformSupport
+		})
+
+		It("prints the installed path to stdout with no stderr note when nothing overrides it", func() {
+			chromeInstaller = func(context.Context) (string, error) { return "/cache/chrome-headless-shell", nil }
+			chromeLocator = func(string) string { return "/cache/chrome-headless-shell" }
+			var stdout, stderr strings.Builder
+			Expect(runInstallChrome(context.Background(), &stdout, &stderr)).To(Succeed())
+			Expect(stdout.String()).To(Equal("/cache/chrome-headless-shell\n"))
+			Expect(stderr.String()).To(BeEmpty())
+		})
+
+		It("notes on stderr, without touching stdout, when something else takes precedence over the binary it just installed", func() {
+			chromeInstaller = func(context.Context) (string, error) { return "/cache/chrome-headless-shell", nil }
+			chromeLocator = func(string) string { return "/opt/other/chrome-headless-shell" }
+			var stdout, stderr strings.Builder
+			Expect(runInstallChrome(context.Background(), &stdout, &stderr)).To(Succeed())
+			Expect(stdout.String()).To(Equal("/cache/chrome-headless-shell\n"))
+			Expect(stderr.String()).To(ContainSubstring("/opt/other/chrome-headless-shell"))
+		})
+
+		It("falls back to an existing binary and warns, rather than failing, when installation fails over the network", func() {
+			chromeInstaller = func(context.Context) (string, error) { return "", errors.New("dial tcp: no route to host") }
+			chromeLocator = func(string) string { return "/opt/fallback/chrome-headless-shell" }
+			var stdout, stderr strings.Builder
+			Expect(runInstallChrome(context.Background(), &stdout, &stderr)).To(Succeed())
+			Expect(stdout.String()).To(Equal("/opt/fallback/chrome-headless-shell\n"))
+			Expect(stderr.String()).To(And(ContainSubstring("warning"), ContainSubstring("no route to host")))
+		})
+
+		It("fails when installation fails and nothing is found locally either", func() {
+			chromeInstaller = func(context.Context) (string, error) { return "", errors.New("dial tcp: no route to host") }
+			chromeLocator = func(string) string { return "" }
+			var stdout, stderr strings.Builder
+			Expect(runInstallChrome(context.Background(), &stdout, &stderr)).To(MatchError(ContainSubstring("no route to host")))
+			Expect(stdout.String()).To(BeEmpty())
+		})
+
+		It("respects context cancellation instead of silently falling back to a stale binary", func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			chromeInstaller = func(ctx context.Context) (string, error) { return "", ctx.Err() }
+			chromeLocator = func(string) string { return "/opt/fallback/chrome-headless-shell" }
+			var stdout, stderr strings.Builder
+			Expect(runInstallChrome(ctx, &stdout, &stderr)).To(MatchError(context.Canceled))
+			Expect(stdout.String()).To(BeEmpty())
+		})
+
+		It("attributes an override to the env var when it is set", func() {
+			Expect(os.Setenv(engine.ChromeEnvVar, "/env/chrome-headless-shell")).To(Succeed())
+			defer func() { Expect(os.Unsetenv(engine.ChromeEnvVar)).To(Succeed()) }()
+			Expect(chromeOverrideReason("/env/chrome-headless-shell")).To(ContainSubstring(engine.ChromeEnvVar))
+		})
+	})
+
+	Describe("augmenting a chrome-not-found error for npm users", func() {
+		var originalPlatformSupport func() bool
+		BeforeEach(func() { originalPlatformSupport = platformSupportsAutoInstall })
+		AfterEach(func() { platformSupportsAutoInstall = originalPlatformSupport })
+
+		It("passes through nil and errors unrelated to a missing Chrome", func() {
+			Expect(augmentChromeNotFoundError(nil)).To(BeNil())
+			unrelated := errors.New("boom")
+			Expect(augmentChromeNotFoundError(unrelated)).To(Equal(unrelated))
+		})
+
+		It("adds the npx install-chrome hint, and keeps errors.Is working, when the platform can auto-install", func() {
+			platformSupportsAutoInstall = func() bool { return true }
+			notFound := fmt.Errorf("%w; install it, set %s, provide an explicit path, or opt in to auto-install", engine.ErrChromeNotFound, engine.ChromeEnvVar)
+			augmented := augmentChromeNotFoundError(notFound)
+			Expect(augmented).To(MatchError(ContainSubstring("npx biloba install-chrome")))
+			Expect(errors.Is(augmented, engine.ErrChromeNotFound)).To(BeTrue())
+		})
+
+		It("recommends a full Chrome/Chromium instead, and does not mention install-chrome, when the platform cannot auto-install", func() {
+			platformSupportsAutoInstall = func() bool { return false }
+			notFound := fmt.Errorf("%w; install it, set %s, provide an explicit path, or opt in to auto-install", engine.ErrChromeNotFound, engine.ChromeEnvVar)
+			augmented := augmentChromeNotFoundError(notFound)
+			Expect(augmented).To(MatchError(ContainSubstring("Chrome or Chromium")))
+			Expect(augmented).NotTo(MatchError(ContainSubstring("install-chrome")))
+			Expect(errors.Is(augmented, engine.ErrChromeNotFound)).To(BeTrue())
+		})
+	})
+
 	It("parses daemon flags", func() {
 		parsed, err := parseConfig([]string{
 			"-chrome-path", "/opt/chrome",

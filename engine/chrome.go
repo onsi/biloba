@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,16 +15,23 @@ import (
 // It is honored by the Ginkgo adapter, by the engine's own suite, and by the bilobad daemon.
 const ChromeEnvVar = "BILOBA_CHROME_HEADLESS_SHELL"
 
+// ErrChromeNotFound is the sentinel behind ResolveHeadlessShell's "could not find
+// chrome-headless-shell" failure, wrapped so callers across the runner-neutral boundary (the
+// bilobad daemon in particular, which has its own npm-flavored remedy to add) can detect it with
+// errors.Is instead of matching on message text.
+var ErrChromeNotFound = errors.New("could not find chrome-headless-shell")
+
 var headlessShellInstaller = InstallHeadlessShell
+var locateChromeForResolve = LocateChrome
 
 // ResolveHeadlessShell finds a local chrome-headless-shell and, only when autoInstall is true,
 // installs Chrome for Testing's stable shell into Biloba's cache as a fallback.
 func ResolveHeadlessShell(ctx context.Context, explicit string, autoInstall bool) (string, bool, error) {
-	if path := LocateChrome(explicit); path != "" {
+	if path := locateChromeForResolve(explicit); path != "" {
 		return path, false, nil
 	}
 	if !autoInstall {
-		return "", false, fmt.Errorf("could not find chrome-headless-shell; install it, set %s, provide an explicit path, or opt in to auto-install", ChromeEnvVar)
+		return "", false, fmt.Errorf("%w; install it, set %s, provide an explicit path, or opt in to auto-install", ErrChromeNotFound, ChromeEnvVar)
 	}
 	path, err := headlessShellInstaller(ctx)
 	if err != nil {

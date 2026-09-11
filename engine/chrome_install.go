@@ -66,8 +66,18 @@ func chromeForTestingPlatform() (string, error) {
 	case "windows/386":
 		return "win32", nil
 	default:
-		return "", fmt.Errorf("chrome-headless-shell auto-install is unavailable for %s/%s", runtime.GOOS, runtime.GOARCH)
+		return "", fmt.Errorf("Chrome for Testing has no chrome-headless-shell build for %s/%s; install a full Chrome or Chromium browser for this platform yourself and point Biloba at it with an explicit executable path in headless mode instead (%s only locates chrome-headless-shell binaries, so it will not help here)", runtime.GOOS, runtime.GOARCH, ChromeEnvVar)
 	}
+}
+
+// SupportsCurrentPlatform reports whether Chrome for Testing publishes a chrome-headless-shell
+// build for the platform Biloba is running on.  InstallHeadlessShell can only succeed when this is
+// true; check it before recommending auto-install (or `npx biloba install-chrome`) as a remedy for
+// a missing browser - on an unsupported platform (Linux on arm64, say) the right remedy is a
+// distro-provided full Chrome/Chromium instead.
+func SupportsCurrentPlatform() bool {
+	_, err := chromeForTestingPlatform()
+	return err == nil
 }
 
 func stableHeadlessShellDownload(ctx context.Context, platform string) (string, string, error) {

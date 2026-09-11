@@ -66,9 +66,14 @@ func main() {
 	defer stop()
 	args := os.Args[1:]
 	var err error
-	if len(args) > 0 && args[0] == "serve-browser" {
+	switch {
+	case len(args) > 0 && args[0] == "serve-browser":
 		err = runBrowserHost(ctx, args[1:], os.Stdout, os.Stdin)
-	} else {
+	case len(args) > 0 && args[0] == "version":
+		err = runVersion(os.Stdout)
+	case len(args) > 0 && args[0] == "install-chrome":
+		err = runInstallChrome(ctx, os.Stdout, os.Stderr)
+	default:
 		err = run(ctx, args, os.Stdout, os.Stdin)
 	}
 	if err != nil {
@@ -95,9 +100,9 @@ func run(ctx context.Context, args []string, stdout io.Writer, stdin io.Reader) 
 	}
 	browser, err := engine.StartBrowser(ctx, browserConfig)
 	if err != nil {
-		return err
+		return augmentChromeNotFoundError(err)
 	}
-	backend := &engineBackend{browser: browser, debug: debug, visual: engine.VisualOptions{
+	backend := &engineBackend{browser: browser, debug: debug, daemonVersion: resolveVersion(), visual: engine.VisualOptions{
 		BaselineDir: config.screenshotBaselinesDir, ArtifactDir: config.artifactDir, Update: config.updateScreenshots,
 		Tolerance: engine.ScreenshotTolerance{PixelFraction: config.screenshotPixelTolerance, ChannelDelta: config.screenshotChannelTolerance}, MaxBytes: config.maxScreenshotBytes,
 	}, maxScreenshotBytes: config.maxScreenshotBytes}
@@ -211,7 +216,7 @@ func runBrowserHost(ctx context.Context, args []string, stdout io.Writer, stdin 
 	}
 	browser, err := engine.StartBrowser(ctx, engine.BrowserConfig{ExecutablePath: config.chromePath, Mode: config.chromeMode, Arguments: config.chromeArgs, WindowWidth: config.windowWidth, WindowHeight: config.windowHeight, AutoInstall: config.autoInstall})
 	if err != nil {
-		return err
+		return augmentChromeNotFoundError(err)
 	}
 	defer browser.Close()
 	ready, err := json.Marshal(browserReady{WSURL: browser.WebSocketURL(), PID: os.Getpid(), Launch: launchMetadataForHost(browser.LaunchMetadata())})
