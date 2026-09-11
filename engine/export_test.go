@@ -70,3 +70,27 @@ func SetChromeCacheRootsForTest(roots []string) func() {
 	chromeCacheRoots = func() []string { return roots }
 	return func() { chromeCacheRoots = previous }
 }
+
+// SetSandboxGOOSForTest overrides the GOOS ChromeSandboxDisabled sees, letting specs drive its
+// Linux-only branches (and rule them out on other platforms) without running on a matching host.
+func SetSandboxGOOSForTest(goos string) func() {
+	previous := sandboxGOOS
+	sandboxGOOS = func() string { return goos }
+	return func() { sandboxGOOS = previous }
+}
+
+// SetSandboxEuidForTest overrides the effective UID ChromeSandboxDisabled sees, letting specs
+// drive the root-on-Linux branch without actually running as root.
+func SetSandboxEuidForTest(euid int) func() {
+	previous := sandboxEuid
+	sandboxEuid = func() int { return euid }
+	return func() { sandboxEuid = previous }
+}
+
+// SetSandboxApparmorRestrictedForTest overrides the AppArmor proc-file read ChromeSandboxDisabled
+// consults, letting specs drive the restricted/unrestricted/missing-file branches deterministically.
+func SetSandboxApparmorRestrictedForTest(restricted bool, err error) func() {
+	previous := sandboxApparmorRestricted
+	sandboxApparmorRestricted = func() (bool, error) { return restricted, err }
+	return func() { sandboxApparmorRestricted = previous }
+}

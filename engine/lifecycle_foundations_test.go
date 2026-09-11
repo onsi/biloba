@@ -438,6 +438,34 @@ var _ = Describe("lifecycle engine foundations", func() {
 		Expect(height).To(Equal(768))
 	})
 
+	It("threads BrowserConfig.Sandbox through to the actual launch and reports it truthfully", func(ctx SpecContext) {
+		sandboxOff := false
+		launched, err := engine.StartBrowser(ctx, engine.BrowserConfig{
+			ExecutablePath: chromePath(),
+			Sandbox:        &sandboxOff,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(launched.Close)
+		session, err := launched.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		Expect(launched.LaunchMetadata().Arguments).To(ContainElement("--no-sandbox"))
+	})
+
+	It("ignores BrowserConfig.Sandbox when attaching to an existing browser, since attaching launches nothing", func(ctx SpecContext) {
+		sandboxOff := false
+		attached, err := engine.StartBrowser(ctx, engine.BrowserConfig{
+			WebSocketURL: browser.WebSocketURL(),
+			Sandbox:      &sandboxOff,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(attached.Close)
+		metadata := attached.LaunchMetadata()
+		Expect(metadata.Attached).To(BeTrue())
+		Expect(metadata.Arguments).To(BeEmpty())
+	})
+
 	It("keeps the default mode compatible with an explicitly supplied full Chrome", func(ctx SpecContext) {
 		launched, err := engine.StartBrowser(ctx, engine.BrowserConfig{
 			ExecutablePath: engine.LocateFullChrome(""),

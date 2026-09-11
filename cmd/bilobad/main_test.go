@@ -241,7 +241,23 @@ var _ = Describe("bilobad", func() {
 		Entry("attach and launch mode", "-chrome-ws-url=ws://example.test", "-chrome-mode=headful"),
 		Entry("attach and raw argument", "-chrome-ws-url=ws://example.test", "-chrome-arg=--site-per-process"),
 		Entry("attach and auto install", "-chrome-ws-url=ws://example.test", "-auto-install"),
+		Entry("attach and chrome-sandbox", "-chrome-ws-url=ws://example.test", "-chrome-sandbox=true"),
+		Entry("invalid chrome-sandbox value", "-chrome-sandbox=maybe"),
 	)
+
+	It("parses the chrome-sandbox tri-state flag", func() {
+		parsed, err := parseConfig([]string{"-chrome-sandbox=true"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(parsed.chromeSandbox).To(HaveValue(BeTrue()))
+
+		parsed, err = parseConfig([]string{"-chrome-sandbox=false"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(parsed.chromeSandbox).To(HaveValue(BeFalse()))
+
+		parsed, err = parseConfig(nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(parsed.chromeSandbox).To(BeNil())
+	})
 
 	DescribeTable("rejects unsafe screenshot daemon bounds",
 		func(arguments ...string) {

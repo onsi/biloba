@@ -31,6 +31,11 @@ type BrowserConfig struct {
 	WindowHeight   int
 	ArtifactDir    string
 	AutoInstall    bool
+	// Sandbox is the tri-state override for whether Chrome launches with its OS sandbox: nil
+	// auto-detects (see ChromeSandboxDisabled), a pointer to true forces the sandbox ON, and a
+	// pointer to false forces it OFF. Only consulted when StartBrowser launches a process itself -
+	// attaching via WebSocketURL launches nothing, so it has no effect there.
+	Sandbox *bool
 	// DebugSink receives bounded structured CDP traffic asynchronously. Nil disables debug work.
 	DebugSink func(DebugEntry)
 }
@@ -143,6 +148,22 @@ func StartBrowser(ctx context.Context, config BrowserConfig) (*Browser, error) {
 		opts = append(opts, chromedp.Flag(argument.name, argument.value))
 	}
 	debug := newDebugDispatcher(config.DebugSink)
+	sandboxDisabled, sandboxReason := ChromeSandboxDisabled(mode, config.Sandbox)
+	reportedArguments := append([]string(nil), config.Arguments...)
+	if sandboxDisabled {
+		explicit := false
+		for _, argument := range arguments {
+			if argument.name == "no-sandbox" {
+				explicit = true
+				break
+			}
+		}
+		if !explicit {
+			opts = append(opts, chromedp.NoSandbox)
+			reportedArguments = append(reportedArguments, "--no-sandbox")
+		}
+		debug.logf("chrome sandbox disabled: %s", sandboxReason)
+	}
 	allocCtx, cancelAllocator := chromedp.NewExecAllocator(ctx, opts...)
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
 	cancel := func() {
@@ -165,7 +186,7 @@ func StartBrowser(ctx context.Context, config BrowserConfig) (*Browser, error) {
 		sessions: map[*Session]struct{}{}, webSocketURL: wsURL,
 		mode: mode, windowWidth: width, windowHeight: height,
 		debug:  debug,
-		launch: LaunchMetadata{Mode: mode, ExecutablePath: executablePath, Arguments: append([]string(nil), config.Arguments...), WindowWidth: width, WindowHeight: height, AutoInstalled: autoInstalled},
+		launch: LaunchMetadata{Mode: mode, ExecutablePath: executablePath, Arguments: reportedArguments, WindowWidth: width, WindowHeight: height, AutoInstalled: autoInstalled},
 	}
 	if err := browser.listenForDestroyedTargets(); err != nil {
 		_ = browser.Close()

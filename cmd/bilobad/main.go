@@ -23,6 +23,7 @@ type config struct {
 	chromeMode                 engine.ChromeMode
 	chromeArgs                 []string
 	autoInstall                bool
+	chromeSandbox              *bool
 	windowWidth                int
 	windowHeight               int
 	attachedLaunch             *protocol.WireLaunchMetadata
@@ -88,7 +89,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stdin io.Reader) 
 		return err
 	}
 	var debug *debugHub
-	browserConfig := engine.BrowserConfig{ExecutablePath: config.chromePath, WebSocketURL: config.chromeWSURL, Mode: config.chromeMode, Arguments: config.chromeArgs, WindowWidth: config.windowWidth, WindowHeight: config.windowHeight, ArtifactDir: config.artifactDir, AutoInstall: config.autoInstall}
+	browserConfig := engine.BrowserConfig{ExecutablePath: config.chromePath, WebSocketURL: config.chromeWSURL, Mode: config.chromeMode, Arguments: config.chromeArgs, WindowWidth: config.windowWidth, WindowHeight: config.windowHeight, ArtifactDir: config.artifactDir, AutoInstall: config.autoInstall, Sandbox: config.chromeSandbox}
 	if config.attachedLaunch != nil {
 		browserConfig.Mode = engine.ChromeMode(config.attachedLaunch.Mode)
 		browserConfig.WindowWidth = config.attachedLaunch.Width
@@ -136,6 +137,8 @@ func parseConfig(args []string) (config, error) {
 	flags.StringVar(&mode, "chrome-mode", "", "headless-shell, headless, or headful")
 	flags.Var((*stringList)(&result.chromeArgs), "chrome-arg", "raw Chrome argument; repeatable")
 	flags.BoolVar(&result.autoInstall, "auto-install", false, "install chrome-headless-shell when missing")
+	var chromeSandbox string
+	flags.StringVar(&chromeSandbox, "chrome-sandbox", "", "true, false, or empty to auto-detect whether Chrome launches with --no-sandbox")
 	flags.IntVar(&result.windowWidth, "window-width", 0, "starting viewport width")
 	flags.IntVar(&result.windowHeight, "window-height", 0, "starting viewport height")
 	var attachedMetadata string
@@ -155,10 +158,21 @@ func parseConfig(args []string) (config, error) {
 	if mode != "" && result.chromeMode != engine.ChromeModeHeadlessShell && result.chromeMode != engine.ChromeModeHeadless && result.chromeMode != engine.ChromeModeHeadful {
 		return config{}, fmt.Errorf("chrome-mode must be headless-shell, headless, or headful")
 	}
+	switch chromeSandbox {
+	case "":
+	case "true":
+		enabled := true
+		result.chromeSandbox = &enabled
+	case "false":
+		enabled := false
+		result.chromeSandbox = &enabled
+	default:
+		return config{}, fmt.Errorf("chrome-sandbox must be true, false, or omitted")
+	}
 	if (result.windowWidth == 0) != (result.windowHeight == 0) || result.windowWidth < 0 || result.windowHeight < 0 {
 		return config{}, fmt.Errorf("window-width and window-height must both be positive")
 	}
-	if result.chromeWSURL != "" && (result.chromePath != "" || mode != "" || len(result.chromeArgs) > 0 || result.autoInstall || result.windowWidth != 0) {
+	if result.chromeWSURL != "" && (result.chromePath != "" || mode != "" || len(result.chromeArgs) > 0 || result.autoInstall || result.windowWidth != 0 || chromeSandbox != "") {
 		return config{}, fmt.Errorf("chrome-ws-url conflicts with process launch options")
 	}
 	if result.autoInstall && result.chromeMode != "" && result.chromeMode != engine.ChromeModeHeadlessShell {
@@ -214,7 +228,7 @@ func runBrowserHost(ctx context.Context, args []string, stdout io.Writer, stdin 
 	if config.chromeWSURL != "" || config.attachedLaunch != nil {
 		return fmt.Errorf("serve-browser does not accept attachment options")
 	}
-	browser, err := engine.StartBrowser(ctx, engine.BrowserConfig{ExecutablePath: config.chromePath, Mode: config.chromeMode, Arguments: config.chromeArgs, WindowWidth: config.windowWidth, WindowHeight: config.windowHeight, AutoInstall: config.autoInstall})
+	browser, err := engine.StartBrowser(ctx, engine.BrowserConfig{ExecutablePath: config.chromePath, Mode: config.chromeMode, Arguments: config.chromeArgs, WindowWidth: config.windowWidth, WindowHeight: config.windowHeight, AutoInstall: config.autoInstall, Sandbox: config.chromeSandbox})
 	if err != nil {
 		return augmentChromeNotFoundError(err)
 	}
