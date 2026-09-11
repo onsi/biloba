@@ -135,7 +135,7 @@ func (gc ChromeConnection) encode() []byte {
 }
 
 /*
-SpinUpOption configures how [SpinUpChrome] launches Chrome.  See [HighFidelityHeadless], [AutoInstallHeadlessShell], [HeadlessShellPath], [StartingWindowSize], and [ChromeFlags].
+SpinUpOption configures how [SpinUpChrome] launches Chrome.  See [HighFidelityHeadless], [AutoInstallHeadlessShell], [HeadlessShellPath], [StartingWindowSize], [ChromeFlags], and [ChromeSandbox].
 */
 type SpinUpOption func(*spinUpConfig)
 
@@ -144,6 +144,7 @@ type spinUpConfig struct {
 	highFidelity         bool
 	autoInstall          bool
 	headlessShellPath    string
+	sandbox              *bool
 }
 
 /*
@@ -195,6 +196,19 @@ func ChromeFlags(options ...chromedp.ExecAllocatorOption) SpinUpOption {
 	return func(c *spinUpConfig) {
 		c.execAllocatorOptions = append(c.execAllocatorOptions, options...)
 	}
+}
+
+/*
+ChromeSandbox overrides SpinUpChrome's automatic decision about Chrome's OS sandbox on Linux.
+
+On Linux, in a headless mode (the default chrome-headless-shell, or HighFidelityHeadless), SpinUpChrome automatically launches Chrome with --no-sandbox when the process is running as root, or when the kernel reports AppArmor is restricting unprivileged user namespaces (the state Ubuntu 23.10+, including GitHub's ubuntu-latest runner, ships by default) - both starve Chrome's sandbox of what it needs to start.  Headful Chrome, and every other OS, are left alone.
+
+ChromeSandbox(true) forces the sandbox on - SpinUpChrome never adds --no-sandbox, even as root or under AppArmor restriction.  ChromeSandbox(false) forces it off - SpinUpChrome always adds --no-sandbox, on any OS or mode.  Chrome running with its sandbox off is less isolated from the host; only pass ChromeSandbox(false) when you understand that trade-off.  You can also force the sandbox off with ChromeFlags(chromedp.NoSandbox); ChromeSandbox exists mainly to force it on.
+
+Read https://onsi.github.io/biloba/#running-chrome-without-its-sandbox-on-linux-ci to learn more
+*/
+func ChromeSandbox(enabled bool) SpinUpOption {
+	return func(c *spinUpConfig) { c.sandbox = &enabled }
 }
 
 // emulateViewportMatchingScreen is a chromedp.EmulateViewportOption that, in addition to the layout
@@ -313,6 +327,18 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...SpinUpOption) ChromeConne
 	opts = append(opts, cfg.execAllocatorOptions...)
 	if interactive {
 		opts = append(opts, chromedp.Flag("headless", false))
+	}
+
+	mode := engine.ChromeModeHeadlessShell
+	switch {
+	case interactive:
+		mode = engine.ChromeModeHeadful
+	case cfg.highFidelity:
+		mode = engine.ChromeModeHeadless
+	}
+	if sandboxDisabled, sandboxReason := engine.ChromeSandboxDisabled(mode, cfg.sandbox); sandboxDisabled {
+		opts = append(opts, chromedp.NoSandbox)
+		ginkgoT.Printf("Biloba: launching Chrome with --no-sandbox (%s)\n", sandboxReason)
 	}
 
 	if !cfg.highFidelity {

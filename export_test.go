@@ -3,6 +3,8 @@ package biloba
 import (
 	"context"
 	"time"
+
+	"github.com/onsi/biloba/engine"
 )
 
 // CapOutlineForTest exposes capOutlineWithCap so that outline_test.go can
@@ -66,6 +68,18 @@ func SetHeadlessShellResolverForTest(resolver func(context.Context, string, bool
 // ResolveHeadlessShellForTest exercises the public Go adapter's error and progress behavior.
 func ResolveHeadlessShellForTest(ginkgoT GinkgoTInterface, explicit string, autoInstall bool) (string, error) {
 	return resolveHeadlessShellPath(ginkgoT, &spinUpConfig{headlessShellPath: explicit, autoInstall: autoInstall})
+}
+
+// SandboxDecisionForTest applies the given SpinUpOptions (ChromeSandbox among them) to a fresh
+// spinUpConfig exactly as SpinUpChrome does, then feeds the result to engine.ChromeSandboxDisabled
+// for the given mode - proving ChromeSandbox reaches the same decision SpinUpChrome consults,
+// without actually launching a browser.
+func SandboxDecisionForTest(mode engine.ChromeMode, options ...SpinUpOption) (disabled bool, reason string) {
+	cfg := &spinUpConfig{}
+	for _, option := range options {
+		option(cfg)
+	}
+	return engine.ChromeSandboxDisabled(mode, cfg.sandbox)
 }
 
 // SafeAllTabScreenshotsForTest exposes safeAllTabScreenshots for integration tests.
