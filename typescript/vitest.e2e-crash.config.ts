@@ -10,7 +10,7 @@ export default defineConfig({
     globalSetup: ["./test/e2e/global-setup.ts"],
     include: ["test/e2e/crash.e2e.test.ts"],
     pool: "forks",
-    poolOptions: {forks: {minForks: 1, maxForks: 1}},
+    maxWorkers: 1,
     testTimeout: 60_000,
     hookTimeout: 60_000,
   },

@@ -8,8 +8,11 @@ import {defineConfig} from "vitest/config";
 //   pool: "forks"    each test file gets its own OS process.  This is the point: the topology
 //                    claim is about worker *processes*, and a thread pool would not test it.
 //   fileParallelism  the files must run at the same time, or the rendezvous barriers below never
-//   + min/maxForks   release and the suite fails - which is the correct outcome, because a serial
+//   + maxWorkers     release and the suite fails - which is the correct outcome, because a serial
 //                    run has not exercised concurrent workers at all.
+//
+// The pool knobs are top-level rather than under `poolOptions.forks`: Vitest 4 removed
+// `poolOptions`, and the top-level spellings mean the same thing on Vitest 3, 4 and 5.
 export default defineConfig({
   test: {
     environment: "node",
@@ -17,7 +20,8 @@ export default defineConfig({
     include: ["test/e2e/worker-*.e2e.test.ts"],
     pool: "forks",
     fileParallelism: true,
-    poolOptions: {forks: {minForks: 3, maxForks: 3, isolate: true}},
+    maxWorkers: 3,
+    isolate: true,
     testTimeout: 60_000,
     hookTimeout: 60_000,
   },

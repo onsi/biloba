@@ -63,7 +63,7 @@ export async function rendezvous(stage: string, name: string, expected: number, 
       throw new Error(
         `rendezvous "${stage}" timed out: saw ${entries.length} of ${expected} workers (${entries.join(", ") || "none"}).\n` +
         "The e2e suite requires its test files to run concurrently, in separate processes - check " +
-        "fileParallelism/minForks in vitest.e2e.config.ts, and that no file failed before reaching this point.",
+        "fileParallelism/maxWorkers in vitest.e2e.config.ts, and that no file failed before reaching this point.",
       );
     }
     await new Promise((resolve) => setTimeout(resolve, 25));
