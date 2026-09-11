@@ -197,7 +197,11 @@ The former `biloba@biloba` plugin remains as a deprecated compatibility alias fo
 
 ### Vitest Support
 
-Biloba's TypeScript client lets a `vitest` suite drive Chrome through Biloba.  **It's a prototype**: the package (`@onsi/biloba-vitest-prototype`) isn't published to npm yet — you build it from this repo — and its API will keep shifting before 1.0.  [**Biloba for Vitest**](https://onsi.github.io/biloba/vitest.html) is the documentation: setup and the shared-browser topology, launch modes, locators, actions and assertions, network control, screenshots and visual assertions, and structured failures.
+Biloba's TypeScript client lets a `vitest` suite drive Chrome through Biloba. **It's a prototype**:
+install the `biloba` package from npm, and expect its API to keep shifting before 1.0.
+[**Biloba for Vitest**](https://onsi.github.io/biloba/vitest.html) is the documentation: setup and
+the shared-browser topology, launch modes, locators, actions and assertions, network control,
+screenshots and visual assertions, and structured failures.
 
 Each `vitest` worker process spawns a small Go daemon (`bilobad`) and talks to it over framed JSON on stdin/stdout.  Every daemon attaches to one shared Chrome — the same "one browser, one isolated tab per parallel process" model that makes the Go suites fast.  Polling happens on the daemon, next to Chrome, so an assertion with a 1s timeout and a 5ms interval is *one* request rather than two hundred.
 
@@ -205,7 +209,7 @@ Here's the chat app from the top of this README, in TypeScript.  Actions and ass
 
 ```ts
 import {beforeEach, describe, it} from "vitest";
-import {contains, Keys, not, type Session} from "@onsi/biloba-vitest-prototype";
+import {contains, Keys, not, type Session} from "biloba";
 
 async function login(tab: Session, user: string, password: string) {
   await tab.navigate("/login");

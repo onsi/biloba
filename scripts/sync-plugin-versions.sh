@@ -5,7 +5,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
 fail() {
-	printf 'plugin version sync failed: %s\n' "$*" >&2
+	printf 'release version sync failed: %s\n' "$*" >&2
 	exit 1
 }
 
@@ -24,4 +24,12 @@ for manifest in "${manifests[@]}"; do
 	PLUGIN_VERSION="$version" perl -pi -e 's/("version": ")[^"]*(",)/$1$ENV{PLUGIN_VERSION}$2/' "$manifest"
 done
 
-printf 'synced %s plugin manifests to Biloba %s\n' "${#manifests[@]}" "$version"
+PACKAGE_VERSION="$version" node -e '
+const fs = require("node:fs");
+const path = "typescript/package.json";
+const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+manifest.version = process.env.PACKAGE_VERSION;
+fs.writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
+'
+
+printf 'synced %s plugin manifests and the npm package to Biloba %s\n' "${#manifests[@]}" "$version"

@@ -1,7 +1,22 @@
 {
-  "name": "@onsi/biloba-vitest-prototype",
-  "version": "0.0.0-private",
-  "private": true,
+  "name": "biloba",
+  "version": "0.15.4",
+  "description": "Fast, stable browser testing from TypeScript and Vitest through Biloba",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/onsi/biloba.git",
+    "directory": "typescript"
+  },
+  "homepage": "https://onsi.github.io/biloba/vitest.html",
+  "bugs": "https://github.com/onsi/biloba/issues",
+  "keywords": [
+    "browser-testing",
+    "chrome",
+    "testing",
+    "typescript",
+    "vitest"
+  ],
   "type": "module",
   "packageManager": "pnpm@11.20.0",
   "exports": {
@@ -9,11 +24,17 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./vitest": {"types": "./dist/vitest.d.ts", "import": "./dist/vitest.js"}
+    "./vitest": {
+      "types": "./dist/vitest.d.ts",
+      "import": "./dist/vitest.js"
+    }
   },
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "generate:protocol": "cd .. && go generate ./protocol",
     "build": "tsc -p tsconfig.build.json",
@@ -23,8 +44,14 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {},
-  "peerDependencies": {"vitest": ">=3 <4"},
-  "peerDependenciesMeta": {"vitest": {"optional": true}},
+  "peerDependencies": {
+    "vitest": ">=3 <4"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/node": "22.15.30",
     "typescript": "5.8.3",
