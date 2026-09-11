@@ -19,6 +19,9 @@
   ],
   "type": "module",
   "packageManager": "pnpm@11.20.0",
+  "bin": {
+    "biloba": "dist/cli.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
