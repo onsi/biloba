@@ -1,5 +1,6 @@
+import {readFileSync} from "node:fs";
 import {PassThrough} from "node:stream";
-import {afterEach, beforeEach, describe, expect, it} from "vitest";
+import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 
 import {
   allOf,
@@ -17,7 +18,7 @@ import {
   xPredicate,
   type Cookie,
 } from "../src/index.js";
-import {connectWithTransport, decodeBinaryBody, encodeBinaryBody, launchFromWire} from "../src/internal/client.js";
+import {connectWithTransport, decodeBinaryBody, encodeBinaryBody, launchFromWire, warnOnDaemonVersionMismatch} from "../src/internal/client.js";
 import type {HandshakeResponse, OpenSessionResponse, OperationResult, Request, VisualResult as WireVisualResult} from "../src/generated/protocol.js";
 import {encodeFrame, FrameDecoder} from "../src/internal/framing.js";
 import {expectTimedOutAction, expectTimedOutAssertion} from "./support/assertions.js";
@@ -74,6 +75,7 @@ describe("Biloba TypeScript client", () => {
   let observeCancel: (() => void) | undefined;
   let warningHistory: unknown[];
   let closeSessionError: string | undefined;
+  let daemonVersion: string | undefined;
   const requests: Array<{method: string; request: Record<string, unknown>}> = [];
   let openedSessions = 0;
 
@@ -95,6 +97,7 @@ describe("Biloba TypeScript client", () => {
     observeCancel = undefined;
     warningHistory = [];
     closeSessionError = undefined;
+    daemonVersion = undefined;
     const fromClient = new PassThrough();
     toClient = new PassThrough();
     transport = new StdioTransport(toClient, fromClient);
@@ -115,7 +118,7 @@ describe("Biloba TypeScript client", () => {
     const reply = (result: unknown) => toClient.write(encodeFrame({id: envelope.id, result}));
     const respond: Respond = reply;
     switch (envelope.method) {
-      case "handshake": reply({protocolVersion: "2", capabilities: ["assertions", "evaluate", "session.context_diagnostics"], launch: {mode: "headless-shell", executablePath: "/opt/chrome-headless-shell", chromeArgs: [], width: 1024, height: 768, attached: false, autoInstalled: false}} satisfies HandshakeResponse); break;
+      case "handshake": reply({protocolVersion: "2", capabilities: ["assertions", "evaluate", "session.context_diagnostics"], launch: {mode: "headless-shell", executablePath: "/opt/chrome-headless-shell", chromeArgs: [], width: 1024, height: 768, attached: false, autoInstalled: false}, ...(daemonVersion !== undefined && {daemonVersion})} satisfies HandshakeResponse); break;
       case "openSession": reply({sessionId: `session-${++openedSessions}`, contextId: `context-${openedSessions}`, targetId: `target-${openedSessions}`, ownsContext: true} satisfies OpenSessionResponse); break;
       case "newTab": reply({sessionId: `session-${++openedSessions}`, contextId: "context-1", targetId: `target-${openedSessions}`, openerId: "target-1"} satisfies OpenSessionResponse); break;
       case "listTabs": reply({handles: [{sessionId: "session-2", contextId: "context-1", targetId: "target-2", openerId: "target-1"}]}); break;
@@ -188,6 +191,70 @@ describe("Biloba TypeScript client", () => {
     const diagnostics = await session.captureDiagnostics({includeScreenshotBytes: true});
     expect(diagnostics.tabs[0]).toMatchObject({sessionId: "session-1", targetId: "target-1", title: "Ready", screenshot: new Uint8Array([0x89, 0x50, 0x4e, 0x47]), domOutline: "body"});
     expect(requests.at(-1)).toEqual({method: "CaptureContextDiagnostics", request: {sessionId: "session-1", purpose: "on-demand", screenshots: true, outlines: true, includeScreenshotBytes: true}});
+  });
+
+  describe("daemon/client version mismatch warning", () => {
+    // The package's own version, read the same way clientPackageVersion() reads it (a relative
+    // package.json), so "matches this package" and "differs from this package" are not hard-coded
+    // guesses that would silently stop meaning anything the day the version is bumped.
+    const clientVersion = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {version: string}).version;
+
+    it("warns exactly once when the daemon reports a different release version", async () => {
+      const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+      daemonVersion = "0.0.1";
+      browser = await connectClient();
+      expect(warning).toHaveBeenCalledTimes(1);
+      expect(warning).toHaveBeenCalledWith(
+        expect.stringContaining("0.0.1"),
+        expect.objectContaining({code: "BILOBA_VERSION_MISMATCH"}),
+      );
+      warning.mockRestore();
+    });
+
+    it("does not warn when the daemon reports the same release version as this package", async () => {
+      const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+      daemonVersion = clientVersion;
+      browser = await connectClient();
+      expect(warning).not.toHaveBeenCalled();
+      warning.mockRestore();
+    });
+
+    it("does not warn when the daemon omits its version (an older bilobad)", async () => {
+      const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+      daemonVersion = undefined;
+      browser = await connectClient();
+      expect(warning).not.toHaveBeenCalled();
+      warning.mockRestore();
+    });
+  });
+
+  describe("warnOnDaemonVersionMismatch", () => {
+    let warning: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => { warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined); });
+    afterEach(() => { warning.mockRestore(); });
+
+    it("warns on two different plain release versions", () => {
+      warnOnDaemonVersionMismatch("1.2.3", "1.2.4");
+      expect(warning).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not warn on matching versions", () => {
+      warnOnDaemonVersionMismatch("1.2.3", "1.2.3");
+      expect(warning).not.toHaveBeenCalled();
+    });
+
+    it("does not warn when either side is not a plain X.Y.Z version", () => {
+      warnOnDaemonVersionMismatch("dev", "1.2.3");
+      warnOnDaemonVersionMismatch("1.2.3", "dev");
+      warnOnDaemonVersionMismatch("1.2.3-beta.1", "1.2.4");
+      warnOnDaemonVersionMismatch("1.2.3", "0.0.0-private");
+      expect(warning).not.toHaveBeenCalled();
+    });
+
+    it("does not warn when the daemon did not report a version", () => {
+      warnOnDaemonVersionMismatch(undefined, "1.2.3");
+      expect(warning).not.toHaveBeenCalled();
+    });
   });
 
   it("delivers live console messages and unsubscribes the last listener", async () => {

@@ -12,6 +12,7 @@ import type {
   SetUploadRequest,
   TypeRequest,
 } from "../generated/protocol.js";
+import {createRequire} from "node:module";
 import {resolve} from "node:path";
 import {
   BilobaError,
@@ -117,6 +118,42 @@ export function resolveDiagnosticsPolicy(options: import("../index.js").Diagnost
 
 export function automationDetected(environment: NodeJS.ProcessEnv): boolean {
   return Boolean(environment.CI || environment.AI_AGENT || environment.CLAUDECODE || environment.CURSOR_AGENT || environment.GEMINI_CLI || environment.CODEX_SANDBOX);
+}
+
+// clientPackageVersion reads the biloba npm package's own version out of its package.json at
+// runtime rather than hard-coding it, so it never drifts from what actually shipped.  A relative
+// path works from both locations this module is loaded from: src/internal/client.ts (running
+// under vitest, which transpiles TS in place) and dist/internal/client.js (tsconfig.build.json's
+// rootDir src / outDir dist) - both are exactly two directories below the package root.  Returns
+// "" on any failure (an unreadable or malformed package.json) so a version check that cannot
+// resolve a version simply skips rather than throwing during connect.
+function clientPackageVersion(): string {
+  try {
+    const packageJSON = createRequire(import.meta.url)("../../package.json") as {version?: unknown};
+    return typeof packageJSON.version === "string" ? packageJSON.version : "";
+  } catch {
+    return "";
+  }
+}
+
+const releaseVersionPattern = /^\d+\.\d+\.\d+$/;
+
+// warnOnDaemonVersionMismatch warns (never throws - a version check must not fail a connection)
+// when the daemon bilobad reported at handshake and this package's own version are both plain
+// release versions (X.Y.Z) and differ.  "dev", a prerelease/private version (anything else, such
+// as "0.0.0-private"), or a daemon that did not report a version at all (an older bilobad, or a
+// backend that does not implement DaemonVersionProvider) all skip the check silently: those are
+// not necessarily mismatches, just versions this check cannot compare.  The only way the two
+// legitimately differ is an overridden daemon binary (BILOBA_DAEMON_EXECUTABLE or the
+// daemonExecutable option) - normally the daemon ships inside this same package and the versions
+// are identical by construction.
+export function warnOnDaemonVersionMismatch(daemonVersion: string | undefined, clientVersion: string): void {
+  if (!daemonVersion || !releaseVersionPattern.test(daemonVersion) || !releaseVersionPattern.test(clientVersion) || daemonVersion === clientVersion) return;
+  process.emitWarning(
+    `bilobad daemon version ${daemonVersion} does not match the biloba package version ${clientVersion}. ` +
+    "This is only expected with an overridden daemon binary (BILOBA_DAEMON_EXECUTABLE or the daemonExecutable option); otherwise the two ship together and should always match.",
+    {code: "BILOBA_VERSION_MISMATCH"},
+  );
 }
 
 class ClientBrowser implements Browser {
@@ -1740,6 +1777,7 @@ export async function connectWithTransport(
         message: `Biloba protocol mismatch: client 2, daemon ${handshake.protocolVersion}`,
       });
     }
+    warnOnDaemonVersionMismatch(handshake.daemonVersion, clientPackageVersion());
     return new ClientBrowser(
       transport,
       handshake.protocolVersion ?? "",
