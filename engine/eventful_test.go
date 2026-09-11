@@ -379,12 +379,12 @@ var _ = Describe("eventful engine state", func() {
 			},
 		})
 		Expect(err).NotTo(HaveOccurred())
-		nearDeadlineHandler, err := session.RegisterNetworkHandler(ctx, engine.NetworkHandlerOptions{
-			URL:              engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/near-transform-deadline"},
-			TransformTimeout: 100 * time.Millisecond,
+		slowTransformHandler, err := session.RegisterNetworkHandler(ctx, engine.NetworkHandlerOptions{
+			URL:              engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/slow-transform"},
+			TransformTimeout: time.Second,
 			Transform: func(_ context.Context, response engine.InterceptedResponse) (engine.ResponseOverride, error) {
-				time.Sleep(90 * time.Millisecond)
-				body := append([]byte("near-deadline:"), response.Body...)
+				time.Sleep(250 * time.Millisecond)
+				body := append([]byte("slow-transform:"), response.Body...)
 				return engine.ResponseOverride{Body: &body}, nil
 			},
 		})
@@ -443,12 +443,12 @@ var _ = Describe("eventful engine state", func() {
 		timeoutStats, err := session.NetworkHandlerStats(timeoutHandler.ID)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(timeoutStats.LastError).To(ContainSubstring("deadline exceeded"))
-		result, err = session.EvaluateAsync(ctx, `fetch("/near-transform-deadline").then(r => r.text())`)
+		result, err = session.EvaluateAsync(ctx, `fetch("/slow-transform").then(r => r.text())`)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result).To(ContainSubstring("near-deadline:"))
-		nearDeadlineStats, err := session.NetworkHandlerStats(nearDeadlineHandler.ID)
+		Expect(result).To(ContainSubstring("slow-transform:"))
+		slowTransformStats, err := session.NetworkHandlerStats(slowTransformHandler.ID)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(nearDeadlineStats.LastError).To(BeEmpty())
+		Expect(slowTransformStats.LastError).To(BeEmpty())
 		result, err = session.EvaluateAsync(ctx, `fetch("/bounded-transform").then(() => false, () => true)`)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(BeTrue())
