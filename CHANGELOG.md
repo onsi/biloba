@@ -2,6 +2,12 @@
 
 ### Features
 
+### Fixes
+
+## 0.16.1
+
+### Features
+
 - New "Nurturing Maintainable Suites" section at the end of the docs: flake hunts (run the whole suite many times with one JSON report per run, read each spec's failure rate and evidence from the reports, know how many clean runs it takes to call a flake dead) and tracking suite performance from the same reports. "Performance and Stability" links to it, and the Vitest docs link back to it.
 - New `flake-hunt` skill in both plugins (`biloba-go:flake-hunt`, `biloba-vitest:flake-hunt`) with scripts for the hunt loop, the failure report, a timing summary, and a committed performance record. The Vitest version also covers the failed runs Vitest's JSON reporter records as clean. The `overview` and `flaky-specs`/`flaky-tests` skills point to it.
 - The deprecated `biloba@biloba` plugin has been removed. Install `biloba-go@biloba` or `biloba-vitest@biloba` instead; if you still have `biloba@biloba` installed, uninstall it first.
