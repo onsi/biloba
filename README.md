@@ -17,6 +17,8 @@ It's [blazing fast](#performance) and designed to work [_really_ well with AI to
 
 Take a look at the [documentation](https://onsi.github.io/biloba) to learn more and [get started](https://onsi.github.io/biloba/#getting-started)!  Biloba tests can be written in Go using Ginkgo, [and in typescript using vitest](#vitest-support) ([quick-start for vitest](https://onsi.github.io/biloba/vitest.html#getting-set-up)).
 
+Or [let Claude Code set it up for you](#using-biloba-with-claude-code).
+
 Biloba is _remarkably_ feature complete and in active development.  A 1.0 release milestone has not been reached yet, so the public API contract may shift as the project evolves.  Send feedback!
 
 Here's a quick taste of what Biloba specs look like in Ginkgo:
@@ -191,6 +193,40 @@ Biloba ships separate [Claude Code](https://claude.com/claude-code) plugins for 
 ```
 
 (or use `claude plugin marketplace add onsi/biloba` followed by `claude plugin install biloba-go@biloba` or `claude plugin install biloba-vitest@biloba`.)
+
+Or let Claude Code do the whole setup.  Paste one of these into Claude Code at the root of your project and it will install the plugin, add Biloba, and get a first suite running:
+
+**Go (Ginkgo and Gomega):**
+
+```text
+Set up Biloba (https://github.com/onsi/biloba) browser tests for this Go project.
+
+1. Install the Claude Code plugins for this project:
+     claude plugin marketplace add onsi/biloba --scope project
+     claude plugin install biloba-go@biloba --scope project
+     claude plugin marketplace add onsi/ginkgo --scope project
+     claude plugin install ginkgo@ginkgo --scope project
+     claude plugin marketplace add onsi/gomega --scope project
+     claude plugin install gomega@gomega --scope project
+   If the biloba-go skills aren't available in this session afterwards, stop and ask me to restart Claude Code, then carry on from step 2.
+2. Read the biloba-go:overview and biloba-go:setup skills and follow setup: go get github.com/onsi/biloba, install chrome-headless-shell, and bootstrap a Ginkgo suite for the browser specs (in ./e2e unless this project has a better place).
+3. Work out how the suite should start and serve the app, one stable origin per parallel process (ask me if it isn't obvious). Then use biloba-go:explore-unfamiliar-page to look at a real page and write a first spec against it with biloba-go:write-tests.
+4. Run the suite with ginkgo -p until it passes, gitignore the failure screenshots directory, and tell me how to run the suite myself.
+```
+
+**TypeScript (Vitest):**
+
+```text
+Set up Biloba (https://github.com/onsi/biloba) browser tests with Vitest for this TypeScript project.
+
+1. Install the Claude Code plugin for this project:
+     claude plugin marketplace add onsi/biloba --scope project
+     claude plugin install biloba-vitest@biloba --scope project
+   If the biloba-vitest skills aren't available in this session afterwards, stop and ask me to restart Claude Code, then carry on from step 2.
+2. Read the biloba-vitest:overview and biloba-vitest:setup skills and follow setup: add vitest and biloba as dev dependencies with this project's package manager, run npx biloba install-chrome, start one shared Chrome in Vitest's global setup, and connect a session per test file.
+3. Work out how the tests should start and serve the app (ask me if it isn't obvious). Then write a first test against a real page with biloba-vitest:write-tests.
+4. Run the suite until it passes, gitignore the failure screenshots directory, add a script to package.json that runs it, and tell me how to run it myself.
+```
 
 ## Failure Output
 
