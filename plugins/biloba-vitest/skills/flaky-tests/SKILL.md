@@ -33,4 +33,4 @@ Do not wrap these calls in `expect.poll`, `waitFor`, sleeps, or a loop. Outer po
 - Mask deterministic dynamic regions; do not widen tolerances until the assertion cannot fail.
 - Treat byte-identical light/dark captures as suspicious when the test intended two schemes.
 
-On failure, read `BilobaError.trajectory` before increasing timeouts. Flat means waiting longer will not help. Artifacts → `biloba-vitest:debug-failures`. Visual workflow → `biloba-vitest:visual-assertions`. Docs: <https://onsi.github.io/biloba/vitest.html>.
+On failure, read `BilobaError.trajectory` before increasing timeouts. Flat means waiting longer will not help. Artifacts → `biloba-vitest:debug-failures`. Measuring a flake's rate, or confirming a fix → `biloba-vitest:flake-hunt`. Visual workflow → `biloba-vitest:visual-assertions`. Docs: <https://onsi.github.io/biloba/vitest.html>.

@@ -126,8 +126,7 @@ knob, confirm the relevant skill was updated in the *same* change — both the r
 `.claude/skills/` (which teach future work *on* Biloba) and, if the change is user-visible, the
 shipped plugin skills (which teach users' agents how to *write tests with* Biloba):
 `plugins/biloba-go/skills/` for the Go API, `plugins/biloba-vitest/skills/` for the TypeScript
-client. Never add files under the deprecated `plugins/biloba/skills/`, which only links to
-`biloba-go`. A fact stated in one skill should agree with the others that touch it; `make
+client. A fact stated in one skill should agree with the others that touch it; `make
 check-plugins` checks the mechanical parts.
 
 **At the end of a session, ask the owner whether they'd like to perform a prompt audit.** Ask —

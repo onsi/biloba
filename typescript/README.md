@@ -27,7 +27,7 @@ The repository ships a dedicated Claude Code plugin for this client:
 /plugin install biloba-vitest@biloba
 ```
 
-The deprecated `biloba@biloba` compatibility plugin contains only the Go client skills; it does not include the TypeScript/Vitest guidance.
+The former `biloba@biloba` plugin has been removed; it only ever carried the Go client skills. If you still have it installed, uninstall it and install `biloba-vitest@biloba` instead.
 
 ## The short version
 

@@ -19,7 +19,7 @@ Biloba ships a dedicated TypeScript/Vitest plugin for Claude Code. The Biloba re
 /plugin install biloba-vitest@biloba
 ```
 
-The former `biloba@biloba` plugin now aliases only the Go client skills for backward compatibility. TypeScript users should uninstall it and install `biloba-vitest@biloba` instead.
+The former `biloba@biloba` plugin has been removed; it only ever carried the Go client skills. If you still have it installed, uninstall it and install `biloba-vitest@biloba` instead.
 
 The installed `biloba-vitest:*` skills activate automatically and can also be invoked explicitly:
 
@@ -31,6 +31,7 @@ The installed `biloba-vitest:*` skills activate automatically and can also be in
 | `biloba-vitest:visual-assertions` | Screenshot baselines, masks, tolerances, color schemes, and diagnosis. |
 | `biloba-vitest:debug-failures` | Structured errors, trajectories, artifacts, console output, and crash codes. |
 | `biloba-vitest:flaky-tests` | Redundant polling, order dependence, lifecycle leakage, and latent races. |
+| `biloba-vitest:flake-hunt` | Running the suite many times to measure each test's failure rate, reading the JSON reports, and keeping a performance record. |
 
 ### Why there's a daemon
 

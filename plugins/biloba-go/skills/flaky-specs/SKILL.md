@@ -9,7 +9,7 @@ Biloba polls by default: `b.Click(sel)`, `b.SetValue(sel, v)`, `b.GetProperty(se
 
 **Master rule: never assert on a value you read exactly once.** Poll it.
 
-Failure *artifacts* (outlines, screenshots, poll trajectory) → `debug-failures`. Authoring baseline → `write-tests`. Method surfaces → `api`. Sibling skills are named here without a prefix; invoke one with the same plugin prefix you loaded this skill under.
+Failure *artifacts* (outlines, screenshots, poll trajectory) → `debug-failures`. Measuring a flake's rate, or confirming a fix → `flake-hunt`. Authoring baseline → `write-tests`. Method surfaces → `api`. Sibling skills are named here without a prefix; invoke one with the same plugin prefix you loaded this skill under.
 
 ## Triage
 

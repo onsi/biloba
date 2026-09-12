@@ -20,7 +20,7 @@ The `Makefile` wraps the canonical invocations — prefer these:
 | `make driver-parity` | the Go/TypeScript parity contract: a real `bilobad` driving a real shared Chrome, asserted against the same fixture from both languages | same, plus before trusting a new vertical slice |
 | `make driver-e2e` | the shipping topology: three vitest worker *processes*, one `bilobad` each, one shared Chrome | before anything touching session isolation, daemon lifecycle, or shared-browser attach/detach |
 | `make packaging-check` | `make npm-pack` (the five npm packages, with `bilobad` cross-compiled), then installs the tarballs into an empty project the way a user would and runs `tsc`, `npx biloba install-chrome`, and one Vitest spec (`VITEST=vitest@3` to try another version) | when touching packaging, the `biloba` CLI, daemon resolution, `typescript/package.json`, or anything a fresh `npm install biloba` depends on — CI runs it on Node 20 + vitest@3 and Node 22 + vitest@latest |
-| `make check-plugins` | the three plugin manifests (`biloba-go`, `biloba-vitest`, and the deprecated `biloba` alias), versions, namespaces, skill names, and client-separation rules | whenever changing `plugins/`, marketplace metadata, docs links, or the release version |
+| `make check-plugins` | both plugin manifests (`biloba-go` and `biloba-vitest`), versions, namespaces, skill names, and client-separation rules | whenever changing `plugins/`, marketplace metadata, docs links, or the release version |
 
 Under the hood `make test` is just `ginkgo -r -p --randomize-all --randomize-suites`. `-p` (parallel) is the realistic mode — Biloba is built for it (one shared Chrome, one isolated root tab per process); `--randomize-all` enforces spec independence.
 

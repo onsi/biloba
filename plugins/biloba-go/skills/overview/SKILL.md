@@ -39,7 +39,7 @@ Biloba is a browser-testing framework for Go, built on [chromedp](https://github
 
 **If your app renders optimistically, both obvious signals lie.** The DOM shows the pre-confirmation state (the click handler wrote it synchronously), so `Eventually` on it just re-reads the optimistic copy; a Go-side HTTP read bypasses the browser's event loop and proves only that the *server* persisted something. Barrier on **app state** — `b.GetJSValue("window.__storeLog", &log)` polls a path the app writes, which can only become true if the renderer applied the response — and force the arrival order with `b.HoldResponse(url)` instead of hoping to hit a 1%-natural race. (`GetJSValue` gates on *definedness*, so it only barriers on a path the app creates **lazily**, in the handler you're waiting for; against an eagerly-created log poll the predicate: `Eventually(expr).Should(b.EvaluateTo(...))`.) → `flaky-specs`
 
-When a spec is flaky, order-dependent, or only fails under `-p`/CI, go straight to `flaky-specs`.
+When a spec is flaky, order-dependent, or only fails under `-p`/CI, go straight to `flaky-specs`. To find out how often specs fail, or to confirm that a fix worked, run the suite many times and read the reports → `flake-hunt`.
 
 ## Selectors are first-class — three pathways
 
@@ -78,3 +78,4 @@ Sibling skills are named here without a prefix; invoke one with the same plugin 
 | Testing a page/app you haven't seen | `explore-unfamiliar-page` |
 | A spec failed and you want to see why | `debug-failures` |
 | A spec is flaky / order-dependent / only fails under `-p` or CI | `flaky-specs` |
+| Measuring failure rates or suite performance across many runs (a flake hunt) | `flake-hunt` |

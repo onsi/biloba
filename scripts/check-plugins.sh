@@ -15,7 +15,7 @@ version=$(sed -n 's/^const BILOBA_VERSION = "\([^"]*\)"/\1/p' biloba.go)
 
 python3 -m json.tool .claude-plugin/marketplace.json >/dev/null
 
-for plugin in biloba-go biloba-vitest biloba; do
+for plugin in biloba-go biloba-vitest; do
 	manifest="plugins/$plugin/.claude-plugin/plugin.json"
 	[[ -f "$manifest" ]] || fail "missing $manifest"
 	python3 -m json.tool "$manifest" >/dev/null
@@ -44,11 +44,10 @@ for plugin in biloba-go biloba-vitest; do
 		[[ -d "plugins/$plugin/skills/$skill_name" ]] || fail "$reference points to a missing skill"
 	done < <(grep -RhoE "$plugin:[a-z0-9-]+" README.md docs "plugins/$plugin" | sort -u)
 
-	# Sibling cross-references inside a skill body carry no plugin prefix (the Gomega skills are
-	# served under two plugin names, so no hardcoded prefix is correct for both).  That means the
-	# prefixed check above validates nothing inside skills/, so validate the unprefixed routing
-	# form here instead: every "-> `name`" must name a skill of this same plugin.  The arrow is
-	# reserved for routing - do not use it for a value.
+	# The Gomega skills name their siblings without a plugin prefix, so the prefixed check above
+	# validates nothing inside them.  Validate the unprefixed routing form here instead: every
+	# "-> `name`" must name a skill of this same plugin.  The arrow is reserved for routing - do
+	# not use it for a value.
 	while IFS= read -r skill_name; do
 		[[ -d "plugins/$plugin/skills/$skill_name" ]] ||
 			fail "$plugin: routing reference to \`$skill_name\` does not name a skill in this plugin"
@@ -84,36 +83,14 @@ for plugin in biloba-go biloba-vitest; do
 	done
 done
 
-canonical_count=0
-for canonical_skill in plugins/biloba-go/skills/*; do
-	[[ -d "$canonical_skill" ]] || continue
-	skill_name=$(basename "$canonical_skill")
-	compatibility_skill="plugins/biloba/skills/$skill_name"
-	expected_target="../../biloba-go/skills/$skill_name"
-	[[ -L "$compatibility_skill" ]] || fail "$compatibility_skill must be a symlink"
-	actual_target=$(readlink "$compatibility_skill")
-	[[ "$actual_target" == "$expected_target" ]] || fail "$compatibility_skill points to $actual_target"
-	[[ -f "$compatibility_skill/SKILL.md" ]] || fail "$compatibility_skill does not resolve to a skill"
-	canonical_count=$((canonical_count + 1))
-done
+[[ ! -e plugins/biloba ]] || fail "plugins/biloba is the removed compatibility alias; skills live in biloba-go and biloba-vitest"
 
-compatibility_count=0
-for compatibility_skill in plugins/biloba/skills/*; do
-	[[ -e "$compatibility_skill" || -L "$compatibility_skill" ]] || continue
-	[[ -L "$compatibility_skill" ]] || fail "$compatibility_skill must be a symlink"
-	compatibility_count=$((compatibility_count + 1))
-done
-[[ "$compatibility_count" == "$canonical_count" ]] || fail "compatibility skill count does not match canonical Gomega skills"
-
-marketplace_count=$(grep -c '"source": "./plugins/biloba-' .claude-plugin/marketplace.json)
-[[ "$marketplace_count" == 2 ]] || fail "marketplace must contain exactly two Biloba client plugins"
-
-total_plugin_count=$(grep -c '"source": "./plugins/biloba' .claude-plugin/marketplace.json)
-[[ "$total_plugin_count" == 3 ]] || fail "marketplace must contain two client plugins and one compatibility alias"
+marketplace_count=$(grep -c '"source": "./plugins/' .claude-plugin/marketplace.json)
+[[ "$marketplace_count" == 2 ]] || fail "marketplace must contain exactly the two Biloba client plugins"
 
 if grep -RniE 'typescript|vitest|biloba-vitest|biloba-go:|`biloba:|/biloba:' plugins/biloba-go/skills >/dev/null; then
 	grep -RniE 'typescript|vitest|biloba-vitest|biloba-go:|`biloba:|/biloba:' plugins/biloba-go/skills >&2
-	fail "canonical Gomega skills contain client-specific routing"
+	fail "Gomega skills contain client-specific routing"
 fi
 
 if grep -RniE 'ginkgo|gomega|biloba-go:' plugins/biloba-vitest >/dev/null; then

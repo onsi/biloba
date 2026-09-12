@@ -541,7 +541,7 @@ Biloba ships a [Claude Code](https://claude.com/claude-code) plugin for its Go/G
 
 (The same can be done non-interactively with `claude plugin marketplace add onsi/biloba` and `claude plugin install biloba-go@biloba`.)
 
-The former `biloba@biloba` plugin remains as a deprecated compatibility alias during the transition window, so existing `/biloba:*` invocations continue to work. Migrate by uninstalling it and installing `biloba-go@biloba` instead.
+The former `biloba@biloba` plugin has been removed. If you still have it installed, uninstall it and install `biloba-go@biloba` instead.
 
 This installs a family of `biloba-go:*` skills that activate automatically while you write tests and can also be invoked explicitly (for example, `/biloba-go:explore-unfamiliar-page http://localhost:8080`):
 
@@ -557,6 +557,7 @@ This installs a family of `biloba-go:*` skills that activate automatically while
 | `biloba-go:explore-unfamiliar-page` | Orienting to a page you haven't seen, then drafting a starter spec. |
 | `biloba-go:debug-failures` | DOM outlines, screenshots, and the env/config knobs that surface them. |
 | `biloba-go:flaky-specs` | A spec that's flaky, order-dependent, or only fails under `-p`/CI — the smells and their polling fixes. |
+| `biloba-go:flake-hunt` | Running the suite many times to measure each spec's failure rate, reading the JSON reports, and keeping a performance record. |
 
 ### `chromedp`: Breaking the Fourth Wall
 

@@ -13,9 +13,11 @@ Biloba builds on top of [chromedp](https://github.com/chromedp/chromedp) to brin
   - Stability via pragmatism
   - Conciseness via Ginkgo and Gomega
 
-It's blazing fast and designed to work _really_ well with AI toolchains like Claude Code.  
+It's [blazing fast](#performance) and designed to work [_really_ well with AI toolchains like Claude Code](#using-biloba-with-claude-code).  
 
-Take a look at the [documentation](https://onsi.github.io/biloba) to learn more and get started!  Biloba tests can be written in Go using Ginkgo, [and in typescript using vitest](#vitest-support).
+Take a look at the [documentation](https://onsi.github.io/biloba) to learn more and [get started](https://onsi.github.io/biloba/#getting-started)!  Biloba tests can be written in Go using Ginkgo, [and in typescript using vitest](#vitest-support) ([quick-start for vitest](https://onsi.github.io/biloba/vitest.html#getting-set-up)).
+
+Biloba is _remarkably_ feature complete and in active development.  A 1.0 release milestone has not been reached yet, so the public API contract may shift as the project evolves.  Send feedback!
 
 Here's a quick taste of what Biloba specs look like in Ginkgo:
 
@@ -134,13 +136,11 @@ Describe("a simple chat app", func() {
 
 Run these in series with `ginkgo`.  And in parallel with `ginkgo -p` for fast, stable, isolated browser tests.
 
-Biloba is quite feature complete and in active development.  However, a 1.0 release milestone has not been reached yet, so the public API contract may shift as the project evolves.
-
-### Poll by default
+## Poll by default
 
 Browsers are asynchronous, so Biloba's interactions and value-getters **poll by default**.  A fully-applied call like `tab.Click("#go")` or `tab.SetValue("#input", "hi")` retries — finding-and-acting atomically in the browser — until it succeeds or times out.
 
-When you want to make the wait explicit (to compose with `Consistently`, or assert on a richer condition), every interaction also has a matcher form you hand to Gomega:
+When you want to make the wait explicit (to compose with `Consistently`, or assert on a richer condition), every interaction also has a Gomega matcher form:
 
 ```go
 Eventually("#go").Should(tab.Click())
@@ -155,13 +155,13 @@ tab.Immediate().Click("#go") // act now; fail immediately if it isn't clickable 
 
 Polling timeout, interval, and context are configurable Gomega-style with `tab.WithTimeout(...)`, `tab.WithPolling(...)`, and `tab.WithContext(...)`.
 
-### Fast and realistic interaction tracks
+## Fast and realistic interaction tracks
 
-By default Biloba interactions are **fast**: atomic JavaScript simulations (`el.click()`, value-set, synthetic events) that run as a single in-browser snippet — no scroll, no occlusion check, no real pointer.  This is what keeps Biloba quick and stable, and it's the right default for the vast majority of specs.
+By default Biloba interactions are **fast**: atomic JavaScript simulations (`el.click()`, value-set, synthetic events) that run as a single in-browser snippet — no scroll, no occlusion check, no real cursor.  This is what keeps Biloba quick and stable, and it's the right default for the vast majority of specs.
 
 For the handful of specs that need genuine input fidelity — real CSS `:hover`, occlusion-aware clicks, scroll-into-view, real keystrokes/drags/wheel/touch — `b.Realistic()` returns a view of the *same tab* whose interactions route through real Chrome DevTools Protocol input.  Same API, just a more faithful (and slightly slower) interaction engine.  See the [documentation](https://onsi.github.io/biloba) (and the `biloba-go:realistic-mode` Claude Code skill).
 
-### Performance
+## Performance
 
 Biloba is fast.  [**onsi/biloba-comparison**](https://github.com/onsi/biloba-comparison) is a reproducible, three-way speed comparison against Playwright — an identical 32-scenario suite run under biloba-fast, biloba-realistic, and Playwright.  On an Apple M1 Max (whole-suite wall clock, median of 15 runs):
 
@@ -173,15 +173,14 @@ Biloba is fast.  [**onsi/biloba-comparison**](https://github.com/onsi/biloba-com
 
 biloba-fast runs the suite **~3.2× faster in parallel / ~4.0× serial** than Playwright; even biloba-realistic — doing the same real-CDP-input work Playwright does — stays **~2.5× / ~2.1×** ahead.  See [the comparison repo](https://github.com/onsi/biloba-comparison) for the methodology, the per-bucket breakdown, and the charts.
 
-### Failure Output
+Of course, synthetic benchmarks don't necessarily capture real-world performance.  Here are two real-life data-points:
 
-Biloba automatically captures and emits screenshots and any JavaScript console output when tests fail.  It even hooks into Ginkgo's progress emitter infrastructure so `^T`/`SIGNIFO` on a mac (`SIGUSR2` on linux) will spit out a screenshot.
+- [A 1,689 spec Ginkgo Biloba suite completes in under 60s](https://claude.ai/code/artifact/d2e1b070-780c-478b-80f9-5fc617dd81d5?org=b6fadba7-f133-4a3c-b118-3b76f250d94f) on an M1 Max Macbook Pro.  These are real-browser tests for an interaction-rich javascript app backed by a go server.
+- A mature 165 scenario playwright suite was converted to a Biloba vitest suite.  [Runtime went from ~3m10s down to ~1m13s](https://onsi-public.s3.amazonaws.com/biloba-playwright.html) - a 2.6x observed speedup.
 
-Screenshots are great for humans but won't show up in most CI systems and don't help AI agents.  Biloba autodetects when it's being run in CI or by an agent and spits out DOM outlines and puts screenshot files on disk instead automatically.
+Fast browser test suites foster better discipline and open the door to more stable suites.  A recommended workflow is to run a local flake-hunt periodically after an extended coding session.  The 1,689 spec suite described above has a less than 1% suite flake rate thanks to this ceremony (it takes more than 60 suite runs to see a flake appear).  The `flake-hunt` skill describes how to set flake hunts up.
 
-The same instinct shapes `b.HaveScreenshot`, Biloba's visual-regression matcher: when a comparison against a committed baseline fails, Biloba writes the usual `.actual.png`/`.diff.png` pair *and* tells you in words what changed — how many pixels, where the changed boxes are, and whether the shape of the change reads as one region, a uniform shift, or something scattered across every text run.  Those three are different bugs, and you can tell them apart without opening an image.
-
-### Using Biloba with Claude Code
+## Using Biloba with Claude Code
 
 Biloba ships separate [Claude Code](https://claude.com/claude-code) plugins for its Go/Gomega and TypeScript/Vitest clients, with this repo doubling as the marketplace. Install the client you use:
 
@@ -193,22 +192,26 @@ Biloba ships separate [Claude Code](https://claude.com/claude-code) plugins for 
 
 (or use `claude plugin marketplace add onsi/biloba` followed by `claude plugin install biloba-go@biloba` or `claude plugin install biloba-vitest@biloba`.)
 
-The former `biloba@biloba` plugin remains as a deprecated compatibility alias for the Go/Gomega skills during the transition window. Existing `/biloba:*` invocations continue to work, but migrate to `biloba-go@biloba`; install both new client plugins only in repositories that genuinely exercise both clients.
+## Failure Output
 
-### Vitest Support
+Biloba automatically captures and emits screenshots and any JavaScript console output when tests fail.  It even hooks into Ginkgo's progress emitter infrastructure so `^T`/`SIGNIFO` on a mac (`SIGUSR2` on linux) will spit out a screenshot.
 
-Biloba's TypeScript client lets a `vitest` suite drive Chrome through Biloba. **It's pre-1.0**:
-install the `biloba` package from npm, and expect its API to keep shifting before 1.0.
-[**Biloba for Vitest**](https://onsi.github.io/biloba/vitest.html) is the documentation: setup and
-the shared-browser topology, launch modes, locators, actions and assertions, network control,
-screenshots and visual assertions, and structured failures.
+Screenshots are great for humans but won't show up in most CI systems and don't help AI agents.  Biloba autodetects when it's being run in CI or by an agent and spits out DOM outlines and puts screenshot files on disk instead automatically.
 
-`npm install -D vitest biloba` pulls in the daemon binary too — no Go toolchain required. It installs
-`biloba` plus one small per-platform package (macOS/Linux, x64/arm64; Windows isn't supported yet).
-`npx biloba install-chrome` then fetches the `chrome-headless-shell` build the daemon drives, once per
-Chrome version.
+The same instinct shapes `b.HaveScreenshot`, Biloba's visual-regression matcher: when a comparison against a committed baseline fails, Biloba writes the usual `.actual.png`/`.diff.png` pair *and* tells an agnet in words what changed — how many pixels, where the changed boxes are, and whether the shape of the change reads as one region, a uniform shift, or something scattered across every text run.  Those three are different bugs, and you can tell them apart without opening an image.
 
-Each `vitest` worker process spawns a small Go daemon (`bilobad`) and talks to it over framed JSON on stdin/stdout.  Every daemon attaches to one shared Chrome — the same "one browser, one isolated tab per parallel process" model that makes the Go suites fast.  Polling happens on the daemon, next to Chrome, so an assertion with a 1s timeout and a 5ms interval is *one* request rather than two hundred.
+## Vitest Support
+
+Biloba's TypeScript client lets a `vitest` suite drive Chrome through Biloba.  Read [**Biloba for Vitest**](https://onsi.github.io/biloba/vitest.html) to learn more.  Each `vitest` worker process spawns a small [Go daemon](https://onsi.github.io/biloba/vitest.html#why-theres-a-daemon) (`bilobad`) and talks to it over framed JSON on stdin/stdout.  Every daemon attaches to one shared Chrome — the same "one browser, one isolated tab per parallel process" model that makes the Go suites fast.
+
+To [get started](https://onsi.github.io/biloba/vitest.html#getting-set-up):
+
+```bash
+npm install -D vitest biloba
+npx biloba install-chrome   # fetches chrome-headless-shell; once per Chrome version
+```
+
+the `install` command pulls in the library and a precompiled `bilobad` — no Go toolchain required - for macOS/Linux, x64/armn64.  Windows isn't supported yet - open an issue if you want it.
 
 Here's the chat app from the top of this README, in TypeScript.  Actions and assertions poll by default, exactly as they do in Go:
 
@@ -324,14 +327,7 @@ describe("a simple chat app", () => {
 });
 ```
 
-#### Running them
-
-Install `biloba`, which pulls in the daemon for you — no Go toolchain needed on macOS or Linux (x64 or arm64; Windows isn't supported yet):
-
-```bash
-npm install -D vitest biloba
-npx biloba install-chrome   # once per Chrome version
-```
+### Running Vitest Tests
 
 Start one Chrome for the whole run in vitest's global setup and hand its connection to the workers.  Register that setup — and a process pool, so each test file really is its own worker with its own daemon — in your vitest config:
 

@@ -11,17 +11,12 @@
     {
       "name": "biloba-go",
       "source": "./plugins/biloba-go",
-      "description": "Write fast, stable Biloba tests in Go/Ginkgo/Gomega: setup, polling and matcher idioms, locators, realistic input, visual assertions, API lookup, diagnostics, and flake prevention."
+      "description": "Write fast, stable Biloba tests in Go/Ginkgo/Gomega: setup, polling and matcher idioms, locators, realistic input, visual assertions, API lookup, diagnostics, flake prevention, and flake hunts."
     },
     {
       "name": "biloba-vitest",
       "source": "./plugins/biloba-vitest",
-      "description": "Write fast, stable Biloba tests in TypeScript/Vitest: daemon and shared-Chrome setup, sessions and locators, polling assertions, realistic input, visual assertions, diagnostics, and flake prevention."
-    },
-    {
-      "name": "biloba",
-      "source": "./plugins/biloba",
-      "description": "Deprecated compatibility alias for existing biloba:* Go/Gomega skill installations. Superseded by biloba-go; install one or the other, never both. New users should install biloba-go instead."
+      "description": "Write fast, stable Biloba tests in TypeScript/Vitest: daemon and shared-Chrome setup, sessions and locators, polling assertions, realistic input, visual assertions, diagnostics, flake prevention, and flake hunts."
     }
   ]
 }
