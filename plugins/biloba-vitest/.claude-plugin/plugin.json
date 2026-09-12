@@ -1,7 +1,7 @@
 {
   "name": "biloba-vitest",
   "description": "Write fast, stable browser tests with Biloba's TypeScript client in Vitest. Skills for daemon and shared-Chrome setup, sessions and locators, polling actions and assertions, realistic input, network control, visual regression, structured diagnostics, preventing flaky tests, and flake hunts.",
-  "version": "0.16.1",
+  "version": "0.16.2",
   "author": {
     "name": "Onsi Fakhouri",
     "url": "https://github.com/onsi"

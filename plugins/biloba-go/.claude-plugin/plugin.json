@@ -1,7 +1,7 @@
 {
   "name": "biloba-go",
   "description": "Write fast, stable browser tests with Biloba in a Go Ginkgo/Gomega suite. Skills for setup, the dual immediate/matcher API, semantic locators, realistic interactions, visual regression, XPath, API lookup, failure diagnosis, preventing flaky specs, and flake hunts.",
-  "version": "0.16.1",
+  "version": "0.16.2",
   "author": {
     "name": "Onsi Fakhouri",
     "url": "https://github.com/onsi"
