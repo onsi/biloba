@@ -178,7 +178,7 @@ Of course, synthetic benchmarks don't necessarily capture real-world performance
 - [A 1,689 spec Ginkgo Biloba suite completes in under 60s](https://claude.ai/code/artifact/d2e1b070-780c-478b-80f9-5fc617dd81d5?org=b6fadba7-f133-4a3c-b118-3b76f250d94f) on an M1 Max Macbook Pro.  These are real-browser tests for an interaction-rich javascript app backed by a go server.
 - A mature 165 scenario playwright suite was converted to a Biloba vitest suite.  [Runtime went from ~3m10s down to ~1m13s](https://onsi-public.s3.amazonaws.com/biloba-playwright.html) - a 2.6x observed speedup.
 
-Fast browser test suites foster better discipline and open the door to more stable suites.  A recommended workflow is to run a local flake-hunt periodically after an extended coding session.  The 1,689 spec suite described above has a less than 1% suite flake rate thanks to this ceremony (it takes more than 60 suite runs to see a flake appear).  The [documentation](https://onsi.github.io/biloba#nurturing-maintainable-suites) and `flake-hunt` skill describes how to set flake hunts up.
+Fast browser test suites foster better discipline and open the door to more stable suites.  A recommended workflow is to run a local flake-hunt periodically after an extended coding session.  The 1,689 spec suite described above has a less than 1% suite flake rate thanks to this ceremony (it takes more than 60 suite runs to see a flake appear).  The [documentation](https://onsi.github.io/biloba/#nurturing-maintainable-suites) and `flake-hunt` skill describe how to set flake hunts up.
 
 ## Using Biloba with Claude Code
 
