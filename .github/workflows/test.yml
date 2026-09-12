@@ -116,6 +116,9 @@ jobs:
         include:
         # The floor biloba supports, and what `npm install -D vitest biloba` gives a user today.
         - {node: 20, vitest: vitest@3}
+        # Node 24 rather than 22: the npm that Node 22 bundles (10.9.x) crashes resolving vitest@4's
+        # dependencies ("Cannot read properties of null (reading 'edgesOut')") before biloba is involved.
+        - {node: 24, vitest: vitest@4}
         - {node: 22, vitest: vitest@latest}
     steps:
     - uses: actions/checkout@v5
