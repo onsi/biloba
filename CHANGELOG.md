@@ -2,7 +2,7 @@
 
 ### Features
 
-- New `flake-hunt` skill in both plugins (`biloba-go:flake-hunt`, `biloba-vitest:flake-hunt`): run the whole suite many times with one JSON report per run, read each spec's failure rate and the evidence from those reports, know how many clean runs it takes to call a flake dead, and keep a performance record from the same reports.
+- New "Nurturing Maintainable Suites" docs section and `flake-hunt` skill in both plugins (`biloba-go:flake-hunt`, `biloba-vitest:flake-hunt`): run the whole suite many times with one JSON report per run, read each spec's failure rate and the evidence from those reports, know how many clean runs it takes to call a flake dead, and keep a performance record from the same reports.
 - The deprecated `biloba@biloba` plugin has been removed. Install `biloba-go@biloba` or `biloba-vitest@biloba` instead; if you still have `biloba@biloba` installed, uninstall it first.
 
 ### Fixes

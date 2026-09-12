@@ -193,6 +193,8 @@ Sure.  And LLMs do best when they have a solid deterministic non-flaky *fast* fe
 
 Biloba has a few tricks up its sleeve to make it easy to write browser-based tests that are performant and stable.
 
+They get each spec off to a good start.  For keeping a whole suite fast and stable as it grows, see [Nurturing Maintainable Suites](#nurturing-maintainable-suites) at the end of these docs.  It covers flake hunts, which measure how often each spec fails, and keeping a performance record so you notice when the suite slows down.
+
 #### Parallelization: How Biloba Manages Browsers and Tabs
 
 First up - Biloba embraces parallelization, and leverages Ginkgo's multi-process parallelization and Chrome's per-tab isolation to minimize the risk of your parallel specs stepping on each other's toes.
@@ -4263,5 +4265,120 @@ BILOBA_INTERACTIVE=true ginkgo
 ```
 
 Biloba will run with `headless` set to `false` and will emit the failure message when a spec fails and then pause until you send a `^C` signal to end the suite.  You should generally do this with a small handful of focused spec and only in serial (running in non-headless mode in parallel is... a lot).
+
+## Nurturing Maintainable Suites
+
+Biloba does what it can to make each spec fast and stable.  Keeping a whole suite that way as it grows from dozens of specs to thousands takes some tending, and that part is up to you (and your agents).  This section covers the practices we've found work.  Most of them come out of a real suite that grew past 1,500 Biloba specs, and most of them center on one habit: the **flake hunt**.
+
+### Flake Hunts
+
+A flake is a spec that fails some of the time.  The trouble is in "some of the time": one green run tells you very little, and one red run tells you something went wrong without telling you how often.  The question that decides what to do next is **how often does each spec fail?**
+
+A flake hunt answers it.  You run the whole suite many times (60 is a good default), let every run finish, and keep one JSON report per run.  Then you read the reports.
+
+Ginkgo's `--repeat` and `--until-it-fails` look like the obvious tools for this, but both stop at the first failure.  You learn that something flaked but not how often, and the first frequent flake hides every rarer one behind it.  So a hunt is a plain loop instead:
+
+```bash
+#!/usr/bin/env bash
+# Run the browser suite RUNS times, every run to completion, one JSON report per run.
+set -uo pipefail
+PKG=${PKG:-./e2e}
+RUNS=${RUNS:-60}
+PROCS=${PROCS:-6}
+DIR=${DIR:-.ginkgo-report/flake}
+GINKGO="go run github.com/onsi/ginkgo/v2/ginkgo"
+
+rm -rf "$DIR" && mkdir -p "$DIR"
+DIR=$(cd "$DIR" && pwd)              # absolute: the test binary runs in its package directory
+$GINKGO build "$PKG" >/dev/null || exit 1
+BIN="$PKG/$(basename "$PKG").test"   # compiled once; every run replays it
+
+failed=0
+for i in $(seq 1 "$RUNS"); do
+  n=$(printf '%03d' "$i")
+  if BILOBA_SCREENSHOTS_DIR="$DIR/run-$n" $GINKGO --procs="$PROCS" --randomize-all --no-color \
+      --poll-progress-after=10s \
+      --json-report="run-$n.json" --output-dir="$DIR" \
+      "$BIN" >"$DIR/run-$n.log" 2>&1; then
+    echo "run $n/$RUNS  ok"
+  else
+    failed=$((failed + 1)); echo "run $n/$RUNS  FAIL  ($DIR/run-$n.log)"
+  fi
+done
+echo "$failed of $RUNS runs failed"
+[ "$failed" -eq 0 ]
+```
+
+A few details worth knowing:
+
+- The suite is compiled **once** with `ginkgo build` and every run replays the same binary.  Sixty runs aren't sixty compiles, and the code under test can't change halfway through the hunt.
+- Every run writes its own [JSON report](https://onsi.github.io/ginkgo/#generating-machine-readable-reports).  Each report records the run's random seed, every failure's message and location, the spec's `GinkgoWriter` output (which is where Biloba streams `console.log`), and Biloba's [failure artifacts](#failure-artifacts-humans-ci-and-agents): the poll trajectory, the DOM outline, and the screenshot path.  Everything you need to diagnose a failure is still there after the hunt is over.
+- Every run gets its own `BILOBA_SCREENSHOTS_DIR`.  Failure screenshots are named after the spec and the tab, so in a shared directory a later run would overwrite an earlier run's screenshot of the same spec.
+- `--poll-progress-after=10s` gets you a progress report, including a screenshot of every open tab, for any spec that hangs.
+
+With the reports in hand, a little `jq` gives you a failure count per spec:
+
+```bash
+jq -r '.[0].SpecReports[] | select(.State | IN("failed", "panicked", "timedout"))
+       | (.ContainerHierarchyTexts + [.LeafNodeText]) | join(" > ")' .ginkgo-report/flake/run-*.json \
+  | sort | uniq -c | sort -rn
+```
+
+The [`biloba-go:flake-hunt`](#claude-code-skills) skill has a fuller version of this that also lists the runs and seeds behind each failure and flags runs that were interrupted (a truncated run had less chance to flake, so it shouldn't count toward a clean streak).
+
+#### Reading a failure
+
+When a hunt turns up a failure, **work from the evidence in the report rather than trying to reproduce it.**  Re-running a failed seed rarely reproduces a race.  The seed fixes the order of the specs, but not which process picks up each one or how the browser schedules its work, so a rerun usually comes back green and tells you nothing.  Pull the failure's message, poll trajectory, DOM outline, and output out of the report, look at the screenshot, form a hypothesis about what happened, fix it for a reason you can state, and then hunt again.
+
+A few patterns come up again and again:
+
+- **Different specs fail in each run.**  If a few hunts turn up several distinct failing specs with no repeats, all in one area of your app, you're probably looking at a single race.  The failing specs are just the ones that happened to be running when some shared mechanism misfired, so fixing them one at a time won't help.  Look for the mechanism instead.  (On the suite mentioned above it was a component remounting and resetting its local state, which quietly undid any click that landed before the tree settled.)
+- **The timeout is far over its budget.**  Gomega checks its deadline between polls, so `Timed out after 8.3s` on a 2 second `Eventually` means a single call into the browser took seconds to come back.  That points to a stalled tab or an overloaded machine (see [When Chrome stops responding](#when-chrome-stops-responding)).  The failure screenshot can even show the right state, because the page caught up after the assertion gave up.
+- **The poll trajectory is flat.**  The value was computed once and never changed, so waiting longer wouldn't have helped.  The race decided which path the app took, and once it was on the wrong one the result was the same every time.
+- **A fix exposes the next race.**  Once the line that used to fail passes, the spec reaches later lines that never ran under failure, and those can have races of their own.  Hunt again after every fix.
+
+What you *shouldn't* do is paper over the flake: widening the timeout, adding `FlakeAttempts`, or re-running until green all hide the failure rather than fixing it.  The [`biloba-go:flaky-specs`](#claude-code-skills) skill catalogs the usual causes and their fixes.
+
+#### How many clean runs is enough?
+
+More than you'd think.  A flake that fails in a fraction `p` of runs will still pass `n` runs in a row with probability `(1 - p)^n`:
+
+| Failure rate | Chance of 30 clean runs anyway | Chance of 60 clean runs anyway |
+|---|---|---|
+| 5% | 21% | 4.6% |
+| 3% | 40% | 16% |
+
+So "I ran it 30 times and it was green" doesn't tell you much about a flake that fires a few percent of the time.  A good rule of thumb is that you need about `3 / p` clean runs to call a flake with failure rate `p` dead: 60 runs for a 5% flake, 100 for a 3% flake.  You also want a root cause you can write down.  If you can't say why it flaked, the clean runs may just be luck.
+
+#### Keeping the measurement valid
+
+A hunt is a measurement, and a few things can spoil it:
+
+- **Run one hunt at a time, on an otherwise idle machine.**  Two hunts at once, or a hunt next to a build or a second test run (or a second agent), overload the machine and fail unrelated specs all over the suite.  Those failures say nothing about your code.
+- **Don't edit the tree during a hunt.**  Compiling once protects your Go code but not fixtures or assets read from disk at run time.  If many unrelated specs fail in one run and pass in the next, or a run's log has no `SUCCESS!`/`FAIL!` verdict at the end, suspect the run rather than the specs and throw it out.
+- **Hunt at the right parallelism.**  Parallelism widens race windows, which is why a hunt runs with `--procs`.  But Biloba specs spend most of their time waiting on the one shared Chrome, so once Chrome saturates the machine's cores, adding processes just produces timeouts that come from the machine.  Run the suite once each at 2, 4, 6, and 8 processes and watch the wall clock: it drops and then flattens.  Hunt where it flattens.
+- **A focused hunt can't confirm a fix.**  Hunting a single file with `--focus-file` is a fine way to iterate, but it puts every process behind a handful of specs and never produces the cross-file interleavings a full randomized suite does.  On the suite mentioned above, a refactor of a shared test helper passed 20 out of 20 focused runs and then flaked repeatedly in full-suite runs.  For anything that touches shared helpers or fixtures, only a full-suite hunt counts.
+- **Check your visual baselines before you start.**  A failing [`b.HaveScreenshot`](#visual-assertions) uses its entire timeout before it fails.  One visual flake in a hunt costs little, but a stale baseline fails every visual spec on every run and turns a hunt of minutes into hours.  A single run of the suite will tell you if a baseline is stale.
+
+#### When to hunt
+
+A hunt takes 60 times as long as your suite, so it's not something to run on every change - the normal gate is still a single `ginkgo -p`.  Hunt before you call a flake fixed, after you change shared test helpers or fixtures, and at the end of a batch of work.  If agents are doing the work, have one of them own the hunts and run them only when nothing else is touching the tree, and send each flake back to the agent whose change introduced it along with the evidence from the report.
+
+### Keeping an Eye on Performance
+
+Every report in a hunt records every spec's duration, so a hunt also hands you 60 timing samples per spec instead of one.  That's enough to see things a single run can't show:
+
+- **Your noise floor.**  On the suite mentioned above, wall clock varied by about 6% from run to run with no code change at all.  A change smaller than your noise floor is noise.
+- **Where the time actually goes.**  With good parallel efficiency, wall clock is roughly the summed spec time divided by the number of processes.  So shaving 6 seconds off your specs saves about 1 second of wall clock at `--procs=6`.  Do that division before deleting slow specs to speed things up; the payoff is usually smaller than it looks.
+- **Setup costs.**  A `BeforeAll` is charged to whichever spec runs first in its `Ordered` container, so the "slowest spec" might just be paying for its container's setup.  The report's `SpecEvents` let you tell the two apart.
+- **Outliers cluster by run.**  When a spec's worst run is many times its median, check which run it was.  On a 60-run hunt of the suite above, the slowest outliers piled up in a handful of runs, one of which held seven where chance would predict fewer than one.  Several unrelated specs spiking in the same run tells you about that run (the machine or the browser stalled) and very little about those specs.
+
+It's also worth **keeping a record.**  At the end of each hunt, append a row to a committed file (say `perf/history.tsv`) with the date, the commit, the Biloba version, the number of processes and runs, the spec count, the median wall clock, and the **per-spec cost**: the sum of each spec's median duration divided by the number of specs.  Commit it along with the change the hunt was checking.
+
+The per-spec cost is the number to watch.  A growing suite gets slower just by growing, and wall clock alone can't tell "we added specs" apart from "every spec got slower".  Per-spec cost can.  And when the wall clock grows by more than the spec count alone would explain, something in the change had an outsized effect.
+
+When you do go looking for the cause of a slowdown, **divide before you blame.**  Take the size of the effect, divide by the cost of a single operation of the thing you suspect, and ask whether that many operations per spec is plausible.  For scale: a round trip to Chrome costs about 0.2ms, a spec in Biloba's own suite sends about a dozen commands to Chrome, and `b.NewTab()` costs about 41ms.  If your explanation needs thousands of operations per spec, it's the wrong explanation - go measure instead.
+
+The [`biloba-go:flake-hunt`](#claude-code-skills) skill has scripts for all of this: the failure report, a timing summary, and the performance record.
 
 {% endraw  %}

@@ -7,6 +7,8 @@ title: Biloba for Vitest
 
 Biloba's TypeScript client lets a `vitest` suite drive Biloba browser automation through a worker-local daemon and one shared Chrome.
 
+Biloba's [main documentation](./) is written for its Go client, but much of the thinking behind it carries over to this one.  In particular, [Nurturing Maintainable Suites](./#nurturing-maintainable-suites) covers flake hunts and keeping track of a suite's performance.  The ideas apply to a Vitest suite too, and the `biloba-vitest:flake-hunt` skill has a Vitest version of the scripts.
+
 > **Status: pre-1.0.** The `biloba` package has an API that will continue to shift before 1.0.
 > See the [support policy](./#support-policy). What follows describes what works today.
 
