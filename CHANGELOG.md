@@ -4,6 +4,8 @@
 
 ### Fixes
 
+- The Release workflow publishes `biloba` after waiting for the platform packages, rather than trying to republish one of them. The v0.16.1 run failed this way before `biloba@0.16.1` reached npm, so `biloba` goes from 0.16.0 to 0.16.2.
+
 ## 0.16.1
 
 ### Features

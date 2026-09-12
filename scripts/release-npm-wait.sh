@@ -20,6 +20,10 @@ wait_for_npm_packages() {
 	shift
 	local pending=("$@")
 	local start=$SECONDS deadline=$((SECONDS + npm_wait_timeout_secs)) last_progress=$SECONDS
+	# release.sh calls this from inside its own `for package in ...` publish loop, so this loop's
+	# variable must not leak: a global `package` here made release.sh publish the last platform
+	# package it checked instead of biloba (the v0.16.1 failure).
+	local package
 	while [[ ${#pending[@]} -gt 0 && $SECONDS -lt $deadline ]]; do
 		local remaining=()
 		for package in "${pending[@]}"; do
