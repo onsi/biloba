@@ -6,6 +6,8 @@
 
 ### Fixes
 
+- Frame discovery includes sandboxed documents and can find a responsive frame while an unrelated renderer is stuck. Frame element screenshots, masks, animation cleanup, and accessibility outlines now stay scoped to the selected frame.
+
 ## 0.16.2
 
 ### Fixes

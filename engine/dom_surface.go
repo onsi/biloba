@@ -618,8 +618,18 @@ func (s *Session) stablePointerPoint(ctx context.Context, selector Selector) (st
 // not need translation. The frame owner's content quad captures borders, parent scrolling, and CSS
 // transforms; a projective mapping also handles perspective-transformed iframe elements.
 func (s *Session) translateFramePoint(ctx context.Context, point actionPoint) (actionPoint, error) {
+	points, err := s.translateFramePoints(ctx, []actionPoint{point})
+	if err != nil {
+		return actionPoint{}, err
+	}
+	return points[0], nil
+}
+
+// translateFramePoints maps several points from one snapshot of the frame owner's geometry. A
+// screenshot rectangle needs all four corners to agree even when page script is moving the frame.
+func (s *Session) translateFramePoints(ctx context.Context, points []actionPoint) ([]actionPoint, error) {
 	if s.executionContextID == 0 || s.frameID == "" {
-		return point, nil
+		return points, nil
 	}
 	type viewport struct {
 		Width  float64 `json:"width"`
@@ -627,10 +637,10 @@ func (s *Session) translateFramePoint(ctx context.Context, point actionPoint) (a
 	}
 	var size viewport
 	if err := EvaluateContext(ctx, `({width: window.innerWidth, height: window.innerHeight})`, false, &size); err != nil {
-		return actionPoint{}, err
+		return nil, err
 	}
 	if size.Width <= 0 || size.Height <= 0 {
-		return actionPoint{}, &Error{Code: CodeActionFailed, Operation: "translate frame point", Message: "frame viewport has no area"}
+		return nil, &Error{Code: CodeActionFailed, Operation: "translate frame point", Message: "frame viewport has no area"}
 	}
 	var quad dom.Quad
 	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
@@ -649,33 +659,38 @@ func (s *Session) translateFramePoint(ctx context.Context, point actionPoint) (a
 		return nil
 	}))
 	if err != nil {
-		return actionPoint{}, contextError("translate frame point", err)
+		return nil, contextError("translate frame point", err)
 	}
 	if len(quad) != 8 {
-		return actionPoint{}, &Error{Code: CodeActionFailed, Operation: "translate frame point", Message: "frame owner has no content quad"}
+		return nil, &Error{Code: CodeActionFailed, Operation: "translate frame point", Message: "frame owner has no content quad"}
 	}
-	u, v := point.x/size.Width, point.y/size.Height
 	x0, y0, x1, y1 := quad[0], quad[1], quad[2], quad[3]
 	x2, y2, x3, y3 := quad[4], quad[5], quad[6], quad[7]
 	sx, sy := x0-x1+x2-x3, y0-y1+y2-y3
 	dx1, dx2 := x1-x2, x3-x2
 	dy1, dy2 := y1-y2, y3-y2
 	denominator := dx1*dy2 - dx2*dy1
-	if math.Abs(sx) < 1e-9 && math.Abs(sy) < 1e-9 {
-		return actionPoint{x: x0 + (x1-x0)*u + (x3-x0)*v, y: y0 + (y1-y0)*u + (y3-y0)*v}, nil
+	affine := math.Abs(sx) < 1e-9 && math.Abs(sy) < 1e-9
+	if !affine && math.Abs(denominator) < 1e-9 {
+		return nil, &Error{Code: CodeActionFailed, Operation: "translate frame point", Message: "frame owner transform is degenerate"}
 	}
-	if math.Abs(denominator) < 1e-9 {
-		return actionPoint{}, &Error{Code: CodeActionFailed, Operation: "translate frame point", Message: "frame owner transform is degenerate"}
+	g, h := 0.0, 0.0
+	if !affine {
+		g = (sx*dy2 - dx2*sy) / denominator
+		h = (dx1*sy - sx*dy1) / denominator
 	}
-	g := (sx*dy2 - dx2*sy) / denominator
-	h := (dx1*sy - sx*dy1) / denominator
 	a, b, c := x1-x0+g*x1, x3-x0+h*x3, x0
 	d, e, f := y1-y0+g*y1, y3-y0+h*y3, y0
-	w := g*u + h*v + 1
-	if math.Abs(w) < 1e-9 {
-		return actionPoint{}, &Error{Code: CodeActionFailed, Operation: "translate frame point", Message: "frame owner transform maps outside the viewport"}
+	translated := make([]actionPoint, len(points))
+	for i, point := range points {
+		u, v := point.x/size.Width, point.y/size.Height
+		w := g*u + h*v + 1
+		if math.Abs(w) < 1e-9 {
+			return nil, &Error{Code: CodeActionFailed, Operation: "translate frame point", Message: "frame owner transform maps outside the viewport"}
+		}
+		translated[i] = actionPoint{x: (a*u + b*v + c) / w, y: (d*u + e*v + f) / w}
 	}
-	return actionPoint{x: (a*u + b*v + c) / w, y: (d*u + e*v + f) / w}, nil
+	return translated, nil
 }
 
 func pointerPayload(offset *Point, modifiers Modifier) map[string]any {

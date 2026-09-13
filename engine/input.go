@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/chromedp/cdproto/accessibility"
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/input"
@@ -95,10 +96,18 @@ func SetFileInputFilesContext(ctx context.Context, nodeScript string, paths []st
 
 // AccessibilityTreeContext reads the full accessibility tree for the tab.
 func AccessibilityTreeContext(ctx context.Context) ([]*accessibility.Node, error) {
+	return accessibilityTreeContext(ctx, "")
+}
+
+func accessibilityTreeContext(ctx context.Context, frameID cdp.FrameID) ([]*accessibility.Node, error) {
 	var nodes []*accessibility.Node
 	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
+		request := accessibility.GetFullAXTree()
+		if frameID != "" {
+			request = request.WithFrameID(frameID)
+		}
 		var readErr error
-		nodes, readErr = accessibility.GetFullAXTree().Do(runCtx)
+		nodes, readErr = request.Do(runCtx)
 		return readErr
 	}))
 	if err != nil {

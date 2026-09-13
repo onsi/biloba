@@ -18,7 +18,7 @@ var _ = Describe("frame visual regressions", func() {
 	It("captures an offset same-process cross-origin element from the child document", func(ctx SpecContext) {
 		child := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 			response.Header().Set("Content-Type", "text/html")
-			_, _ = response.Write([]byte(`<!doctype html><title>visual-child</title><style>html,body{margin:0}.subject{position:absolute;left:20px;top:20px;width:80px;height:60px;background:rgb(0,255,0)}</style><div class="subject"></div>`))
+			_, _ = response.Write([]byte(`<!doctype html><title>visual-child</title><style>html,body{margin:0;height:900px}.subject{position:absolute;left:20px;top:520px;width:80px;height:60px;background:rgb(0,255,0)}.mask{width:20px;height:20px;background:white}</style><div class="subject"><div class="mask"></div></div>`))
 		}))
 		DeferCleanup(child.Close)
 
@@ -26,7 +26,7 @@ var _ = Describe("frame visual regressions", func() {
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(root.Close)
 		Expect(root.Navigate(ctx, server.URL)).To(Succeed())
-		_, err = root.Evaluate(ctx, `document.head.innerHTML = '<style>html,body{margin:0;min-height:100%;background:rgb(255,0,0)}</style>'; document.body.innerHTML = '<iframe id="child" style="position:fixed;left:350px;top:250px;width:300px;height:200px;border:0"></iframe>'; document.querySelector('#child').src = `+strconv.Quote(child.URL))
+		_, err = root.Evaluate(ctx, `document.head.innerHTML = '<style>html,body{margin:0;min-height:1500px;background:rgb(255,0,0)}</style>'; document.body.innerHTML = '<iframe id="child" style="position:absolute;left:350px;top:950px;width:300px;height:200px;border:0;transform:scale(.75);transform-origin:top left"></iframe>'; document.querySelector('#child').src = `+strconv.Quote(child.URL))
 		Expect(err).NotTo(HaveOccurred())
 
 		frame, err := root.WaitForFrame(ctx, engine.FrameQuery{URL: &engine.Expectation{Kind: engine.ExpectEqual, Expected: child.URL + "/"}, HasElement: selectorPtr(engine.CSS(".subject"))}, engine.PollPolicy{Timeout: 3 * time.Second, Interval: 5 * time.Millisecond})
@@ -39,12 +39,18 @@ var _ = Describe("frame visual regressions", func() {
 		Expect(childOrigin.Hostname()).To(Equal(rootOrigin.Hostname()))
 		Expect(childOrigin.Host).NotTo(Equal(rootOrigin.Host))
 		Expect(frame.TargetID()).To(Equal(root.TargetID()), "fixture must exercise a cross-origin frame sharing its renderer target")
-
-		shot, err := frame.CaptureElementScreenshot(ctx, engine.CSS(".subject"), engine.ScreenshotCaptureOptions{Animated: true})
+		_, err = frame.Evaluate(ctx, `window.scrollTo(0, 450)`)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(shot.Width).To(Equal(80))
-		Expect(shot.Height).To(Equal(60))
-		Expect(pixelAt(shot.PNG, 40, 30)).To(Equal(color.NRGBA{G: 255, A: 255}))
+
+		shot, err := frame.CaptureElementScreenshot(ctx, engine.CSS(".subject"), engine.ScreenshotCaptureOptions{
+			Animated: true,
+			Masks:    []engine.Selector{engine.CSS(".mask")},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(shot.Width).To(Equal(60))
+		Expect(shot.Height).To(Equal(45))
+		Expect(pixelAt(shot.PNG, 8, 8)).To(Equal(color.NRGBA{R: 128, G: 128, B: 128, A: 255}))
+		Expect(pixelAt(shot.PNG, 30, 22)).To(Equal(color.NRGBA{G: 255, A: 255}))
 	})
 
 	It("restores the child animation state after a default frame screenshot", func(ctx SpecContext) {

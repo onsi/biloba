@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/page"
@@ -66,6 +67,7 @@ func (s *Session) Frames(ctx context.Context) ([]*Frame, error) {
 }
 
 // WaitForFrame discovers a matching cross-origin frame and waits for its document predicate.
+// When several frames match, it returns a ready match; renderer response order can vary.
 func (s *Session) WaitForFrame(ctx context.Context, query FrameQuery, policy PollPolicy) (*Frame, error) {
 	var matched *Frame
 	shouldReturnCandidateError := func(attemptCtx context.Context, err error) bool {
@@ -84,39 +86,35 @@ func (s *Session) WaitForFrame(ctx context.Context, query FrameQuery, policy Pol
 		return engineErr.Code != CodeFrameDetached && engineErr.Code != CodeSessionClosed
 	}
 	_, err := Poll(ctx, policy, func(attemptCtx context.Context) (Observation, bool, error) {
-		descriptors, listErr := s.frameDescriptors(attemptCtx)
-		if listErr != nil {
-			return Observation{}, false, listErr
-		}
-		for _, descriptor := range descriptors {
+		listErr := s.visitFrameDescriptors(attemptCtx, true, func(descriptor frameDescriptor) (bool, error) {
 			urlMatches, matchErr := matchesExpectation(descriptor.frame.URL, query.URL)
 			if matchErr != nil {
-				return Observation{}, false, matchErr
+				return false, matchErr
 			}
 			if !urlMatches {
-				continue
+				return false, nil
 			}
 			candidate, _, attachErr := s.attachFrame(attemptCtx, descriptor)
 			if attachErr != nil {
-				return Observation{Value: descriptor.frame.URL}, false, attachErr
+				return false, attachErr
 			}
 			if query.Title != nil {
 				title, titleErr := candidate.Title(attemptCtx)
 				if titleErr != nil {
 					_ = candidate.Close()
 					if shouldReturnCandidateError(attemptCtx, titleErr) {
-						return Observation{Value: descriptor.frame.URL}, false, titleErr
+						return false, titleErr
 					}
-					continue
+					return false, nil
 				}
 				titleMatches, titleMatchErr := matchesExpectation(title, query.Title)
 				if titleMatchErr != nil {
 					_ = candidate.Close()
-					return Observation{}, false, titleMatchErr
+					return false, titleMatchErr
 				}
 				if !titleMatches {
 					_ = candidate.Close()
-					continue
+					return false, nil
 				}
 			}
 			if query.HasElement != nil {
@@ -124,18 +122,24 @@ func (s *Session) WaitForFrame(ctx context.Context, query FrameQuery, policy Pol
 				if existsErr != nil {
 					_ = candidate.Close()
 					if shouldReturnCandidateError(attemptCtx, existsErr) {
-						return Observation{Value: descriptor.frame.URL}, false, existsErr
+						return false, existsErr
 					}
-					continue
+					return false, nil
 				}
 				found, _ := exists.Value.(bool)
 				if !found {
 					_ = candidate.Close()
-					continue
+					return false, nil
 				}
 			}
 			matched = candidate
-			return Observation{Value: candidate.url}, true, nil
+			return true, nil
+		})
+		if listErr != nil {
+			return Observation{}, false, listErr
+		}
+		if matched != nil {
+			return Observation{Value: matched.url}, true, nil
 		}
 		return Observation{Value: "no matching frame"}, false, nil
 	})
@@ -153,105 +157,200 @@ func matchesExpectation(actual string, expectation *Expectation) (bool, error) {
 }
 
 func (s *Session) frameDescriptors(ctx context.Context) ([]frameDescriptor, error) {
+	descriptors := []frameDescriptor{}
+	err := s.visitFrameDescriptors(ctx, false, func(descriptor frameDescriptor) (bool, error) {
+		descriptors = append(descriptors, descriptor)
+		return false, nil
+	})
+	return descriptors, err
+}
+
+// visitFrameDescriptors visits reachable documents as renderer trees arrive. A waiter can
+// finish without waiting for unrelated renderers, including ones blocked by page scripts.
+func (s *Session) visitFrameDescriptors(ctx context.Context, incremental bool, visit func(frameDescriptor) (bool, error)) error {
 	s.mu.Lock()
 	closed := s.closed
 	s.mu.Unlock()
 	if closed {
-		return nil, &Error{Code: CodeSessionClosed, Operation: "list frames", Message: "session is closed"}
+		return &Error{Code: CodeSessionClosed, Operation: "list frames", Message: "session is closed"}
 	}
 	if s.browser == nil {
-		return nil, &Error{Code: CodeSessionClosed, Operation: "list frames", Message: "browser is closed"}
+		return &Error{Code: CodeSessionClosed, Operation: "list frames", Message: "browser is closed"}
 	}
 	infos, err := s.frameTargetInfos(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	// A Page frame tree is renderer-local: Chrome may stop it at an OOPIF boundary. Read the tree
-	// from every descendant iframe target, then join them by Frame.ParentID. This produces the actual
-	// document ancestry rather than the coarser target ancestry (which cannot distinguish sibling
-	// OOPIFs below a same-process frame).
-	targetIDs := []target.ID{s.targetID}
-	for _, info := range infos {
-		targetIDs = append(targetIDs, info.TargetID)
-	}
 	type graphNode struct {
 		descriptor frameDescriptor
-		origin     string
 		parentID   cdp.FrameID
 	}
 	nodes := map[cdp.FrameID]graphNode{}
 	order := []cdp.FrameID{}
-	for index, targetID := range targetIDs {
-		tree, treeErr := s.frameTreeForTarget(ctx, targetID)
-		if treeErr != nil {
-			if ctx.Err() != nil {
-				return nil, contextError("list frames", ctx.Err())
-			}
-			if index == 0 {
-				return nil, treeErr
-			}
-			// Target.getTargets and attachment are not atomic. A disappearing child is simply no
-			// longer discoverable; the next waiter poll will rebuild the graph from current targets.
-			continue
-		}
-		var addTree func(*page.FrameTree, bool)
-		addTree = func(current *page.FrameTree, targetRoot bool) {
+	scopeID := s.frameID
+	addTree := func(tree *page.FrameTree, targetID target.ID) {
+		var add func(*page.FrameTree, bool)
+		add = func(current *page.FrameTree, root bool) {
 			if _, exists := nodes[current.Frame.ID]; !exists {
 				order = append(order, current.Frame.ID)
 			}
 			nodes[current.Frame.ID] = graphNode{
-				descriptor: frameDescriptor{frame: current.Frame, targetID: targetID, oopif: targetRoot && index > 0},
-				origin:     current.Frame.SecurityOrigin, parentID: current.Frame.ParentID,
+				descriptor: frameDescriptor{frame: current.Frame, targetID: targetID, oopif: root && targetID != s.targetID},
+				parentID:   current.Frame.ParentID,
 			}
 			for _, child := range current.ChildFrames {
-				addTree(child, false)
+				add(child, false)
 			}
 		}
-		addTree(tree, true)
+		add(tree, true)
 	}
-
-	scopeID := cdp.FrameID("")
-	if s.frameID != "" {
-		scopeID = s.frameID
+	tree, err := s.frameTreeForTarget(ctx, s.targetID)
+	if err != nil {
+		return err
+	}
+	addTree(tree, s.targetID)
+	if scopeID == "" {
+		scopeID = tree.Frame.ID
+	} else {
 		scope, found := nodes[scopeID]
 		if !found || scope.descriptor.frame.LoaderID != s.frameLoaderID {
-			return nil, staleFrameError("list frames", s.frameID)
+			return staleFrameError("list frames", scopeID)
 		}
-	} else {
+	}
+	visited := map[cdp.FrameID]bool{}
+	// The reported security origin can retain the URL origin for sandboxed documents.
+	// For equal origins, ask the browser whether the child can actually read its parent.
+	boundaries := map[cdp.FrameID]bool{}
+	walkAvailable := func() (bool, error) {
+		children := map[cdp.FrameID][]cdp.FrameID{}
 		for _, id := range order {
-			if nodes[id].descriptor.targetID == s.targetID && nodes[id].parentID == "" {
-				scopeID = id
-				break
-			}
-		}
-	}
-	if scopeID == "" {
-		return nil, &Error{Code: CodeActionFailed, Operation: "list frames", Message: "root frame was not present in Chrome's frame tree"}
-	}
-
-	children := map[cdp.FrameID][]cdp.FrameID{}
-	for _, id := range order {
-		node := nodes[id]
-		if node.parentID != "" {
+			node := nodes[id]
 			children[node.parentID] = append(children[node.parentID], id)
 		}
-	}
-	descriptors := []frameDescriptor{}
-	var walk func(cdp.FrameID, bool)
-	walk = func(parentID cdp.FrameID, crossedOrigin bool) {
-		parent := nodes[parentID]
-		for _, childID := range children[parentID] {
-			child := nodes[childID]
-			crossed := crossedOrigin || child.origin != parent.origin
-			if crossed {
-				descriptors = append(descriptors, child.descriptor)
+		var walk func(cdp.FrameID, bool) (bool, error)
+		walk = func(parentID cdp.FrameID, crossed bool) (bool, error) {
+			for _, childID := range children[parentID] {
+				child := nodes[childID]
+				boundary := crossed || child.descriptor.oopif || child.descriptor.frame.SecurityOrigin != nodes[parentID].descriptor.frame.SecurityOrigin
+				if !boundary {
+					var checked bool
+					boundary, checked = boundaries[childID]
+					if !checked {
+						var err error
+						boundary, err = s.frameOriginBoundary(ctx, child.descriptor)
+						if err != nil {
+							return false, err
+						}
+						boundaries[childID] = boundary
+					}
+				}
+				if boundary && !visited[childID] {
+					visited[childID] = true
+					stop, err := visit(child.descriptor)
+					if stop || err != nil {
+						return stop, err
+					}
+				}
+				stop, err := walk(childID, boundary)
+				if stop || err != nil {
+					return stop, err
+				}
 			}
-			walk(childID, crossed)
+			return false, nil
+		}
+		return walk(scopeID, false)
+	}
+	if incremental {
+		if stop, err := walkAvailable(); stop || err != nil {
+			return err
 		}
 	}
-	walk(scopeID, false)
-	return descriptors, nil
+
+	// Fetch child trees concurrently so an unresponsive renderer cannot hold up a
+	// matching document in another renderer. Cancellation joins every pending request.
+	discoveryCtx, cancel := context.WithCancel(ctx)
+	var workers sync.WaitGroup
+	defer func() { cancel(); workers.Wait() }()
+	type treeResult struct {
+		tree     *page.FrameTree
+		targetID target.ID
+		err      error
+	}
+	results := make(chan treeResult, len(infos))
+	completed := make(map[target.ID]*page.FrameTree, len(infos))
+	for _, info := range infos {
+		workers.Add(1)
+		go func(id target.ID) {
+			defer workers.Done()
+			tree, err := s.frameTreeForTarget(discoveryCtx, id)
+			results <- treeResult{tree: tree, targetID: id, err: err}
+		}(info.TargetID)
+	}
+	for range infos {
+		select {
+		case <-ctx.Done():
+			return contextError("list frames", ctx.Err())
+		case result := <-results:
+			if result.err != nil {
+				if ctx.Err() != nil {
+					return contextError("list frames", ctx.Err())
+				}
+				// A child may disappear between listing targets and reading its tree.
+				continue
+			}
+
+			if incremental {
+				addTree(result.tree, result.targetID)
+				if stop, err := walkAvailable(); stop || err != nil {
+					return err
+				}
+			} else {
+				completed[result.targetID] = result.tree
+			}
+		}
+	}
+	// A complete snapshot retains target-list and frame-tree order, regardless of
+	// which renderer answered first. Waiters instead visit documents as they become ready.
+	if !incremental {
+		for _, info := range infos {
+			if tree := completed[info.TargetID]; tree != nil {
+				addTree(tree, info.TargetID)
+			}
+		}
+		_, err := walkAvailable()
+		return err
+	}
+	return nil
+}
+
+func (s *Session) frameOriginBoundary(ctx context.Context, descriptor frameDescriptor) (bool, error) {
+	targetCtx, err := s.browser.frameTargetContext(ctx, descriptor.targetID)
+	if err != nil {
+		return false, err
+	}
+	opCtx, cancel := executorContext(targetCtx, ctx)
+	defer cancel()
+	var boundary bool
+	err = chromedp.Run(opCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
+		id, err := page.CreateIsolatedWorld(descriptor.frame.ID).WithWorldName("biloba-frame-" + string(descriptor.frame.ID)).Do(runCtx)
+		if err != nil {
+			return err
+		}
+		result, exception, err := runtime.Evaluate(`(() => { try { void parent.document; return false; } catch (error) { if (error.name === 'SecurityError') return true; throw error; } })()`).WithContextID(id).WithReturnByValue(true).Do(runCtx)
+		if err != nil {
+			return err
+		}
+		if exception != nil {
+			return exception
+		}
+		boundary = string(result.Value) == "true"
+		return nil
+	}))
+	if err != nil {
+		return false, contextError("check frame origin", err)
+	}
+	return boundary, nil
 }
 
 func (s *Session) frameTreeForTarget(ctx context.Context, targetID target.ID) (*page.FrameTree, error) {
