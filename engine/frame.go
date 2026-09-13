@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/chromedp/cdproto/cdp"
@@ -67,6 +68,21 @@ func (s *Session) Frames(ctx context.Context) ([]*Frame, error) {
 // WaitForFrame discovers a matching cross-origin frame and waits for its document predicate.
 func (s *Session) WaitForFrame(ctx context.Context, query FrameQuery, policy PollPolicy) (*Frame, error) {
 	var matched *Frame
+	shouldReturnCandidateError := func(attemptCtx context.Context, err error) bool {
+		if attemptCtx.Err() != nil {
+			return true
+		}
+		if !IsFatal(err) {
+			return false
+		}
+		var engineErr *Error
+		if !errors.As(err, &engineErr) {
+			return true
+		}
+		// A candidate belongs to one document. Navigation can either invalidate that document or
+		// destroy its OOPIF target, which closes this handle; discovery can reacquire its replacement.
+		return engineErr.Code != CodeFrameDetached && engineErr.Code != CodeSessionClosed
+	}
 	_, err := Poll(ctx, policy, func(attemptCtx context.Context) (Observation, bool, error) {
 		descriptors, listErr := s.frameDescriptors(attemptCtx)
 		if listErr != nil {
@@ -88,6 +104,9 @@ func (s *Session) WaitForFrame(ctx context.Context, query FrameQuery, policy Pol
 				title, titleErr := candidate.Title(attemptCtx)
 				if titleErr != nil {
 					_ = candidate.Close()
+					if shouldReturnCandidateError(attemptCtx, titleErr) {
+						return Observation{Value: descriptor.frame.URL}, false, titleErr
+					}
 					continue
 				}
 				titleMatches, titleMatchErr := matchesExpectation(title, query.Title)
@@ -104,6 +123,9 @@ func (s *Session) WaitForFrame(ctx context.Context, query FrameQuery, policy Pol
 				exists, existsErr := candidate.Exists(attemptCtx, *query.HasElement)
 				if existsErr != nil {
 					_ = candidate.Close()
+					if shouldReturnCandidateError(attemptCtx, existsErr) {
+						return Observation{Value: descriptor.frame.URL}, false, existsErr
+					}
 					continue
 				}
 				found, _ := exists.Value.(bool)
@@ -163,6 +185,9 @@ func (s *Session) frameDescriptors(ctx context.Context) ([]frameDescriptor, erro
 	for index, targetID := range targetIDs {
 		tree, treeErr := s.frameTreeForTarget(ctx, targetID)
 		if treeErr != nil {
+			if ctx.Err() != nil {
+				return nil, contextError("list frames", ctx.Err())
+			}
 			if index == 0 {
 				return nil, treeErr
 			}
@@ -387,6 +412,9 @@ func (b *Browser) registerFrameSession(frame *Session) error {
 // get one managed attachment shared by document-scoped child contexts. Closing an outer handle can
 // therefore never cancel a nested handle that happens to use the same renderer connection.
 func (b *Browser) frameTargetContext(ctx context.Context, targetID target.ID) (context.Context, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, contextError("attach frame target", err)
+	}
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
@@ -406,12 +434,29 @@ func (b *Browser) frameTargetContext(ctx context.Context, targetID target.ID) (c
 	}
 	b.mu.Unlock()
 
-	targetCtx, cancelTarget := chromedp.NewContext(b.ctx, chromedp.WithTargetID(targetID))
+	// Keep chromedp's detach/close cleanup separate from execution cancellation. The first Run
+	// initializes Context.Target before issuing renderer commands, which may never answer. Cancel
+	// those commands first, wait for initialization to finish, and only then suppress target closure
+	// and let chromedp detach. Neither request nor browser cancellation may bypass that ordering.
+	chromeCtx, cancelChrome := chromedp.NewContext(context.WithoutCancel(b.ctx), chromedp.WithTargetID(targetID))
+	targetCtx, stopExecution := context.WithCancel(chromeCtx)
+	stopBrowserCancel := context.AfterFunc(b.ctx, stopExecution)
 	attachDone := make(chan error, 1)
+	cleanupDone := make(chan struct{})
 	go func() {
 		var ready any
-		attachDone <- chromedp.Run(targetCtx, chromedp.Evaluate("1", &ready))
+		err := chromedp.Run(targetCtx, chromedp.Evaluate("1", &ready))
+		protectFrameTarget(chromeCtx)
+		attachDone <- err
+		<-targetCtx.Done()
+		stopBrowserCancel()
+		cancelChrome()
+		close(cleanupDone)
 	}()
+	cancelTarget := func() {
+		stopExecution()
+		<-cleanupDone
+	}
 	var err error
 	select {
 	case err = <-attachDone:
@@ -419,7 +464,6 @@ func (b *Browser) frameTargetContext(ctx context.Context, targetID target.ID) (c
 		cancelTarget()
 		err = ctx.Err()
 	}
-	protectFrameTarget(targetCtx)
 	if err != nil {
 		cancelTarget()
 		return nil, contextError("attach frame target", err)
