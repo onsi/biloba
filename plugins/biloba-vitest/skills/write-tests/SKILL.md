@@ -45,7 +45,8 @@ afterAll(async () => { await browser.close(); });
 ```
 
 - A root `Session` has its own browser context, so cookies and storage are isolated. `session.prepare()` resets it cheaply — call it between tests rather than opening a new session.
-- `await session.newTab()` opens a sibling tab in the same context. Use `tabs()`/`spawnedTabs()` for snapshots, `findTab()`/`waitForTab()` for popup workflows, and `frames()`/`waitForFrame()` for cross-origin frame targets.
+- `await session.newTab()` opens a sibling tab in the same context. Use `tabs()`/`spawnedTabs()` for snapshots and `findTab()`/`waitForTab()` for popup workflows.
+- `frames()` snapshots cross-origin iframe documents and `waitForFrame({url, title, has})` polls for one. It covers nested OOPIFs and same-site cross-origin frames (for example, two localhost ports) through CDP frame scoping. Use the returned session for locators, trusted/fast actions, uploads, and assertions; use `>>>` for same-origin iframe or open-shadow piercing. Removal, iframe/parent navigation, or replacement makes the old handle fail with `TARGET_NOT_FOUND`; closing a non-owning frame leaves independently acquired nested handles live, while owner `prepare()`/`close()` invalidates them with `DRIVER_CLOSED`.
 
 ## 3. Locators
 

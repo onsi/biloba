@@ -652,7 +652,7 @@ func (s *engineSession) wrap(session *engine.Session, frameURL string) *engineSe
 }
 
 func (s *engineSession) Metadata() protocol.SessionMetadata {
-	return protocol.SessionMetadata{ContextID: string(s.session.ContextID()), TargetID: string(s.session.TargetID()), OpenerID: string(s.session.OpenerID()), OwnsContext: s.session.OwnsContext(), Frame: s.frameURL != "", URL: s.frameURL}
+	return protocol.SessionMetadata{ContextID: string(s.session.ContextID()), TargetID: string(s.session.TargetID()), FrameID: string(s.session.FrameID()), DocumentID: string(s.session.FrameDocumentID()), OpenerID: string(s.session.OpenerID()), OwnsContext: s.session.OwnsContext(), Frame: s.frameURL != "", URL: s.frameURL}
 }
 
 func (s *engineSession) Tabs(ctx context.Context) ([]protocol.Session, error) {
@@ -2135,6 +2135,7 @@ var engineProtocolCodes = map[engine.ErrorCode]protocol.ErrorCode{
 	engine.CodeInvalidSelector: protocol.CodeInvalidArgument,
 	engine.CodeInvalidArgument: protocol.CodeInvalidArgument,
 	engine.CodeSessionClosed:   protocol.CodeTargetNotFound,
+	engine.CodeFrameDetached:   protocol.CodeTargetNotFound,
 	engine.CodeNotFound:        protocol.CodeTargetNotFound,
 	// The target was found and refused the operation - a click on a hidden element.  That is a page
 	// state, not a driver fault, and it is the one bucket where a retry might succeed.

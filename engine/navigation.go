@@ -59,12 +59,20 @@ func httpStatusFailure(err error) bool {
 
 func LocationContext(ctx context.Context) (string, error) {
 	var location string
+	if executionContext(ctx) != 0 {
+		err := EvaluateContext(ctx, "window.location.href", false, &location)
+		return location, err
+	}
 	err := chromedp.Run(ctx, chromedp.Location(&location))
 	return location, err
 }
 
 func TitleContext(ctx context.Context) (string, error) {
 	var title string
+	if executionContext(ctx) != 0 {
+		err := EvaluateContext(ctx, "document.title", false, &title)
+		return title, err
+	}
 	err := chromedp.Run(ctx, chromedp.Title(&title))
 	return title, err
 }

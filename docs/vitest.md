@@ -173,7 +173,24 @@ await popup.activate();
 await popup.close();
 ```
 
-Use `tabs()` and `spawnedTabs()` for snapshots, `findTab()` for an optional match, and `waitForTab()` when a popup is expected.  `frames()` and `waitForFrame()` expose cross-origin frame targets as typed sessions.  Closing or preparing an owning session invalidates all of its descendant handles.
+Use `tabs()` and `spawnedTabs()` for snapshots, `findTab()` for an optional match, and `waitForTab()` when a popup is expected.
+
+`frames()` snapshots the cross-origin iframe documents below a session; `waitForFrame()` polls for one by `url`, `title`, and/or a `has` locator. This covers both out-of-process frames (cross-site OOPIF targets) and same-site cross-origin frames such as two local servers on different ports. Biloba asks CDP for Chrome's frame tree and runs same-process frame operations in a non-universal isolated world scoped to that frame—it does not read the iframe through parent-page JavaScript or relax the browser's same-origin policy:
+
+```ts
+const frame = await session.waitForFrame(
+  {url: /child-form/, has: 'input[name="email"]'},
+  {timeoutMs: 10_000},
+);
+
+await frame.locator('input[name="email"]').setValue("ada@example.com");
+await frame.locator('button[type="submit"]').click();
+await frame.locator("#success").expectVisible();
+```
+
+Frame handles expose the normal locator, action, assertion, JavaScript, upload, and frame-local storage APIs. Trusted pointer input is translated through the iframe owner's content geometry, including parent scrolling, borders, and CSS transforms. In a same-process cross-origin frame, `evaluate()` runs in Biloba's isolated world: the frame's DOM and web-platform globals are available, but page-script variables attached to that frame's main-world global are not. Use the owning tab for tab/context controls such as navigation, preparation, emulation, cookies, downloads, and network interception. Same-origin iframe and open-shadow-root piercing remains `session.locator("outer >>> inner")`; `frames()` is the cross-origin boundary API.
+
+`frame.frameId` is the CDP frame identity, while `frame.targetId` is the renderer target that owns it; several same-process frames can therefore share a target. Discovery follows actual frame ancestry across nested renderer boundaries, so a root session includes same-process descendants inside an OOPIF while frame-local discovery excludes siblings. `frame.frameUrl` is the URL snapshot from discovery. Removing, replacing, or navigating the iframe—or navigating its parent tab—makes that document handle stale; its next operation fails with `TARGET_NOT_FOUND`, and `waitForFrame()` returns the replacement document's new handle. Closing a non-owning frame handle does not close independently acquired nested handles. Closing or preparing an owning session invalidates all descendant handles locally with `DRIVER_CLOSED`.
 
 ### Navigating and selecting
 

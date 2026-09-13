@@ -238,6 +238,7 @@ class ClientSession implements Session {
   readonly id: string;
   readonly contextId: string;
   readonly targetId: string;
+  readonly frameId?: string;
   readonly openerId?: string;
   readonly ownsContext: boolean;
   readonly isFrame: boolean;
@@ -272,6 +273,7 @@ class ClientSession implements Session {
     this.id = response.sessionId;
     this.contextId = response.contextId ?? "";
     this.targetId = response.targetId ?? "";
+    if (response.frameId !== undefined) this.frameId = response.frameId;
     if (response.openerId !== undefined) this.openerId = response.openerId;
     this.ownsContext = response.ownsContext ?? false;
     this.isFrame = response.frame ?? false;

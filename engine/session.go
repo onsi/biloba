@@ -16,6 +16,7 @@ import (
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
@@ -54,6 +55,9 @@ type Session struct {
 	openerID              target.ID
 	ownsContext           bool
 	frameTarget           bool
+	frameID               cdp.FrameID
+	frameLoaderID         cdp.LoaderID
+	executionContextID    runtime.ExecutionContextID
 	artifactDir           string
 	mu                    sync.Mutex
 	requestMu             sync.Mutex
@@ -119,6 +123,12 @@ func (s *Session) ContextID() cdp.BrowserContextID { return s.browserContextID }
 
 // TargetID identifies this session's page target.
 func (s *Session) TargetID() target.ID { return s.targetID }
+
+// FrameID identifies the child frame represented by this session, or is empty for tab sessions.
+func (s *Session) FrameID() cdp.FrameID { return s.frameID }
+
+// FrameDocumentID identifies the document generation represented by a frame session.
+func (s *Session) FrameDocumentID() cdp.LoaderID { return s.frameLoaderID }
 
 // OpenerID identifies the target that opened this tab, or is empty for explicitly-created tabs.
 func (s *Session) OpenerID() target.ID { return s.openerID }
@@ -883,7 +893,7 @@ func (s *Session) actionablePoint(ctx context.Context, selector Selector) (actio
 	if !xOK || !yOK || point["enabled"] != true || point["inViewport"] != true || point["hittable"] != true {
 		return actionPoint{}, &Error{Code: CodeActionFailed, Operation: "resolve pointer target", Message: "element is not actionable"}
 	}
-	return actionPoint{x: x, y: y}, nil
+	return s.translateFramePoint(ctx, actionPoint{x: x, y: y})
 }
 
 func (s *Session) ensureBiloba(ctx context.Context) error {
@@ -918,6 +928,14 @@ func (s *Session) serial(requestCtx context.Context, operation string, run func(
 	}
 	opCtx, cancel := executorContext(s.ctx, requestCtx)
 	defer cancel()
+	if s.frameID != "" {
+		if err := s.validateFrameDocument(opCtx); err != nil {
+			return err
+		}
+		if s.executionContextID != 0 {
+			opCtx = withExecutionContext(opCtx, s.executionContextID)
+		}
+	}
 	if !recovers {
 		// Interrupt an operation that is already waiting on the renderer when it dies.  Without this
 		// the crash is only noticed by the *next* call, and this one still burns its whole deadline.

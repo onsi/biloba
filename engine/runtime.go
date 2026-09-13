@@ -10,6 +10,17 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
+type executionContextKey struct{}
+
+func withExecutionContext(ctx context.Context, id runtime.ExecutionContextID) context.Context {
+	return context.WithValue(ctx, executionContextKey{}, id)
+}
+
+func executionContext(ctx context.Context) runtime.ExecutionContextID {
+	id, _ := ctx.Value(executionContextKey{}).(runtime.ExecutionContextID)
+	return id
+}
+
 // HandlerResponse is the typed wire-neutral result returned by a biloba.js atomic handler.
 type HandlerResponse struct {
 	Success bool   `json:"success"`
@@ -35,6 +46,9 @@ func EvaluateRawContext(ctx context.Context, script string, awaitPromise bool) (
 	var encoded []byte
 	err := chromedp.Run(ctx, chromedp.EvaluateAsDevTools(script, &encoded, func(params *runtime.EvaluateParams) *runtime.EvaluateParams {
 		params = params.WithUserGesture(true)
+		if id := executionContext(ctx); id != 0 {
+			params = params.WithContextID(id)
+		}
 		if awaitPromise {
 			params = params.WithAwaitPromise(true)
 		}

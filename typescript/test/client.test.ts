@@ -122,9 +122,9 @@ describe("Biloba TypeScript client", () => {
       case "openSession": reply({sessionId: `session-${++openedSessions}`, contextId: `context-${openedSessions}`, targetId: `target-${openedSessions}`, ownsContext: true} satisfies OpenSessionResponse); break;
       case "newTab": reply({sessionId: `session-${++openedSessions}`, contextId: "context-1", targetId: `target-${openedSessions}`, openerId: "target-1"} satisfies OpenSessionResponse); break;
       case "listTabs": reply({handles: [{sessionId: "session-2", contextId: "context-1", targetId: "target-2", openerId: "target-1"}]}); break;
-      case "listFrames": reply({handles: [{sessionId: "frame-1", contextId: "context-1", targetId: "frame-target", frame: true, url: "https://frame.test/"}]}); break;
+      case "listFrames": reply({handles: [{sessionId: "frame-1", contextId: "context-1", targetId: "frame-target", frameId: "frame-id", frame: true, url: "https://frame.test/"}]}); break;
       case "waitForTab": reply({sessionId: "session-2", contextId: "context-1", targetId: "target-2", openerId: "target-1"}); break;
-      case "waitForFrame": reply({sessionId: "frame-1", contextId: "context-1", targetId: "frame-target", frame: true, url: "https://frame.test/"}); break;
+      case "waitForFrame": reply({sessionId: "frame-1", contextId: "context-1", targetId: "frame-target", frameId: "frame-id", frame: true, url: "https://frame.test/"}); break;
       case "evaluate": respond(operationResult({observedJson: JSON.stringify({ready: true})})); break;
       case "getCookies": reply({cookies: [{name: "auth", value: "abc", path: "/", session: true}]}); break;
       case "lifecycle": {
@@ -531,7 +531,7 @@ describe("Biloba TypeScript client", () => {
     const session = await browser.openSession();
     const tabs = await session.spawnedTabs();
     expect(tabs[0]).toMatchObject({contextId: session.contextId, openerId: session.targetId});
-    expect((await session.frames())[0]).toMatchObject({isFrame: true, frameUrl: "https://frame.test/"});
+    expect((await session.frames())[0]).toMatchObject({isFrame: true, frameId: "frame-id", frameUrl: "https://frame.test/"});
     expect((await session.localStorage().get<number>("count"))).toEqual({found: true, value: 3});
     expect(await session.waitForDefined<number>("window.ready", {timeoutMs: 50})).toBe(42);
     expect(await session.url()).toBe("https://app.test/ready");

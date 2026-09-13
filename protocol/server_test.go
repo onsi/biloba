@@ -328,12 +328,57 @@ var _ = Describe("driver protocol", func() {
 		Expect(client.call("listTabs", protocol.ListHandlesRequest{SessionID: opened.SessionID}, &second)).To(Succeed())
 		Expect(first.Handles).To(HaveLen(1))
 		Expect(second.Handles[0].SessionID).To(Equal(first.Handles[0].SessionID))
+		Expect(child.closed).To(Equal(0), "a duplicate tab wrapper refers to the published shared backend handle")
 
 		var prepared protocol.InvalidationResponse
 		Expect(client.call("prepareSession", protocol.SessionRequest{SessionID: opened.SessionID}, &prepared)).To(Succeed())
 		Expect(prepared.InvalidatedSessionIDs).To(ConsistOf(first.Handles[0].SessionID))
 		err := client.call("prepareSession", protocol.SessionRequest{SessionID: first.Handles[0].SessionID}, nil)
 		Expect(err.Code).To(Equal(protocol.CodeTargetNotFound))
+	})
+
+	It("keeps same-target frame documents distinct", func() {
+		first := &discoverableSession{metadata: protocol.SessionMetadata{ContextID: "context-a", TargetID: "tab", FrameID: "frame-a", DocumentID: "loader-a", Frame: true, URL: "https://child.test/a"}}
+		second := &discoverableSession{metadata: protocol.SessionMetadata{ContextID: "context-a", TargetID: "tab", FrameID: "frame-b", DocumentID: "loader-b", Frame: true, URL: "https://child.test/b"}}
+		root := &discoverableSession{metadata: protocol.SessionMetadata{ContextID: "context-a", TargetID: "tab", OwnsContext: true}, frames: []protocol.Session{first, second}}
+		client, cleanup := startTestServer(&fakeBackend{custom: root})
+		DeferCleanup(cleanup)
+
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+		var handles protocol.HandleListResponse
+		Expect(client.call("listFrames", protocol.ListHandlesRequest{SessionID: opened.SessionID}, &handles)).To(Succeed())
+		Expect(handles.Handles).To(HaveLen(2))
+		Expect(handles.Handles[0].SessionID).NotTo(Equal(handles.Handles[1].SessionID))
+		Expect(handles.Handles[0].FrameID).To(Equal("frame-a"))
+
+		replacement := &discoverableSession{metadata: protocol.SessionMetadata{ContextID: "context-a", TargetID: "tab", FrameID: "frame-a", DocumentID: "loader-replaced", Frame: true, URL: "https://child.test/replaced"}}
+		root.frames = []protocol.Session{replacement}
+		var replaced protocol.HandleListResponse
+		Expect(client.call("listFrames", protocol.ListHandlesRequest{SessionID: opened.SessionID}, &replaced)).To(Succeed())
+		Expect(replaced.Handles).To(HaveLen(1))
+		Expect(replaced.Handles[0].SessionID).NotTo(Equal(handles.Handles[0].SessionID))
+	})
+
+	It("closes a redundant fresh backend handle without closing the published frame", func() {
+		metadata := protocol.SessionMetadata{ContextID: "context-a", TargetID: "tab", FrameID: "frame-a", DocumentID: "loader-a", Frame: true, URL: "https://child.test/a"}
+		first := &discoverableSession{metadata: metadata}
+		root := &discoverableSession{metadata: protocol.SessionMetadata{ContextID: "context-a", TargetID: "tab", OwnsContext: true}, frames: []protocol.Session{first}}
+		client, cleanup := startTestServer(&fakeBackend{custom: root})
+		DeferCleanup(cleanup)
+
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+		var firstList protocol.HandleListResponse
+		Expect(client.call("listFrames", protocol.ListHandlesRequest{SessionID: opened.SessionID}, &firstList)).To(Succeed())
+
+		second := &discoverableSession{metadata: metadata}
+		root.frames = []protocol.Session{second}
+		var secondList protocol.HandleListResponse
+		Expect(client.call("listFrames", protocol.ListHandlesRequest{SessionID: opened.SessionID}, &secondList)).To(Succeed())
+		Expect(secondList.Handles[0].SessionID).To(Equal(firstList.Handles[0].SessionID))
+		Expect(first.closed).To(Equal(0))
+		Expect(second.closed).To(Equal(1))
 	})
 
 	It("keeps an owning session live when a discovered child closes and rejects prepare on the child", func() {
@@ -835,11 +880,12 @@ type discoverableSession struct {
 	metadata protocol.SessionMetadata
 	tabs     []protocol.Session
 	frames   []protocol.Session
+	closed   int
 }
 
 func (s *discoverableSession) Metadata() protocol.SessionMetadata { return s.metadata }
 func (s *discoverableSession) Prepare(context.Context) error      { return nil }
-func (s *discoverableSession) Close() error                       { return nil }
+func (s *discoverableSession) Close() error                       { s.closed++; return nil }
 func (s *discoverableSession) Execute(context.Context, protocol.Operation) (protocol.Result, error) {
 	return protocol.Result{Matched: true, Attempts: 1}, nil
 }

@@ -64,6 +64,7 @@ export interface OpenSessionResponse {
   sessionId: string;
   contextId?: string;
   targetId?: string;
+  frameId?: string;
   openerId?: string;
   ownsContext?: boolean;
   frame?: boolean;

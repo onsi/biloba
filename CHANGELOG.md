@@ -2,6 +2,8 @@
 
 ### Features
 
+- TypeScript `Session.frames()` and `waitForFrame()` now cover same-site cross-origin iframes as well as nested OOPIF targets. Frame locators, trusted pointer input, uploads, actions, and assertions run in the correct CDP-scoped document without relaxing the browser's same-origin policy; additive `frameId` metadata distinguishes multiple frames sharing one renderer target. Independently acquired and nested handles have independent lifetimes. Removed, replaced, navigated, and parent-navigated frame documents fail predictably as stale handles, while owner close/prepare continues to invalidate every descendant.
+
 ### Fixes
 
 ## 0.16.2
