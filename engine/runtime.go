@@ -12,13 +12,23 @@ import (
 
 type executionContextKey struct{}
 
-func withExecutionContext(ctx context.Context, id runtime.ExecutionContextID) context.Context {
-	return context.WithValue(ctx, executionContextKey{}, id)
+func withExecutionContext(ctx context.Context, world frameWorld) context.Context {
+	return context.WithValue(ctx, executionContextKey{}, world)
 }
 
 func executionContext(ctx context.Context) runtime.ExecutionContextID {
-	id, _ := ctx.Value(executionContextKey{}).(runtime.ExecutionContextID)
-	return id
+	world, _ := ctx.Value(executionContextKey{}).(frameWorld)
+	return world.id
+}
+
+// Unique IDs cannot be reused after a renderer swap. Do not fall back to the
+// target's default world when a frame document disappears between validation and evaluation.
+func scopeEvaluation(ctx context.Context, params *runtime.EvaluateParams) *runtime.EvaluateParams {
+	world, _ := ctx.Value(executionContextKey{}).(frameWorld)
+	if world.uniqueID != "" {
+		return params.WithUniqueContextID(world.uniqueID)
+	}
+	return params
 }
 
 // HandlerResponse is the typed wire-neutral result returned by a biloba.js atomic handler.
@@ -46,9 +56,7 @@ func EvaluateRawContext(ctx context.Context, script string, awaitPromise bool) (
 	var encoded []byte
 	err := chromedp.Run(ctx, chromedp.EvaluateAsDevTools(script, &encoded, func(params *runtime.EvaluateParams) *runtime.EvaluateParams {
 		params = params.WithUserGesture(true)
-		if id := executionContext(ctx); id != 0 {
-			params = params.WithContextID(id)
-		}
+		params = scopeEvaluation(ctx, params)
 		if awaitPromise {
 			params = params.WithAwaitPromise(true)
 		}

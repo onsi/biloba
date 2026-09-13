@@ -175,7 +175,7 @@ await popup.close();
 
 Use `tabs()` and `spawnedTabs()` for snapshots, `findTab()` for an optional match, and `waitForTab()` when a popup is expected.
 
-`frames()` snapshots the cross-origin iframe documents below a session; `waitForFrame()` polls for one by `url`, `title`, and/or a `has` locator. This covers both out-of-process frames (cross-site OOPIF targets) and same-site cross-origin frames such as two local servers on different ports. Biloba asks CDP for Chrome's frame tree and runs same-process frame operations in a non-universal isolated world scoped to that frame—it does not read the iframe through parent-page JavaScript or relax the browser's same-origin policy:
+`frames()` snapshots the cross-origin iframe documents below a session; `waitForFrame()` polls for one by `url`, `title`, and/or a `has` locator. This covers both out-of-process frames (cross-site OOPIF targets) and same-site cross-origin frames such as two local servers on different ports. Biloba asks CDP for Chrome's frame tree and scopes operations directly to the selected frame; it does not read the iframe through parent-page JavaScript or relax the browser's same-origin policy:
 
 ```ts
 const frame = await session.waitForFrame(
@@ -188,7 +188,7 @@ await frame.locator('button[type="submit"]').click();
 await frame.locator("#success").expectVisible();
 ```
 
-Frame handles expose the normal locator, action, assertion, JavaScript, upload, and frame-local storage APIs. Trusted pointer input is translated through the iframe owner's content geometry, including parent scrolling, borders, and CSS transforms. In a same-process cross-origin frame, `evaluate()` runs in Biloba's isolated world: the frame's DOM and web-platform globals are available, but page-script variables attached to that frame's main-world global are not. Use the owning tab for tab/context controls such as navigation, preparation, emulation, cookies, downloads, and network interception. Same-origin iframe and open-shadow-root piercing remains `session.locator("outer >>> inner")`; `frames()` is the cross-origin boundary API.
+Frame handles expose the normal locator, action, assertion, JavaScript, upload, and frame-local storage APIs. Trusted pointer input is translated through the iframe owner's content geometry, including parent scrolling, borders, and CSS transforms. `frame.evaluate()` runs in the selected frame's normal JavaScript environment, just like `session.evaluate()` does for a tab, so it can read and update globals created by the frame's own scripts. Use the owning tab for tab/context controls such as navigation, preparation, emulation, cookies, downloads, and network interception. Same-origin iframe and open-shadow-root piercing remains `session.locator("outer >>> inner")`; `frames()` is the cross-origin boundary API.
 
 If several frames match a `waitForFrame()` query, it returns a ready match without waiting for other renderers. Use a specific URL, title, or `has` locator when you need a particular frame.
 

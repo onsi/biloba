@@ -628,7 +628,7 @@ func (s *Session) translateFramePoint(ctx context.Context, point actionPoint) (a
 // translateFramePoints maps several points from one snapshot of the frame owner's geometry. A
 // screenshot rectangle needs all four corners to agree even when page script is moving the frame.
 func (s *Session) translateFramePoints(ctx context.Context, points []actionPoint) ([]actionPoint, error) {
-	if s.executionContextID == 0 || s.frameID == "" {
+	if s.frameOOPIF || s.frameID == "" {
 		return points, nil
 	}
 	type viewport struct {

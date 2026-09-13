@@ -76,8 +76,9 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
 
     childServer = createServer((request, response) => {
       const id = new URL(request.url ?? "/", "http://child.test").searchParams.get("id") ?? "child";
+      const serializedId = JSON.stringify(id);
       response.setHeader("content-type", "text/html");
-      response.end(`<!doctype html><title>${id}</title><form onsubmit="event.preventDefault(); success.hidden=false; success.textContent=document.querySelector('input').value"><label>Email <input name="email"></label><button type="submit">Submit</button></form><div id="success" hidden></div><input id="frame-upload" type="file">`);
+      response.end(`<!doctype html><title>${id}</title><script>window.frameState = {id: ${serializedId}, count: 1}; let frameLexical = "lexical-" + ${serializedId};</script><form onsubmit="event.preventDefault(); success.hidden=false; success.textContent=document.querySelector('input').value"><label>Email <input name="email"></label><button type="submit">Submit</button></form><div id="success" hidden></div><input id="frame-upload" type="file">`);
     });
     await new Promise<void>((resolve, reject) => {
       childServer.once("error", reject);
@@ -118,6 +119,13 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     expect(second.frameId).not.toBe(frame.frameId);
     expect(await frameOwner.frames()).toHaveLength(2);
 
+    await frameOwner.evaluate(`window.frameState = {id: "parent", count: 10}; window.frameLexical = "parent"`);
+    expect(await frame.evaluate(`[window.frameState.id, window.frameState.count, frameLexical]`)).toEqual(["one", 1, "lexical-one"]);
+    await frame.evaluate(`window.frameState.count = 2; frameLexical = "changed-in-one"`);
+    expect(await frame.evaluate(`[window.frameState.count, frameLexical]`)).toEqual([2, "changed-in-one"]);
+    expect(await second.evaluate(`[window.frameState.id, window.frameState.count, frameLexical]`)).toEqual(["two", 1, "lexical-two"]);
+    expect(await frameOwner.evaluate(`[window.frameState.id, window.frameState.count, window.frameLexical]`)).toEqual(["parent", 10, "parent"]);
+
     await frame.locator('input[name="email"]').setValue("ada@example.com");
     await frame.locator('button[type="submit"]').realistic().click();
     await frame.locator("#success").expectVisible();
@@ -133,13 +141,17 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
 
     await frameOwner.evaluate(`document.querySelector("#one").remove()`);
     await expect(frame.locator("#success").expectVisible()).rejects.toMatchObject({code: "TARGET_NOT_FOUND"});
+    await expect(frame.evaluate(`window.frameState.id`)).rejects.toMatchObject({code: "TARGET_NOT_FOUND"});
 
     await frameOwner.evaluate(`url => { document.querySelector("#two").src = url + "/child-form?id=replaced"; }`, [childBaseUrl]);
     const replacement = await frameOwner.waitForFrame({url: {kind: "contains", expected: "id=replaced"}}, {timeoutMs: 5_000});
     await expect(second.locator('input[name="email"]').expectVisible()).rejects.toMatchObject({code: "TARGET_NOT_FOUND"});
+    await expect(second.evaluate(`window.frameState.id`)).rejects.toMatchObject({code: "TARGET_NOT_FOUND"});
+    expect(await replacement.evaluate(`[window.frameState.id, frameLexical]`)).toEqual(["replaced", "lexical-replaced"]);
 
     await frameOwner.navigate(baseUrl);
     await expect(replacement.locator('input[name="email"]').expectVisible()).rejects.toMatchObject({code: "TARGET_NOT_FOUND"});
+    await expect(replacement.evaluate(`window.frameState.id`)).rejects.toMatchObject({code: "TARGET_NOT_FOUND"});
 
     await frameOwner.evaluate(`url => { const frame = document.createElement("iframe"); frame.src = url + "/child-form?id=prepare"; document.body.append(frame); }`, [childBaseUrl]);
     const preparedFrame = await frameOwner.waitForFrame({title: "prepare"}, {timeoutMs: 5_000});

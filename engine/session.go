@@ -16,7 +16,6 @@ import (
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
-	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
@@ -57,7 +56,8 @@ type Session struct {
 	frameTarget           bool
 	frameID               cdp.FrameID
 	frameLoaderID         cdp.LoaderID
-	executionContextID    runtime.ExecutionContextID
+	frameWorld            frameWorld
+	frameOOPIF            bool
 	artifactDir           string
 	mu                    sync.Mutex
 	requestMu             sync.Mutex
@@ -932,8 +932,8 @@ func (s *Session) serial(requestCtx context.Context, operation string, run func(
 		if err := s.validateFrameDocument(opCtx); err != nil {
 			return err
 		}
-		if s.executionContextID != 0 {
-			opCtx = withExecutionContext(opCtx, s.executionContextID)
+		if s.frameWorld.id != 0 {
+			opCtx = withExecutionContext(opCtx, s.frameWorld)
 		}
 	}
 	if !recovers {
@@ -957,6 +957,18 @@ func (s *Session) serial(requestCtx context.Context, operation string, run func(
 	}
 	if requestCtx.Err() != nil {
 		return requestContextError(operation, requestCtx, err)
+	}
+	// If the document disappeared after validation, report the stale handle rather
+	// than turning Chrome's missing-context response into a generic action failure.
+	if s.frameID != "" {
+		if frameContextGone(err) {
+			return staleFrameError(operation, s.frameID)
+		}
+		if s.ctx.Err() == nil {
+			if world, worldErr := mainFrameWorld(s.ctx, s.frameID); worldErr != nil || world.uniqueID != s.frameWorld.uniqueID {
+				return staleFrameError(operation, s.frameID)
+			}
+		}
 	}
 	var engineErr *Error
 	if errors.As(err, &engineErr) {

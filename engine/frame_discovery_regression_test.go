@@ -15,10 +15,20 @@ import (
 
 var _ = Describe("frame discovery regressions", func() {
 	It("discovers a same-server sandboxed frame whose opaque origin blocks parent DOM access", func(ctx SpecContext) {
+		sandboxServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			response.Header().Set("Content-Type", "text/html")
+			if request.URL.Path == "/sandbox-child" {
+				_, _ = response.Write([]byte(`<!doctype html><div data-testid="destination">arrived</div><script>const parent = {document: {body: "decoy"}}</script>`))
+				return
+			}
+			_, _ = response.Write([]byte(`<!doctype html><title>sandbox parent</title>`))
+		}))
+		DeferCleanup(sandboxServer.Close)
+
 		root, err := browser.OpenSession(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(root.Close)
-		Expect(root.Navigate(ctx, server.URL)).To(Succeed())
+		Expect(root.Navigate(ctx, sandboxServer.URL)).To(Succeed())
 
 		loaded, err := root.EvaluateAsync(ctx, `new Promise((resolve, reject) => {
 			const frame = document.createElement('iframe');
@@ -26,7 +36,7 @@ var _ = Describe("frame discovery regressions", func() {
 			frame.sandbox = 'allow-scripts';
 			frame.onload = () => resolve(true);
 			frame.onerror = () => reject(new Error('sandboxed frame failed to load'));
-			frame.src = `+strconv.Quote(server.URL+"/destination")+`;
+			frame.src = `+strconv.Quote(sandboxServer.URL+"/sandbox-child")+`;
 			document.body.append(frame);
 		})`)
 		Expect(err).NotTo(HaveOccurred())
@@ -49,7 +59,7 @@ var _ = Describe("frame discovery regressions", func() {
 			frame.id = 'same-origin';
 			frame.sandbox = 'allow-same-origin';
 			frame.onload = () => resolve(true);
-			frame.src = `+strconv.Quote(server.URL+"/destination")+`;
+			frame.src = `+strconv.Quote(sandboxServer.URL+"/sandbox-child")+`;
 			document.body.append(frame);
 		})`)
 		Expect(err).NotTo(HaveOccurred())
@@ -65,7 +75,10 @@ var _ = Describe("frame discovery regressions", func() {
 			}
 		})
 		Expect(frames).To(HaveLen(1))
-		Expect(frames[0].URL()).To(Equal(server.URL + "/destination"))
+		Expect(frames[0].URL()).To(Equal(sandboxServer.URL + "/sandbox-child"))
+		shadowedParent, err := frames[0].Evaluate(ctx, `parent.document.body`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(shadowedParent).To(Equal("decoy"), "the fixture must shadow the page world's parent binding")
 		text, err := frames[0].Text(ctx, engine.TestID("destination"))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(text.Value).To(Equal("arrived"))

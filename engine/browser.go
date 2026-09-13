@@ -399,6 +399,7 @@ func (b *Browser) openTabLocked(ctx context.Context, browserContextID cdp.Browse
 		return nil, contextError("open tab", err)
 	}
 	tabCtx, cancelTab := chromedp.NewContext(b.ctx, chromedp.WithTargetID(targetID))
+	tabCtx = trackFrameWorlds(tabCtx)
 	attachDone := make(chan error, 1)
 	go func() {
 		// The first Run owns chromedp's target executor for the session lifetime. It must use the

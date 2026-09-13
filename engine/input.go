@@ -71,9 +71,7 @@ func SetFileInputFilesContext(ctx context.Context, nodeScript string, paths []st
 	found := false
 	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
 		evaluate := runtime.Evaluate(nodeScript).WithUserGesture(true)
-		if id := executionContext(ctx); id != 0 {
-			evaluate = evaluate.WithContextID(id)
-		}
+		evaluate = scopeEvaluation(ctx, evaluate)
 		node, exception, evaluateErr := evaluate.Do(runCtx)
 		if evaluateErr != nil {
 			return evaluateErr

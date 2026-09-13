@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/chromedp"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -290,4 +292,215 @@ var _ = Describe("cross-origin frame targets", func() {
 		_, err = rootFrames[0].Text(ctx, engine.TestID("destination"))
 		Expect(err).To(MatchError(ContainSubstring("session is closed")))
 	})
+
+	It("tracks page worlds that already exist when a popup tab is discovered", func(ctx SpecContext) {
+		child := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			response.Header().Set("Content-Type", "text/html")
+			_, _ = response.Write([]byte(`<!doctype html><div id="ready">ready</div><script>
+				window.popupFrameWindow = "page-window";
+				const popupFrameLexical = "page-lexical";
+			</script>`))
+		}))
+		DeferCleanup(child.Close)
+
+		popupSite := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			response.Header().Set("Content-Type", "text/html")
+			if request.URL.Path == "/popup" {
+				_, _ = response.Write([]byte(`<!doctype html><iframe src=` + strconv.Quote(child.URL) + ` onload="opener.postMessage('popup-frame-ready', '*')"></iframe>`))
+				return
+			}
+			_, _ = response.Write([]byte(`<!doctype html><title>opener</title>`))
+		}))
+		DeferCleanup(popupSite.Close)
+
+		root, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(root.Close)
+		Expect(root.Navigate(ctx, popupSite.URL)).To(Succeed())
+		ready, err := root.EvaluateAsync(ctx, `new Promise((resolve, reject) => {
+			const listener = event => {
+				if (event.data !== "popup-frame-ready") return;
+				removeEventListener("message", listener);
+				resolve(true);
+			};
+			addEventListener("message", listener);
+			if (!window.open("/popup", "_blank")) reject(new Error("popup was blocked"));
+		})`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ready).To(BeTrue(), "the popup's frame must finish loading before Biloba attaches to its tab")
+
+		tabs, err := root.Tabs(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		var popup *engine.Session
+		for _, tab := range tabs {
+			if tab.OpenerID() == root.TargetID() {
+				popup = tab
+				break
+			}
+		}
+		Expect(popup).NotTo(BeNil())
+		DeferCleanup(popup.Close)
+
+		frame, err := popup.WaitForFrame(ctx, engine.FrameQuery{
+			URL:        &engine.Expectation{Kind: engine.ExpectEqual, Expected: child.URL + "/"},
+			HasElement: selectorPtr(engine.CSS("#ready")),
+		}, engine.PollPolicy{Timeout: 2 * time.Second, Interval: 5 * time.Millisecond})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(frame.Close)
+		Expect(frame.TargetID()).To(Equal(popup.TargetID()), "the fixture must exercise a frame in the popup's renderer")
+		values, err := frame.Evaluate(ctx, `[window.popupFrameWindow, popupFrameLexical]`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(values).To(Equal([]any{"page-window", "page-lexical"}))
+	})
+
+	DescribeTable("evaluates in the frame's page world",
+		func(ctx SpecContext, forceOOPIF bool) {
+			child := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				response.Header().Set("Content-Type", "text/html")
+				id := request.URL.Query().Get("id")
+				_, _ = response.Write([]byte(`<!doctype html>
+					<div id="observed">idle</div>
+					<script>
+						window.frameWindowValue = ` + strconv.Quote(id+"-window") + `;
+						const frameLexicalState = {value: ` + strconv.Quote(id+"-lexical") + `};
+						addEventListener("biloba-sync", () => {
+							document.querySelector("#observed").textContent = window.frameWindowValue + "|" + frameLexicalState.value;
+						});
+					</script>`))
+			}))
+			DeferCleanup(child.Close)
+
+			frameBaseURL := child.URL
+			activeBrowser := browser
+			if forceOOPIF {
+				frameBaseURL = strings.Replace(frameBaseURL, "127.0.0.1", "localhost", 1)
+				isolatedBrowser, err := engine.StartBrowser(ctx, engine.BrowserConfig{
+					ExecutablePath: chromePath(),
+					Arguments:      []string{"--site-per-process"},
+				})
+				Expect(err).NotTo(HaveOccurred())
+				DeferCleanup(isolatedBrowser.Close)
+				activeBrowser = isolatedBrowser
+			}
+
+			parent := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				response.Header().Set("Content-Type", "text/html")
+				_, _ = response.Write([]byte(`<!doctype html>
+					<iframe id="selected" src=` + strconv.Quote(frameBaseURL+"/frame?id=selected") + `></iframe>
+					<iframe id="sibling" src=` + strconv.Quote(frameBaseURL+"/frame?id=sibling") + `></iframe>
+					<script>
+						window.frameWindowValue = "parent-window";
+						const frameLexicalState = {value: "parent-lexical"};
+						window.pendingFrameEvaluationStarted = false;
+						addEventListener("message", event => {
+							if (event.data === "pending-frame-evaluation-started") window.pendingFrameEvaluationStarted = true;
+						});
+					</script>`))
+			}))
+			DeferCleanup(parent.Close)
+
+			root, err := activeBrowser.OpenSession(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(root.Close)
+			Expect(root.Navigate(ctx, parent.URL)).To(Succeed())
+
+			selected, err := root.WaitForFrame(ctx, engine.FrameQuery{
+				URL:        &engine.Expectation{Kind: engine.ExpectContains, Expected: "id=selected"},
+				HasElement: selectorPtr(engine.CSS("#observed")),
+			}, engine.PollPolicy{Timeout: 3 * time.Second, Interval: 5 * time.Millisecond})
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(selected.Close)
+			sibling, err := root.WaitForFrame(ctx, engine.FrameQuery{
+				URL:        &engine.Expectation{Kind: engine.ExpectContains, Expected: "id=sibling"},
+				HasElement: selectorPtr(engine.CSS("#observed")),
+			}, engine.PollPolicy{Timeout: 3 * time.Second, Interval: 5 * time.Millisecond})
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(sibling.Close)
+
+			Expect(selected.FrameID()).NotTo(Equal(sibling.FrameID()))
+			if forceOOPIF {
+				Expect(selected.TargetID()).NotTo(Equal(root.TargetID()), "the fixture must exercise an out-of-process iframe")
+			} else {
+				Expect(selected.TargetID()).To(Equal(root.TargetID()), "the fixture must exercise a frame in the parent's renderer")
+			}
+
+			value, err := selected.Evaluate(ctx, `[window.frameWindowValue, frameLexicalState.value]`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(value).To(Equal([]any{"selected-window", "selected-lexical"}))
+
+			// An extension or another tool can create isolated worlds in the same frame. Their
+			// context-created events must not replace the page's default world in Biloba's registry.
+			targetCtx := engine.SessionContextForTest(selected.Session)
+			err = chromedp.Run(targetCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
+				_, createErr := page.CreateIsolatedWorld(selected.FrameID()).
+					WithWorldName("biloba-main-world-regression").Do(runCtx)
+				return createErr
+			}))
+			Expect(err).NotTo(HaveOccurred())
+			value, err = selected.Evaluate(ctx, `[window.frameWindowValue, frameLexicalState.value]`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(value).To(Equal([]any{"selected-window", "selected-lexical"}))
+
+			_, err = selected.Evaluate(ctx, `window.frameWindowValue = "updated-window"; frameLexicalState.value = "updated-lexical"; dispatchEvent(new Event("biloba-sync"))`)
+			Expect(err).NotTo(HaveOccurred())
+			observed, err := selected.Text(ctx, engine.CSS("#observed"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(observed.Value).To(Equal("updated-window|updated-lexical"), "a handler installed by the page must observe the updates")
+
+			parentValues, err := root.Evaluate(ctx, `[window.frameWindowValue, frameLexicalState.value]`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(parentValues).To(Equal([]any{"parent-window", "parent-lexical"}))
+			siblingValues, err := sibling.Evaluate(ctx, `[window.frameWindowValue, frameLexicalState.value]`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(siblingValues).To(Equal([]any{"sibling-window", "sibling-lexical"}))
+
+			parentAccess, err := selected.Evaluate(ctx, `(() => { try { void parent.document.body; return "allowed" } catch (error) { return error.name } })()`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(parentAccess).To(Equal("SecurityError"), "evaluation must still obey the browser's same-origin policy")
+			_, err = selected.Evaluate(ctx, `throw new Error("Inspected target navigated or closed")`)
+			var pageError *engine.Error
+			Expect(errors.As(err, &pageError)).To(BeTrue())
+			Expect(pageError.Code).To(Equal(engine.CodeJavaScript), "page-thrown text must not be mistaken for a protocol navigation error")
+
+			oldDocumentID := selected.FrameDocumentID()
+			pending := make(chan error, 1)
+			evaluationCtx, cancelEvaluation := context.WithTimeout(ctx, 3*time.Second)
+			DeferCleanup(cancelEvaluation)
+			go func() {
+				_, evaluateErr := selected.EvaluateAsync(evaluationCtx, `new Promise(() => parent.postMessage("pending-frame-evaluation-started", "*"))`)
+				pending <- evaluateErr
+			}()
+			Eventually(func() bool {
+				started, evaluateErr := root.Evaluate(ctx, `window.pendingFrameEvaluationStarted`)
+				return evaluateErr == nil && started == true
+			}).WithTimeout(2 * time.Second).WithPolling(5 * time.Millisecond).Should(BeTrue())
+
+			_, err = root.Evaluate(ctx, `document.querySelector("#selected").src = `+strconv.Quote(frameBaseURL+"/frame?id=replaced"))
+			Expect(err).NotTo(HaveOccurred())
+			var pendingErr error
+			Eventually(pending).WithTimeout(2 * time.Second).Should(Receive(&pendingErr))
+			var pendingDetached *engine.Error
+			Expect(errors.As(pendingErr, &pendingDetached)).To(BeTrue())
+			Expect(pendingDetached.Code).To(Equal(engine.CodeFrameDetached), "pending evaluation failed: %v (session context: %v)", pendingErr, engine.SessionContextForTest(selected.Session).Err())
+
+			replacement, err := root.WaitForFrame(ctx, engine.FrameQuery{
+				URL:        &engine.Expectation{Kind: engine.ExpectContains, Expected: "id=replaced"},
+				HasElement: selectorPtr(engine.CSS("#observed")),
+			}, engine.PollPolicy{Timeout: 3 * time.Second, Interval: 5 * time.Millisecond})
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(replacement.Close)
+			Expect(replacement.FrameDocumentID()).NotTo(Equal(oldDocumentID))
+
+			_, err = selected.Evaluate(ctx, `window.frameWindowValue`)
+			var detached *engine.Error
+			Expect(errors.As(err, &detached)).To(BeTrue())
+			Expect(detached.Code).To(Equal(engine.CodeFrameDetached))
+
+			replacementValues, err := replacement.Evaluate(ctx, `[window.frameWindowValue, frameLexicalState.value]`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(replacementValues).To(Equal([]any{"replaced-window", "replaced-lexical"}))
+		},
+		Entry("for a same-process cross-origin frame", false),
+		Entry("for an out-of-process iframe", true),
+	)
 })

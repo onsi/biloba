@@ -237,7 +237,7 @@ func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, opt
 // renderer target's document. CDP captures clips in the latter coordinate space. OOPIFs already
 // have their own renderer target, so their rectangles need no translation.
 func (s *Session) translateScreenshotRect(ctx context.Context, x, y, width, height float64) (float64, float64, float64, float64, error) {
-	if s.executionContextID == 0 || s.frameID == "" {
+	if s.frameOOPIF || s.frameID == "" {
 		return x, y, width, height, nil
 	}
 
@@ -287,8 +287,8 @@ func (s *Session) translateScreenshotRect(ctx context.Context, x, y, width, heig
 func (s *Session) visualCleanupContext() (context.Context, context.CancelFunc) {
 	requestCtx, requestCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	cleanupCtx, cleanupCancel := executorContext(s.ctx, requestCtx)
-	if s.executionContextID != 0 {
-		cleanupCtx = withExecutionContext(cleanupCtx, s.executionContextID)
+	if s.frameWorld.id != 0 {
+		cleanupCtx = withExecutionContext(cleanupCtx, s.frameWorld)
 	}
 	return cleanupCtx, func() {
 		cleanupCancel()

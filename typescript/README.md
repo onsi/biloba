@@ -63,6 +63,8 @@ await frame.locator('button[type="submit"]').click();
 await frame.locator("#success").expectVisible();
 ```
 
+`frame.evaluate()` runs in that frame's normal JavaScript environment, so it can read and update globals created by the frame's own scripts.
+
 Same-origin iframe and open-shadow-root piercing continues to use the `>>>` selector combinator.
 
 ## Read this instead

@@ -21,7 +21,7 @@ type FrameQuery struct {
 }
 
 // Frame is a DOM-capable frame-scoped Session. Out-of-process frames use their own target;
-// same-process cross-origin frames use a CDP isolated world in the owning tab's target.
+// all frame operations use the selected document's normal JavaScript context.
 type Frame struct {
 	*Session
 	url string
@@ -333,7 +333,9 @@ func (s *Session) frameOriginBoundary(ctx context.Context, descriptor frameDescr
 	defer cancel()
 	var boundary bool
 	err = chromedp.Run(opCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		id, err := page.CreateIsolatedWorld(descriptor.frame.ID).WithWorldName("biloba-frame-" + string(descriptor.frame.ID)).Do(runCtx)
+		// Keep this browser access check separate from page-defined globals (including
+		// replacements for Window.parent). User evaluation always uses the page world.
+		id, err := page.CreateIsolatedWorld(descriptor.frame.ID).WithWorldName("biloba-origin-check-" + string(descriptor.frame.ID)).Do(runCtx)
 		if err != nil {
 			return err
 		}
@@ -418,26 +420,12 @@ func (s *Session) attachFrame(ctx context.Context, descriptor frameDescriptor) (
 	opCtx, cancelOperation := executorContext(frameCtx, ctx)
 	defer cancelOperation()
 
-	var executionContextID runtime.ExecutionContextID
-	if descriptor.oopif {
-		tree, err := getFrameTree(opCtx)
-		if err != nil {
-			cancelFrame()
-			return nil, false, contextError("read attached frame", err)
-		}
-		descriptor.frame = tree.Frame
-	} else {
-		var err error
-		err = chromedp.Run(opCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
-			executionContextID, err = page.CreateIsolatedWorld(descriptor.frame.ID).
-				WithWorldName("biloba-frame-" + string(descriptor.frame.ID)).Do(runCtx)
-			return err
-		}))
-		if err != nil {
-			cancelFrame()
-			return nil, false, contextError("attach frame", err)
-		}
+	world, err := mainFrameWorld(targetCtx, descriptor.frame.ID)
+	if err != nil {
+		cancelFrame()
+		return nil, false, err
 	}
+
 	tree, err := getFrameTree(opCtx)
 	if err != nil {
 		cancelFrame()
@@ -453,8 +441,8 @@ func (s *Session) attachFrame(ctx context.Context, descriptor frameDescriptor) (
 		browser: s.browser, ctx: frameCtx, cancel: cancelFrame,
 		browserContextID: s.browserContextID, targetID: descriptor.targetID,
 		frameID: descriptor.frame.ID, frameLoaderID: descriptor.frame.LoaderID,
-		executionContextID: executionContextID,
-		root:               s.contextRoot(), artifactDir: s.artifactDir, frameTarget: true,
+		frameWorld: world, frameOOPIF: descriptor.oopif,
+		root: s.contextRoot(), artifactDir: s.artifactDir, frameTarget: true,
 		initialWidth: s.initialWidth, initialHeight: s.initialHeight,
 		highFidelity: s.highFidelity, cacheEnabled: true,
 	}
@@ -479,6 +467,11 @@ func (s *Session) validateFrameDocument(ctx context.Context) error {
 	if frame == nil || frame.Frame.LoaderID != s.frameLoaderID {
 		return staleFrameError("use frame", s.frameID)
 	}
+	world, err := mainFrameWorld(ctx, s.frameID)
+	if err != nil || world.uniqueID != s.frameWorld.uniqueID {
+		return staleFrameError("use frame", s.frameID)
+	}
+
 	return nil
 }
 
@@ -538,6 +531,7 @@ func (b *Browser) frameTargetContext(ctx context.Context, targetID target.ID) (c
 	// those commands first, wait for initialization to finish, and only then suppress target closure
 	// and let chromedp detach. Neither request nor browser cancellation may bypass that ordering.
 	chromeCtx, cancelChrome := chromedp.NewContext(context.WithoutCancel(b.ctx), chromedp.WithTargetID(targetID))
+	chromeCtx = trackFrameWorlds(chromeCtx)
 	targetCtx, stopExecution := context.WithCancel(chromeCtx)
 	stopBrowserCancel := context.AfterFunc(b.ctx, stopExecution)
 	attachDone := make(chan error, 1)
