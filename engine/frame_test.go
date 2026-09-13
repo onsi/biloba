@@ -418,11 +418,7 @@ var _ = Describe("cross-origin frame targets", func() {
 			DeferCleanup(sibling.Close)
 
 			Expect(selected.FrameID()).NotTo(Equal(sibling.FrameID()))
-			if forceOOPIF {
-				Expect(selected.TargetID()).NotTo(Equal(root.TargetID()), "the fixture must exercise an out-of-process iframe")
-			} else {
-				Expect(selected.TargetID()).To(Equal(root.TargetID()), "the fixture must exercise a frame in the parent's renderer")
-			}
+			Expect(selected.TargetID() != root.TargetID()).To(Equal(forceOOPIF), "the fixture must use the requested renderer process model")
 
 			value, err := selected.Evaluate(ctx, `[window.frameWindowValue, frameLexicalState.value]`)
 			Expect(err).NotTo(HaveOccurred())

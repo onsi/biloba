@@ -1,6 +1,7 @@
 package engine_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -84,7 +85,7 @@ var _ = Describe("frame discovery regressions", func() {
 		Expect(text.Value).To(Equal("arrived"))
 	})
 
-	DescribeTable("does not let an unrelated busy OOPIF block waiting for a healthy frame", func(ctx SpecContext, healthyOOPIF, busySandbox bool) {
+	DescribeTable("does not let an unrelated busy OOPIF block waiting for a healthy frame", func(ctx SpecContext, busyHostname, healthyHostname string, busyAttributes map[string]string, healthySharesRootTarget bool) {
 		busy := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 			response.Header().Set("Content-Type", "text/html")
 			if request.URL.Path != "/busy" {
@@ -109,25 +110,17 @@ var _ = Describe("frame discovery regressions", func() {
 		root, err := isolatedBrowser.OpenSession(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(root.Close)
-		rootURL := server.URL
-		if busySandbox {
-			rootURL = busy.URL
-		}
-		Expect(root.Navigate(ctx, rootURL)).To(Succeed())
+		Expect(root.Navigate(ctx, busy.URL)).To(Succeed())
 
-		busyURL := strings.Replace(busy.URL, "127.0.0.1", "localhost", 1) + "/busy"
-		if busySandbox {
-			busyURL = busy.URL + "/busy"
-		}
-		healthyURL := healthy.URL
-		if healthyOOPIF {
-			healthyURL = strings.Replace(healthyURL, "127.0.0.1", "healthy.test", 1)
-		}
+		busyURL := strings.Replace(busy.URL, "127.0.0.1", busyHostname, 1) + "/busy"
+		healthyURL := strings.Replace(healthy.URL, "127.0.0.1", healthyHostname, 1)
+		busyAttributesJSON, err := json.Marshal(busyAttributes)
+		Expect(err).NotTo(HaveOccurred())
 		_, err = root.Evaluate(ctx, `window.busyChildStarted = false;
 			window.healthyChildLoaded = false;
 			addEventListener('message', event => { if (event.data === 'busy-child-starting') window.busyChildStarted = true });
 			const busyFrame = document.createElement('iframe');
-			if (`+strconv.FormatBool(busySandbox)+`) busyFrame.sandbox = 'allow-scripts';
+			for (const [name, value] of Object.entries(`+string(busyAttributesJSON)+`)) busyFrame.setAttribute(name, value);
 			busyFrame.src = `+strconv.Quote(busyURL)+`;
 			document.body.append(busyFrame);
 			const healthyFrame = document.createElement('iframe');
@@ -146,17 +139,13 @@ var _ = Describe("frame discovery regressions", func() {
 		}, engine.PollPolicy{Timeout: 2 * time.Second, Interval: 5 * time.Millisecond})
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(frame.Close)
-		if healthyOOPIF {
-			Expect(frame.TargetID()).NotTo(Equal(root.TargetID()))
-		} else {
-			Expect(frame.TargetID()).To(Equal(root.TargetID()))
-		}
+		Expect(frame.TargetID() == root.TargetID()).To(Equal(healthySharesRootTarget), "the fixture must use the requested renderer process model")
 		text, err := frame.Text(ctx, engine.CSS("#healthy"))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(text.Value).To(Equal("ready"))
 	},
-		Entry("in the parent renderer", false, false),
-		Entry("in another renderer", true, false),
-		Entry("beside a sandboxed renderer with the same reported origin", true, true),
+		Entry("in the parent renderer", "localhost", "127.0.0.1", map[string]string{}, true),
+		Entry("in another renderer", "localhost", "healthy.test", map[string]string{}, false),
+		Entry("beside a sandboxed renderer with the same reported origin", "127.0.0.1", "healthy.test", map[string]string{"sandbox": "allow-scripts"}, false),
 	)
 })

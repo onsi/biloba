@@ -15,11 +15,12 @@ import (
 
 var _ = Describe("frame-scoped trusted pointer coordinates", func() {
 	for _, scenario := range []struct {
-		name  string
-		oopif bool
+		name                  string
+		outerHostname         string
+		outerSharesRootTarget bool
 	}{
-		{name: "in a shared renderer target"},
-		{name: "in an OOPIF target", oopif: true},
+		{name: "in a shared renderer target", outerHostname: "127.0.0.1", outerSharesRootTarget: true},
+		{name: "in an OOPIF target", outerHostname: "localhost"},
 	} {
 		scenario := scenario
 		It("translates a nested same-origin frame point exactly once "+scenario.name, func(ctx SpecContext) {
@@ -45,10 +46,7 @@ var _ = Describe("frame-scoped trusted pointer coordinates", func() {
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(root.Close)
 			Expect(root.Navigate(ctx, server.URL)).To(Succeed())
-			outerURL := frames.URL
-			if scenario.oopif {
-				outerURL = strings.Replace(outerURL, "127.0.0.1", "localhost", 1)
-			}
+			outerURL := strings.Replace(frames.URL, "127.0.0.1", scenario.outerHostname, 1)
 			_, err = root.Evaluate(ctx, `document.body.innerHTML = '<iframe id="outer" style="position:fixed;left:300px;top:200px;width:500px;height:350px;border:0"></iframe>'; document.querySelector('#outer').src = `+fmt.Sprintf("%q", outerURL))
 			Expect(err).NotTo(HaveOccurred())
 
@@ -58,11 +56,7 @@ var _ = Describe("frame-scoped trusted pointer coordinates", func() {
 			inner, err := root.WaitForFrame(ctx, engine.FrameQuery{Title: &engine.Expectation{Kind: engine.ExpectEqual, Expected: "pointer-inner"}}, engine.PollPolicy{Timeout: 3 * time.Second, Interval: 5 * time.Millisecond})
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(inner.Close)
-			if scenario.oopif {
-				Expect(outer.TargetID()).NotTo(Equal(root.TargetID()))
-			} else {
-				Expect(outer.TargetID()).To(Equal(root.TargetID()))
-			}
+			Expect(outer.TargetID() == root.TargetID()).To(Equal(scenario.outerSharesRootTarget))
 			Expect(inner.TargetID()).To(Equal(outer.TargetID()))
 
 			Expect(inner.RealisticClick(ctx, engine.CSS("#intended"))).To(Succeed())

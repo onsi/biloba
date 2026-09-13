@@ -661,6 +661,12 @@ func (s *Session) translateFramePoints(ctx context.Context, points []actionPoint
 	if err != nil {
 		return nil, contextError("translate frame point", err)
 	}
+	return mapPointsToQuad(points, size.Width, size.Height, quad)
+}
+
+// mapPointsToQuad maps viewport coordinates onto a frame owner's content quad,
+// including CSS perspective transforms. It does not access the browser.
+func mapPointsToQuad(points []actionPoint, width, height float64, quad dom.Quad) ([]actionPoint, error) {
 	if len(quad) != 8 {
 		return nil, &Error{Code: CodeActionFailed, Operation: "translate frame point", Message: "frame owner has no content quad"}
 	}
@@ -683,7 +689,7 @@ func (s *Session) translateFramePoints(ctx context.Context, points []actionPoint
 	d, e, f := y1-y0+g*y1, y3-y0+h*y3, y0
 	translated := make([]actionPoint, len(points))
 	for i, point := range points {
-		u, v := point.x/size.Width, point.y/size.Height
+		u, v := point.x/width, point.y/height
 		w := g*u + h*v + 1
 		if math.Abs(w) < 1e-9 {
 			return nil, &Error{Code: CodeActionFailed, Operation: "translate frame point", Message: "frame owner transform maps outside the viewport"}
