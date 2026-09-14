@@ -3,16 +3,10 @@ package engine
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"math"
 	"strings"
 
-	"github.com/chromedp/cdproto"
-	"github.com/chromedp/cdproto/cdp"
-	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/input"
-	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
 
@@ -628,10 +622,9 @@ func (s *Session) stablePointerPoint(ctx context.Context, selector Selector) (st
 	return stablePointerPoint{x: translated.x, y: translated.y, enabled: point["enabled"] == true, inViewport: point["inViewport"] == true, hittable: point["hittable"] == true && reachable}, nil
 }
 
-// translateFramePoint maps a same-process frame's viewport coordinates into the viewport of the
-// renderer target that receives trusted CDP input. OOPIFs receive input in their own target and do
-// not need translation. The frame owner's content quad captures borders, parent scrolling, and CSS
-// transforms; a projective mapping also handles perspective-transformed iframe elements.
+// translateFramePoint maps a point in this session's viewport into the viewport of the renderer target
+// that receives trusted CDP input (see TranslateFramePointsContext). A tab and an out-of-process frame
+// receive input in their own viewport, so their points pass through.
 func (s *Session) translateFramePoint(ctx context.Context, point actionPoint) (actionPoint, error) {
 	points, err := s.translateFramePoints(ctx, []actionPoint{point})
 	if err != nil {
@@ -641,38 +634,18 @@ func (s *Session) translateFramePoint(ctx context.Context, point actionPoint) (a
 }
 
 // translatePointerPoint translates a pointer target like translateFramePoint and also reports whether
-// trusted input at the translated point would land in this frame's document. biloba.js checks occlusion
-// only inside the frame, but a same-process frame's input is hit-tested against the whole tab, so an
-// overlay in the embedding page would otherwise take the click while the action reported success.
+// trusted input at the translated point would land in this frame's document (see
+// FramePointReachableContext).
 func (s *Session) translatePointerPoint(ctx context.Context, point actionPoint) (actionPoint, bool, error) {
 	translated, err := s.translateFramePoint(ctx, point)
 	if err != nil || s.frameOOPIF || s.frameID == "" {
 		return translated, err == nil, err
 	}
-	var hitFrame cdp.FrameID
-	var tree *page.FrameTree
-	err = chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		var hitErr error
-		_, hitFrame, _, hitErr = dom.GetNodeForLocation(int64(math.Round(translated.x)), int64(math.Round(translated.y))).WithIncludeUserAgentShadowDOM(true).Do(runCtx)
-		if hitErr != nil || hitFrame == s.frameID {
-			return hitErr
-		}
-		// The target may sit in a same-origin child of this frame, reached with >>>.
-		tree, hitErr = page.GetFrameTree().Do(runCtx)
-		return hitErr
-	}))
-	var protocolErr *cdproto.Error
-	if errors.As(err, &protocolErr) && protocolErr.Message == "No node found at given location" {
-		return translated, false, nil
-	}
+	reachable, err := framePointReachable(ctx, s.frameID, translated)
 	if err != nil {
-		return actionPoint{}, false, contextError("hit-test frame point", err)
+		return actionPoint{}, false, err
 	}
-	if hitFrame == s.frameID {
-		return translated, true, nil
-	}
-	own := findFrameTree(tree, s.frameID)
-	return translated, own != nil && findFrameTree(own, hitFrame) != nil, nil
+	return translated, reachable, nil
 }
 
 // translateFramePoints maps several points from one snapshot of the frame owner's geometry. A
@@ -681,72 +654,7 @@ func (s *Session) translateFramePoints(ctx context.Context, points []actionPoint
 	if s.frameOOPIF || s.frameID == "" {
 		return points, nil
 	}
-	type viewport struct {
-		Width  float64 `json:"width"`
-		Height float64 `json:"height"`
-	}
-	var size viewport
-	if err := EvaluateContext(ctx, `({width: window.innerWidth, height: window.innerHeight})`, false, &size); err != nil {
-		return nil, err
-	}
-	if size.Width <= 0 || size.Height <= 0 {
-		return nil, &Error{Code: CodeActionFailed, Operation: "translate frame point", Message: "frame viewport has no area"}
-	}
-	var quad dom.Quad
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		backendNodeID, _, ownerErr := dom.GetFrameOwner(s.frameID).Do(runCtx)
-		if ownerErr != nil {
-			return ownerErr
-		}
-		if scrollErr := dom.ScrollIntoViewIfNeeded().WithBackendNodeID(backendNodeID).Do(runCtx); scrollErr != nil {
-			return scrollErr
-		}
-		model, modelErr := dom.GetBoxModel().WithBackendNodeID(backendNodeID).Do(runCtx)
-		if modelErr != nil {
-			return modelErr
-		}
-		quad = model.Content
-		return nil
-	}))
-	if err != nil {
-		return nil, contextError("translate frame point", err)
-	}
-	return mapPointsToQuad(points, size.Width, size.Height, quad)
-}
-
-// mapPointsToQuad maps viewport coordinates onto a frame owner's content quad,
-// including CSS perspective transforms. It does not access the browser.
-func mapPointsToQuad(points []actionPoint, width, height float64, quad dom.Quad) ([]actionPoint, error) {
-	if len(quad) != 8 {
-		return nil, &Error{Code: CodeActionFailed, Operation: "translate frame point", Message: "frame owner has no content quad"}
-	}
-	x0, y0, x1, y1 := quad[0], quad[1], quad[2], quad[3]
-	x2, y2, x3, y3 := quad[4], quad[5], quad[6], quad[7]
-	sx, sy := x0-x1+x2-x3, y0-y1+y2-y3
-	dx1, dx2 := x1-x2, x3-x2
-	dy1, dy2 := y1-y2, y3-y2
-	denominator := dx1*dy2 - dx2*dy1
-	affine := math.Abs(sx) < 1e-9 && math.Abs(sy) < 1e-9
-	if !affine && math.Abs(denominator) < 1e-9 {
-		return nil, &Error{Code: CodeActionFailed, Operation: "translate frame point", Message: "frame owner transform is degenerate"}
-	}
-	g, h := 0.0, 0.0
-	if !affine {
-		g = (sx*dy2 - dx2*sy) / denominator
-		h = (dx1*sy - sx*dy1) / denominator
-	}
-	a, b, c := x1-x0+g*x1, x3-x0+h*x3, x0
-	d, e, f := y1-y0+g*y1, y3-y0+h*y3, y0
-	translated := make([]actionPoint, len(points))
-	for i, point := range points {
-		u, v := point.x/width, point.y/height
-		w := g*u + h*v + 1
-		if math.Abs(w) < 1e-9 {
-			return nil, &Error{Code: CodeActionFailed, Operation: "translate frame point", Message: "frame owner transform maps outside the viewport"}
-		}
-		translated[i] = actionPoint{x: (a*u + b*v + c) / w, y: (d*u + e*v + f) / w}
-	}
-	return translated, nil
+	return translateFramePoints(ctx, s.frameID, points)
 }
 
 func pointerPayload(offset *Point, modifiers Modifier) map[string]any {

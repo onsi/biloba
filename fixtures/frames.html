@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head>
+<title>Frames Parent</title>
+<style>
+  body { margin: 0; background: rgb(255, 0, 0); }
+  #form-frame { position: absolute; left: 100px; top: 120px; width: 360px; height: 260px; border: 6px solid rgb(0, 0, 0); }
+  #overlay { display: none; position: absolute; left: 0; top: 0; width: 700px; height: 600px; }
+</style>
+</head>
+<body>
+<button id="parent-button">Parent</button>
+<div id="parent-only">only in the parent</div>
+<iframe id="form-frame"></iframe>
+<div id="overlay"></div>
+<script>
+  // the frame's origin differs from run to run (it is another fixture server's port), so the spec
+  // passes it in
+  const child = new URLSearchParams(location.search).get("child")
+  if (child) document.querySelector("#form-frame").src = child
+  document.querySelector("#parent-button").onclick = (e) => e.target.dataset.clicked = "yes"
+  document.querySelector("#overlay").onclick = (e) => e.target.dataset.clicked = "yes"
+</script>
+</body>
+</html>

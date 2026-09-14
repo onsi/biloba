@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/page"
-	"github.com/chromedp/chromedp"
 )
 
 const DefaultMaxScreenshotBytes = 16 << 20
@@ -244,75 +243,19 @@ func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, opt
 	return shot, nil
 }
 
-// frameViewportClip is a same-process frame's page capture: the frame's viewport, in the tab's document
-// coordinates. The tab composites the frame, so its document cannot be captured beyond the iframe
-// that displays it.
+// frameViewportClip is a same-process frame's page capture (see FrameViewportClipContext).
 func (s *Session) frameViewportClip(ctx context.Context) (*page.Viewport, error) {
-	var viewport struct {
-		X      float64 `json:"x"`
-		Y      float64 `json:"y"`
-		Width  float64 `json:"width"`
-		Height float64 `json:"height"`
-	}
-	if err := EvaluateContext(ctx, `({x: window.scrollX, y: window.scrollY, width: window.innerWidth, height: window.innerHeight})`, false, &viewport); err != nil {
-		return nil, contextError("measure frame viewport", err)
-	}
-	x, y, width, height, err := s.translateScreenshotRect(ctx, viewport.X, viewport.Y, viewport.Width, viewport.Height)
-	if err != nil {
-		return nil, err
-	}
-	return &page.Viewport{X: x, Y: y, Width: width, Height: height, Scale: 1}, nil
+	return FrameViewportClipContext(ctx, s.frameID)
 }
 
 // translateScreenshotRect maps a rectangle from a same-process frame's document into the owning
-// renderer target's document. CDP captures clips in the latter coordinate space. Tab rectangles need
-// no translation, and captureScreenshot rejects out-of-process frames before measuring anything.
+// renderer target's document (see FrameScreenshotRectContext). Tab rectangles need no translation, and
+// captureScreenshot rejects out-of-process frames before measuring anything.
 func (s *Session) translateScreenshotRect(ctx context.Context, x, y, width, height float64) (float64, float64, float64, float64, error) {
 	if s.frameOOPIF || s.frameID == "" {
 		return x, y, width, height, nil
 	}
-
-	var frameScroll struct {
-		X float64 `json:"x"`
-		Y float64 `json:"y"`
-	}
-	if err := EvaluateContext(ctx, `({x: window.scrollX, y: window.scrollY})`, false, &frameScroll); err != nil {
-		return 0, 0, 0, 0, contextError("translate screenshot rectangle", err)
-	}
-
-	left, top := x-frameScroll.X, y-frameScroll.Y
-	points := [...]actionPoint{
-		{x: left, y: top},
-		{x: left + width, y: top},
-		{x: left + width, y: top + height},
-		{x: left, y: top + height},
-	}
-	translated, err := s.translateFramePoints(ctx, points[:])
-	if err != nil {
-		return 0, 0, 0, 0, err
-	}
-	minX, minY := math.Inf(1), math.Inf(1)
-	maxX, maxY := math.Inf(-1), math.Inf(-1)
-	for _, point := range translated {
-		minX, minY = math.Min(minX, point.x), math.Min(minY, point.y)
-		maxX, maxY = math.Max(maxX, point.x), math.Max(maxY, point.y)
-	}
-
-	var pageX, pageY float64
-	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		_, _, _, _, viewport, _, metricsErr := page.GetLayoutMetrics().Do(runCtx)
-		if metricsErr != nil {
-			return metricsErr
-		}
-		if viewport == nil {
-			return errors.New("Chrome did not report a visual viewport")
-		}
-		pageX, pageY = viewport.PageX, viewport.PageY
-		return nil
-	})); err != nil {
-		return 0, 0, 0, 0, contextError("translate screenshot rectangle", err)
-	}
-	return minX + pageX, minY + pageY, maxX - minX, maxY - minY, nil
+	return FrameScreenshotRectContext(ctx, s.frameID, x, y, width, height)
 }
 
 func (s *Session) visualCleanupContext() (context.Context, context.CancelFunc) {

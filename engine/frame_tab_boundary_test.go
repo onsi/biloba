@@ -164,6 +164,29 @@ var _ = Describe("frame handles and their tab", func() {
 	})
 })
 
+var _ = Describe("frames that share their parent's origin", func() {
+	It("leaves about:blank and srcdoc iframes, which inherit the page's origin, to >>>", func(ctx SpecContext) {
+		root, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(root.Close)
+		Expect(root.Navigate(ctx, server.URL)).To(Succeed())
+		// Chrome reports "://" as the security origin of all three; only the data: document is opaque.
+		_, err = root.Evaluate(ctx, `document.body.innerHTML = '<iframe id="blank"></iframe><iframe id="inline" srcdoc="<p id=inline-p>inline</p>"></iframe><iframe id="opaque" src="data:text/html,<p id=opaque-p>opaque</p>"></iframe>'`)
+		Expect(err).NotTo(HaveOccurred())
+		frame, err := root.WaitForFrame(ctx, engine.FrameQuery{HasElement: selectorPtr(engine.CSS("#opaque-p"))}, engine.PollPolicy{Timeout: 3 * time.Second, Interval: 5 * time.Millisecond})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(frame.Close)
+		exists, err := root.Exists(ctx, engine.CSS("#inline >>> #inline-p"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(exists.Value).To(BeTrue())
+
+		frames, err := root.Frames(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(frames).To(HaveLen(1), "only the opaque data: document is behind a cross-origin boundary")
+		Expect(frames[0].URL()).To(HavePrefix("data:"))
+	})
+})
+
 var _ = Describe("out-of-process frame screenshots", func() {
 	It("fails with an actionable error instead of Chrome's top-level-target refusal", func(ctx SpecContext) {
 		isolatedBrowser, err := engine.StartBrowser(ctx, engine.BrowserConfig{ExecutablePath: chromePath(), Arguments: []string{"--site-per-process"}})

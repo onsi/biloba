@@ -140,6 +140,10 @@ func (b *Biloba) captureScreenshot() []byte {
 	var img []byte
 	err := b.runEngineIn(ctx, timeout, "capture a screenshot", func(runCtx context.Context) error {
 		var err error
+		if b.frame != nil {
+			img, _, err = b.captureFrameViewport(runCtx)
+			return err
+		}
 		img, err = engine.CapturePageContext(runCtx, nil)
 		return err
 	})
@@ -324,13 +328,7 @@ func (b *Biloba) elementScreenshot(selector any) ([]byte, *page.Viewport, captur
 	if clipper, ok := box["clipper"].(string); ok && clipper != "" {
 		notes.clipped = &clippedCapture{clipper: clipper, visibleFraction: toFloat64(box["visibleFraction"])}
 	}
-	clip := &page.Viewport{
-		X:      toFloat64(box["x"]),
-		Y:      toFloat64(box["y"]),
-		Width:  toFloat64(box["width"]),
-		Height: toFloat64(box["height"]),
-		Scale:  1,
-	}
+	var clip *page.Viewport
 	beyondViewport := expandsViewport(box)
 	timeout := b.waitingTimeout(screenshotCaptureTimeout)
 	cctx, cancel := b.waitingContext(screenshotCaptureTimeout)
@@ -338,6 +336,10 @@ func (b *Biloba) elementScreenshot(selector any) ([]byte, *page.Viewport, captur
 	var img []byte
 	err := b.runEngineIn(cctx, timeout, "capture an element screenshot", func(runCtx context.Context) error {
 		var err error
+		// boundingBox measures in the element's document; a frame's box has to move into its tab's.
+		if clip, err = b.toTabClip(runCtx, toFloat64(box["x"]), toFloat64(box["y"]), toFloat64(box["width"]), toFloat64(box["height"])); err != nil {
+			return err
+		}
 		img, err = engine.CaptureClipContext(runCtx, clip, beyondViewport)
 		return err
 	})

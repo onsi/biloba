@@ -224,8 +224,9 @@ Read https://onsi.github.io/biloba/#managing-tabs to learn more about managing t
 func (b *Biloba) AllSpawnedTabs() Tabs {
 	b.guardConfig("AllSpawnedTabs")
 	out := Tabs{}
+	self := b.tab()
 	for _, tab := range b.AllTabs() {
-		if b.isSiblingTab(tab) {
+		if self.isSiblingTab(tab) {
 			out = append(out, tab)
 		}
 	}

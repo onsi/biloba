@@ -598,7 +598,11 @@ func (b *Biloba) captureForComparison(selector any, cfg screenshotConfig, scheme
 	// factor from the decoded image.
 	var originX, originY, cssWidth float64
 	if selector == nil {
-		img, cssWidth, err = b.fullPageScreenshot()
+		var clip *page.Viewport
+		img, clip, cssWidth, err = b.fullPageScreenshot()
+		if clip != nil {
+			originX, originY = clip.X, clip.Y
+		}
 	} else {
 		var clip *page.Viewport
 		var notes captureNotes
@@ -694,18 +698,28 @@ func (b *Biloba) clearLeakedColorSchemeEmulation() {
 // expanded capture and the plain one are the same pixels, so skipping it changes nothing except that
 // the page stops being told its viewport resized.  That is the app-shell case: a document that never
 // scrolls because an inner pane does.
-func (b *Biloba) fullPageScreenshot() ([]byte, float64, error) {
+//
+// A frame's whole page is what the frame shows: its viewport, clipped out of the tab that composites
+// it.  That capture does not start at the document origin, so its clip comes back too (nil for a tab).
+func (b *Biloba) fullPageScreenshot() ([]byte, *page.Viewport, float64, error) {
 	timeout := b.waitingTimeout(screenshotCaptureTimeout)
 	ctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
 	var img []byte
+	var clip *page.Viewport
 	var cssWidth float64
 	err := b.runEngineIn(ctx, timeout, "capture a full-page screenshot", func(runCtx context.Context) error {
 		var err error
+		if b.frame != nil {
+			if img, clip, err = b.captureFrameViewport(runCtx); clip != nil {
+				cssWidth = clip.Width
+			}
+			return err
+		}
 		img, err = engine.CapturePageContext(runCtx, &cssWidth)
 		return err
 	})
-	return img, cssWidth, err
+	return img, clip, cssWidth, err
 }
 
 // maskRects resolves the mask selectors into image-coordinate rectangles for the capture in img.
@@ -744,8 +758,21 @@ func (b *Biloba) maskRects(masks []any, img []byte, originX, originY, cssWidth f
 		if !ok {
 			continue
 		}
-		x, y := toFloat64(box["x"])-originX, toFloat64(box["y"])-originY
+		x, y := toFloat64(box["x"]), toFloat64(box["y"])
 		width, height := toFloat64(box["width"]), toFloat64(box["height"])
+		if b.frame != nil {
+			// maskBoxes measures in the frame's document and the capture is clipped from its tab's.
+			var clip *page.Viewport
+			if err := b.runEngine("locate a mask in the frame's tab", func(ctx context.Context) error {
+				var err error
+				clip, err = b.toTabClip(ctx, x, y, width, height)
+				return err
+			}); err != nil {
+				return nil, err
+			}
+			x, y, width, height = clip.X, clip.Y, clip.Width, clip.Height
+		}
+		x, y = x-originX, y-originY
 		// Round outward: a fractional CSS box that got floored on both edges leaves a sliver of the
 		// masked-out thing showing, which defeats the point of masking it.
 		rects = append(rects, image.Rect(

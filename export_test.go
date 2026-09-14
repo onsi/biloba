@@ -261,3 +261,7 @@ type TabScreenshotForTest struct {
 func ChromeDownloadLimitForTest() int {
 	return _CHROME_DOWNLOAD_LIMIT
 }
+
+// FrameOutOfProcessForTest reports whether a frame handle drives an out-of-process frame, so
+// frames_test.go can prove its fixture exercises the process model it claims to.
+func (b *Biloba) FrameOutOfProcessForTest() bool { return b.frame != nil && b.frame.outOfProcess }

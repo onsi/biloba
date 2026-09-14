@@ -12,6 +12,9 @@ SetWindowSize() sets the window size for this tab.  A DeferCleanup is automatica
 */
 func (b *Biloba) SetWindowSize(width, height int, opts ...chromedp.EmulateViewportOption) {
 	b.gt.Helper()
+	if b.refusedOnFrame("SetWindowSize") {
+		return
+	}
 	b.guardConfig("SetWindowSize")
 	originalWidth, originalHeight := b.windowSize()
 	// In high-fidelity mode the compositor's real input surface is clamped to a small virtual screen,
@@ -49,7 +52,7 @@ WindowSize() returns the current window size of this tab.
 func (b *Biloba) WindowSize() (int, int) {
 	b.gt.Helper()
 	b.guardConfig("WindowSize")
-	return b.windowSize()
+	return b.tab().windowSize() // a frame reports its tab's window, as the TypeScript client does
 }
 
 // windowSize is the unguarded substrate behind WindowSize, used internally (e.g. by SetWindowSize)

@@ -26,6 +26,8 @@ Under the hood `make test` is just `ginkgo -r -p --randomize-all --randomize-sui
 
 `make stress-test` exists because Biloba's flakes are timing/concurrency races in the Chrome DevTools target lifecycle that a single clean run won't surface. It runs `ginkgo -procs=6 --repeat 40 --timeout=1500s --poll-progress-after=45s` under background `stress` load: the load perturbs scheduling so races show up, `--poll-progress-after` dumps the wedged goroutine stack within 45s of any hang, and the generous `--timeout` is a *total* budget across all repeats (so size it above repeats × per-run, or a healthy run looks like a timeout). Don't run it on every change — reach for it after touching tab create/close, `AllTabs`, `ConnectToChrome`, or anything in the chromedp bridge, and after adding specs that drive asynchronous page state (network interception, fetch-then-render fixtures, anything with two DOM writes): it finds races in newly written specs that both normal lanes pass.
 
+**Don't run two root-package `ginkgo` invocations from the same checkout at once** (say, a focused probe while `make test-all` runs in the background). `SpinUpChrome` writes `./.biloba-config-<process>` and its cleanup deletes it, so the second run's Chrome takes over — and then removes — the connection file the first run's specs read whenever they `ConnectToChrome` a fresh root. Those specs then panic on a nil `*Biloba`, which reads like a real regression. The `./engine` suite doesn't share the file.
+
 To focus while debugging, run in serial and optionally non-headless/interactive:
 
 ```
@@ -123,6 +125,7 @@ Conventions the wire specs enforce:
 - A single shared `b *biloba.Biloba` is created in `SynchronizedBeforeSuite` (process 1 runs `SpinUpChrome`, every process runs `ConnectToChrome`).
 - `b.Prepare()` runs in a `BeforeEach` decorated `OncePerOrdered` (so it doesn't reset between `It`s inside an `Ordered` container).
 - Specs are served HTML fixtures from `./fixtures/*.html` by a `ghttp` server reachable at the package var `fixtureServer`. Add a `.html` file there when you need new DOM to test against.
+- `crossOriginFixtureServer` serves the same fixtures from another port — a different origin on the same site — for cross-origin iframe specs (`fixtures/frames.html?child=<url>` embeds any URL). Swap `127.0.0.1` for `localhost` to make it cross-*site*; whether that runs out of process depends on the lane (chrome-headless-shell keeps it in the tab's renderer, full Chrome doesn't). `frames_test.go`'s "Out-of-process iframes" container pins the out-of-process path in both lanes by starting its own `--site-per-process` chrome-headless-shell with `engine.StartBrowser` and connecting a fresh root to it with `biloba.ConnectToChrome(gt, biloba.BilobaConfigWithChromeConnection(...))`. Start that browser with `context.Background()`, not the node's `SpecContext`: the context ends with the node and takes the browser with it.
 
 ## Typical spec shape
 

@@ -78,12 +78,18 @@ func mainFrameWorld(ctx context.Context, id cdp.FrameID) (frameWorld, error) {
 // this classification to protocol errors; page-thrown exceptions keep their meaning.
 func frameContextGone(err error) bool {
 	var protocolErr *cdproto.Error
-	if !errors.As(err, &protocolErr) || protocolErr.Code != -32000 {
+	if !errors.As(err, &protocolErr) {
 		return false
 	}
-	switch protocolErr.Message {
-	case "Inspected target navigated or closed", "Cannot find context with specified id", "Execution context was destroyed.":
-		return true
+	switch {
+	case protocolErr.Code == -32000:
+		switch protocolErr.Message {
+		case "Inspected target navigated or closed", "Cannot find context with specified id", "Execution context was destroyed.":
+			return true
+		}
+	case protocolErr.Code == -32602:
+		// An evaluation pinned by uniqueContextId to a document that has since been replaced.
+		return protocolErr.Message == "uniqueContextId not found"
 	}
 	return false
 }

@@ -8,7 +8,6 @@ import (
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/page"
-	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
@@ -232,7 +231,7 @@ func (s *Session) visitFrameDescriptors(ctx context.Context, incremental bool, v
 		walk = func(parentID cdp.FrameID, crossed bool) (bool, error) {
 			for _, childID := range children[parentID] {
 				child := nodes[childID]
-				boundary := crossed || child.descriptor.oopif || child.descriptor.frame.SecurityOrigin != nodes[parentID].descriptor.frame.SecurityOrigin
+				boundary := crossed || child.descriptor.oopif || reportedCrossOrigin(child.descriptor.frame, nodes[parentID].descriptor.frame)
 				if !boundary {
 					var checked bool
 					boundary, checked = boundaries[childID]
@@ -331,28 +330,7 @@ func (s *Session) frameOriginBoundary(ctx context.Context, descriptor frameDescr
 	}
 	opCtx, cancel := executorContext(targetCtx, ctx)
 	defer cancel()
-	var boundary bool
-	err = chromedp.Run(opCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		// Keep this browser access check separate from page-defined globals (including
-		// replacements for Window.parent). User evaluation always uses the page world.
-		id, err := page.CreateIsolatedWorld(descriptor.frame.ID).WithWorldName("biloba-origin-check-" + string(descriptor.frame.ID)).Do(runCtx)
-		if err != nil {
-			return err
-		}
-		result, exception, err := runtime.Evaluate(`(() => { try { void parent.document; return false; } catch (error) { if (error.name === 'SecurityError') return true; throw error; } })()`).WithContextID(id).WithReturnByValue(true).Do(runCtx)
-		if err != nil {
-			return err
-		}
-		if exception != nil {
-			return exception
-		}
-		boundary = string(result.Value) == "true"
-		return nil
-	}))
-	if err != nil {
-		return false, contextError("check frame origin", err)
-	}
-	return boundary, nil
+	return FrameOriginBoundaryContext(opCtx, descriptor.frame.ID)
 }
 
 func (s *Session) frameTreeForTarget(ctx context.Context, targetID target.ID) (*page.FrameTree, error) {
@@ -539,40 +517,9 @@ func (b *Browser) frameTargetContext(ctx context.Context, targetID target.ID) (c
 	}
 	b.mu.Unlock()
 
-	// Keep chromedp's detach/close cleanup separate from execution cancellation. The first Run
-	// initializes Context.Target before issuing renderer commands, which may never answer. Cancel
-	// those commands first, wait for initialization to finish, and only then suppress target closure
-	// and let chromedp detach. Neither request nor browser cancellation may bypass that ordering.
-	chromeCtx, cancelChrome := chromedp.NewContext(context.WithoutCancel(b.ctx), chromedp.WithTargetID(targetID))
-	chromeCtx = trackFrameWorlds(chromeCtx)
-	targetCtx, stopExecution := context.WithCancel(chromeCtx)
-	stopBrowserCancel := context.AfterFunc(b.ctx, stopExecution)
-	attachDone := make(chan error, 1)
-	cleanupDone := make(chan struct{})
-	go func() {
-		var ready any
-		err := chromedp.Run(targetCtx, chromedp.Evaluate("1", &ready))
-		protectFrameTarget(chromeCtx)
-		attachDone <- err
-		<-targetCtx.Done()
-		stopBrowserCancel()
-		cancelChrome()
-		close(cleanupDone)
-	}()
-	cancelTarget := func() {
-		stopExecution()
-		<-cleanupDone
-	}
-	var err error
-	select {
-	case err = <-attachDone:
-	case <-ctx.Done():
-		cancelTarget()
-		err = ctx.Err()
-	}
+	targetCtx, cancelTarget, err := AttachFrameTargetContext(ctx, b.ctx, targetID)
 	if err != nil {
-		cancelTarget()
-		return nil, contextError("attach frame target", err)
+		return nil, err
 	}
 
 	b.mu.Lock()
@@ -592,6 +539,53 @@ func (b *Browser) frameTargetContext(ctx context.Context, targetID target.ID) (c
 	b.frameTargets[targetID] = &frameTargetContext{ctx: targetCtx, cancel: cancelTarget}
 	b.mu.Unlock()
 	return targetCtx, nil
+}
+
+// AttachFrameTargetContext attaches to an out-of-process frame's renderer target and returns a
+// chromedp context for it, already tracked by TrackFrameWorlds, with the function that detaches it.
+// lifetime is the context the attachment lives under - the browser, or the tab that embeds the frame -
+// and cancelling it detaches too; ctx bounds only the attach.  Detaching never closes the target: it
+// belongs to the page that embeds the frame.
+func AttachFrameTargetContext(ctx, lifetime context.Context, targetID target.ID) (context.Context, func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, contextError("attach frame target", err)
+	}
+	// Keep chromedp's detach/close cleanup separate from execution cancellation. The first Run
+	// initializes Context.Target before issuing renderer commands, which may never answer. Cancel
+	// those commands first, wait for initialization to finish, and only then suppress target closure
+	// and let chromedp detach. Neither request nor lifetime cancellation may bypass that ordering.
+	chromeCtx, cancelChrome := chromedp.NewContext(context.WithoutCancel(lifetime), chromedp.WithTargetID(targetID))
+	chromeCtx = trackFrameWorlds(chromeCtx)
+	targetCtx, stopExecution := context.WithCancel(chromeCtx)
+	stopLifetimeCancel := context.AfterFunc(lifetime, stopExecution)
+	attachDone := make(chan error, 1)
+	cleanupDone := make(chan struct{})
+	go func() {
+		var ready any
+		err := chromedp.Run(targetCtx, chromedp.Evaluate("1", &ready))
+		protectFrameTarget(chromeCtx)
+		attachDone <- err
+		<-targetCtx.Done()
+		stopLifetimeCancel()
+		cancelChrome()
+		close(cleanupDone)
+	}()
+	cancelTarget := func() {
+		stopExecution()
+		<-cleanupDone
+	}
+	var err error
+	select {
+	case err = <-attachDone:
+	case <-ctx.Done():
+		cancelTarget()
+		err = ctx.Err()
+	}
+	if err != nil {
+		cancelTarget()
+		return nil, nil, contextError("attach frame target", err)
+	}
+	return targetCtx, cancelTarget, nil
 }
 
 func protectFrameTarget(frameCtx context.Context) {

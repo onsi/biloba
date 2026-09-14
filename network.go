@@ -387,6 +387,9 @@ Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn 
 */
 func (b *Biloba) StubRequest(url any, response StubResponse) *RequestStub {
 	b.gt.Helper()
+	if b.refusedOnFrame("StubRequest") {
+		return nil
+	}
 	b.guardConfig("StubRequest")
 	if response.Status == 0 {
 		response.Status = http.StatusOK
@@ -418,6 +421,9 @@ Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn 
 */
 func (b *Biloba) AbortRequest(url any) *RequestAbort {
 	b.gt.Helper()
+	if b.refusedOnFrame("AbortRequest") {
+		return nil
+	}
 	b.guardConfig("AbortRequest")
 	b.lock.Lock()
 	handler := &requestHandler{matcher: matcherOrEqual(url), abort: true, prov: newHandlerProvenance("AbortRequest", "request")}
@@ -461,6 +467,9 @@ Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn 
 */
 func (b *Biloba) ModifyRequest(url any) *RequestModification {
 	b.gt.Helper()
+	if b.refusedOnFrame("ModifyRequest") {
+		return nil
+	}
 	b.guardConfig("ModifyRequest")
 	mod := &RequestModification{b: b}
 	b.lock.Lock()
@@ -598,6 +607,9 @@ Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn 
 */
 func (b *Biloba) ModifyResponse(url any) *ResponseModification {
 	b.gt.Helper()
+	if b.refusedOnFrame("ModifyResponse") {
+		return nil
+	}
 	b.guardConfig("ModifyResponse")
 	mod := &ResponseModification{b: b, matcher: matcherOrEqual(url), prov: newHandlerProvenance("ModifyResponse", "response")}
 	b.lock.Lock()
@@ -727,6 +739,9 @@ Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn 
 */
 func (b *Biloba) HoldResponse(url any) *ResponseHold {
 	b.gt.Helper()
+	if b.refusedOnFrame("HoldResponse") {
+		return nil
+	}
 	// the two knobs HoldResponse accepts are the two Await honors - it stashes them for the wait.
 	b.guardConfig("HoldResponse", knobTimeout, knobContext)
 	h := &ResponseHold{

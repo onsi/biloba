@@ -41,6 +41,9 @@ Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cook
 */
 func (b *Biloba) SetCookie(cookies ...Cookie) {
 	b.gt.Helper()
+	if b.refusedOnFrame("SetCookie") {
+		return
+	}
 	b.guardConfig("SetCookie")
 	location, _ := b.location()
 	engineCookies := make([]engine.Cookie, len(cookies))
@@ -161,6 +164,9 @@ Read https://onsi.github.io/biloba/#cookies-and-storage to learn more about cook
 */
 func (b *Biloba) ClearCookies() {
 	b.gt.Helper()
+	if b.refusedOnFrame("ClearCookies") {
+		return
+	}
 	b.guardConfig("ClearCookies")
 	err := b.runEngine("clear cookies", func(ctx context.Context) error {
 		return engine.ClearCookiesContext(ctx, b.browserContextID)

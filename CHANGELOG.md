@@ -2,6 +2,7 @@
 
 ### Features
 
+- Go: drive cross-origin iframes with frame handles. `b.Frame(query)` polls for a frame matching a `FrameQuery` (`WithURL`/`WithTitle`/`WithDOMElement`) and returns a `*Biloba` scoped to its document, so the whole DOM, matcher, JavaScript, realistic-input, upload and screenshot API works inside it; `b.HaveFrame()` and `b.AllFrames()` mirror the tab queries. Tab-level methods fail on a frame handle, and a handle whose document is gone fails with `frame_detached`. Out-of-process frames are supported too.
 - TypeScript `Session.frames()` and `waitForFrame()` now cover same-site cross-origin iframes as well as nested OOPIF targets. Frame locators, trusted pointer input, uploads, actions, assertions, and JavaScript evaluation run in the correct CDP-scoped document without relaxing the browser's same-origin policy. Frame evaluation uses the document's normal JavaScript environment, so it can read and update globals created by the frame's own scripts. Additive `frameId` metadata distinguishes multiple frames sharing one renderer target. Independently acquired and nested handles have independent lifetimes. Removed, replaced, navigated, and parent-navigated frame documents fail predictably as stale handles, while owner close/prepare continues to invalidate every descendant.
 
 ### Fixes
@@ -11,6 +12,8 @@
 - A realistic action in a same-process frame fails when the embedding page covers the target, instead of clicking the covering element and reporting success.
 - A frame handle's page screenshot captures the frame's viewport instead of the whole tab, and screenshots of out-of-process frames fail with a clear error naming the workaround.
 - Same-process frame handles record their own console messages and requests.
+- `SetUpload` resolves relative paths before handing them to Chrome. A relative path attached the file but left the tab's next navigation hanging until it timed out (both clients).
+- An `<iframe>` with no `src`, or with a `srcdoc`, is no longer listed as a cross-origin frame: it shares the page's origin and `>>>` reaches it.
 
 ## 0.16.2
 

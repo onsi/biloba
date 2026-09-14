@@ -192,9 +192,11 @@ Frame handles expose the normal locator, action, assertion, JavaScript, upload, 
 
 A frame handle is a document, not a tab. Tab and browser-context controls fail on it with `INVALID_ARGUMENT`: `navigate()`, `prepare()`, `addInitScript()`, `activate()`, `newTab()`, `setWindowSize()`, the emulation setters (device metrics, geolocation, permissions, locale, timezone, media), `setCookies()`/`clearCookies()`, request stubbing, aborting, modifying, routing and holding, network state and cache, and `handleDialogs()`. Call them on the session that owns the frame. Reads that don't change the tab, such as `getCookies()` and `windowSize()`, still work.
 
-A frame handle records its own document's console messages and requests, so `frame.expectConsoleMessage()` and `frame.waitForRequest()` work for either kind of frame. The owning tab also sees the console output and requests of its same-process frames, but not those of out-of-process frames. Dialogs from any frame are reported and handled on the owning tab. Network interception registered on the tab applies to its same-process frames' requests, not to an out-of-process frame's.
+A frame handle records its own document's console messages and requests from the moment it is found, so `frame.expectConsoleMessage()` and `frame.waitForRequest()` work for either kind of frame. The owning tab also sees the console output and requests of its same-process frames, but not those of out-of-process frames. Dialogs from any frame are reported and handled on the owning tab. Network interception registered on the tab applies to its same-process frames' requests, not to an out-of-process frame's.
 
 `frame.captureScreenshot()` and a page-level `frame.expectScreenshot()` capture the frame's viewport; element screenshots and masks work inside the frame. Chrome can only capture top-level targets, so screenshots on an out-of-process frame's handle fail with `INVALID_ARGUMENT`; capture the iframe element from the owning session instead.
+
+An iframe with no `src`, or with a `srcdoc`, shares the page's origin, so it is not listed here: reach into it with `>>>`.
 
 If several frames match a `waitForFrame()` query, it returns a ready match without waiting for other renderers. Use a specific URL, title, or `has` locator when you need a particular frame.
 

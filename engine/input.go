@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"path/filepath"
 
 	"github.com/chromedp/cdproto/accessibility"
 	"github.com/chromedp/cdproto/cdp"
@@ -68,6 +69,17 @@ func TapContext(ctx context.Context, x, y float64) error {
 // remote object, then hand DOM.setFileInputFiles its object id.  Reports false when the selector
 // matched nothing, so a caller can poll rather than fail.
 func SetFileInputFilesContext(ctx context.Context, nodeScript string, paths []string) (bool, error) {
+	// Chrome accepts a relative path and attaches the file, but the tab's next navigation then stalls
+	// until it times out.  Resolve against the working directory ourselves, which is what Chrome
+	// would have resolved against.
+	absolute := make([]string, len(paths))
+	for i, path := range paths {
+		var err error
+		if absolute[i], err = filepath.Abs(path); err != nil {
+			return false, err
+		}
+	}
+	paths = absolute
 	found := false
 	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
 		evaluate := runtime.Evaluate(nodeScript).WithUserGesture(true)

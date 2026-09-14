@@ -32,7 +32,7 @@ Quarantine it to a handful of smoke tests. It costs real round-trips and can rei
 
 To merely *assert* an element isn't occluded, use the cheaper deterministic matcher `Eventually(sel).Should(b.BeClickable())` (visible + enabled + topmost-at-its-center) — no realistic round-trips.
 
-Realistic mode does **not** help with cross-origin frames or geolocation — drop to chromedp via `b.Context` (`overview`).
+Realistic mode works inside a cross-origin iframe through its frame handle — `b.Frame(...).Realistic().Click(...)` translates the point into the tab and fails (keeps polling) if the embedding page covers the frame there; an out-of-process frame (full Chrome, cross-site) gets real input but no embedding-page occlusion check. For geolocation, drop to chromedp via `b.Context` (`overview`).
 
 ## Capability matrix
 

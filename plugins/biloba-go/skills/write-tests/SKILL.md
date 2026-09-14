@@ -1,6 +1,6 @@
 ---
 name: write-tests
-description: Author Biloba specs in a Go Ginkgo/Gomega suite — the dual immediate/matcher API (act now vs. return a matcher you poll with Eventually), capturing a matcher's observed value with .Capture instead of asserting-then-re-reading, first-vs-all naming, the navigate-then-readiness-anchor shape (gate on the DOM, then read GetLocation), selecting elements (CSS targeting stable hooks as the default, semantic role/text/label locators, anchoring a locator scope so a negative assertion isn't vacuous, the >>> piercing combinator, XPath), the interaction vocabulary (click variants, drag, scroll, tap, text selection), realistic mode for occlusion/hover smoke tests, visual regression with b.HaveScreenshot against a committed baseline, hermetic tests via request stubbing/aborting/modifying/holding, the GetJSValue app-state barrier (and when it gates nothing), multi-tab flows, and seeding state. Use when writing or reviewing Biloba browser tests.
+description: Author Biloba specs in a Go Ginkgo/Gomega suite — the dual immediate/matcher API (act now vs. return a matcher you poll with Eventually), capturing a matcher's observed value with .Capture instead of asserting-then-re-reading, first-vs-all naming, the navigate-then-readiness-anchor shape (gate on the DOM, then read GetLocation), selecting elements (CSS targeting stable hooks as the default, semantic role/text/label locators, anchoring a locator scope so a negative assertion isn't vacuous, the >>> piercing combinator, XPath), the interaction vocabulary (click variants, drag, scroll, tap, text selection), realistic mode for occlusion/hover smoke tests, visual regression with b.HaveScreenshot against a committed baseline, hermetic tests via request stubbing/aborting/modifying/holding, the GetJSValue app-state barrier (and when it gates nothing), multi-tab flows, cross-origin iframes (b.Frame frame handles), and seeding state. Use when writing or reviewing Biloba browser tests.
 ---
 
 # Writing Biloba specs
@@ -156,7 +156,7 @@ Eventually("#published-list").Should(b.Exist())                                 
 Consistently(b.ByTextContains("Draft").Within("#published-list")).ShouldNot(b.Exist()) // …so this bites
 ```
 
-Locators **pierce open shadow roots automatically**; CSS needs `>>>` (one boundary each, open shadow / same-origin iframe only); XPath crosses neither.
+Locators **pierce open shadow roots automatically**; CSS needs `>>>` (one boundary each, open shadow / same-origin iframe only); XPath crosses neither. Nothing crosses into a **cross-origin** iframe (another port counts) — get a frame handle with `b.Frame(...)` instead (§ Cross-origin iframes).
 
 ```go
 b.Click("my-widget >>> button.submit")
@@ -345,6 +345,23 @@ yt := tab.AllSpawnedTabs().Find(tab.TabMatching().WithURL("https://youtube.com/.
 
 A DOM method always operates on the tab it's invoked on (`tab.Click`, not `b.Click`). Dialogs and downloads are per-tab too — register dialog handlers **before** the action that triggers them.
 
+## Cross-origin iframes
+
+A frame from another origin — a form on `localhost:3001` inside an app on `localhost:3000`, a payment widget — is out of reach of `>>>`, locators, and `b.Run` from the page. Ask for a **frame handle**: a `*Biloba` scoped to the frame's document, so the whole API works through it.
+
+```go
+checkout := b.Frame(b.FrameMatching().WithURL(ContainSubstring("/checkout")).WithDOMElement("#email")) // polls
+checkout.SetValue("#email", "ada@example.com")
+checkout.Realistic().Click("#pay")
+Eventually("#receipt").Should(checkout.HaveInnerText(ContainSubstring("Paid")))
+```
+
+- `b.Frame` is the one-step wait-and-get — don't gate with `Eventually(b).Should(b.HaveFrame()...)` and then re-find with `b.AllFrames().Find(...)`. Use `WithDOMElement` so the frame is ready, not just present.
+- Tab-level methods fail on a frame handle (`Navigate`, `Prepare`, `SetWindowSize`, cookie writes, `StubRequest`/`HoldResponse`/…, dialog handlers, downloads): call them on `b`. The tab's stubs and dialog handlers cover its frames.
+- A handle belongs to one document. After the iframe navigates or is replaced (or the tab navigates) its calls fail with `frame_detached`; call `b.Frame(...)` again rather than reusing it.
+- Realistic input inside a frame fails (and keeps polling) when something in the embedding page covers the frame — same contract as an overlay inside the page.
+- Under full Chrome (`HighFidelityHeadless`) a **cross-site** frame runs out of process: same API, but screenshot its `iframe` element from the tab rather than the frame, and don't expect the tab's `StubRequest` to catch its requests.
+
 ## When Biloba can't express it
 
-Realism (occlusion, scroll-into-view, real CSS `:hover`) → `b.Realistic()`. Real keystrokes → `b.Type`, not `SetValue`. Everything else — cross-origin frames, geolocation, any CDP feature without a wrapper — drop to chromedp via `b.Context` (`overview`). When you do, wrap it: `b.Context` carries no deadline, and Biloba's backstop covers only its own commands, so `ctx, cancel := context.WithTimeout(b.Context, 30*time.Second)` is what keeps a wedged Chrome from hanging the suite (derive from `b.Context`, not `context.Background()`, so the tab's executor stays in the chain). Propose an issue if a common pattern is missing.
+Realism (occlusion, scroll-into-view, real CSS `:hover`) → `b.Realistic()`. Real keystrokes → `b.Type`, not `SetValue`. Cross-origin iframes → `b.Frame(...)` (above). Everything else — geolocation, any CDP feature without a wrapper — drop to chromedp via `b.Context` (`overview`). When you do, wrap it: `b.Context` carries no deadline, and Biloba's backstop covers only its own commands, so `ctx, cancel := context.WithTimeout(b.Context, 30*time.Second)` is what keeps a wedged Chrome from hanging the suite (derive from `b.Context`, not `context.Background()`, so the tab's executor stays in the chain). Propose an issue if a common pattern is missing.

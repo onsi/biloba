@@ -310,7 +310,7 @@ that's it.
 
 Biloba hands Chrome a piece of javascript once per tab, to run at the start of every document that tab creates - so a global `_biloba` object is on `window` before any of the page's own scripts run.  Chrome maintains that, rather than Biloba noticing after each navigation that the object is gone and putting it back; a page that navigates itself mid-command can't leave a command looking at a document that never had it.
 
-That covers the tab's child frames as well as its main document, which is more than Biloba needs: it only ever *uses* the main frame's copy, reaching into a same-origin child frame from there.  A copy in a frame it can't pierce - a `sandbox="allow-scripts"` widget on an opaque origin - is unused, and costs a few hundred microseconds of nothing.  Whether Chrome even puts one there depends on the build: `chrome-headless-shell` injects into an opaque origin, full headless Chrome doesn't.  Neither is worth doing anything about; it's noted because "every document" is otherwise easy to read as a promise about frames.
+That covers the tab's child frames as well as its main document.  A tab only ever *uses* the main frame's copy, reaching into a same-origin child frame from there; a [frame handle](#working-with-cross-origin-iframes) uses the copy in its own frame's document (and installs one if Chrome didn't).  Whether Chrome even puts one there depends on the build: `chrome-headless-shell` injects into an opaque origin, full headless Chrome doesn't.  Neither is worth doing anything about; it's noted because "every document" is otherwise easy to read as a promise about frames.
 
 This object provides simple Javascript simulations for a bunch of common actions.  The `click` function does the following:
 
@@ -628,7 +628,7 @@ chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
 
 (`SetWindowSize` is the one piece of this Biloba *does* wrap natively - see [Window Size](#window-size-screenshots-configuration-and-debugging).)
 
-**Cross-origin iframes** are likewise out of scope: Biloba's `>>>` piercing handles same-origin iframes and open shadow roots, but a cross-origin frame is a separate CDP target.  Until Biloba grows per-target frame support, drive the frame's target directly through chromedp.  Multi-browser (Firefox/WebKit) is a deliberate non-goal - Biloba is Chrome-only by design.
+Multi-browser (Firefox/WebKit) is a deliberate non-goal - Biloba is Chrome-only by design.
 
 ### The rest of these docs...
 
@@ -830,6 +830,57 @@ Note that `b.HaveSpawnedTab` will have failed.  That's because Biloba associates
 
 There are analogous `b.AllTabs()` and `b.HaveTab()` functions that let you search through _all_ tabs associated with this Biloba Chrome connection (`b.HaveTab()` returns the same kind of `TabQuery`, just searched against every tab rather than only spawned tabs).  This won't include any tabs opened by other Ginkgo processes running in parallel - but any tabs that are associated with the current process (whether explicitly created Tabs or Spawned Tabs) will be returned by these methods.
 
+## Working with Cross-Origin Iframes
+
+A same-origin iframe is part of the page as far as Biloba is concerned: `>>>` reaches into it (see [Piercing Shadow DOM and iframes](#piercing-shadow-dom-and-iframes)).  A **cross-origin** iframe is different.  Say your app runs on `localhost:3000` and embeds a checkout form served from `localhost:3001`, or a payment widget from another site.  The browser keeps the embedding page from reading the frame's document, so `>>>`, locators, and `b.Run` can't see inside it.
+
+Biloba reaches the frame from the other side.  It finds the frame in Chrome's frame tree and gives you a **frame handle**: a `*Biloba` whose actions, matchers, getters, and JavaScript all run in the frame's own document.
+
+```go
+checkout := b.Frame(b.FrameMatching().WithURL(ContainSubstring("/checkout")).WithDOMElement("#card-number"))
+
+checkout.SetValue("#card-number", "4242424242424242")
+checkout.Click("#pay")
+Eventually("#receipt").Should(checkout.HaveInnerText(ContainSubstring("Paid")))
+```
+
+`b.Frame(query)` polls until a frame matches and returns its handle, and fails the spec if none matches in time.  Like the other polling methods it honors `WithTimeout`, `WithPolling`, `WithContext`, and `Immediate`.  The query is a `FrameQuery` - chain any of:
+
+- `WithURL(url)` matches if the frame's URL matches (a string for an exact match, or a Gomega matcher).
+- `WithTitle(title)` matches if the frame document's title matches.
+- `WithDOMElement(selector)` matches if the frame's document has an element matching `selector`.  This is the usual way to wait for a frame that is ready to use, not just present.
+
+It works like the [`TabQuery`](#finding-and-managing-spawned-tabs) you use for tabs.  Spell it `b.HaveFrame()` when you poll it as an assertion, and `b.FrameMatching()` when you hand it to `b.Frame` or to the `Find`/`Filter` helpers on the `Frames` slice returned by `b.AllFrames()`:
+
+```go
+Eventually(b).Should(b.HaveFrame().WithTitle("Checkout"))
+Expect(b.AllFrames()).To(HaveLen(1))
+```
+
+`b.AllFrames()` is a snapshot of the cross-origin frames below the tab right now, including frames nested inside them.  Handles nest the same way: `checkout.Frame(...)` finds a frame inside `checkout`.  An iframe with no `src`, or with a `srcdoc`, shares the page's origin, so it is not a frame in this sense - reach into it with `>>>`.
+
+Because a frame handle is a `*Biloba`, the rest of these docs apply to it: `.Capture`, `checkout.Realistic()`, `checkout.Run(...)`, `checkout.SetUpload(...)`, `checkout.LocalStorage()`, screenshots and `HaveScreenshot`.  A few things are specific to frames:
+
+- **Realistic input** is translated through the iframe's position, borders, scrolling, and CSS transforms, so the real pointer lands on the element.  The occlusion check covers the embedding page too: if something in the page covers the frame where the click would land, the click is not dispatched and the action keeps polling, as it would for an overlay inside the frame.  (Out-of-process frames are the exception - see below.)
+- **Screenshots** of the frame itself (`checkout.CaptureScreenshot()`, or `Eventually(checkout).Should(b.HaveScreenshot("checkout"))`) capture what the frame shows - its viewport - rather than its whole document.  Element captures and masks are measured inside the frame.
+- **Requests**: `checkout.AllRequests()`, `HaveMadeRequest`, and `BeNetworkIdle` cover the requests the frame's document makes after the handle is found.  The tab records them too.
+- `GetLocation`, `GetTitle`, `Outline`, and `A11yOutline` describe the frame's document.  `WindowSize` reports the tab's window.
+
+A frame handle is a document, not a tab.  Methods that act on the tab or its browser context - `Navigate`, `Prepare`, `NewTab`, `SetWindowSize`, `SetCookie`/`ClearCookies`, `StubRequest` and the other network handlers, the dialog handlers and `Dialogs`, and the download queries - fail the spec on a frame handle.  Call them on the tab.  The tab's network stubs apply to the frame's requests, and dialogs the frame opens are handled by the tab.
+
+A frame handle also belongs to one document.  If the iframe is removed or navigated, or the tab navigates, the handle's calls fail with `frame_detached`.  Find the frame again with `b.Frame(...)` to get a handle for the new document.  `b.Prepare()` discards every frame handle.
+
+None of this relaxes the browser's same-origin policy - `checkout.Run("parent.document")` still throws a `SecurityError`.  Biloba talks to the frame directly, the way DevTools does.
+
+### Frames in Another Process
+
+Chrome can run a cross-site frame in a renderer process of its own ("site isolation").  Which frames it does that for depends on the build: `chrome-headless-shell`, Biloba's default, keeps cross-site frames in the tab's process, while full Chrome (`HighFidelityHeadless`) gives them their own.  `b.Frame` finds and drives both kinds the same way, but an out-of-process frame differs in a few places:
+
+- Chrome can't screenshot it directly, so `CaptureScreenshot`, `CaptureScreenshotOf`, and `HaveScreenshot` on its handle fail the spec.  Capture the iframe element from the tab instead: `Eventually("#payment-frame").Should(b.HaveScreenshot("payment"))`.
+- The tab's network stubs don't reach its requests - Chrome intercepts requests per renderer - and its requests are recorded on the frame handle but not on the tab.
+- Real input goes straight to the frame's renderer, so realistic mode can't check whether something in the embedding page covers the frame.
+
+## Working with the DOM
 ## Working with the DOM
 
 Most of what you'll be doing with Biloba will involve working with the DOM: selecting DOM elements, clicking on them, making assertions about their properties, changing their properties, etc...
@@ -894,7 +945,7 @@ b.HaveInnerText("app-shell >>> settings-panel >>> .title")
 
 Each `>>>` steps across exactly one boundary: the element to its left is the host (a shadow host or an iframe) and the selector to its right is resolved inside that host's shadow root or document.  `>>>` works with every selector-based method (actions, matchers, and the `*Each`/count forms).
 
-This pierces **open shadow roots** and **same-origin iframes**.  It cannot reach into **closed** shadow roots or **cross-origin** iframes - the browser does not expose their contents to JavaScript, so a selector targeting them simply won't match (drop down to chromedp's frame handling for cross-origin frames).  `>>>` is a CSS-only feature; XPath selectors do not cross boundaries.  (Locators pierce open shadow roots automatically - see below.)
+This pierces **open shadow roots** and **same-origin iframes**.  It cannot reach into **closed** shadow roots or **cross-origin** iframes - the browser does not expose their contents to JavaScript, so a selector targeting them simply won't match.  For a cross-origin iframe, get a [frame handle](#working-with-cross-origin-iframes) with `b.Frame(...)` and use selectors on that.  `>>>` is a CSS-only feature; XPath selectors do not cross boundaries.  (Locators pierce open shadow roots automatically - see below.)
 
 #### Selecting by Locator
 
@@ -967,7 +1018,7 @@ b.GetAttribute(b.ByCSS(".figure-frame--story").Nth(1), "data-frame-index")
 
 Because the combinators accept any pathway, you can write things like `b.ByRole("button").And(".primary")` or `b.ByRole("listitem").Containing(b.ByText("Delete")).Within("#cart")` - reaching for whichever pathway reads best at each step.
 
-Locators **pierce open shadow roots** - `b.ByRole("button").WithName("Submit")` will find a button inside a custom element's open shadow DOM with no `>>>` ceremony (closed roots and cross-origin frames are skipped, matching the rest of Biloba).
+Locators **pierce open shadow roots** - `b.ByRole("button").WithName("Submit")` will find a button inside a custom element's open shadow DOM with no `>>>` ceremony (closed roots and cross-origin frames are skipped, matching the rest of Biloba - use a locator on a [frame handle](#working-with-cross-origin-iframes) to search inside a cross-origin frame).
 
 Coverage is a pragmatic ARIA subset rather than the full specification - it handles explicit roles plus the common implicit ones, and the common accessible-name sources.  For anything it can't express, CSS `:has()` and the XPath DSL are right there.
 
@@ -2416,7 +2467,7 @@ Biloba's interactions run on two tracks: the fast default (`b`) is an atomic Jav
 A couple of deliberate gaps are worth calling out, both reachable via [chromedp](#codechromedpcode-breaking-the-fourth-wall) on `b.Context`:
 
 - **Occlusion on the fast track.** Plain `Click` intentionally clicks through overlays (the atomic, no-scroll default).  When you want to *assert* an element is genuinely clickable without paying for full realistic mode, use the deterministic [`b.BeClickable()`](#existence-counting-visibility-and-interactibility) matcher (visible + enabled + topmost-at-its-center); it stays opt-in rather than changing `Click`'s default, so existing click-through behavior is never silently broken.
-- **Native HTML5 drag-and-drop, native `<select>` realism, cross-origin iframes, and device/mobile emulation** are not driven by either track by design - drop to chromedp for those (see the [emulation recipes](#emulation-and-device-conveniences-drop-to-chromedp)).
+- **Native HTML5 drag-and-drop, native `<select>` realism, and device/mobile emulation** are not driven by either track by design - drop to chromedp for those (see the [emulation recipes](#emulation-and-device-conveniences-drop-to-chromedp)).  Both tracks work inside a cross-origin iframe through a [frame handle](#working-with-cross-origin-iframes): `checkout.Realistic().Click(...)` translates the point into the tab and checks that nothing in the embedding page covers it.
 
 And one asymmetry to expect when you move a spec from one track to the other: **a `position: fixed` footer or banner is invisible to the fast track and perfectly solid to the realistic one.**  `element.click()` does no hit-testing, so the fast track reaches an element the footer is sitting on top of; real pointer input lands on the footer.  A spec that has passed for months can fail the moment it switches to `b.Realistic()`, because a row near the bottom of a short list is genuinely underneath the footer.  Both tracks are right - the realistic one is telling you a user could not reach that element either.  Scroll it clear of the footer (`b.ScrollIntoView(sel, b.AtTopOffset(px))`) rather than assuming your interaction code is wrong.
 
