@@ -1,6 +1,9 @@
-![Ginkgo](https://onsi.github.io/biloba/images/biloba.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/biloba-dark.png">
+  <img alt="Biloba" src="docs/images/biloba.png">
+</picture>
 
-[![test](https://github.com/onsi/biloba/workflows/test/badge.svg?branch=master)](https://github.com/onsi/biloba/actions?query=workflow%3Atest+branch%3Amaster) | [Biloba Docs](https://onsi.github.io/biloba/)
+[![test](https://github.com/onsi/biloba/actions/workflows/test.yml/badge.svg?branch=master)](https://github.com/onsi/biloba/actions/workflows/test.yml?query=branch%3Amaster) [![Biloba Docs](docs/images/docs-badge.svg)](https://onsi.github.io/biloba/)
 
 ---
 
@@ -19,7 +22,7 @@ Take a look at the [documentation](https://onsi.github.io/biloba) to learn more 
 
 Or [let Claude Code set it up for you](#using-biloba-with-claude-code).
 
-Biloba is _remarkably_ feature complete and in active development.  A 1.0 release milestone has not been reached yet, so the public API contract may shift as the project evolves.  Send feedback!
+Biloba is remarkably feature complete and in active development.  A 1.0 release milestone has not been reached yet, so the public API contract may shift as the project evolves.  Send feedback!
 
 Here's a quick taste of what Biloba specs look like in Ginkgo:
 
