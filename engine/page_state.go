@@ -46,7 +46,11 @@ func (s *Session) AccessibilityOutline(ctx context.Context) (string, error) {
 	var nodes []*accessibility.Node
 	err := s.serial(ctx, "capture accessibility outline", func(opCtx context.Context) error {
 		var readErr error
-		nodes, readErr = accessibilityTreeContext(opCtx, s.frameID)
+		if s.frameID != "" {
+			nodes, readErr = AccessibilityTreeForFrameContext(opCtx, s.frameID)
+		} else {
+			nodes, readErr = accessibilityTreeContext(opCtx, "")
+		}
 		return readErr
 	})
 	if err != nil {

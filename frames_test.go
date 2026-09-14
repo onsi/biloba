@@ -5,6 +5,8 @@ import (
 	"context"
 	"image"
 	"image/png"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -242,6 +244,34 @@ var _ = Describe("Cross-origin iframes", func() {
 	})
 
 	Describe("frame documents", func() {
+		It("observes requests and network idle while the frame's JavaScript thread is busy", func() {
+			started := make(chan struct{}, 1)
+			signal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+				w.(http.Flusher).Flush()
+				started <- struct{}{}
+			}))
+			DeferCleanup(signal.Close)
+
+			// The server signal proves the scheduled callback has begun before either observation. The
+			// loop is bounded so a failed assertion cannot leave this shared renderer wedged.
+			checkout.Run(`setTimeout(() => {
+				const signal = new Image();
+				signal.src = "` + signal.URL + `/busy-start";
+				const until = performance.now() + 1500;
+				while (performance.now() < until) {}
+			}, 0)`)
+			Eventually(started).WithTimeout(2 * time.Second).Should(Receive())
+
+			observationStarted := time.Now()
+			Eventually(checkout).WithTimeout(500 * time.Millisecond).WithPolling(10 * time.Millisecond).
+				Should(checkout.HaveMadeRequest(ContainSubstring("/busy-start")))
+			Eventually(checkout).WithTimeout(500 * time.Millisecond).WithPolling(10 * time.Millisecond).
+				Should(checkout.BeNetworkIdle())
+			Ω(time.Since(observationStarted)).Should(BeNumerically("<", time.Second),
+				"cached network observations must not wait for the renderer's busy loop")
+		})
+
 		It("fails a handle whose document has gone, and finds the replacement", func() {
 			b.Run(`document.querySelector("#form-frame").src = "` + crossOriginFixtureServer + `/frame-form.html?replaced"`)
 			replacement := b.Frame(b.FrameMatching().WithURL(ContainSubstring("?replaced")).WithDOMElement("#email"))
@@ -274,6 +304,9 @@ var _ = Describe("Cross-origin iframes", func() {
 			matched, err := checkout.HaveFrame().Match(checkout)
 			Ω(matched).Should(BeFalse())
 			Ω(err).Should(MatchError(ContainSubstring("frame_detached")))
+			stop, ok := err.(interface{ IsStopTrying() bool })
+			Ω(ok).Should(BeTrue())
+			Ω(stop.IsStopTrying()).Should(BeTrue(), "HaveFrame must stop polling a stale document")
 
 			replacement.Run(`fetch("/api/replacement-only")`)
 			Eventually(replacement).Should(replacement.HaveMadeRequest(ContainSubstring("/api/replacement-only")))
@@ -284,9 +317,15 @@ var _ = Describe("Cross-origin iframes", func() {
 			matched, err = checkout.HaveMadeRequest(ContainSubstring("/api/replacement-only")).Match(checkout)
 			Ω(matched).Should(BeFalse())
 			Ω(err).Should(MatchError(ContainSubstring("frame_detached")))
+			stop, ok = err.(interface{ IsStopTrying() bool })
+			Ω(ok).Should(BeTrue())
+			Ω(stop.IsStopTrying()).Should(BeTrue(), "HaveMadeRequest must stop polling a stale document")
 			matched, err = checkout.BeNetworkIdle().Match(checkout)
 			Ω(matched).Should(BeFalse())
 			Ω(err).Should(MatchError(ContainSubstring("frame_detached")))
+			stop, ok = err.(interface{ IsStopTrying() bool })
+			Ω(ok).Should(BeTrue())
+			Ω(stop.IsStopTrying()).Should(BeTrue(), "BeNetworkIdle must stop polling a stale document")
 		})
 
 		It("fails discovery through a closed handle", func() {

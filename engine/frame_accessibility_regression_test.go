@@ -1,6 +1,7 @@
 package engine_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -13,9 +14,13 @@ import (
 )
 
 var _ = Describe("frame accessibility regressions", func() {
-	It("returns the child accessibility tree without the owning tab's controls", func(ctx SpecContext) {
+	It("scopes the accessibility tree to the child document, including navigation during a read", func(ctx SpecContext) {
 		child := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 			response.Header().Set("Content-Type", "text/html")
+			if request.URL.RawQuery == "replacement" {
+				_, _ = response.Write([]byte(`<!doctype html><title>Replacement accessibility</title><button>Replacement action</button>`))
+				return
+			}
 			_, _ = response.Write([]byte(`<!doctype html><title>Child accessibility</title><button>Child action</button>`))
 		}))
 		DeferCleanup(child.Close)
@@ -46,5 +51,25 @@ var _ = Describe("frame accessibility regressions", func() {
 			Not(ContainSubstring("Parent accessibility")),
 			Not(ContainSubstring("Parent action")),
 		))
+
+		scoped, err := engine.ScopeToFrameContext(engine.SessionContextForTest(frame.Session), frame.FrameID())
+		Expect(err).NotTo(HaveOccurred())
+		readCtx, cancel := context.WithTimeout(scoped, 3*time.Second)
+		DeferCleanup(cancel)
+		nodes, err := engine.AccessibilityTreeDuringNavigationForTest(readCtx, frame.FrameID(), func() {
+			_, navigateErr := root.Evaluate(ctx, `document.querySelector('#child').src = `+strconv.Quote(child.URL+"?replacement"))
+			Expect(navigateErr).NotTo(HaveOccurred())
+			replacement, findErr := root.WaitForFrame(ctx, engine.FrameQuery{
+				Title: &engine.Expectation{Kind: engine.ExpectEqual, Expected: "Replacement accessibility"},
+			}, engine.PollPolicy{Timeout: 2 * time.Second, Interval: 5 * time.Millisecond})
+			Expect(findErr).NotTo(HaveOccurred())
+			DeferCleanup(replacement.Close)
+			replacementOutline, readErr := replacement.AccessibilityOutline(ctx)
+			Expect(readErr).NotTo(HaveOccurred())
+			Expect(replacementOutline).To(ContainSubstring(`button "Replacement action"`))
+		})
+		Expect(err).To(HaveOccurred())
+		Expect(engine.FrameContextGone(err)).To(BeTrue(), "a frame ID must not allow reading the replacement document")
+		Expect(nodes).To(BeNil())
 	})
 })

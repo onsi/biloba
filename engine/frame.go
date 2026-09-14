@@ -452,8 +452,7 @@ func (s *Session) acceptsConsoleEvent(id runtime.ExecutionContextID) bool {
 }
 
 func (s *Session) frameWorldCurrent() bool {
-	world, err := mainFrameWorld(s.ctx, s.frameID)
-	return s.ctx.Err() == nil && err == nil && world.uniqueID == s.frameWorld.uniqueID
+	return frameWorldCurrent(s.ctx, s.frameID, s.frameWorld)
 }
 
 // Event waits must remain independent of serialized renderer operations: an evaluation

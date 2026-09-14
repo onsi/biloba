@@ -38,6 +38,23 @@ func ScopeToFrameContext(ctx context.Context, frameID cdp.FrameID) (context.Cont
 	return withExecutionContext(ctx, world), nil
 }
 
+// ValidateFrameWorldContext checks that a context returned by ScopeToFrameContext still
+// belongs to frameID's current document. It uses CDP's execution-context registry without
+// sending a command to the renderer, so event observers can run while page JavaScript is busy.
+func ValidateFrameWorldContext(ctx context.Context, frameID cdp.FrameID) error {
+	if err := ctx.Err(); err != nil {
+		return contextError("validate frame document", err)
+	}
+	expected, _ := ctx.Value(executionContextKey{}).(frameWorld)
+	if expected.uniqueID == "" {
+		return &Error{Code: CodeInvalidArgument, Operation: "validate frame document", Message: "context is not scoped to a frame document"}
+	}
+	if !frameWorldCurrent(ctx, frameID, expected) {
+		return staleFrameError("validate frame document", frameID)
+	}
+	return nil
+}
+
 // FrameContextGone reports whether err is Chrome refusing an evaluation because the document a
 // ScopeToFrameContext context is pinned to no longer exists.
 func FrameContextGone(err error) bool { return frameContextGone(err) }
@@ -326,7 +343,23 @@ func FrameViewportClipContext(ctx context.Context, frameID cdp.FrameID) (*page.V
 
 // AccessibilityTreeForFrameContext reads the accessibility tree of one frame's document.
 func AccessibilityTreeForFrameContext(ctx context.Context, frameID cdp.FrameID) ([]*accessibility.Node, error) {
-	return accessibilityTreeContext(ctx, frameID)
+	return accessibilityTreeForFrameContext(ctx, frameID, accessibilityTreeContext)
+}
+
+func accessibilityTreeForFrameContext(ctx context.Context, frameID cdp.FrameID, read func(context.Context, cdp.FrameID) ([]*accessibility.Node, error)) ([]*accessibility.Node, error) {
+	if err := EvaluateContext(ctx, "undefined", false, nil); err != nil {
+		return nil, err
+	}
+	nodes, err := read(ctx, frameID)
+	if err != nil {
+		return nil, err
+	}
+	// The AX command addresses a frame ID, which survives document replacement.
+	// Verify the pinned execution context again before returning the tree.
+	if err := EvaluateContext(ctx, "undefined", false, nil); err != nil {
+		return nil, err
+	}
+	return nodes, nil
 }
 
 // mapPointsToQuad maps viewport coordinates onto a frame owner's content quad,

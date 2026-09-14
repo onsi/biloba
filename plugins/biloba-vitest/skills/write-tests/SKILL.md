@@ -164,6 +164,8 @@ Always release a hold. Network handlers are first-match-wins, so assert `count()
 
 Use `requests()`/`responses()` for history and `waitForRequest()` for an atomic winning observation. `stubRequest()`, `abortRequest()`, `modifyRequest()`, `modifyResponse()`, and `routeResponse()` return first-match-wins handlers with `count()`, `stats()`, and `remove()`. Network-state methods cover cache, offline mode, latency, throughput, and connection type.
 
+`routeResponse()` starts its callback timeout after the body is read. The body has a separate timeout of five seconds, or `timeoutMs` if longer. When Chrome refuses to provide a body (for example, on a redirect), Biloba continues the response without calling the callback and records the error in `stats()`.
+
 `modifyResponse()` patches the response: what you leave out is inherited from the original. `routeResponse()` *replaces* it - an unset status means 200, and unset headers or body mean none - so hand back anything you want kept, including headers you read off the intercepted response.
 
 ```ts

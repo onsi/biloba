@@ -1,6 +1,11 @@
 package engine
 
-import "context"
+import (
+	"context"
+
+	"github.com/chromedp/cdproto/accessibility"
+	"github.com/chromedp/cdproto/cdp"
+)
 
 type VisualOperationHooksForTest struct {
 	EmulateColorScheme func(context.Context, string) error
@@ -93,4 +98,13 @@ func SetSandboxApparmorRestrictedForTest(restricted bool, err error) func() {
 	previous := sandboxApparmorRestricted
 	sandboxApparmorRestricted = func() (bool, error) { return restricted, err }
 	return func() { sandboxApparmorRestricted = previous }
+}
+
+// AccessibilityTreeDuringNavigationForTest runs navigation after the initial document
+// check, at the boundary where Chrome would handle the frame-ID-based AX command.
+func AccessibilityTreeDuringNavigationForTest(ctx context.Context, frameID cdp.FrameID, navigate func()) ([]*accessibility.Node, error) {
+	return accessibilityTreeForFrameContext(ctx, frameID, func(readCtx context.Context, id cdp.FrameID) ([]*accessibility.Node, error) {
+		navigate()
+		return accessibilityTreeContext(readCtx, id)
+	})
 }

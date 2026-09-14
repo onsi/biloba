@@ -2,6 +2,7 @@ package biloba
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 	"github.com/onsi/biloba/engine"
+	"github.com/onsi/gomega"
 	"github.com/onsi/gomega/format"
 	"github.com/onsi/gomega/types"
 )
@@ -257,6 +259,9 @@ func (q *FrameQuery) Match(actual any) (bool, error) {
 	}
 	frames, err := parent.discoverFrames()
 	if err != nil {
+		if parent.frameValidationStopsPolling(err) {
+			return false, gomega.StopTrying(err.Error())
+		}
 		return false, err
 	}
 	q.observed = frames
@@ -379,9 +384,40 @@ func (b *Biloba) validateFrameDocument(what string) error {
 	if b.frame == nil {
 		return nil
 	}
-	return b.runEngine(what, func(ctx context.Context) error {
+	if err := b.validateFrameObservation(); err != nil {
+		return err
+	}
+	err := b.runEngine(what, func(ctx context.Context) error {
 		return engine.EvaluateContext(ctx, "undefined", false, nil)
 	})
+	if engine.FrameContextGone(err) {
+		// Only this pinned evaluation proves that the subject document is gone.
+		// A similar error while inspecting a child is a discovery race worth retrying.
+		return &engine.Error{Code: engine.CodeFrameDetached, Message: err.Error(), Cause: err}
+	}
+	return err
+}
+
+// validateFrameObservation proves that a frame handle still belongs to its original document from
+// the execution-context registry maintained by CDP events. It sends no renderer command, so request
+// and in-flight observations remain available while the frame's JavaScript thread is busy.
+func (b *Biloba) validateFrameObservation() error {
+	if b.frame == nil {
+		return nil
+	}
+	err := engine.ValidateFrameWorldContext(b.Context, b.frame.id)
+	if err != nil && b.frameValidationStopsPolling(err) {
+		return fmt.Errorf("frame_detached: %w", err)
+	}
+	return err
+}
+
+// frameValidationStopsPolling reports the document-lifetime failures a retry cannot repair. Other
+// validation failures are transient and stay ordinary matcher errors so a later poll can recover.
+func (b *Biloba) frameValidationStopsPolling(err error) bool {
+	var engineErr *engine.Error
+	return (errors.As(err, &engineErr) && engineErr.Code == engine.CodeFrameDetached) ||
+		b.Context.Err() != nil
 }
 
 // frameTrees reads this tab's frame tree and the trees of the out-of-process frame targets below it,

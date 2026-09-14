@@ -337,6 +337,8 @@ try {
 
 Import `endsWith` (or another Biloba expectation) from the package.  Always release a hold.  Network handlers are first-match-wins; use each handler's `count()` or `stats()` and `networkShadowDiagnostics()` to prove that the intended handler claimed the request.
 
+`routeResponse()` starts its callback timeout after reading the response body. Body reads have a separate timeout of five seconds, or `timeoutMs` if it is longer. For example, `{timeoutMs: 30_000}` allows up to 30 seconds to read the body, then another 30 seconds for the callback. If Chrome refuses to provide a body, as it does for redirects, Biloba continues the response without calling the callback and records the error in the handler's `stats()`.
+
 Dialog handlers are newest-first and removable.  Dialog history records both explicitly handled and safely auto-handled dialogs.  Downloads expose lifecycle metadata, bounded binary content, cancellation, snapshot filters, and polling assertions.
 
 ```ts

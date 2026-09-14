@@ -74,6 +74,13 @@ func mainFrameWorld(ctx context.Context, id cdp.FrameID) (frameWorld, error) {
 	return frameWorld{}, &Error{Code: CodeConditionNotMet, Operation: "attach frame", Message: "frame's page execution context is not available yet"}
 }
 
+// frameWorldCurrent compares document identity using the registry maintained by CDP events.
+// It does not send a command to a potentially busy renderer.
+func frameWorldCurrent(ctx context.Context, id cdp.FrameID, expected frameWorld) bool {
+	world, err := mainFrameWorld(ctx, id)
+	return ctx.Err() == nil && expected.uniqueID != "" && err == nil && world.uniqueID == expected.uniqueID
+}
+
 // Chrome can reject evaluation before it announces context destruction. Restrict
 // this classification to protocol errors; page-thrown exceptions keep their meaning.
 func frameContextGone(err error) bool {

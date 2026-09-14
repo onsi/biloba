@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"time"
 
+	"github.com/chromedp/cdproto"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
 	cdpio "github.com/chromedp/cdproto/io"
@@ -37,18 +39,17 @@ func ResponseBodyContext(ctx context.Context, requestID fetch.RequestID) ([]byte
 
 func responseBodyContext(ctx context.Context, requestID fetch.RequestID, maxBytes int64) ([]byte, cdpio.StreamHandle, bool, error) {
 	var stream cdpio.StreamHandle
-	var takeAttempted bool
 	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
 		var takeErr error
-		takeAttempted = true
 		stream, takeErr = fetch.TakeResponseBodyAsStream(requestID).Do(runCtx)
 		return takeErr
 	}))
 	if err != nil {
-		// A deadline can win after Chrome takes the body but before its reply arrives.
-		// Once we attempt the transfer, callers must fail the request on error:
-		// ContinueResponse cannot resume a body that Chrome has already handed over.
-		return nil, stream, takeAttempted, err
+		// A protocol error is Chrome's reply refusing the transfer, so the response remains
+		// resumable. Cancellation and transport errors are ambiguous: Chrome may have taken the
+		// body before its reply was lost, and ContinueResponse cannot resume it in that state.
+		var protocolErr *cdproto.Error
+		return nil, "", !errors.As(err, &protocolErr), err
 	}
 	body, err := readBounded(ctx, &cdpStreamReader{ctx: ctx, handle: stream}, maxBytes)
 	return body, stream, true, err

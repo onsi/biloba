@@ -7,6 +7,9 @@
 
 ### Fixes
 
+- Old frame handles no longer discover replacement documents or record their requests. Live frame matchers stop when their document is gone, while saved request history remains available. Go network observations work even while the frame's JavaScript thread is busy.
+- Frame accessibility reads reject navigation during the read instead of returning the replacement document's tree (both clients).
+- Response callbacks receive their full timeout after the body arrives. Longer configured timeouts still extend body reads, and intercepted redirects continue when Chrome cannot provide their body. Interrupted body transfers fail the request instead of leaving it stuck.
 - Frame discovery includes sandboxed documents and can find a responsive frame while an unrelated renderer is stuck. Frame element screenshots, masks, animation cleanup, and accessibility outlines now stay scoped to the selected frame.
 - TypeScript frame handles reject tab and browser-context controls (`navigate`, `prepare`, `addInitScript`, emulation, cookie writes, network interception and state, `handleDialogs`) with `INVALID_ARGUMENT` instead of acting on the parent page.
 - A realistic action in a same-process frame fails when the embedding page covers the target, instead of clicking the covering element and reporting success.

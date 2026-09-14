@@ -173,8 +173,11 @@ func (q *RequestQuery) Match(actual any) (bool, error) {
 	if !ok {
 		return false, fmt.Errorf("HaveMadeRequest must be passed a Biloba tab.  Got:\n%s", format.Object(actual, 1))
 	}
-	if err := tab.validateFrameDocument("inspect its requests"); err != nil {
-		return false, gomega.StopTrying(err.Error())
+	if err := tab.validateFrameObservation(); err != nil {
+		if tab.frameValidationStopsPolling(err) {
+			return false, gomega.StopTrying(err.Error())
+		}
+		return false, err
 	}
 	q.observed = tab.AllRequests()
 	return q.observed.Find(q) != nil, nil
@@ -220,8 +223,11 @@ Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn 
 */
 func (b *Biloba) BeNetworkIdle() types.GomegaMatcher {
 	return gcustom.MakeMatcher(func(_ *Biloba) (bool, error) {
-		if err := b.validateFrameDocument("inspect its in-flight requests"); err != nil {
-			return false, gomega.StopTrying(err.Error())
+		if err := b.validateFrameObservation(); err != nil {
+			if b.frameValidationStopsPolling(err) {
+				return false, gomega.StopTrying(err.Error())
+			}
+			return false, err
 		}
 		b.lock.Lock()
 		defer b.lock.Unlock()

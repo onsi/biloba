@@ -53,7 +53,9 @@ type NetworkHandlerOptions struct {
 	Response          *ResponseOverride
 	Transform         ResponseTransform
 	ResponseBodyLimit int64
-	TransformTimeout  time.Duration
+	// TransformTimeout starts after the body read. Values above five seconds also extend
+	// the separate body-read timeout. Zero uses a five-second callback timeout.
+	TransformTimeout time.Duration
 }
 type NetworkHandler struct{ ID string }
 type NetworkHandlerStats struct {
@@ -499,7 +501,11 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 		// Reading the intercepted body is transport work, not user callback work. Starting the
 		// transform deadline here made a slow upstream response consume the callback's entire budget
 		// before the callback was invoked.
-		bodyCtx, cancelBody := context.WithTimeout(s.ctx, 5*time.Second)
+		bodyTimeout := 5 * time.Second
+		if h.options.TransformTimeout > bodyTimeout {
+			bodyTimeout = h.options.TransformTimeout
+		}
+		bodyCtx, cancelBody := context.WithTimeout(s.ctx, bodyTimeout)
 		body, stream, bodyTaken, err := responseBodyContext(bodyCtx, event.RequestID, limit)
 		cancelBody()
 		defer closeResponseStream(s.ctx, stream)
