@@ -108,6 +108,10 @@ func (s *Session) CaptureElementScreenshot(ctx context.Context, selector Selecto
 }
 
 func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, options ScreenshotCaptureOptions) (shot Screenshot, err error) {
+	if s.frameOOPIF {
+		// Chrome captures only top-level targets, and an out-of-process frame is its own target.
+		return shot, &Error{Code: CodeInvalidArgument, Operation: "capture screenshot", Message: "Chrome cannot screenshot an out-of-process frame directly: capture the iframe element from the session that owns the frame"}
+	}
 	if err = s.ensureBiloba(ctx); err != nil {
 		return shot, err
 	}
@@ -144,7 +148,14 @@ func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, opt
 
 	var pngBytes []byte
 	var originX, originY, cssWidth float64
-	if selector == nil {
+	if selector == nil && s.frameID != "" {
+		var clip *page.Viewport
+		clip, err = s.frameViewportClip(ctx)
+		if err == nil {
+			originX, originY, cssWidth = clip.X, clip.Y, clip.Width
+			pngBytes, err = CaptureClipContext(ctx, clip, false)
+		}
+	} else if selector == nil {
 		pngBytes, err = CapturePageContext(ctx, &cssWidth)
 	} else {
 		response, callErr := RunHandlerContext(ctx, "boundingBox", selector.Encoded())
@@ -233,9 +244,29 @@ func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, opt
 	return shot, nil
 }
 
+// frameViewportClip is a same-process frame's page capture: the frame's viewport, in the tab's document
+// coordinates. The tab composites the frame, so its document cannot be captured beyond the iframe
+// that displays it.
+func (s *Session) frameViewportClip(ctx context.Context) (*page.Viewport, error) {
+	var viewport struct {
+		X      float64 `json:"x"`
+		Y      float64 `json:"y"`
+		Width  float64 `json:"width"`
+		Height float64 `json:"height"`
+	}
+	if err := EvaluateContext(ctx, `({x: window.scrollX, y: window.scrollY, width: window.innerWidth, height: window.innerHeight})`, false, &viewport); err != nil {
+		return nil, contextError("measure frame viewport", err)
+	}
+	x, y, width, height, err := s.translateScreenshotRect(ctx, viewport.X, viewport.Y, viewport.Width, viewport.Height)
+	if err != nil {
+		return nil, err
+	}
+	return &page.Viewport{X: x, Y: y, Width: width, Height: height, Scale: 1}, nil
+}
+
 // translateScreenshotRect maps a rectangle from a same-process frame's document into the owning
-// renderer target's document. CDP captures clips in the latter coordinate space. OOPIFs already
-// have their own renderer target, so their rectangles need no translation.
+// renderer target's document. CDP captures clips in the latter coordinate space. Tab rectangles need
+// no translation, and captureScreenshot rejects out-of-process frames before measuring anything.
 func (s *Session) translateScreenshotRect(ctx context.Context, x, y, width, height float64) (float64, float64, float64, float64, error) {
 	if s.frameOOPIF || s.frameID == "" {
 		return x, y, width, height, nil

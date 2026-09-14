@@ -42,6 +42,9 @@ type Media struct {
 }
 
 func (s *Session) SetDeviceMetrics(ctx context.Context, metrics DeviceMetrics) error {
+	if err := s.tabOnly("set device metrics"); err != nil {
+		return err
+	}
 	if metrics.Width <= 0 || metrics.Height <= 0 || metrics.DeviceScaleFactor <= 0 {
 		return &Error{Code: CodeInvalidArgument, Operation: "set device metrics", Message: "width, height, and device scale factor must be positive"}
 	}
@@ -51,6 +54,9 @@ func (s *Session) SetDeviceMetrics(ctx context.Context, metrics DeviceMetrics) e
 }
 
 func (s *Session) ClearDeviceMetrics(ctx context.Context) error {
+	if err := s.tabOnly("clear device metrics"); err != nil {
+		return err
+	}
 	return s.serial(ctx, "clear device metrics", clearDeviceMetrics)
 }
 func clearDeviceMetrics(ctx context.Context) error {
@@ -58,6 +64,9 @@ func clearDeviceMetrics(ctx context.Context) error {
 }
 
 func (s *Session) SetGeolocation(ctx context.Context, location Geolocation) error {
+	if err := s.tabOnly("set geolocation"); err != nil {
+		return err
+	}
 	if location.Latitude < -90 || location.Latitude > 90 || location.Longitude < -180 || location.Longitude > 180 || location.Accuracy < 0 {
 		return &Error{Code: CodeInvalidArgument, Operation: "set geolocation", Message: "latitude, longitude, or accuracy is outside its valid range"}
 	}
@@ -76,6 +85,9 @@ func (s *Session) SetGeolocation(ctx context.Context, location Geolocation) erro
 }
 
 func (s *Session) ClearGeolocation(ctx context.Context) error {
+	if err := s.tabOnly("clear geolocation"); err != nil {
+		return err
+	}
 	return s.serial(ctx, "clear geolocation", clearGeolocation)
 }
 func clearGeolocation(ctx context.Context) error {
@@ -83,6 +95,9 @@ func clearGeolocation(ctx context.Context) error {
 }
 
 func (s *Session) SetPermissions(ctx context.Context, origin string, permissions map[Permission]PermissionState) error {
+	if err := s.tabOnly("set permissions"); err != nil {
+		return err
+	}
 	return s.serial(ctx, "set permissions", func(opCtx context.Context) error {
 		return s.withBrowserExecutor(opCtx, func(browserCtx context.Context) error {
 			for permission, state := range permissions {
@@ -101,6 +116,9 @@ func (s *Session) SetPermissions(ctx context.Context, origin string, permissions
 }
 
 func (s *Session) ResetPermissions(ctx context.Context) error {
+	if err := s.tabOnly("reset permissions"); err != nil {
+		return err
+	}
 	return s.serial(ctx, "reset permissions", s.resetPermissions)
 }
 func (s *Session) resetPermissions(ctx context.Context) error {
@@ -110,6 +128,9 @@ func (s *Session) resetPermissions(ctx context.Context) error {
 }
 
 func (s *Session) SetLocale(ctx context.Context, locale string) error {
+	if err := s.tabOnly("set locale"); err != nil {
+		return err
+	}
 	return s.serial(ctx, "set locale", func(opCtx context.Context) error { return setLocale(opCtx, locale) })
 }
 func (s *Session) ClearLocale(ctx context.Context) error { return s.SetLocale(ctx, "") }
@@ -118,6 +139,9 @@ func setLocale(ctx context.Context, locale string) error {
 }
 
 func (s *Session) SetTimezone(ctx context.Context, timezone string) error {
+	if err := s.tabOnly("set timezone"); err != nil {
+		return err
+	}
 	return s.serial(ctx, "set timezone", func(opCtx context.Context) error { return setTimezone(opCtx, timezone) })
 }
 func (s *Session) ClearTimezone(ctx context.Context) error { return s.SetTimezone(ctx, "") }
@@ -126,6 +150,9 @@ func setTimezone(ctx context.Context, timezone string) error {
 }
 
 func (s *Session) SetMedia(ctx context.Context, media Media) error {
+	if err := s.tabOnly("set media"); err != nil {
+		return err
+	}
 	return s.serial(ctx, "set media", func(opCtx context.Context) error {
 		if err := setMedia(opCtx, media); err != nil {
 			return err

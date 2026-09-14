@@ -238,6 +238,9 @@ func (s *Session) HoldResponse(ctx context.Context, expectation Expectation) (st
 
 // HoldResponseWithOptions begins pausing responses whose URLs match expectation.
 func (s *Session) HoldResponseWithOptions(ctx context.Context, expectation Expectation, options ResponseHoldOptions) (string, error) {
+	if err := s.tabOnly("hold response"); err != nil {
+		return "", err
+	}
 	if _, err := MatchExpectation("", expectation); err != nil {
 		return "", &Error{Code: CodeInvalidArgument, Operation: "hold response", Message: err.Error(), Cause: err}
 	}

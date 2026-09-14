@@ -100,6 +100,9 @@ type dialogHandlerEntry struct {
 }
 
 func (s *Session) RegisterDialogHandler(ctx context.Context, options DialogHandlerOptions) (DialogHandler, error) {
+	if err := s.tabOnly("register dialog handler"); err != nil {
+		return DialogHandler{}, err
+	}
 	if options.Type != DialogAlert && options.Type != DialogBeforeUnload && options.Type != DialogConfirm && options.Type != DialogPrompt {
 		return DialogHandler{}, &Error{Code: CodeInvalidArgument, Operation: "register dialog handler", Message: "unsupported dialog type", Observed: options.Type}
 	}

@@ -65,6 +65,8 @@ await frame.locator("#success").expectVisible();
 
 `frame.evaluate()` runs in that frame's normal JavaScript environment, so it can read and update globals created by the frame's own scripts.
 
+A frame handle is a document, not a tab: navigation, `prepare()`, emulation, cookies, dialogs, and network interception belong to the owning session and fail with `INVALID_ARGUMENT` on a frame.
+
 Same-origin iframe and open-shadow-root piercing continues to use the `>>>` selector combinator.
 
 ## Read this instead

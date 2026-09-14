@@ -139,6 +139,15 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     await second.locator('input[name="email"]').setValue("grace@example.com");
     await frame.locator('input[name="email"]').expectValue("ada@example.com");
 
+    // A same-process frame shares its tab's renderer attachment: tab controls must refuse rather than
+    // act on the parent page, and the handle must still see its own document's console output.
+    await expect(frame.navigate(`${childBaseUrl}/child-form?id=elsewhere`)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(frame.addInitScript("window.fromFrameInitScript = true")).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(frame.setOffline(true)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await frameOwner.expectUrl(`${baseUrl}/`, {exact: true});
+    await frame.evaluate(`console.log("frame-console-" + window.frameState.id)`);
+    expect((await frame.expectConsoleMessage("frame-console-one")).text).toBe("frame-console-one");
+
     await frameOwner.evaluate(`document.querySelector("#one").remove()`);
     await expect(frame.locator("#success").expectVisible()).rejects.toMatchObject({code: "TARGET_NOT_FOUND"});
     await expect(frame.evaluate(`window.frameState.id`)).rejects.toMatchObject({code: "TARGET_NOT_FOUND"});

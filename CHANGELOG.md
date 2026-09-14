@@ -7,6 +7,10 @@
 ### Fixes
 
 - Frame discovery includes sandboxed documents and can find a responsive frame while an unrelated renderer is stuck. Frame element screenshots, masks, animation cleanup, and accessibility outlines now stay scoped to the selected frame.
+- TypeScript frame handles reject tab and browser-context controls (`navigate`, `prepare`, `addInitScript`, emulation, cookie writes, network interception and state, `handleDialogs`) with `INVALID_ARGUMENT` instead of acting on the parent page.
+- A realistic action in a same-process frame fails when the embedding page covers the target, instead of clicking the covering element and reporting success.
+- A frame handle's page screenshot captures the frame's viewport instead of the whole tab, and screenshots of out-of-process frames fail with a clear error naming the workaround.
+- Same-process frame handles record their own console messages and requests.
 
 ## 0.16.2
 

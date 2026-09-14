@@ -454,6 +454,8 @@ func (s *Session) attachFrame(ctx context.Context, descriptor frameDescriptor) (
 	frameSession.eventsEnabled.Store(true)
 	if descriptor.oopif {
 		s.browser.listenToSession(frameSession)
+	} else {
+		s.browser.listenToFrameDocument(frameSession)
 	}
 	return &Frame{Session: frameSession, url: descriptor.frame.URL}, true, nil
 }
@@ -483,6 +485,17 @@ func getFrameTree(ctx context.Context) (*page.FrameTree, error) {
 		return err
 	}))
 	return tree, err
+}
+
+// tabOnly rejects a tab or browser-context control on a frame handle. A same-process frame shares its
+// tab's renderer attachment, so these commands would otherwise act on the parent page - navigating it,
+// installing scripts in it, or tearing it down in Prepare. Frame handles reject them uniformly, whichever
+// process the frame lives in; call them on the session that owns the frame.
+func (s *Session) tabOnly(operation string) error {
+	if s.frameID == "" {
+		return nil
+	}
+	return &Error{Code: CodeInvalidArgument, Operation: operation, Message: "a frame handle cannot control its tab: call this on the session that owns the frame"}
 }
 
 func staleFrameError(operation string, id cdp.FrameID) *Error {

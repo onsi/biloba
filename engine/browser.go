@@ -497,6 +497,37 @@ func (b *Browser) listenToSession(session *Session) {
 	})
 }
 
+// listenToFrameDocument records a same-process frame's own console messages and requests, so a frame
+// handle observes its document whichever process the frame lives in (an out-of-process frame gets
+// listenToSession on its own target). The tab shares the renderer attachment and records these events
+// too; the handle keeps only its document's. Dialogs and downloads stay with the tab, as does
+// interception, which tabOnly rejects on frame handles.
+func (b *Browser) listenToFrameDocument(session *Session) {
+	chromedp.ListenTarget(session.ctx, func(event any) {
+		switch event := event.(type) {
+		case *runtime.EventConsoleAPICalled:
+			if session.eventsEnabled.Load() && event.ExecutionContextID == session.frameWorld.id {
+				session.recordConsoleMessage(event)
+			}
+		case *network.EventRequestWillBeSent:
+			if session.eventsEnabled.Load() && event.FrameID == session.frameID {
+				session.recordRequest(event)
+				if event.Type != network.ResourceTypeWebSocket {
+					session.trackRequest(event.RequestID)
+				}
+			}
+		case *network.EventResponseReceived:
+			if session.eventsEnabled.Load() && event.FrameID == session.frameID {
+				session.recordResponse(event)
+			}
+		case *network.EventLoadingFinished:
+			session.finishRequest(event.RequestID)
+		case *network.EventLoadingFailed:
+			session.finishRequest(event.RequestID)
+		}
+	})
+}
+
 // Sessions returns a stable snapshot of the targets this Browser currently owns or has discovered.
 func (b *Browser) Sessions() []*Session {
 	b.mu.Lock()

@@ -3,12 +3,16 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
 
+	"github.com/chromedp/cdproto"
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/input"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
 
@@ -584,7 +588,18 @@ func (s *Session) resolvePointerTarget(ctx context.Context, selector Selector, o
 	if !leftOK || !topOK || !widthOK || !heightOK || x < 0 || y < 0 || x > width || y > height {
 		return actionPoint{}, &Error{Code: CodeActionFailed, Operation: "resolve pointer target", Message: "element offset is outside the viewport"}
 	}
-	return s.translateFramePoint(ctx, actionPoint{x: x, y: y})
+	translated, reachable, err := s.translatePointerPoint(ctx, actionPoint{x: x, y: y})
+	if err != nil {
+		return actionPoint{}, err
+	}
+	if !reachable {
+		return actionPoint{}, frameObscuredError()
+	}
+	return translated, nil
+}
+
+func frameObscuredError() error {
+	return &Error{Code: CodeActionFailed, Operation: "resolve pointer target", Message: "element is obscured by the page that embeds its frame"}
 }
 
 type stablePointerPoint struct {
@@ -606,11 +621,11 @@ func (s *Session) stablePointerPoint(ctx context.Context, selector Selector) (st
 	if !xOK || !yOK {
 		return stablePointerPoint{}, malformed("resolve pointer target", response.Result)
 	}
-	translated, err := s.translateFramePoint(ctx, actionPoint{x: x, y: y})
+	translated, reachable, err := s.translatePointerPoint(ctx, actionPoint{x: x, y: y})
 	if err != nil {
 		return stablePointerPoint{}, err
 	}
-	return stablePointerPoint{x: translated.x, y: translated.y, enabled: point["enabled"] == true, inViewport: point["inViewport"] == true, hittable: point["hittable"] == true}, nil
+	return stablePointerPoint{x: translated.x, y: translated.y, enabled: point["enabled"] == true, inViewport: point["inViewport"] == true, hittable: point["hittable"] == true && reachable}, nil
 }
 
 // translateFramePoint maps a same-process frame's viewport coordinates into the viewport of the
@@ -623,6 +638,41 @@ func (s *Session) translateFramePoint(ctx context.Context, point actionPoint) (a
 		return actionPoint{}, err
 	}
 	return points[0], nil
+}
+
+// translatePointerPoint translates a pointer target like translateFramePoint and also reports whether
+// trusted input at the translated point would land in this frame's document. biloba.js checks occlusion
+// only inside the frame, but a same-process frame's input is hit-tested against the whole tab, so an
+// overlay in the embedding page would otherwise take the click while the action reported success.
+func (s *Session) translatePointerPoint(ctx context.Context, point actionPoint) (actionPoint, bool, error) {
+	translated, err := s.translateFramePoint(ctx, point)
+	if err != nil || s.frameOOPIF || s.frameID == "" {
+		return translated, err == nil, err
+	}
+	var hitFrame cdp.FrameID
+	var tree *page.FrameTree
+	err = chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
+		var hitErr error
+		_, hitFrame, _, hitErr = dom.GetNodeForLocation(int64(math.Round(translated.x)), int64(math.Round(translated.y))).WithIncludeUserAgentShadowDOM(true).Do(runCtx)
+		if hitErr != nil || hitFrame == s.frameID {
+			return hitErr
+		}
+		// The target may sit in a same-origin child of this frame, reached with >>>.
+		tree, hitErr = page.GetFrameTree().Do(runCtx)
+		return hitErr
+	}))
+	var protocolErr *cdproto.Error
+	if errors.As(err, &protocolErr) && protocolErr.Message == "No node found at given location" {
+		return translated, false, nil
+	}
+	if err != nil {
+		return actionPoint{}, false, contextError("hit-test frame point", err)
+	}
+	if hitFrame == s.frameID {
+		return translated, true, nil
+	}
+	own := findFrameTree(tree, s.frameID)
+	return translated, own != nil && findFrameTree(own, hitFrame) != nil, nil
 }
 
 // translateFramePoints maps several points from one snapshot of the frame owner's geometry. A

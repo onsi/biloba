@@ -124,6 +124,9 @@ const (
 )
 
 func (s *Session) RegisterNetworkHandler(ctx context.Context, options NetworkHandlerOptions) (NetworkHandler, error) {
+	if err := s.tabOnly("register network handler"); err != nil {
+		return NetworkHandler{}, err
+	}
 	if _, err := MatchExpectation("", options.URL); err != nil {
 		return NetworkHandler{}, &Error{Code: CodeInvalidArgument, Operation: "register network handler", Message: err.Error(), Cause: err}
 	}
@@ -871,6 +874,9 @@ func (s *Session) WaitForNetworkIdle(ctx context.Context, p PollPolicy) (PollRes
 	})
 }
 func (s *Session) SetNetworkState(ctx context.Context, state NetworkState) error {
+	if err := s.tabOnly("set network state"); err != nil {
+		return err
+	}
 	if state.Latency < 0 || state.DownloadThroughput < 0 || state.UploadThroughput < 0 {
 		return &Error{Code: CodeInvalidArgument, Operation: "set network state", Message: "latency and throughput must not be negative"}
 	}
@@ -920,6 +926,9 @@ func (s *Session) ResetNetworkState(ctx context.Context) error {
 	return s.SetNetworkState(ctx, NetworkState{})
 }
 func (s *Session) SetCacheEnabled(ctx context.Context, enabled bool) error {
+	if err := s.tabOnly("set cache enabled"); err != nil {
+		return err
+	}
 	return s.serial(ctx, "set cache enabled", func(op context.Context) error {
 		s.networkMu.Lock()
 		s.cacheEnabled = enabled

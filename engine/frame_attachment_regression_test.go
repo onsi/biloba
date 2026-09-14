@@ -23,9 +23,12 @@ var _ = Describe("frame attachment cancellation", func() {
 		}))
 		DeferCleanup(child.Close)
 
+		// The replacement below needs a site of its own. Chrome may put another localhost frame in the
+		// busy child's renderer, which is still spinning after the child is removed, so the replacement
+		// document would never start.
 		isolatedBrowser, err := engine.StartBrowser(ctx, engine.BrowserConfig{
 			ExecutablePath: chromePath(),
-			Arguments:      []string{"--site-per-process"},
+			Arguments:      []string{"--site-per-process", "--host-resolver-rules=MAP replacement.test 127.0.0.1"},
 		})
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(isolatedBrowser.Close)
@@ -58,7 +61,7 @@ var _ = Describe("frame attachment cancellation", func() {
 		// Removing the busy document and discovering a replacement also verifies that a canceled
 		// attachment was not published as a permanently poisoned renderer connection.
 		_, err = root.Evaluate(ctx, `document.querySelector('iframe').remove();
-			const replacement = document.createElement('iframe'); replacement.src = `+strconv.Quote(strings.Replace(server.URL, "127.0.0.1", "localhost", 1)+"/destination")+`; document.body.append(replacement)`)
+			const replacement = document.createElement('iframe'); replacement.src = `+strconv.Quote(strings.Replace(server.URL, "127.0.0.1", "replacement.test", 1)+"/destination")+`; document.body.append(replacement)`)
 		Expect(err).NotTo(HaveOccurred())
 		replacement, err := root.WaitForFrame(ctx, engine.FrameQuery{
 			HasElement: selectorPtr(engine.TestID("destination")),
