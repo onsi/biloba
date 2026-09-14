@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -123,6 +124,8 @@ type DiscoverableSession interface {
 type SessionMetadata struct {
 	ContextID   string
 	TargetID    string
+	FrameID     string
+	DocumentID  string
 	OpenerID    string
 	OwnsContext bool
 	Frame       bool
@@ -599,6 +602,7 @@ type OpenSessionResponse struct {
 	SessionID   string `json:"sessionId"`
 	ContextID   string `json:"contextId,omitempty"`
 	TargetID    string `json:"targetId,omitempty"`
+	FrameID     string `json:"frameId,omitempty"`
 	OpenerID    string `json:"openerId,omitempty"`
 	OwnsContext bool   `json:"ownsContext,omitempty"`
 	Frame       bool   `json:"frame,omitempty"`
@@ -1909,24 +1913,50 @@ func (s *Server) registerSession(session Session) (OpenSessionResponse, *Protoco
 		metadata = discoverable.Metadata()
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if metadata.TargetID != "" {
+	if metadata.TargetID != "" || metadata.FrameID != "" {
 		for id, entry := range s.sessions {
-			if existing, ok := entry.session.(DiscoverableSession); ok && existing.Metadata().TargetID == metadata.TargetID {
-				return openSessionResponse(id, metadata), nil
+			if existing, ok := entry.session.(DiscoverableSession); ok && sameSessionIdentity(existing.Metadata(), metadata) {
+				response := openSessionResponse(id, metadata)
+				sameHandle := sameSessionHandle(entry.session, session)
+				s.mu.Unlock()
+				// Frame discovery returns a fresh document-scoped backend handle for an identity
+				// already published on the wire. Discard that redundant acquisition without closing
+				// the handle already owned by the existing protocol session. Tab discovery, by
+				// contrast, returns shared cached handles and must not close its duplicate wrapper.
+				if metadata.Frame && !sameHandle {
+					_ = session.Close()
+				}
+				return response, nil
 			}
 		}
 	}
 	id, err := randomID()
 	if err != nil {
+		s.mu.Unlock()
 		return OpenSessionResponse{}, NewError(CodeDriver, "generate session id")
 	}
 	s.sessions[id] = &sessionEntry{session: session}
+	s.mu.Unlock()
 	return openSessionResponse(id, metadata), nil
 }
 
+func sameSessionHandle(left, right Session) bool {
+	leftValue, rightValue := reflect.ValueOf(left), reflect.ValueOf(right)
+	return leftValue.IsValid() && rightValue.IsValid() && leftValue.Kind() == reflect.Pointer && rightValue.Kind() == reflect.Pointer && leftValue.Type() == rightValue.Type() && leftValue.Pointer() == rightValue.Pointer()
+}
+
 func openSessionResponse(id string, metadata SessionMetadata) OpenSessionResponse {
-	return OpenSessionResponse{SessionID: id, ContextID: metadata.ContextID, TargetID: metadata.TargetID, OpenerID: metadata.OpenerID, OwnsContext: metadata.OwnsContext, Frame: metadata.Frame, URL: metadata.URL}
+	return OpenSessionResponse{SessionID: id, ContextID: metadata.ContextID, TargetID: metadata.TargetID, FrameID: metadata.FrameID, OpenerID: metadata.OpenerID, OwnsContext: metadata.OwnsContext, Frame: metadata.Frame, URL: metadata.URL}
+}
+
+func sameSessionIdentity(left, right SessionMetadata) bool {
+	if left.ContextID != right.ContextID || left.TargetID != right.TargetID {
+		return false
+	}
+	if left.Frame || right.Frame {
+		return left.Frame && right.Frame && left.FrameID != "" && left.FrameID == right.FrameID && left.DocumentID != "" && left.DocumentID == right.DocumentID
+	}
+	return true
 }
 
 func (s *Server) invalidateContext(session Session, keepID string, keepSelf bool) []string {

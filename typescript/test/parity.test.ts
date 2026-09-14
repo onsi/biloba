@@ -35,7 +35,9 @@ const daemonExecutable = process.env.BILOBA_DAEMON_EXECUTABLE;
 // exactly like a suite that passed.  Opt out deliberately with BILOBA_SKIP_PARITY=true.
 describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript parity contract", () => {
   let server: Server;
+  let childServer: Server;
   let baseUrl: string;
+  let childBaseUrl: string;
   let browser: Browser;
   let session: Session;
   let sharedBrowser: SharedBrowserProcess;
@@ -71,29 +73,92 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("fixture server did not bind TCP");
     baseUrl = `http://127.0.0.1:${address.port}`;
+
+    childServer = createServer((request, response) => {
+      const id = new URL(request.url ?? "/", "http://child.test").searchParams.get("id") ?? "child";
+      const serializedId = JSON.stringify(id);
+      response.setHeader("content-type", "text/html");
+      response.end(`<!doctype html><title>${id}</title><script>window.frameState = {id: ${serializedId}, count: 1}; let frameLexical = "lexical-" + ${serializedId};</script><form onsubmit="event.preventDefault(); success.hidden=false; success.textContent=document.querySelector('input').value"><label>Email <input name="email"></label><button type="submit">Submit</button></form><div id="success" hidden></div><input id="frame-upload" type="file">`);
+    });
+    await new Promise<void>((resolve, reject) => {
+      childServer.once("error", reject);
+      childServer.listen(0, "127.0.0.1", resolve);
+    });
+    const childAddress = childServer.address();
+    if (!childAddress || typeof childAddress === "string") throw new Error("child fixture server did not bind TCP");
+    childBaseUrl = `http://127.0.0.1:${childAddress.port}`;
     artifactDir = await mkdtemp(join(tmpdir(), "biloba-parity-"));
     baselineDir = join(artifactDir, "baselines");
     // No chromePath: bilobad runs the same runner-neutral Chrome search the Go suite does, so this
     // exercises the resolution path a real worker takes.
-    sharedBrowser = await startSharedBrowser({executable: daemonExecutable, chromeArgs: ["--site-per-process"]});
+    sharedBrowser = await startSharedBrowser({executable: daemonExecutable});
     browser = await connect({daemonExecutable: daemonExecutable, chromeConnection: sharedBrowser.connection, artifactDir, screenshotBaselinesDir: baselineDir, onScreenshotWarning: ({message}) => screenshotWarnings.push(message)});
     session = await browser.openSession();
   });
 
-  it("drives a cross-origin OOPIF launched under site-per-process", async () => {
-    expect(browser.launch).toMatchObject({attached: true, source: "shared-host", chromeArgs: ["--site-per-process"], windowSize: {width: 1024, height: 768}});
-    const session = await browser.openSession();
-    const crossOrigin = baseUrl.replace("127.0.0.1", "localhost");
-    await session.navigate(baseUrl);
-    await session.evaluate(`url => { const frame = document.createElement("iframe"); frame.id = "oopif"; frame.src = url; document.body.append(frame); }`, [crossOrigin]);
-    const frame = await session.waitForFrame({url: {kind: "contains", expected: "localhost"}}, {timeoutMs: 5_000});
-    expect(frame.isFrame).toBe(true);
-    expect(frame.frameUrl).toContain("localhost");
-    await frame.getByRole("heading", {name: "Biloba parity"}).expectVisible();
-    expect((await session.captureDiagnostics({screenshots: false, outlines: false})).tabs.every((tab) => tab.targetId !== frame.targetId)).toBe(true);
-    await session.prepare();
-    await expect(frame.title()).rejects.toMatchObject({code: "DRIVER_CLOSED"});
-    await session.close();
+  it("drives same-site cross-origin frames through the TypeScript client", async () => {
+    expect(browser.launch).toMatchObject({attached: true, source: "shared-host", chromeArgs: [], windowSize: {width: 1024, height: 768}});
+    const frameOwner = await browser.openSession();
+    expect(frameOwner.contextId).not.toBe(session.contextId);
+    await frameOwner.navigate(baseUrl);
+    await frameOwner.evaluate(`url => {
+      document.body.innerHTML = '<button id="parent-trap" style="position:fixed;left:0;top:0;width:250px;height:150px">Parent</button><input id="parent-upload" type="file">';
+      document.querySelector("#parent-trap").onclick = event => { event.currentTarget.dataset.clicked = "yes"; };
+      for (const [index, id] of ["one", "two"].entries()) {
+        const frame = document.createElement("iframe");
+        frame.id = id;
+        frame.style.cssText = "position:fixed;left:400px;top:" + (100 + index * 300) + "px;width:320px;height:220px;border:8px solid black;transform:rotate(1deg);transform-origin:top left";
+        frame.src = url + "/child-form?id=" + id;
+        document.body.append(frame);
+      }
+    }`, [childBaseUrl]);
+
+    const frame = await frameOwner.waitForFrame({url: {kind: "contains", expected: "id=one"}, has: 'input[name="email"]'}, {timeoutMs: 5_000});
+    const second = await frameOwner.waitForFrame({title: "two"}, {timeoutMs: 5_000});
+    expect(frame).toMatchObject({isFrame: true, frameUrl: expect.stringContaining("id=one"), frameId: expect.any(String)});
+    expect(second.frameId).not.toBe(frame.frameId);
+    expect(await frameOwner.frames()).toHaveLength(2);
+
+    await frameOwner.evaluate(`window.frameState = {id: "parent", count: 10}; window.frameLexical = "parent"`);
+    expect(await frame.evaluate(`[window.frameState.id, window.frameState.count, frameLexical]`)).toEqual(["one", 1, "lexical-one"]);
+    await frame.evaluate(`window.frameState.count = 2; frameLexical = "changed-in-one"`);
+    expect(await frame.evaluate(`[window.frameState.count, frameLexical]`)).toEqual([2, "changed-in-one"]);
+    expect(await second.evaluate(`[window.frameState.id, window.frameState.count, frameLexical]`)).toEqual(["two", 1, "lexical-two"]);
+    expect(await frameOwner.evaluate(`[window.frameState.id, window.frameState.count, window.frameLexical]`)).toEqual(["parent", 10, "parent"]);
+
+    await frame.locator('input[name="email"]').setValue("ada@example.com");
+    await frame.locator('button[type="submit"]').realistic().click();
+    await frame.locator("#success").expectVisible();
+    await frame.locator("#success").expectText("ada@example.com");
+    expect(await frameOwner.evaluate(`document.querySelector('#parent-trap').dataset.clicked || ''`)).toBe("");
+    const frameUpload = join(artifactDir, "frame-upload.txt");
+    await writeFile(frameUpload, "frame");
+    await frame.locator("#frame-upload").setUploadFiles([frameUpload]);
+    expect(await frame.evaluate(`document.querySelector('#frame-upload').files[0].name`)).toBe("frame-upload.txt");
+    expect(await frameOwner.evaluate(`document.querySelector('#parent-upload').files.length`)).toBe(0);
+    await second.locator('input[name="email"]').setValue("grace@example.com");
+    await frame.locator('input[name="email"]').expectValue("ada@example.com");
+
+    await frameOwner.evaluate(`document.querySelector("#one").remove()`);
+    await expect(frame.locator("#success").expectVisible()).rejects.toMatchObject({code: "TARGET_NOT_FOUND"});
+    await expect(frame.evaluate(`window.frameState.id`)).rejects.toMatchObject({code: "TARGET_NOT_FOUND"});
+
+    await frameOwner.evaluate(`url => { document.querySelector("#two").src = url + "/child-form?id=replaced"; }`, [childBaseUrl]);
+    const replacement = await frameOwner.waitForFrame({url: {kind: "contains", expected: "id=replaced"}}, {timeoutMs: 5_000});
+    await expect(second.locator('input[name="email"]').expectVisible()).rejects.toMatchObject({code: "TARGET_NOT_FOUND"});
+    await expect(second.evaluate(`window.frameState.id`)).rejects.toMatchObject({code: "TARGET_NOT_FOUND"});
+    expect(await replacement.evaluate(`[window.frameState.id, frameLexical]`)).toEqual(["replaced", "lexical-replaced"]);
+
+    await frameOwner.navigate(baseUrl);
+    await expect(replacement.locator('input[name="email"]').expectVisible()).rejects.toMatchObject({code: "TARGET_NOT_FOUND"});
+    await expect(replacement.evaluate(`window.frameState.id`)).rejects.toMatchObject({code: "TARGET_NOT_FOUND"});
+
+    await frameOwner.evaluate(`url => { const frame = document.createElement("iframe"); frame.src = url + "/child-form?id=prepare"; document.body.append(frame); }`, [childBaseUrl]);
+    const preparedFrame = await frameOwner.waitForFrame({title: "prepare"}, {timeoutMs: 5_000});
+    await frameOwner.prepare();
+    await expect(preparedFrame.title()).rejects.toMatchObject({code: "DRIVER_CLOSED"});
+    await frameOwner.close();
+    expect(await session.title()).toBe("");
   });
 
   it("captures raw screenshots and runs the visual baseline workflow through the real daemon", async () => {
@@ -207,6 +272,9 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     await sharedBrowser?.stop();
     if (server) {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+    if (childServer) {
+      await new Promise<void>((resolve, reject) => childServer.close((error) => error ? reject(error) : resolve()));
     }
     if (artifactDir) await rm(artifactDir, {recursive: true, force: true});
   });

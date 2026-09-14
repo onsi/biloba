@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/chromedp/cdproto/accessibility"
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/input"
@@ -67,25 +68,44 @@ func TapContext(ctx context.Context, x, y float64) error {
 // remote object, then hand DOM.setFileInputFiles its object id.  Reports false when the selector
 // matched nothing, so a caller can poll rather than fail.
 func SetFileInputFilesContext(ctx context.Context, nodeScript string, paths []string) (bool, error) {
-	var node *runtime.RemoteObject
-	if err := chromedp.Run(ctx, chromedp.Evaluate(nodeScript, &node)); err != nil {
-		return false, err
-	}
-	if node == nil || node.ObjectID == "" {
-		return false, nil
-	}
-	if err := chromedp.Run(ctx, dom.SetFileInputFiles(paths).WithObjectID(node.ObjectID)); err != nil {
-		return false, err
-	}
-	return true, nil
+	found := false
+	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
+		evaluate := runtime.Evaluate(nodeScript).WithUserGesture(true)
+		evaluate = scopeEvaluation(ctx, evaluate)
+		node, exception, evaluateErr := evaluate.Do(runCtx)
+		if evaluateErr != nil {
+			return evaluateErr
+		}
+		if exception != nil {
+			return exception
+		}
+		if node == nil || node.ObjectID == "" {
+			return nil
+		}
+		defer func() { _ = runtime.ReleaseObject(node.ObjectID).Do(runCtx) }()
+		if setErr := dom.SetFileInputFiles(paths).WithObjectID(node.ObjectID).Do(runCtx); setErr != nil {
+			return setErr
+		}
+		found = true
+		return nil
+	}))
+	return found, err
 }
 
 // AccessibilityTreeContext reads the full accessibility tree for the tab.
 func AccessibilityTreeContext(ctx context.Context) ([]*accessibility.Node, error) {
+	return accessibilityTreeContext(ctx, "")
+}
+
+func accessibilityTreeContext(ctx context.Context, frameID cdp.FrameID) ([]*accessibility.Node, error) {
 	var nodes []*accessibility.Node
 	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
+		request := accessibility.GetFullAXTree()
+		if frameID != "" {
+			request = request.WithFrameID(frameID)
+		}
 		var readErr error
-		nodes, readErr = accessibility.GetFullAXTree().Do(runCtx)
+		nodes, readErr = request.Do(runCtx)
 		return readErr
 	}))
 	if err != nil {

@@ -75,11 +75,17 @@ type Browser struct {
 	launch       LaunchMetadata
 	mu           sync.Mutex
 	sessions     map[*Session]struct{}
+	frameTargets map[target.ID]*frameTargetContext
 	closedIDs    map[target.ID]struct{}
 	closedOrder  []target.ID
 	closed       bool
 	webSocketURL string
 	debug        *debugDispatcher
+}
+
+type frameTargetContext struct {
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // StartBrowser starts exactly one Chrome process using the supplied executable.
@@ -253,6 +259,8 @@ func (b *Browser) listenForDestroyedTargets() error {
 
 func (b *Browser) removeDestroyedTarget(targetID target.ID) {
 	b.mu.Lock()
+	managed := b.frameTargets[targetID]
+	delete(b.frameTargets, targetID)
 	var destroyed []*Session
 	for session := range b.sessions {
 		if session.targetID == targetID {
@@ -268,6 +276,9 @@ func (b *Browser) removeDestroyedTarget(targetID target.ID) {
 		b.rememberClosedTargetLocked(targetID)
 	}
 	b.mu.Unlock()
+	if managed != nil {
+		managed.cancel()
+	}
 	for _, session := range destroyed {
 		go session.markTargetDestroyed()
 	}
@@ -388,6 +399,7 @@ func (b *Browser) openTabLocked(ctx context.Context, browserContextID cdp.Browse
 		return nil, contextError("open tab", err)
 	}
 	tabCtx, cancelTab := chromedp.NewContext(b.ctx, chromedp.WithTargetID(targetID))
+	tabCtx = trackFrameWorlds(tabCtx)
 	attachDone := make(chan error, 1)
 	go func() {
 		// The first Run owns chromedp's target executor for the session lifetime. It must use the
@@ -549,7 +561,7 @@ func (b *Browser) DebugDropped() uint64 { return b.debug.droppedCount() }
 func (b *Browser) removeSession(session *Session) {
 	b.mu.Lock()
 	delete(b.sessions, session)
-	if session.targetID != "" {
+	if session.targetID != "" && !session.frameTarget {
 		b.rememberClosedTargetLocked(session.targetID)
 	}
 	b.mu.Unlock()

@@ -2,7 +2,11 @@
 
 ### Features
 
+- TypeScript `Session.frames()` and `waitForFrame()` now cover same-site cross-origin iframes as well as nested OOPIF targets. Frame locators, trusted pointer input, uploads, actions, assertions, and JavaScript evaluation run in the correct CDP-scoped document without relaxing the browser's same-origin policy. Frame evaluation uses the document's normal JavaScript environment, so it can read and update globals created by the frame's own scripts. Additive `frameId` metadata distinguishes multiple frames sharing one renderer target. Independently acquired and nested handles have independent lifetimes. Removed, replaced, navigated, and parent-navigated frame documents fail predictably as stale handles, while owner close/prepare continues to invalidate every descendant.
+
 ### Fixes
+
+- Frame discovery includes sandboxed documents and can find a responsive frame while an unrelated renderer is stuck. Frame element screenshots, masks, animation cleanup, and accessibility outlines now stay scoped to the selected frame.
 
 ## 0.16.2
 

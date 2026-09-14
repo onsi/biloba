@@ -76,6 +76,7 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 	// OpenSession, openTab, Close, Sessions, target reconciliation - behind a round trip to a target
 	// that may be mid-teardown.  listenToSession's own comment says as much from the other side.
 	tabCtx, cancelTab := chromedp.NewContext(b.ctx, chromedp.WithTargetID(targetID))
+	tabCtx = trackFrameWorlds(tabCtx)
 	if !attachProbeSucceeds(ctx, tabCtx) {
 		cancelTab()
 		// A target that will not attach is skipped - it is almost always one Chrome is still

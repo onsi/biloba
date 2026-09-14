@@ -632,6 +632,7 @@ export interface Session {
   readonly id: string;
   readonly contextId: string;
   readonly targetId: string;
+  readonly frameId?: string;
   readonly openerId?: string;
   readonly ownsContext: boolean;
   readonly isFrame: boolean;

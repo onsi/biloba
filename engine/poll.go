@@ -17,6 +17,7 @@ const (
 	CodeInvalidArgument ErrorCode = "invalid_argument"
 	CodeBrowserStart    ErrorCode = "browser_start"
 	CodeSessionClosed   ErrorCode = "session_closed"
+	CodeFrameDetached   ErrorCode = "frame_detached"
 	CodeNavigation      ErrorCode = "navigation"
 	CodeJavaScript      ErrorCode = "javascript"
 	CodeNotFound        ErrorCode = "not_found"
@@ -66,7 +67,7 @@ func (e *Error) Unwrap() error { return e.Cause }
 // blames the page for something that was never about the page.
 func (e *Error) Fatal() bool {
 	switch e.Code {
-	case CodeBrowserGone, CodeSessionClosed, CodeInvalidSelector, CodeInvalidScript, CodePageCrashed:
+	case CodeBrowserGone, CodeSessionClosed, CodeFrameDetached, CodeInvalidSelector, CodeInvalidScript, CodePageCrashed:
 		return true
 	default:
 		return false

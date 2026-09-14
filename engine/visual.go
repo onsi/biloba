@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/chromedp"
 )
 
 const DefaultMaxScreenshotBytes = 16 << 20
@@ -163,7 +164,14 @@ func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, opt
 				shot.Warning = fmt.Sprintf("element %s is partially clipped by %s (%.0f%% visible)", selector.Description(), clipper, visibleFraction*100)
 			}
 		}
-		clip := &page.Viewport{X: floatValue(box["x"]), Y: floatValue(box["y"]), Width: floatValue(box["width"]), Height: floatValue(box["height"]), Scale: 1}
+		x, y, width, height, translateErr := s.translateScreenshotRect(ctx,
+			floatValue(box["x"]), floatValue(box["y"]),
+			floatValue(box["width"]), floatValue(box["height"]),
+		)
+		if translateErr != nil {
+			return shot, translateErr
+		}
+		clip := &page.Viewport{X: x, Y: y, Width: width, Height: height, Scale: 1}
 		originX, originY, cssWidth = clip.X, clip.Y, clip.Width
 		inViewport, _ := box["inViewport"].(bool)
 		pngBytes, err = CaptureClipContext(ctx, clip, !inViewport)
@@ -202,8 +210,14 @@ func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, opt
 			if !ok {
 				continue
 			}
-			x, y := floatValue(box["x"])-originX, floatValue(box["y"])-originY
-			w, h := floatValue(box["width"]), floatValue(box["height"])
+			x, y, w, h, translateErr := s.translateScreenshotRect(ctx,
+				floatValue(box["x"]), floatValue(box["y"]),
+				floatValue(box["width"]), floatValue(box["height"]),
+			)
+			if translateErr != nil {
+				return shot, translateErr
+			}
+			x, y = x-originX, y-originY
 			rects = append(rects, image.Rect(int(math.Floor(x*scale)), int(math.Floor(y*scale)), int(math.Ceil((x+w)*scale)), int(math.Ceil((y+h)*scale))))
 		}
 		pngBytes, err = maskScreenshotPNG(pngBytes, rects)
@@ -219,9 +233,63 @@ func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, opt
 	return shot, nil
 }
 
+// translateScreenshotRect maps a rectangle from a same-process frame's document into the owning
+// renderer target's document. CDP captures clips in the latter coordinate space. OOPIFs already
+// have their own renderer target, so their rectangles need no translation.
+func (s *Session) translateScreenshotRect(ctx context.Context, x, y, width, height float64) (float64, float64, float64, float64, error) {
+	if s.frameOOPIF || s.frameID == "" {
+		return x, y, width, height, nil
+	}
+
+	var frameScroll struct {
+		X float64 `json:"x"`
+		Y float64 `json:"y"`
+	}
+	if err := EvaluateContext(ctx, `({x: window.scrollX, y: window.scrollY})`, false, &frameScroll); err != nil {
+		return 0, 0, 0, 0, contextError("translate screenshot rectangle", err)
+	}
+
+	left, top := x-frameScroll.X, y-frameScroll.Y
+	points := [...]actionPoint{
+		{x: left, y: top},
+		{x: left + width, y: top},
+		{x: left + width, y: top + height},
+		{x: left, y: top + height},
+	}
+	translated, err := s.translateFramePoints(ctx, points[:])
+	if err != nil {
+		return 0, 0, 0, 0, err
+	}
+	minX, minY := math.Inf(1), math.Inf(1)
+	maxX, maxY := math.Inf(-1), math.Inf(-1)
+	for _, point := range translated {
+		minX, minY = math.Min(minX, point.x), math.Min(minY, point.y)
+		maxX, maxY = math.Max(maxX, point.x), math.Max(maxY, point.y)
+	}
+
+	var pageX, pageY float64
+	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
+		_, _, _, _, viewport, _, metricsErr := page.GetLayoutMetrics().Do(runCtx)
+		if metricsErr != nil {
+			return metricsErr
+		}
+		if viewport == nil {
+			return errors.New("Chrome did not report a visual viewport")
+		}
+		pageX, pageY = viewport.PageX, viewport.PageY
+		return nil
+	})); err != nil {
+		return 0, 0, 0, 0, contextError("translate screenshot rectangle", err)
+	}
+	return minX + pageX, minY + pageY, maxX - minX, maxY - minY, nil
+}
+
 func (s *Session) visualCleanupContext() (context.Context, context.CancelFunc) {
 	requestCtx, requestCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	cleanupCtx, cleanupCancel := executorContext(s.ctx, requestCtx)
+	if s.frameWorld.id != 0 {
+		cleanupCtx = withExecutionContext(cleanupCtx, s.frameWorld)
+	}
 	return cleanupCtx, func() {
 		cleanupCancel()
 		requestCancel()
