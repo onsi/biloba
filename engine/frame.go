@@ -8,6 +8,7 @@ import (
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
@@ -436,6 +437,39 @@ func (s *Session) attachFrame(ctx context.Context, descriptor frameDescriptor) (
 		s.browser.listenToFrameDocument(frameSession)
 	}
 	return &Frame{Session: frameSession, url: descriptor.frame.URL}, true, nil
+}
+
+// Frame IDs survive navigation. Event histories belong to the loader and page world
+// the handle was created for, including when several documents share a target.
+func (s *Session) acceptsDocumentEvent(id cdp.FrameID, loader cdp.LoaderID) bool {
+	return s.eventsEnabled.Load() && (s.frameID == "" ||
+		(id == s.frameID && loader == s.frameLoaderID && s.frameWorldCurrent()))
+}
+
+func (s *Session) acceptsConsoleEvent(id runtime.ExecutionContextID) bool {
+	return s.eventsEnabled.Load() && (s.frameID == "" ||
+		(id == s.frameWorld.id && s.frameWorldCurrent()))
+}
+
+func (s *Session) frameWorldCurrent() bool {
+	world, err := mainFrameWorld(s.ctx, s.frameID)
+	return s.ctx.Err() == nil && err == nil && world.uniqueID == s.frameWorld.uniqueID
+}
+
+// Event waits must remain independent of serialized renderer operations: an evaluation
+// can be waiting for the very request the caller is observing. The world's registry
+// is maintained by CDP events and needs neither a renderer command nor the session lock.
+func (s *Session) frameObservationError(operation string) error {
+	if s.frameID == "" {
+		return nil
+	}
+	if s.ctx.Err() != nil {
+		return &Error{Code: CodeSessionClosed, Operation: operation, Message: "session is closed"}
+	}
+	if !s.frameWorldCurrent() {
+		return staleFrameError(operation, s.frameID)
+	}
+	return nil
 }
 
 func (s *Session) validateFrameDocument(ctx context.Context) error {

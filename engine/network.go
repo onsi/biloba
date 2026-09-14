@@ -215,6 +215,9 @@ func (s *Session) RequestsMatching(query RequestQuery) []Request {
 func (s *Session) WaitForRequest(ctx context.Context, query RequestQuery, policy PollPolicy) (Request, error) {
 	var found Request
 	_, err := Poll(ctx, policy, func(context.Context) (Observation, bool, error) {
+		if err := s.frameObservationError("wait for request"); err != nil {
+			return Observation{}, false, err
+		}
 		matches := s.RequestsMatching(query)
 		if len(matches) == 0 {
 			return Observation{}, false, nil

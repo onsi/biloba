@@ -161,6 +161,8 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     await frameOwner.navigate(baseUrl);
     await expect(replacement.locator('input[name="email"]').expectVisible()).rejects.toMatchObject({code: "TARGET_NOT_FOUND"});
     await expect(replacement.evaluate(`window.frameState.id`)).rejects.toMatchObject({code: "TARGET_NOT_FOUND"});
+    await expect(replacement.waitForRequest({url: contains("/never")}, {timeoutMs: 100})).rejects.toMatchObject({code: "TARGET_NOT_FOUND"});
+    await expect(replacement.expectNetworkIdle({timeoutMs: 100})).rejects.toMatchObject({code: "TARGET_NOT_FOUND"});
 
     await frameOwner.evaluate(`url => { const frame = document.createElement("iframe"); frame.src = url + "/child-form?id=prepare"; document.body.append(frame); }`, [childBaseUrl]);
     const preparedFrame = await frameOwner.waitForFrame({title: "prepare"}, {timeoutMs: 5_000});
@@ -168,6 +170,65 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     await expect(preparedFrame.title()).rejects.toMatchObject({code: "DRIVER_CLOSED"});
     await frameOwner.close();
     expect(await session.title()).toBe("");
+  });
+
+  it("drives an out-of-process iframe through its own renderer target", async () => {
+    const isolatedChrome = await startSharedBrowser({executable: daemonExecutable!, chromeArgs: ["--site-per-process"]});
+    let isolatedBrowser: Browser | undefined;
+    try {
+      isolatedBrowser = await connect({daemonExecutable: daemonExecutable!, chromeConnection: isolatedChrome.connection, artifactDir});
+      expect(isolatedBrowser.launch.chromeArgs).toContain("--site-per-process");
+      const owner = await isolatedBrowser.openSession();
+      const otherTab = await owner.newTab();
+      await Promise.all([owner.navigate(baseUrl), otherTab.navigate(baseUrl)]);
+      const oopifBaseUrl = childBaseUrl.replace("127.0.0.1", "localhost");
+      await owner.evaluate(`url => {
+        window.frameState = {id: "parent", count: 10};
+        document.body.innerHTML = '<input id="parent-upload" type="file"><iframe id="oopif" style="width:360px;height:240px" src="' + url + '/child-form?id=oopif"></iframe><iframe id="peer" style="width:360px;height:240px" src="' + url + '/child-form?id=peer"></iframe>';
+      }`, [oopifBaseUrl]);
+
+      const frame = await owner.waitForFrame({title: "oopif", has: 'input[name="email"]'}, {timeoutMs: 5_000});
+      const peer = await owner.waitForFrame({title: "peer"}, {timeoutMs: 5_000});
+      expect(frame).toMatchObject({isFrame: true, frameUrl: `${oopifBaseUrl}/child-form?id=oopif`});
+      expect(frame.targetId).not.toBe(owner.targetId);
+      expect(frame.targetId).not.toBe("");
+      expect(await frame.evaluate(`[window.frameState.id, window.frameState.count, frameLexical]`)).toEqual(["oopif", 1, "lexical-oopif"]);
+      expect(await owner.evaluate(`window.frameState`)).toEqual({id: "parent", count: 10});
+
+      await frame.locator('input[name="email"]').realistic().setValue("oopif@example.com");
+      await frame.locator('button[type="submit"]').realistic().click();
+      await frame.locator("#success").expectText("oopif@example.com");
+      const upload = join(artifactDir, "oopif-upload.txt");
+      await writeFile(upload, "oopif");
+      await frame.locator("#frame-upload").setUploadFiles([upload]);
+      expect(await frame.evaluate(`document.querySelector("#frame-upload").files[0].name`)).toBe("oopif-upload.txt");
+      expect(await peer.locator('input[name="email"]').value()).toBe("");
+      expect(await owner.evaluate(`document.querySelector("#parent-upload").files.length`)).toBe(0);
+      expect(await otherTab.getByTestId("upload").value()).toBe("");
+
+      await expect(frame.navigate(`${oopifBaseUrl}/child-form?id=elsewhere`)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+      await expect(frame.addInitScript("window.fromFrameInitScript = true")).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+      await expect(frame.setOffline(true)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+      await expect(frame.captureScreenshot()).rejects.toMatchObject({code: "INVALID_ARGUMENT", message: expect.stringContaining("capture the iframe element")});
+      expect((await owner.locator("#oopif").captureScreenshot()).byteLength).toBeGreaterThan(0);
+
+      await frame.close();
+      expect(await owner.evaluate(`document.querySelector("#oopif").isConnected`)).toBe(true);
+      expect(await peer.evaluate(`window.frameState.id`)).toBe("peer");
+      expect(await otherTab.getByRole("heading", {name: "Biloba parity"}).text()).toBe("Biloba parity");
+
+      const reopened = await owner.waitForFrame({title: "oopif"}, {timeoutMs: 5_000});
+      await owner.evaluate(`url => { document.querySelector("#oopif").src = url + "/child-form?id=replaced"; }`, [oopifBaseUrl]);
+      const replacement = await owner.waitForFrame({title: "replaced"}, {timeoutMs: 5_000});
+      await expect(reopened.evaluate(`window.frameState.id`)).rejects.toMatchObject({code: "TARGET_NOT_FOUND"});
+      expect(await replacement.evaluate(`window.frameState.id`)).toBe("replaced");
+      await owner.navigate(baseUrl);
+      await expect(replacement.waitForRequest({url: contains("/never")}, {timeoutMs: 100})).rejects.toMatchObject({code: "TARGET_NOT_FOUND"});
+      expect(await otherTab.title()).toBe("");
+    } finally {
+      await isolatedBrowser?.close();
+      await isolatedChrome.stop();
+    }
   });
 
   it("captures raw screenshots and runs the visual baseline workflow through the real daemon", async () => {

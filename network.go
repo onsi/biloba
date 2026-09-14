@@ -16,6 +16,7 @@ import (
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 	ginkgotypes "github.com/onsi/ginkgo/v2/types"
+	"github.com/onsi/gomega"
 	"github.com/onsi/gomega/format"
 	"github.com/onsi/gomega/gcustom"
 	"github.com/onsi/gomega/types"
@@ -172,6 +173,9 @@ func (q *RequestQuery) Match(actual any) (bool, error) {
 	if !ok {
 		return false, fmt.Errorf("HaveMadeRequest must be passed a Biloba tab.  Got:\n%s", format.Object(actual, 1))
 	}
+	if err := tab.validateFrameDocument("inspect its requests"); err != nil {
+		return false, gomega.StopTrying(err.Error())
+	}
 	q.observed = tab.AllRequests()
 	return q.observed.Find(q) != nil, nil
 }
@@ -216,6 +220,9 @@ Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn 
 */
 func (b *Biloba) BeNetworkIdle() types.GomegaMatcher {
 	return gcustom.MakeMatcher(func(_ *Biloba) (bool, error) {
+		if err := b.validateFrameDocument("inspect its in-flight requests"); err != nil {
+			return false, gomega.StopTrying(err.Error())
+		}
 		b.lock.Lock()
 		defer b.lock.Unlock()
 		return len(b.state.inflightRequests) == 0, nil

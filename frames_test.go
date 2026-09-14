@@ -253,6 +253,53 @@ var _ = Describe("Cross-origin iframes", func() {
 			Ω(replacement.GetValue("#email")).Should(Equal("new@example.com"))
 		})
 
+		It("does not let a stale handle observe the replacement document", func() {
+			checkout.Run(`fetch("/api/original-only")`)
+			Eventually(checkout).Should(checkout.HaveMadeRequest(ContainSubstring("/api/original-only")))
+
+			b.Run(`document.querySelector("#form-frame").src = "` + crossOriginFixtureServer + `/frame-form.html?replacement"`)
+			replacement := b.Frame(b.FrameMatching().WithURL(ContainSubstring("?replacement")).WithDOMElement("#email"))
+			replacement.Run(`document.body.insertAdjacentHTML("beforeend", '<h1>Replacement only</h1><iframe src="` + fixtureServer + `/iframe-content.html"></iframe>')`)
+			Eventually(replacement).Should(replacement.HaveFrame().WithDOMElement("#iframe-btn"))
+
+			Ω(checkout.AllFrames()).Should(BeEmpty())
+			Ω(checkout.Immediate().Frame(checkout.FrameMatching())).Should(BeNil())
+			Ω(checkout.A11yOutline()).Should(BeEmpty())
+			ExpectFailures(
+				ContainSubstring("frame_detached"),
+				ContainSubstring("frame_detached"),
+				ContainSubstring("frame_detached"),
+			)
+
+			matched, err := checkout.HaveFrame().Match(checkout)
+			Ω(matched).Should(BeFalse())
+			Ω(err).Should(MatchError(ContainSubstring("frame_detached")))
+
+			replacement.Run(`fetch("/api/replacement-only")`)
+			Eventually(replacement).Should(replacement.HaveMadeRequest(ContainSubstring("/api/replacement-only")))
+			originalRequests := checkout.AllRequests()
+			Ω(originalRequests.Filter(checkout.RequestMatching(ContainSubstring("/api/original-only")))).Should(HaveLen(1))
+			Ω(originalRequests.Filter(checkout.RequestMatching(ContainSubstring("/api/replacement-only")))).Should(BeEmpty())
+
+			matched, err = checkout.HaveMadeRequest(ContainSubstring("/api/replacement-only")).Match(checkout)
+			Ω(matched).Should(BeFalse())
+			Ω(err).Should(MatchError(ContainSubstring("frame_detached")))
+			matched, err = checkout.BeNetworkIdle().Match(checkout)
+			Ω(matched).Should(BeFalse())
+			Ω(err).Should(MatchError(ContainSubstring("frame_detached")))
+		})
+
+		It("fails discovery through a closed handle", func() {
+			checkout.Close()
+			Ω(checkout.AllFrames()).Should(BeEmpty())
+			Ω(checkout.Immediate().Frame(checkout.FrameMatching())).Should(BeNil())
+			ExpectFailures(ContainSubstring("frame_detached"), ContainSubstring("frame_detached"))
+
+			matched, err := checkout.HaveFrame().Match(checkout)
+			Ω(matched).Should(BeFalse())
+			Ω(err).Should(MatchError(ContainSubstring("frame_detached")))
+		})
+
 		It("does not carry handles across Prepare", func() {
 			b.Prepare()
 			Ω(b.AllFrames()).Should(BeEmpty())
@@ -334,6 +381,37 @@ var _ = Describe("Out-of-process iframes", func() {
 		Ω(replacement).ShouldNot(BeNil())
 		replacement.SetValue("#email", "new@example.com")
 		frame.Immediate().SetValue("#email", "old@example.com")
+		ExpectFailures(ContainSubstring("frame_detached"))
+	})
+
+	It("does not let a stale handle observe an out-of-process replacement", func() {
+		frame.Run(`fetch("/api/original-only")`)
+		Eventually(frame).Should(frame.HaveMadeRequest(ContainSubstring("/api/original-only")))
+
+		tab.Run(`document.querySelector("#form-frame").src = "` + frameURL + `?replacement"`)
+		replacement := tab.Frame(tab.FrameMatching().WithURL(frameURL + "?replacement").WithDOMElement("#email"))
+		replacement.Run(`document.body.insertAdjacentHTML("beforeend", '<h1>Replacement only</h1><iframe src="` + fixtureServer + `/iframe-content.html"></iframe>')`)
+		Eventually(replacement).Should(replacement.HaveFrame().WithDOMElement("#iframe-btn"))
+		replacement.Run(`fetch("/api/replacement-only")`)
+		Eventually(replacement).Should(replacement.HaveMadeRequest(ContainSubstring("/api/replacement-only")))
+
+		Ω(frame.AllFrames()).Should(BeEmpty())
+		Ω(frame.A11yOutline()).Should(BeEmpty())
+		ExpectFailures(ContainSubstring("frame_detached"), ContainSubstring("frame_detached"))
+
+		originalRequests := frame.AllRequests()
+		Ω(originalRequests.Filter(frame.RequestMatching(ContainSubstring("/api/original-only")))).Should(HaveLen(1))
+		Ω(originalRequests.Filter(frame.RequestMatching(ContainSubstring("/api/replacement-only")))).Should(BeEmpty())
+
+		matched, err := frame.HaveMadeRequest(ContainSubstring("/api/replacement-only")).Match(frame)
+		Ω(matched).Should(BeFalse())
+		Ω(err).Should(MatchError(ContainSubstring("frame_detached")))
+		matched, err = frame.BeNetworkIdle().Match(frame)
+		Ω(matched).Should(BeFalse())
+		Ω(err).Should(MatchError(ContainSubstring("frame_detached")))
+
+		replacement.Close()
+		Ω(replacement.AllFrames()).Should(BeEmpty())
 		ExpectFailures(ContainSubstring("frame_detached"))
 	})
 })

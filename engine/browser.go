@@ -459,7 +459,7 @@ func (b *Browser) listenToSession(session *Session) {
 			session.markCrashed()
 		}
 		if request, ok := event.(*network.EventRequestWillBeSent); ok {
-			if session.eventsEnabled.Load() {
+			if session.acceptsDocumentEvent(request.FrameID, request.LoaderID) {
 				session.recordRequest(request)
 				if request.Type != network.ResourceTypeWebSocket {
 					session.trackRequest(request.RequestID)
@@ -467,7 +467,7 @@ func (b *Browser) listenToSession(session *Session) {
 			}
 		}
 		if response, ok := event.(*network.EventResponseReceived); ok {
-			if session.eventsEnabled.Load() {
+			if session.acceptsDocumentEvent(response.FrameID, response.LoaderID) {
 				session.recordResponse(response)
 			}
 		}
@@ -481,7 +481,7 @@ func (b *Browser) listenToSession(session *Session) {
 			session.handlePausedEvent(paused)
 		}
 		if console, ok := event.(*runtime.EventConsoleAPICalled); ok {
-			if session.eventsEnabled.Load() {
+			if session.acceptsConsoleEvent(console.ExecutionContextID) {
 				session.recordConsoleMessage(console)
 			}
 		}
@@ -506,18 +506,18 @@ func (b *Browser) listenToFrameDocument(session *Session) {
 	chromedp.ListenTarget(session.ctx, func(event any) {
 		switch event := event.(type) {
 		case *runtime.EventConsoleAPICalled:
-			if session.eventsEnabled.Load() && event.ExecutionContextID == session.frameWorld.id {
+			if session.acceptsConsoleEvent(event.ExecutionContextID) {
 				session.recordConsoleMessage(event)
 			}
 		case *network.EventRequestWillBeSent:
-			if session.eventsEnabled.Load() && event.FrameID == session.frameID {
+			if session.acceptsDocumentEvent(event.FrameID, event.LoaderID) {
 				session.recordRequest(event)
 				if event.Type != network.ResourceTypeWebSocket {
 					session.trackRequest(event.RequestID)
 				}
 			}
 		case *network.EventResponseReceived:
-			if session.eventsEnabled.Load() && event.FrameID == session.frameID {
+			if session.acceptsDocumentEvent(event.FrameID, event.LoaderID) {
 				session.recordResponse(event)
 			}
 		case *network.EventLoadingFinished:

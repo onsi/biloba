@@ -868,7 +868,7 @@ Because a frame handle is a `*Biloba`, the rest of these docs apply to it: `.Cap
 
 A frame handle is a document, not a tab.  Methods that act on the tab or its browser context - `Navigate`, `Prepare`, `NewTab`, `SetWindowSize`, `SetCookie`/`ClearCookies`, `StubRequest` and the other network handlers, the dialog handlers and `Dialogs`, and the download queries - fail the spec on a frame handle.  Call them on the tab.  The tab's network stubs apply to the frame's requests, and dialogs the frame opens are handled by the tab.
 
-A frame handle also belongs to one document.  If the iframe is removed or navigated, or the tab navigates, the handle's calls fail with `frame_detached`.  Find the frame again with `b.Frame(...)` to get a handle for the new document.  `b.Prepare()` discards every frame handle.
+A frame handle also belongs to one document.  If the iframe is removed or navigated, or the tab navigates, the handle's calls fail with `frame_detached`.  Find the frame again with `b.Frame(...)` to get a handle for the new document.  `b.Prepare()` discards every frame handle. Previously recorded request history remains available through `AllRequests()`, but the old handle never records the replacement document's requests. Request and network-idle matchers reject the stale handle.
 
 None of this relaxes the browser's same-origin policy - `checkout.Run("parent.document")` still throws a `SecurityError`.  Biloba talks to the frame directly, the way DevTools does.
 

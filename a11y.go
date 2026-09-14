@@ -38,7 +38,13 @@ func (b *Biloba) a11yOutline() (string, error) {
 	err := b.runEngine("capture the accessibility tree", func(ctx context.Context) error {
 		var err error
 		if b.frame != nil {
+			if err = engine.EvaluateContext(ctx, "undefined", false, nil); err != nil {
+				return err
+			}
 			nodes, err = engine.AccessibilityTreeForFrameContext(ctx, b.frame.id)
+			if err == nil {
+				err = engine.EvaluateContext(ctx, "undefined", false, nil)
+			}
 		} else {
 			nodes, err = engine.AccessibilityTreeContext(ctx)
 		}

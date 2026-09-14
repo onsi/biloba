@@ -869,6 +869,9 @@ func (s *Session) InflightRequestCount() int {
 }
 func (s *Session) WaitForNetworkIdle(ctx context.Context, p PollPolicy) (PollResult, error) {
 	return Poll(ctx, p, func(context.Context) (Observation, bool, error) {
+		if err := s.frameObservationError("wait for network idle"); err != nil {
+			return Observation{}, false, err
+		}
 		n := s.InflightRequestCount()
 		return Observation{Value: n}, n == 0, nil
 	})

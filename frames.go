@@ -343,6 +343,9 @@ func (b *Biloba) AllFrames() Frames {
 // discoverFrames lists the cross-origin frames below b, in the tab's renderer and in the out-of-process
 // frame targets below it.
 func (b *Biloba) discoverFrames() (Frames, error) {
+	if err := b.validateFrameDocument("list frames"); err != nil {
+		return nil, err
+	}
 	owner := b.tab()
 	var scope cdp.FrameID
 	if b.frame != nil {
@@ -363,7 +366,22 @@ func (b *Biloba) discoverFrames() (Frames, error) {
 			frames = append(frames, frame)
 		}
 	}
+	if err := b.validateFrameDocument("list frames"); err != nil {
+		return nil, err
+	}
 	return frames, nil
+}
+
+// validateFrameDocument makes operations whose CDP command is addressed by frame ID prove that the
+// handle's original execution context still exists first. Chrome reuses a frame ID across
+// navigations, while the scoped context belongs to exactly one document.
+func (b *Biloba) validateFrameDocument(what string) error {
+	if b.frame == nil {
+		return nil
+	}
+	return b.runEngine(what, func(ctx context.Context) error {
+		return engine.EvaluateContext(ctx, "undefined", false, nil)
+	})
 }
 
 // frameTrees reads this tab's frame tree and the trees of the out-of-process frame targets below it,
@@ -542,10 +560,11 @@ func (b *Biloba) frameHandle(info engine.FrameInfo) *Biloba {
 // too: it sees every request its renderer makes.
 func (b *Biloba) listenForFrameRequests() {
 	id := b.frame.id
+	loaderID := b.frame.loaderID
 	chromedp.ListenTarget(b.Context, func(ev any) {
 		switch ev := ev.(type) {
 		case *network.EventRequestWillBeSent:
-			if ev.FrameID == id {
+			if ev.FrameID == id && ev.LoaderID == loaderID {
 				b.handleEventRequestWillBeSent(ev)
 			}
 		case *network.EventLoadingFinished:
