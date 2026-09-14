@@ -37,13 +37,18 @@ func ResponseBodyContext(ctx context.Context, requestID fetch.RequestID) ([]byte
 
 func responseBodyContext(ctx context.Context, requestID fetch.RequestID, maxBytes int64) ([]byte, cdpio.StreamHandle, bool, error) {
 	var stream cdpio.StreamHandle
+	var takeAttempted bool
 	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
 		var takeErr error
+		takeAttempted = true
 		stream, takeErr = fetch.TakeResponseBodyAsStream(requestID).Do(runCtx)
 		return takeErr
 	}))
 	if err != nil {
-		return nil, "", false, err
+		// A deadline can win after Chrome takes the body but before its reply arrives.
+		// Once we attempt the transfer, callers must fail the request on error:
+		// ContinueResponse cannot resume a body that Chrome has already handed over.
+		return nil, stream, takeAttempted, err
 	}
 	body, err := readBounded(ctx, &cdpStreamReader{ctx: ctx, handle: stream}, maxBytes)
 	return body, stream, true, err

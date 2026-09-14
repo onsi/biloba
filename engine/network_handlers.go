@@ -488,12 +488,6 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 	s.beginInterception()
 	go func() {
 		defer s.endInterception()
-		timeout := 5 * time.Second
-		if h.options.TransformTimeout > 0 {
-			timeout = h.options.TransformTimeout
-		}
-		ctx, cancel := context.WithTimeout(s.ctx, timeout)
-		defer cancel()
 		o := ResponseOverride{}
 		status := int(event.ResponseStatusCode)
 		headers, orderedHeaders := responseHeaders(event.ResponseHeaders)
@@ -502,7 +496,12 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 		if limit == 0 {
 			limit = DefaultInterceptedBodyLimit
 		}
-		body, stream, bodyTaken, err := responseBodyContext(ctx, event.RequestID, limit)
+		// Reading the intercepted body is transport work, not user callback work. Starting the
+		// transform deadline here made a slow upstream response consume the callback's entire budget
+		// before the callback was invoked.
+		bodyCtx, cancelBody := context.WithTimeout(s.ctx, 5*time.Second)
+		body, stream, bodyTaken, err := responseBodyContext(bodyCtx, event.RequestID, limit)
+		cancelBody()
 		defer closeResponseStream(s.ctx, stream)
 		if err != nil {
 			s.recordNetworkHandlerError(h, err)
@@ -510,6 +509,12 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 			return
 		}
 		if h.options.Transform != nil {
+			timeout := 5 * time.Second
+			if h.options.TransformTimeout > 0 {
+				timeout = h.options.TransformTimeout
+			}
+			transformCtx, cancelTransform := context.WithTimeout(s.ctx, timeout)
+			defer cancelTransform()
 			type transformResult struct {
 				override ResponseOverride
 				err      error
@@ -519,7 +524,7 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 				URL: event.Request.URL, Status: status, Headers: cloneStringMap(headers), HeaderEntries: cloneHeaderEntries(orderedHeaders), Body: append([]byte(nil), body...),
 			}
 			go func() {
-				override, transformErr := h.options.Transform(ctx, response)
+				override, transformErr := h.options.Transform(transformCtx, response)
 				result <- transformResult{override: override, err: transformErr}
 			}()
 			select {
@@ -530,8 +535,8 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 					s.fallbackResponse(event.RequestID, status, orderedHeaders, body)
 					return
 				}
-			case <-ctx.Done():
-				s.recordNetworkHandlerError(h, ctx.Err())
+			case <-transformCtx.Done():
+				s.recordNetworkHandlerError(h, transformCtx.Err())
 				s.fallbackResponse(event.RequestID, status, orderedHeaders, body)
 				return
 			}

@@ -60,6 +60,12 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
       if (request.url === "/echo-request") { const chunks: Buffer[] = []; request.on("data", (chunk: Buffer) => chunks.push(chunk)); request.on("end", () => { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({method: request.method, header: request.headers["x-modified"], body: Buffer.concat(chunks).toString("utf8")})); }); return; }
       if (request.url?.startsWith("/network-json") || request.url?.startsWith("/callback")) { response.setHeader("content-type", "text/plain"); response.setHeader("x-duplicate", ["first", "second"]); response.end(request.url.startsWith("/callback") ? "callback" : "network"); return; }
       if (request.url === "/slow") { setTimeout(() => response.end("slow"), 100); return; }
+      if (request.url === "/slow-callback") {
+        response.setHeader("content-type", "text/plain");
+        response.flushHeaders();
+        setTimeout(() => response.end("slow body"), 600);
+        return;
+      }
       response.setHeader("content-type", "text/html");
       // A 4xx that still renders HTML - the case that makes navigate()'s 200 assertion something you
       // need a way out of, rather than a rule that is always right.
@@ -420,6 +426,21 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     expect((await hold.await()).status).toBe(200);
     await hold.release();
     await session.setWindowSize(1920, 1080);
+  });
+
+  it("reads the response body before starting the callback timeout", async () => {
+    await session.prepare();
+    await session.navigate(baseUrl);
+    const route = await session.routeResponse(endsWith("/slow-callback"), (response) => ({
+      status: 202,
+      body: new TextEncoder().encode(new TextDecoder().decode(response.body).toUpperCase()),
+    }), {timeoutMs: 200});
+    try {
+      expect(await session.evaluateAsync(`fetch("/slow-callback").then(async response => [response.status, await response.text()])`)).toEqual([202, "SLOW BODY"]);
+      expect((await route.stats()).lastError).toBeFalsy();
+    } finally {
+      await route.remove();
+    }
   });
 
   it("bridges dialog, download, and network lifecycles through the real daemon", async () => {
