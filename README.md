@@ -3,7 +3,7 @@
   <img alt="Biloba" src="docs/images/biloba.png">
 </picture>
 
-[![test](https://github.com/onsi/biloba/actions/workflows/test.yml/badge.svg?branch=master)](https://github.com/onsi/biloba/actions/workflows/test.yml?query=branch%3Amaster) [![Biloba Docs](docs/images/docs-badge.svg)](https://onsi.github.io/biloba/)
+[![test](https://github.com/onsi/biloba/actions/workflows/test.yml/badge.svg?branch=master)](https://github.com/onsi/biloba/actions/workflows/test.yml?query=branch%3Amaster) [![Biloba Docs](docs/images/docs-badge.svg)](https://onsi.github.io/biloba/) [![Sponsor onsi](docs/images/sponsor-badge.svg)](https://github.com/sponsors/onsi)
 
 ---
 
