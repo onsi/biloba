@@ -1,4 +1,4 @@
-<picture>
+<picture id="README">
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/biloba-dark.png">
   <img alt="Biloba" src="docs/images/biloba.png">
 </picture>
