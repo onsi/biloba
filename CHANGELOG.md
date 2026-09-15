@@ -7,6 +7,8 @@
 
 ### Fixes
 
+- Two processes auto-installing chrome-headless-shell at once no longer launch a half-extracted copy: the cache search skips installs still being extracted (both clients).
+- A command given an already-cancelled context (a Go `WithContext`, or an engine request) fails before it reaches Chrome, instead of sometimes running.
 - Old frame handles no longer discover replacement documents or record their requests. Live frame matchers stop when their document is gone, while saved request history remains available.
 - Frame accessibility reads reject navigation during the read instead of returning the replacement document's tree (both clients).
 - TypeScript `routeResponse()` callbacks get their full `timeoutMs` after the response body arrives; the body read has its own timeout of five seconds, or `timeoutMs` if longer. A body transfer interrupted by a timeout fails the request instead of leaving it stuck.
