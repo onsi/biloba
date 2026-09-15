@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"time"
 
 	"github.com/chromedp/cdproto/accessibility"
 	"github.com/chromedp/cdproto/cdp"
@@ -98,6 +99,15 @@ func SetSandboxApparmorRestrictedForTest(restricted bool, err error) func() {
 	previous := sandboxApparmorRestricted
 	sandboxApparmorRestricted = func() (bool, error) { return restricted, err }
 	return func() { sandboxApparmorRestricted = previous }
+}
+
+// SetMinResponseBodyTimeoutForTest shortens the floor on intercepted body reads, so a spec can show a
+// longer TransformTimeout extending it without waiting five seconds.  Call before the response is
+// intercepted; the returned func restores the default.
+func SetMinResponseBodyTimeoutForTest(timeout time.Duration) func() {
+	previous := minResponseBodyTimeout
+	minResponseBodyTimeout = timeout
+	return func() { minResponseBodyTimeout = previous }
 }
 
 // AccessibilityTreeDuringNavigationForTest runs navigation after the initial document

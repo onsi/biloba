@@ -17,6 +17,10 @@ import (
 
 const DefaultInterceptedBodyLimit int64 = 16 << 20
 
+// minResponseBodyTimeout is how long a response handler may wait for an intercepted body when its
+// TransformTimeout is shorter; a longer TransformTimeout extends it.  A var so specs can shorten it.
+var minResponseBodyTimeout = 5 * time.Second
+
 type ResponseOverride struct {
 	Status        *int
 	Headers       map[string]string
@@ -501,11 +505,7 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 		// Reading the intercepted body is transport work, not user callback work. Starting the
 		// transform deadline here made a slow upstream response consume the callback's entire budget
 		// before the callback was invoked.
-		bodyTimeout := 5 * time.Second
-		if h.options.TransformTimeout > bodyTimeout {
-			bodyTimeout = h.options.TransformTimeout
-		}
-		bodyCtx, cancelBody := context.WithTimeout(s.ctx, bodyTimeout)
+		bodyCtx, cancelBody := context.WithTimeout(s.ctx, max(minResponseBodyTimeout, h.options.TransformTimeout))
 		body, stream, bodyTaken, err := responseBodyContext(bodyCtx, event.RequestID, limit)
 		cancelBody()
 		defer closeResponseStream(s.ctx, stream)

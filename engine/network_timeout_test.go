@@ -52,15 +52,17 @@ var _ = Describe("response transform deadlines", func() {
 		Expect(stats.LastError).To(ContainSubstring("response body"))
 	})
 
-	It("uses a configured transform timeout longer than five seconds for the body read", func(ctx SpecContext) {
+	It("extends the body read to a transform timeout longer than the minimum", func(ctx SpecContext) {
+		// The production minimum is five seconds; shorten it so the spec need not wait that long.
+		DeferCleanup(engine.SetMinResponseBodyTimeoutForTest(100 * time.Millisecond))
 		responseServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-			if request.URL.Path != "/long-body" {
+			if request.URL.Path != "/long-body" && request.URL.Path != "/default-body" {
 				_, _ = io.WriteString(response, "<!doctype html>")
 				return
 			}
 			response.WriteHeader(http.StatusOK)
 			response.(http.Flusher).Flush()
-			time.Sleep(5200 * time.Millisecond)
+			time.Sleep(400 * time.Millisecond)
 			_, _ = io.WriteString(response, "long body")
 		}))
 		DeferCleanup(responseServer.Close)
@@ -70,19 +72,32 @@ var _ = Describe("response transform deadlines", func() {
 		DeferCleanup(session.Close)
 		Expect(session.Navigate(ctx, responseServer.URL)).To(Succeed())
 
+		transform := func(_ context.Context, intercepted engine.InterceptedResponse) (engine.ResponseOverride, error) {
+			body := append([]byte("transformed:"), intercepted.Body...)
+			return engine.ResponseOverride{Body: &body}, nil
+		}
 		_, err = session.RegisterNetworkHandler(ctx, engine.NetworkHandlerOptions{
 			URL:              engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/long-body"},
-			TransformTimeout: 6500 * time.Millisecond,
-			Transform: func(_ context.Context, intercepted engine.InterceptedResponse) (engine.ResponseOverride, error) {
-				body := append([]byte("transformed:"), intercepted.Body...)
-				return engine.ResponseOverride{Body: &body}, nil
-			},
+			TransformTimeout: time.Second,
+			Transform:        transform,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		// Without a longer TransformTimeout the minimum applies, and the same slow body misses it.
+		defaultHandler, err := session.RegisterNetworkHandler(ctx, engine.NetworkHandlerOptions{
+			URL:       engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/default-body"},
+			Transform: transform,
 		})
 		Expect(err).NotTo(HaveOccurred())
 
 		value, err := session.EvaluateAsync(ctx, `fetch("/long-body").then(response => response.text())`)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(value).To(Equal("transformed:long body"))
+
+		_, err = session.EvaluateAsync(ctx, `fetch("/default-body").then(response => response.text())`)
+		Expect(err).To(HaveOccurred())
+		stats, err := session.NetworkHandlerStats(defaultHandler.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(stats.LastError).To(ContainSubstring("deadline exceeded"))
 	})
 
 	It("starts the transform deadline after the intercepted response body is available", func(ctx SpecContext) {

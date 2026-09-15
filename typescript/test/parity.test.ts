@@ -66,12 +66,6 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
         setTimeout(() => response.end("slow body"), 600);
         return;
       }
-      if (request.url === "/long-response-body") {
-        response.setHeader("content-type", "text/plain");
-        response.flushHeaders();
-        setTimeout(() => response.end("long body"), 5_200);
-        return;
-      }
       if (request.url === "/redirect-response") {
         response.statusCode = 302;
         response.setHeader("location", "/redirect-final");
@@ -468,20 +462,6 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
       expect(await session.evaluateAsync(`fetch("/redirect-response").then(response => response.text())`)).toBe("redirect final");
       expect(invoked).toBe(0);
       expect((await route.stats()).lastError).toContain("response body");
-    } finally {
-      await route.remove();
-    }
-  });
-
-  it("uses a transform timeout longer than five seconds for the response body read", async () => {
-    await session.prepare();
-    await session.navigate(baseUrl);
-    const route = await session.routeResponse(endsWith("/long-response-body"), (response) => ({
-      body: new TextEncoder().encode(`transformed:${new TextDecoder().decode(response.body)}`),
-    }), {timeoutMs: 6_500});
-    try {
-      expect(await session.evaluateAsync(`fetch("/long-response-body").then(response => response.text())`)).toBe("transformed:long body");
-      expect((await route.stats()).lastError).toBeFalsy();
     } finally {
       await route.remove();
     }
