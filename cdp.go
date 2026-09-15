@@ -156,9 +156,7 @@ func (b *Biloba) diagnoseCDPError(what string, timeout time.Duration, err error)
 	// Each diagnosis is built as a plain string and handed to wrapCDPError, which does the one
 	// error-wrapping fmt.Errorf in this file.
 	if b.frame != nil && (engine.FrameContextGone(err) || b.Context.Err() != nil) {
-		return wrapCDPError(fmt.Sprintf("frame_detached: the document this frame handle was found in is gone, so Chrome could not %s.\n"+
-			"Its iframe was removed or navigated, or its tab navigated, since the handle was found.\n"+
-			"A frame handle belongs to one document: find the frame again with b.Frame(...).", what), err)
+		return frameDetachedError(what, err)
 	}
 	if b.pageCrashed() {
 		return wrapCDPError(fmt.Sprintf("page_crashed: this tab's renderer crashed, so Chrome could not %s.\n"+
@@ -186,6 +184,15 @@ func (b *Biloba) diagnoseCDPError(what string, timeout time.Duration, err error)
 // to print its own bespoke timeout message.
 func wrapCDPError(diagnosis string, err error) error {
 	return fmt.Errorf("%s\nUnderlying error: %w", diagnosis, err)
+}
+
+// frameDetachedError explains a frame handle whose document is gone.  Failed browser commands get it
+// from diagnoseCDPError; the frame checks in frames.go that send no command use it directly, so every
+// stale-handle failure reads the same way.
+func frameDetachedError(what string, err error) error {
+	return wrapCDPError(fmt.Sprintf("frame_detached: the document this frame handle was found in is gone, so Biloba could not %s.\n"+
+		"Its iframe was removed or navigated, or its tab navigated, since the handle was found.\n"+
+		"A frame handle belongs to one document: find the frame again with b.Frame(...).", what), err)
 }
 
 // pageCrashed reports whether Chrome has told us this tab's renderer died (Inspector.targetCrashed).

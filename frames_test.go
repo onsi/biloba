@@ -17,6 +17,7 @@ import (
 	"github.com/onsi/biloba/engine"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega/types"
 )
 
 // The frame is served by crossOriginFixtureServer - another port on the same host - so it is a
@@ -301,9 +302,16 @@ var _ = Describe("Cross-origin iframes", func() {
 				ContainSubstring("frame_detached"),
 			)
 
+			// The checks that send Chrome no command read like every other stale-handle failure.
+			detached := func(what string) types.GomegaMatcher {
+				return MatchError(And(
+					ContainSubstring("frame_detached: the document this frame handle was found in is gone, so Biloba could not "+what),
+					ContainSubstring("find the frame again with b.Frame(...)"),
+				))
+			}
 			matched, err := checkout.HaveFrame().Match(checkout)
 			Ω(matched).Should(BeFalse())
-			Ω(err).Should(MatchError(ContainSubstring("frame_detached")))
+			Ω(err).Should(detached("list frames"))
 			stop, ok := err.(interface{ IsStopTrying() bool })
 			Ω(ok).Should(BeTrue())
 			Ω(stop.IsStopTrying()).Should(BeTrue(), "HaveFrame must stop polling a stale document")
@@ -316,13 +324,13 @@ var _ = Describe("Cross-origin iframes", func() {
 
 			matched, err = checkout.HaveMadeRequest(ContainSubstring("/api/replacement-only")).Match(checkout)
 			Ω(matched).Should(BeFalse())
-			Ω(err).Should(MatchError(ContainSubstring("frame_detached")))
+			Ω(err).Should(detached("inspect its requests"))
 			stop, ok = err.(interface{ IsStopTrying() bool })
 			Ω(ok).Should(BeTrue())
 			Ω(stop.IsStopTrying()).Should(BeTrue(), "HaveMadeRequest must stop polling a stale document")
 			matched, err = checkout.BeNetworkIdle().Match(checkout)
 			Ω(matched).Should(BeFalse())
-			Ω(err).Should(MatchError(ContainSubstring("frame_detached")))
+			Ω(err).Should(detached("inspect its in-flight requests"))
 			stop, ok = err.(interface{ IsStopTrying() bool })
 			Ω(ok).Should(BeTrue())
 			Ω(stop.IsStopTrying()).Should(BeTrue(), "BeNetworkIdle must stop polling a stale document")

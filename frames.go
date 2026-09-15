@@ -384,7 +384,7 @@ func (b *Biloba) validateFrameDocument(what string) error {
 	if b.frame == nil {
 		return nil
 	}
-	if err := b.validateFrameObservation(); err != nil {
+	if err := b.validateFrameObservation(what); err != nil {
 		return err
 	}
 	err := b.runEngine(what, func(ctx context.Context) error {
@@ -393,6 +393,7 @@ func (b *Biloba) validateFrameDocument(what string) error {
 	if engine.FrameContextGone(err) {
 		// Only this pinned evaluation proves that the subject document is gone.
 		// A similar error while inspecting a child is a discovery race worth retrying.
+		// runEngine has already worded err as a frame_detached failure; the code makes it stop polling.
 		return &engine.Error{Code: engine.CodeFrameDetached, Message: err.Error(), Cause: err}
 	}
 	return err
@@ -401,13 +402,13 @@ func (b *Biloba) validateFrameDocument(what string) error {
 // validateFrameObservation proves that a frame handle still belongs to its original document from
 // the execution-context registry maintained by CDP events. It sends no renderer command, so request
 // and in-flight observations remain available while the frame's JavaScript thread is busy.
-func (b *Biloba) validateFrameObservation() error {
+func (b *Biloba) validateFrameObservation(what string) error {
 	if b.frame == nil {
 		return nil
 	}
 	err := engine.ValidateFrameWorldContext(b.Context, b.frame.id)
 	if err != nil && b.frameValidationStopsPolling(err) {
-		return fmt.Errorf("frame_detached: %w", err)
+		return frameDetachedError(what, err)
 	}
 	return err
 }
