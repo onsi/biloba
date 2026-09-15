@@ -359,7 +359,7 @@ Eventually("#receipt").Should(checkout.HaveInnerText(ContainSubstring("Paid")))
 - `b.Frame` is the one-step wait-and-get — don't gate with `Eventually(b).Should(b.HaveFrame()...)` and then re-find with `b.AllFrames().Find(...)`. Use `WithDOMElement` so the frame is ready, not just present.
 - Tab-level methods fail on a frame handle (`Navigate`, `Prepare`, `SetWindowSize`, cookie writes, `StubRequest`/`HoldResponse`/…, dialog handlers, downloads): call them on `b`. The tab's stubs and dialog handlers cover its frames.
 - A handle belongs to one document. After the iframe navigates or is replaced (or the tab navigates) its calls fail with `frame_detached`; call `b.Frame(...)` again rather than reusing it.
-- `HaveMadeRequest` and `BeNetworkIdle` use recorded events, so they work while the frame's JavaScript thread is busy. Live matchers stop on stale handles; `AllRequests()` remains available as history of the original document.
+- On a stale handle `HaveMadeRequest` and `BeNetworkIdle` stop polling with `frame_detached`; `AllRequests()` still returns the original document's requests.
 - Realistic input inside a frame fails (and keeps polling) when something in the embedding page covers the frame — same contract as an overlay inside the page.
 - Under full Chrome (`HighFidelityHeadless`) a **cross-site** frame runs out of process: same API, but screenshot its `iframe` element from the tab rather than the frame, and don't expect the tab's `StubRequest` to catch its requests.
 
