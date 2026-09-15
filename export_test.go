@@ -183,6 +183,12 @@ func (b *Biloba) ShadowedHandlersNoteForTest() string {
 	return b.renderShadowedHandlers()
 }
 
+// UnreadableResponseBodyNoteForTest exposes this tab's unreadable-response-body note for
+// network_test.go.
+func (b *Biloba) UnreadableResponseBodyNoteForTest() string {
+	return b.unreadableResponseBodies.render()
+}
+
 // SetVisualDirsForTest points the root's visual-regression directories - the committed baselines and
 // the (gitignored) artifacts destination HaveScreenshot writes actual/diff PNGs to - at
 // test-controlled locations, so visual_test.go can generate its baselines into a per-spec TempDir

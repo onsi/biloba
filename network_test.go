@@ -2,6 +2,7 @@ package biloba_test
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"regexp"
@@ -258,6 +259,152 @@ var _ = Describe("Observing the network", func() {
 				// the first It's handler still wins - the second It's never runs
 				Eventually("#body").Should(b.HaveInnerText("from the first It"))
 			})
+		})
+	})
+
+	// Chrome pauses a 3xx response at the response stage like any other, but refuses to hand its body
+	// over (Fetch.takeResponseBodyAsStream fails with a protocol error).  A ModifyResponse transform
+	// written for the final response must never see the redirect, and a static override must not
+	// replace it either - see https://github.com/onsi/biloba/issues/41.  Any other read failure (a
+	// deadline, a lost reply, a body over the limit) may have already taken the body from Chrome, so
+	// that fails the request instead.
+	Describe("redirects and other unreadable response bodies", func() {
+		var redirectServer *ghttp.Server
+
+		BeforeEach(func() {
+			redirectServer = ghttp.NewServer()
+			redirectServer.RouteToHandler("GET", "/network-interception.html", func(w http.ResponseWriter, r *http.Request) {
+				fixture, err := os.ReadFile("./fixtures/network-interception.html")
+				Expect(err).NotTo(HaveOccurred())
+				w.Write(fixture)
+			})
+			redirectServer.RouteToHandler("GET", "/redirect-response", func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "/redirect-final", http.StatusFound)
+			})
+			redirectServer.RouteToHandler("GET", "/redirect-final", func(w http.ResponseWriter, r *http.Request) {
+				io.WriteString(w, "redirect final")
+			})
+			// the high-fidelity lane's full Chrome asks for /favicon.ico; only route what the specs
+			// care about and let everything else 404 quietly (see "interception and the HTTP cache")
+			redirectServer.AllowUnhandledRequests = true
+			redirectServer.UnhandledRequestStatusCode = http.StatusNotFound
+			DeferCleanup(redirectServer.Close)
+
+			b.Navigate(redirectServer.URL() + "/network-interception.html")
+			Eventually("#hello").Should(b.Exist())
+		})
+
+		It("never invokes Using for a redirect, and the page follows it to the final response", func() {
+			mod := b.ModifyResponse(ContainSubstring("/redirect-response")).Using(func(r biloba.InterceptedResponse) biloba.StubResponse {
+				return biloba.StubResponse{Body: "patched:" + r.Body}
+			})
+			result := b.RunAsync(`
+				const r = await fetch("/redirect-response")
+				return [r.status, r.redirected, r.url, await r.text()]
+			`)
+			// a transform that ran would have prefixed the body with "patched:" - its absence, alongside
+			// redirected=true and the final URL, is proof Using was never consulted
+			Expect(result).To(Equal([]any{200.0, true, redirectServer.URL() + "/redirect-final", "redirect final"}))
+			// the handler still claimed the dispatch - see the Count() discussion below
+			Eventually(mod.Count).Should(Equal(1))
+		})
+
+		It("continues a static override untouched on a redirect", func() {
+			mod := b.ModifyResponse(ContainSubstring("/redirect-response")).WithBody("should never be served")
+			result := b.RunAsync(`
+				const r = await fetch("/redirect-response")
+				return [r.status, r.redirected, r.url, await r.text()]
+			`)
+			Expect(result).To(Equal([]any{200.0, true, redirectServer.URL() + "/redirect-final", "redirect final"}))
+			Eventually(mod.Count).Should(Equal(1))
+		})
+
+		It("does not hold a redirect whose body cannot be read", func() {
+			hold := b.HoldResponse(ContainSubstring("/redirect-response"))
+			result := b.RunAsync(`
+				const r = await fetch("/redirect-response")
+				return [r.status, r.redirected, r.url, await r.text()]
+			`)
+			Expect(result).To(Equal([]any{200.0, true, redirectServer.URL() + "/redirect-final", "redirect final"}))
+			// counted, but never held - Await would have blocked forever waiting for something that was
+			// never going to arrive
+			Eventually(hold.Count).Should(Equal(1))
+			Eventually(hold.PassedThrough).Should(Equal(1))
+			Expect(hold.Held()).To(Equal(0))
+		})
+
+		// Count() is a fact about the DISPATCH, not about whether the transform actually ran - the
+		// handler claims the URL, and Count() ticks, before Biloba even tries to read the body.  This
+		// matches the engine (and the TypeScript client), which counts a response-stage dispatch the
+		// same way: at selection, before the body read that might fail.
+		It("still counts the dispatch even though the transform never ran", func() {
+			mod := b.ModifyResponse(ContainSubstring("/redirect-response")).Using(func(r biloba.InterceptedResponse) biloba.StubResponse {
+				return biloba.StubResponse{Body: "patched:" + r.Body}
+			})
+			Expect(mod.Count()).To(Equal(0))
+			b.RunAsync(`await fetch("/redirect-response")`)
+			Eventually(mod.Count).Should(Equal(1))
+		})
+
+		It("reports which handler could not read the response body, and what Biloba did", func() {
+			transform := func(r biloba.InterceptedResponse) biloba.StubResponse {
+				return biloba.StubResponse{Body: "patched:" + r.Body}
+			}
+			b.ModifyResponse(ContainSubstring("/redirect-response")).Using(transform)
+			loc := lineAbove()
+			b.RunAsync(`await fetch("/redirect-response")`)
+
+			Eventually(b.UnreadableResponseBodyNoteForTest).Should(SatisfyAll(
+				ContainSubstring("⚠ A ModifyResponse handler registered at "+loc+" could not read the response body for "+redirectServer.URL()+"/redirect-response (status 302):"),
+				ContainSubstring("Biloba continued the response unmodified."),
+			))
+		})
+
+		// A genuine read failure - as opposed to Chrome's protocol-level refusal on a redirect - is
+		// reached only when the body itself never arrives in time.  SetCDPTimeoutsForTest shrinks the
+		// backstop that bounds the body read so a real (not injected) slow response can trip it quickly.
+		It("fails the request outright when the body genuinely cannot be read", func() {
+			release := make(chan struct{})
+			var once sync.Once
+
+			slowServer := ghttp.NewServer()
+			slowServer.RouteToHandler("GET", "/slow.html", func(w http.ResponseWriter, r *http.Request) {
+				io.WriteString(w, `<!doctype html><div id="hello">ready</div>`)
+			})
+			slowServer.RouteToHandler("GET", "/slow-body", func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				w.(http.Flusher).Flush()
+				<-release
+				io.WriteString(w, "eventually arrives")
+			})
+			// the high-fidelity lane's full Chrome asks for /favicon.ico; only route what the spec
+			// cares about and let everything else 404 quietly (see "interception and the HTTP cache")
+			slowServer.AllowUnhandledRequests = true
+			slowServer.UnhandledRequestStatusCode = http.StatusNotFound
+			DeferCleanup(slowServer.Close)
+			DeferCleanup(func() { once.Do(func() { close(release) }) })
+
+			b.Navigate(slowServer.URL() + "/slow.html")
+			Eventually("#hello").Should(b.Exist())
+			DeferCleanup(biloba.SetCDPTimeoutsForTest(150*time.Millisecond, 5*time.Second))
+
+			b.ModifyResponse(ContainSubstring("/slow-body")).WithStatus(200)
+			loc := lineAbove()
+
+			result := b.RunAsync(`
+				try {
+					await fetch("/slow-body")
+					return "resolved"
+				} catch (e) {
+					return "rejected: " + e.message
+				}
+			`)
+			Expect(result).To(ContainSubstring("rejected"))
+
+			Eventually(b.UnreadableResponseBodyNoteForTest).Should(SatisfyAll(
+				ContainSubstring("⚠ A ModifyResponse handler registered at "+loc),
+				ContainSubstring("Biloba failed the request."),
+			))
 		})
 	})
 

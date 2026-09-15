@@ -88,6 +88,14 @@ The shape line (`one box`, `changed regions: N boxes`, `scattered`, `uniform shi
 
 Reported only when a handler **never fired** *and* was shadowed at least once. **Limit:** it's a failure artifact, so it cannot surface shadowing's other presentation — a leftover *stateful* handler claiming the response, passing it through untouched, spec **green**. Only your own `Eventually(hold.Count).Should(Equal(1))` catches that (`flaky-specs` §6).
 
+**"Network handler could not read a response body"** — Chrome refuses to hand over some response bodies (a redirect's, notably), so a `ModifyResponse`/`HoldResponse` handler that matched never gets to run `Using`, apply a static override, or hold the response; Biloba continues it unmodified. Any other read failure (a timeout, a lost reply, a body over the limit) fails the request instead, since the body may already be gone. Either way the handler still counts the dispatch (`Count()` ticks at selection, before the read), and the note names the handler, its registration site, the URL, and which of the two Biloba did.
+
+```
+⚠ A ModifyResponse handler registered at checkout_test.go:42 could not read the response body for http://localhost:8080/login (status 302):
+  Can only get response body on requests captured after headers received. (-32000)
+  Biloba continued the response unmodified.
+```
+
 ### When the failure is Chrome itself
 
 Every command Biloba sends Chrome runs under a deadline, so an unresponsive browser produces a failing spec instead of a hung suite. Three shapes, each naming its cause on the first line:

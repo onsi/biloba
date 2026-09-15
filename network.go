@@ -3,6 +3,7 @@ package biloba
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"github.com/onsi/biloba/engine"
 	"maps"
@@ -855,6 +856,16 @@ func (h *ResponseHold) intercept(r InterceptedResponse) StubResponse {
 	return passthrough
 }
 
+// recordUnreadableAsPassthrough accounts a response whose body Biloba could not read as passed
+// straight through, mirroring intercept's own passthrough branch: it counts toward Count and
+// PassedThrough, but was never held, so Await never sees it - no notify wakeup is needed.
+func (h *ResponseHold) recordUnreadableAsPassthrough() {
+	h.lock.Lock()
+	h.count++
+	h.passed++
+	h.lock.Unlock()
+}
+
 // holdingCount is how many entries are still frozen.  Must be called with h.lock held.
 func (h *ResponseHold) holdingCount() int {
 	n := 0
@@ -1298,6 +1309,67 @@ func (b *Biloba) renderShadowedHandlers() string {
 	return out.String()
 }
 
+// maxUnreadableResponseBodies bounds the ring, mirroring maxOccludedClicks: only the most recent
+// handful are useful near the failure.
+const maxUnreadableResponseBodies = 5
+
+// unreadableResponseBody is one response-stage handler dispatch whose body Chrome refused to hand
+// over, or that otherwise failed to read (see engine.ReadInterceptedResponseBodyContext).  Recorded
+// whenever it happens, surfaced only when the spec fails.
+type unreadableResponseBody struct {
+	api, location, url string
+	status             int
+	err                string
+	continued          bool // true: Biloba continued the response unmodified; false: it failed the request
+}
+
+// unreadableResponseBodyRecorder holds a tab's most recent unreadable-response-body notes.  Like
+// occlusionRecorder it is shared across a tab's clone-with-a-flag views (b.WithTimeout(...) and
+// friends act on a shallow copy) via a pointer, so the recording survives back to the tab the
+// failure artifacts read.
+type unreadableResponseBodyRecorder struct {
+	mu      sync.Mutex
+	entries []unreadableResponseBody
+}
+
+func (r *unreadableResponseBodyRecorder) record(entry unreadableResponseBody) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.entries = append(r.entries, entry)
+	if len(r.entries) > maxUnreadableResponseBodies {
+		r.entries = r.entries[len(r.entries)-maxUnreadableResponseBodies:]
+	}
+}
+
+func (r *unreadableResponseBodyRecorder) reset() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.entries = nil
+}
+
+// render returns the on-failure note for this tab's unreadable response bodies, or "" when there
+// were none.  Chrome refuses to hand over some response bodies (a redirect's, notably); any other
+// read failure (a deadline, a lost reply, a body over the limit) may have already taken the body
+// from Chrome.  Either way the handler that would have run never saw it - Using/WithStatus/
+// WithHeader/WithBody never ran, and a hold never held it - so the note says what Biloba did instead.
+func (r *unreadableResponseBodyRecorder) render() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.entries) == 0 {
+		return ""
+	}
+	out := &strings.Builder{}
+	for _, e := range r.entries {
+		action := "continued the response unmodified"
+		if !e.continued {
+			action = "failed the request"
+		}
+		fmt.Fprintf(out, "⚠ %s %s handler registered at %s could not read the response body for %s (status %d):\n  %s\n  Biloba %s.\n",
+			indefiniteArticle(e.api), e.api, e.location, e.url, e.status, e.err, action)
+	}
+	return out.String()
+}
+
 // handleEventRequestPaused responds to a paused request.  With response-stage interception enabled a
 // request pauses twice: once at the request stage (ResponseStatusCode/ResponseErrorReason unset) and
 // again at the response stage (those fields populated).  We route on the stage so request-stage
@@ -1365,20 +1437,31 @@ func (b *Biloba) handleResponseStagePause(ev *fetch.EventRequestPaused) {
 			return
 		}
 
+		var body []byte
+		err := b.runEngine("read a paused network response", func(ctx context.Context) error {
+			var err error
+			body, err = engine.ReadInterceptedResponseBodyContext(ctx, ev.RequestID, engine.DefaultInterceptedBodyLimit, func(failure error) {
+				// h.intercept never runs for this response, so the hold's accounting happens here
+				if handler.hold != nil {
+					handler.hold.recordUnreadableAsPassthrough()
+				}
+				b.recordUnreadableResponseBody(handler, ev, failure)
+			})
+			return err
+		})
+		if err != nil {
+			// already continued or failed: no handler sees a body Biloba couldn't read
+			return
+		}
+
 		original := InterceptedResponse{
 			Status:  int(ev.ResponseStatusCode),
 			Headers: map[string]string{},
+			Body:    string(body),
 		}
 		for _, h := range ev.ResponseHeaders {
 			original.Headers[h.Name] = h.Value
 		}
-		var body []byte
-		_ = b.runEngine("read a paused network response", func(ctx context.Context) error {
-			var err error
-			body, err = engine.ResponseBodyContext(ctx, ev.RequestID)
-			return err
-		})
-		original.Body = string(body)
 
 		response := handler.resolve(original)
 		if response.Status == 0 {
@@ -1393,6 +1476,20 @@ func (b *Biloba) handleResponseStagePause(ev *fetch.EventRequestPaused) {
 			return engine.RunActionContext(ctx, params)
 		})
 	}()
+}
+
+// recordUnreadableResponseBody notes a response-stage handler dispatch whose body Biloba could not
+// read, for the on-failure report.
+func (b *Biloba) recordUnreadableResponseBody(handler *ResponseModification, ev *fetch.EventRequestPaused, readErr error) {
+	if b.unreadableResponseBodies == nil {
+		return
+	}
+	var resolved *engine.ResponseAlreadyResolvedError
+	continued := errors.As(readErr, &resolved) && resolved.Action == engine.ResponseContinued
+	b.unreadableResponseBodies.record(unreadableResponseBody{
+		api: handler.prov.api, location: handler.prov.location.String(), url: ev.Request.URL,
+		status: int(ev.ResponseStatusCode), err: readErr.Error(), continued: continued,
+	})
 }
 
 func (b *Biloba) handleEventRequestWillBeSent(ev *network.EventRequestWillBeSent) {

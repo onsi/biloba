@@ -19,6 +19,7 @@
 - Same-process frame handles record their own console messages and requests.
 - `SetUpload` resolves relative paths before handing them to Chrome. A relative path attached the file but left the tab's next navigation hanging until it timed out (both clients).
 - An `<iframe>` with no `src`, or with a `srcdoc`, is no longer listed as a cross-origin frame: it shares the page's origin and `>>>` reaches it.
+- Go: `ModifyResponse` and `HoldResponse` no longer replace or hold a redirect, whose body Chrome won't hand over; the page follows it, as in the TypeScript client. Any other unreadable body fails the request instead of reaching the handler with an empty body. A new failure report entry, "Network handler could not read a response body", names the handler and URL (#41).
 
 ## 0.16.2
 

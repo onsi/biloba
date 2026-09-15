@@ -290,8 +290,8 @@ func roundDuration(d time.Duration) string {
 }
 
 // resetPollDiagnostics clears the per-spec poll diagnostics - the value trajectory and the match trail
-// behind the detached-node signal, and the occluded-click ring - across the root tab and every
-// registered tab.
+// behind the detached-node signal, the occluded-click ring, and the unreadable-response-body notes -
+// across the root tab and every registered tab.
 // attachFailureArtifactsIfFailed calls it on the way out of every spec (pass or fail).  It walks the
 // registered-tab map rather than AllTabs() deliberately: AllTabs costs a CDP round-trip, and this
 // runs on the happy path too.
@@ -313,6 +313,9 @@ func (b *Biloba) resetPollDiagnostics() {
 		}
 		if tab.occlusions != nil {
 			tab.occlusions.reset()
+		}
+		if tab.unreadableResponseBodies != nil {
+			tab.unreadableResponseBodies.reset()
 		}
 	}
 }

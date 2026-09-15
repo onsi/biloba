@@ -960,6 +960,11 @@ type Biloba struct {
 	// recorded (one synchronous elementFromPoint inside the click's own snippet), rendered only when a
 	// spec fails - plain Click stays occlusion-blind by design, this just leaves a trail.
 	occlusions *occlusionRecorder
+
+	// unreadableResponseBodies holds the most recent response-stage handler dispatches whose body
+	// Chrome refused to hand over (or that otherwise failed to read) - see
+	// engine.ReadInterceptedResponseBodyContext.  Rendered only when a spec fails.
+	unreadableResponseBodies *unreadableResponseBodyRecorder
 }
 
 // inlineScreenshotsEnabled returns true when inline-image output should be
@@ -1002,6 +1007,7 @@ func newBiloba(ginkgoT GinkgoTInterface) *Biloba {
 		pollTrajectory:            true,
 		probes:                    &probeRecorder{},
 		occlusions:                &occlusionRecorder{},
+		unreadableResponseBodies:  &unreadableResponseBodyRecorder{},
 		colorSchemeEmulated:       new(bool),
 	}
 	return b
@@ -1355,6 +1361,11 @@ func (b *Biloba) attachFailureArtifactsIfFailed() {
 			// whatever was waiting on it, and points nowhere near the registration that lost
 			if shadowed := tab.renderShadowedHandlers(); shadowed != "" {
 				b.gt.AddReportEntryVisibilityFailureOrVerbose("Network handler never ran (shadowed by an earlier handler)"+suffix, shadowed)
+			}
+			// a redirect's body (or one Biloba otherwise couldn't read) never reaches
+			// Using/WithStatus/WithHeader/WithBody or a hold - this says why, and what Biloba did instead
+			if unreadable := tab.unreadableResponseBodies.render(); unreadable != "" {
+				b.gt.AddReportEntryVisibilityFailureOrVerbose("Network handler could not read a response body"+suffix, unreadable)
 			}
 		}
 		if !b.failureScreenshots {

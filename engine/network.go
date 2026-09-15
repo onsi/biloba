@@ -30,14 +30,44 @@ func RunActionContext(ctx context.Context, action chromedp.Action) error {
 	return chromedp.Run(ctx, action)
 }
 
-// ResponseBodyContext reads and decodes the body of a response paused by Fetch interception.
-func ResponseBodyContext(ctx context.Context, requestID fetch.RequestID) ([]byte, error) {
-	body, stream, _, err := responseBodyContext(ctx, requestID, DefaultInterceptedBodyLimit)
-	closeResponseStream(ctx, stream)
-	return body, err
+// ResponseAlreadyResolvedAction says how ReadInterceptedResponseBodyContext resolved a paused
+// response whose body it could not read.
+type ResponseAlreadyResolvedAction string
+
+const (
+	// ResponseContinued: Chrome refused to hand over the body (a redirect's, notably), so the
+	// response was continued unmodified.
+	ResponseContinued ResponseAlreadyResolvedAction = "continued"
+	// ResponseFailed: the body may already have left Chrome, so the request was failed.
+	ResponseFailed ResponseAlreadyResolvedAction = "failed"
+)
+
+// ResponseAlreadyResolvedError is ReadInterceptedResponseBodyContext's error: the pause has already
+// been resolved, so the caller must not fulfill it.
+type ResponseAlreadyResolvedError struct {
+	Err    error
+	Action ResponseAlreadyResolvedAction
 }
 
-func responseBodyContext(ctx context.Context, requestID fetch.RequestID, maxBytes int64) ([]byte, cdpio.StreamHandle, bool, error) {
+func (e *ResponseAlreadyResolvedError) Error() string { return e.Err.Error() }
+func (e *ResponseAlreadyResolvedError) Unwrap() error { return e.Err }
+
+// ReadInterceptedResponseBodyContext reads the body of a response paused at Fetch's response stage.
+// When it can't, it resolves the pause itself and returns a *ResponseAlreadyResolvedError: a
+// protocol error means Chrome refused the transfer and still holds the body, so the response is
+// continued; any other failure may have taken the body, so the request is failed.
+//
+// onFailure runs before the pause is resolved.  Record diagnostics there: once the page sees the
+// outcome, a concurrent assertion may already be reading them.
+func ReadInterceptedResponseBodyContext(ctx context.Context, requestID fetch.RequestID, maxBytes int64, onFailure func(error)) ([]byte, error) {
+	fail := func(err error, action ResponseAlreadyResolvedAction) error {
+		resolved := &ResponseAlreadyResolvedError{Err: err, Action: action}
+		if onFailure != nil {
+			onFailure(resolved)
+		}
+		resolvePausedResponse(ctx, requestID, action)
+		return resolved
+	}
 	var stream cdpio.StreamHandle
 	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
 		var takeErr error
@@ -45,14 +75,31 @@ func responseBodyContext(ctx context.Context, requestID fetch.RequestID, maxByte
 		return takeErr
 	}))
 	if err != nil {
-		// A protocol error is Chrome's reply refusing the transfer, so the response remains
-		// resumable. Cancellation and transport errors are ambiguous: Chrome may have taken the
-		// body before its reply was lost, and ContinueResponse cannot resume it in that state.
 		var protocolErr *cdproto.Error
-		return nil, "", !errors.As(err, &protocolErr), err
+		if errors.As(err, &protocolErr) {
+			return nil, fail(err, ResponseContinued)
+		}
+		return nil, fail(err, ResponseFailed)
 	}
+	defer closeResponseStream(ctx, stream)
 	body, err := readBounded(ctx, &cdpStreamReader{ctx: ctx, handle: stream}, maxBytes)
-	return body, stream, true, err
+	if err != nil {
+		return nil, fail(err, ResponseFailed)
+	}
+	return body, nil
+}
+
+// resolvePausedResponse gets its own deadline: the read's deadline is often what just expired.
+func resolvePausedResponse(ctx context.Context, requestID fetch.RequestID, action ResponseAlreadyResolvedAction) {
+	resolveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if action == ResponseContinued {
+		_ = chromedp.Run(resolveCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
+			return fetch.ContinueResponse(requestID).Do(runCtx)
+		}))
+		return
+	}
+	_ = chromedp.Run(resolveCtx, fetch.FailRequest(requestID, network.ErrorReasonFailed))
 }
 
 func closeResponseStream(ctx context.Context, stream cdpio.StreamHandle) {
@@ -423,18 +470,17 @@ func (s *Session) handlePausedResponse(event *fetch.EventRequestPaused, selected
 		defer s.endInterception()
 		ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 		defer cancel()
-		body, stream, bodyTaken, err := responseBodyContext(ctx, event.RequestID, selected.bodyLimit)
-		defer closeResponseStream(s.ctx, stream)
-		if err != nil {
+		body, err := ReadInterceptedResponseBodyContext(ctx, event.RequestID, selected.bodyLimit, func(failure error) {
 			s.holdMu.Lock()
 			selected.pending--
 			selected.passed++
-			selected.lastError = err.Error()
+			selected.lastError = failure.Error()
 			close(selected.notify)
 			selected.notify = make(chan struct{})
 			s.holdMu.Unlock()
-			s.resolveResponseReadFailure(event.RequestID, bodyTaken)
-			return
+		})
+		if err != nil {
+			return // already continued or failed
 		}
 		headers, orderedHeaders := responseHeaders(event.ResponseHeaders)
 		entry := &heldResponseEntry{
@@ -470,11 +516,9 @@ func (s *Session) continueResponse(id fetch.RequestID) {
 	}))
 }
 
-func (s *Session) resolveResponseReadFailure(id fetch.RequestID, bodyTaken bool) {
-	if !bodyTaken {
-		s.continueResponse(id)
-		return
-	}
+// failFulfilledResponse fails a paused response whose body was read but whose fulfill failed: the body
+// has left Chrome, so it cannot be continued.
+func (s *Session) failFulfilledResponse(id fetch.RequestID) {
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
 	_ = chromedp.Run(ctx, fetch.FailRequest(id, network.ErrorReasonFailed))

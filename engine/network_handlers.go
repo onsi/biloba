@@ -506,13 +506,12 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 		// transform deadline here made a slow upstream response consume the callback's entire budget
 		// before the callback was invoked.
 		bodyCtx, cancelBody := context.WithTimeout(s.ctx, max(minResponseBodyTimeout, h.options.TransformTimeout))
-		body, stream, bodyTaken, err := responseBodyContext(bodyCtx, event.RequestID, limit)
+		body, err := ReadInterceptedResponseBodyContext(bodyCtx, event.RequestID, limit, func(failure error) {
+			s.recordNetworkHandlerError(h, failure)
+		})
 		cancelBody()
-		defer closeResponseStream(s.ctx, stream)
 		if err != nil {
-			s.recordNetworkHandlerError(h, err)
-			s.resolveResponseReadFailure(event.RequestID, bodyTaken)
-			return
+			return // already continued or failed
 		}
 		if h.options.Transform != nil {
 			timeout := 5 * time.Second
@@ -587,14 +586,14 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 		}
 		if err := s.fulfillResponse(event.RequestID, status, orderedHeaders, body); err != nil {
 			s.recordNetworkHandlerError(h, err)
-			s.resolveResponseReadFailure(event.RequestID, true)
+			s.failFulfilledResponse(event.RequestID)
 		}
 	}()
 }
 
 func (s *Session) fallbackResponse(id fetch.RequestID, status int, headers []HeaderEntry, body []byte) {
 	if err := s.fulfillResponse(id, status, headers, body); err != nil {
-		s.resolveResponseReadFailure(id, true)
+		s.failFulfilledResponse(id)
 	}
 }
 

@@ -3530,6 +3530,8 @@ b.ModifyResponse(ContainSubstring("/api/users")).Using(func(r biloba.Intercepted
 
 Response interception is a heavier mode than the request-stage handlers: the tab pauses each matching request twice (once on the way out, once when the response arrives) so Biloba can read the real body.  As with the others, it's per-tab, reset by `Prepare()`, and first-match-wins - and its builder carries the same `Count()`, which is the cheapest way to prove your transform ran at all ([as with a stub](#stubbing-requests)).
 
+Chrome refuses to hand over a redirect's body, so a redirect never reaches `Using` or a static `WithStatus`/`WithHeader`/`WithBody` override - Biloba continues it unmodified, and the page follows it as if nothing were registered.  Any other read failure (a timeout, a lost reply, a body over the limit) fails the request instead, since the body may already be gone.  Either way `Count()` still counts the dispatch - the handler claimed the URL before Biloba tried to read the body - and the failure output names the handler and says what happened; see [Outline](#outline).
+
 > **First-match-wins has a sharp edge inside an `Ordered` container.**  Handlers are consulted in registration order and the first one whose URL matches claims the request - later handlers for that same URL are never consulted.  `Prepare()` is what clears them, and in an `Ordered` container with `BeforeEach(..., OncePerOrdered)` **`Prepare()` does not run between the `It`s**.  So handlers *accumulate*: a handler registered by the first `It` is still registered when the second `It` runs, and an identical handler registered there is silently dead code.  No error, no warning - it simply never runs, and you're left staring at a spec that behaves as though your stub isn't there.
 >
 > Two fixes.  The better one is usually to **drive both orderings from a single `It`** - if two specs need to install competing handlers for the same URL, that's often a sign they're really one scenario, and it reads better as one spec.  Failing that, give the second spec **its own `b.NewTab()`**: the handler list is per-tab, so a fresh tab starts empty.
@@ -3584,6 +3586,8 @@ The API:
 | `hold.PassedThrough()` | how many reached the hold and were never frozen: they arrived while it was at its `Limit`, or after a bare terminal `Release()`. |
 
 `Held() + PassedThrough() == Count()`, always.  All three are snapshots and all three are safe to poll.
+
+A response whose body Chrome refuses to hand over - a redirect's, most commonly - is never held: it is counted and passed straight through, exactly like one that arrived at the `Limit`, and `Await()` never sees it.  The failure output names the hold's registration site and the URL; see [Outline](#outline).
 
 **`Limit(1)` is how you say "hold #1 while #2 lands."**  Two rapid saves where the *first* response must resolve *last* is an ordering a default hold can never produce, since it freezes the second response as well:
 
@@ -4237,7 +4241,15 @@ b.AllowMissing("disabled") - to get nil back instead of waiting for it.
 
 A handler is only reported when it **never fired** *and* was shadowed at least once - so a catch-all that loses one URL to a specific stub while happily claiming others stays silent.
 
-All five of these are **diagnostic only**: none of them changes whether a spec passes, and none appears unless it fails.
+**Network handler could not read a response body.**  Chrome pauses a redirect at the response stage like any other response, but refuses to hand its body over - so a `ModifyResponse`/`HoldResponse` handler that matched it never gets to run `Using`, apply a static override, or hold it: Biloba continues the redirect unmodified.  Any other read failure (a timeout, a lost reply, a body over the limit) fails the request instead, since the body may already be gone from Chrome.  Either way, the handler that would have run says so:
+
+```
+⚠ A ModifyResponse handler registered at checkout_test.go:42 could not read the response body for http://localhost:8080/login (status 302):
+  Can only get response body on requests captured after headers received. (-32000)
+  Biloba continued the response unmodified.
+```
+
+All six of these are **diagnostic only**: none of them changes whether a spec passes, and none appears unless it fails.
 
 You can also call `b.Outline()` directly in a spec to capture a snapshot at any point:
 

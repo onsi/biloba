@@ -262,6 +262,8 @@ Eventually(".user").Should(b.HaveCount(2))
 
 Stubs are per-tab and reset by `Prepare()`. Also `b.AbortRequest(url)`, `b.ModifyRequest(url).WithURL/.WithMethod/.WithHeader/.WithBody(...)`, and `b.ModifyResponse(url).WithStatus/.WithHeader/.WithBody/.Using(func(biloba.InterceptedResponse) biloba.StubResponse)`. All share one **first-match-wins** handler list. While interception is on Biloba disables the HTTP cache (a cached response raises no interception event), restoring it in `Prepare()`.
 
+A redirect's body is never handed to `ModifyResponse` (Chrome refuses to transfer it) — the redirect is continued unmodified and the page follows it, same as any other unreadable body (a genuine read failure fails the request instead). `Count()` still ticks either way; see `debug-failures` for the report entry this leaves on a spec that expected its transform to run.
+
 Every registration returns a handle — `stub.Count()`/`abort.Count()`/`mod.Count()` — reporting how many dispatches *that handler* claimed. **Assert it fired:** `Eventually(stub.Count).Should(Equal(1))`. A typo'd URL otherwise matches nothing, passes through to the real network, and the spec passes for the wrong reason.
 
 Three traps, detailed in `flaky-specs`:
@@ -282,6 +284,8 @@ hold.Release()                 // now let the stale response land
 ```
 
 By default a hold freezes *every* matching response; `.Limit(n)` caps how many are held at once so a later match can fly straight past instead — how you express "hold save #1 while save #2 lands". Method shapes (`Await`/`Limit`/`Release`/`ReleaseNext`/`Count`/`Held`/`PassedThrough`) → `api`. The Limit/Release/ReleaseNext semantics, why `Count`/`Release` are facts about the network and not the page, and the tab-wide/URL-based sharp edge → `flaky-specs` §3.
+
+A response whose body can't be read (a redirect, most commonly) is never held — it counts toward `Count()`/`PassedThrough()` exactly like one that arrived at the `Limit`, and `Await()` never sees it.
 
 ## Seed state to skip slow flows
 
