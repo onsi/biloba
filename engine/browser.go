@@ -633,10 +633,8 @@ func executorContext(executorCtx, requestCtx context.Context) (context.Context, 
 		cancel = func() { deadlineCancel(); baseCancel() }
 	}
 	if requestCtx.Err() != nil {
-		// requestCtx is already done: cancel synchronously rather than spawning a goroutine that
-		// would notice on its own schedule. A caller that immediately issues a command against the
-		// returned context (e.g. Session.tabs) must see it already cancelled, not race a genuine CDP
-		// round trip that can still win and mask requestCtx's cancellation.
+		// The goroutine below notices cancellation on its own schedule; a request that is already
+		// cancelled must not reach Chrome in the meantime.
 		cancel()
 		return ctx, cancel
 	}

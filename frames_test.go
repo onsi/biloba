@@ -364,11 +364,8 @@ var _ = Describe("Out-of-process iframes", func() {
 	var frameURL string
 
 	BeforeEach(func(ctx SpecContext) {
-		// Reuse whatever Chrome this lane already has instead of resolving (and, in the default
-		// lane, potentially auto-installing) one of our own: the high-fidelity lane never installs
-		// chrome-headless-shell at all, and having every spec's BeforeEach race to auto-install one
-		// is what raced two parallel Ginkgo processes into picking up each other's half-extracted
-		// install (see the chromeCacheStagingMarker fix in engine/chrome.go).
+		// Use the Chrome this lane already has: the high-fidelity lane never installs
+		// chrome-headless-shell, and the default lane's suite setup already did.
 		browserConfig := engine.BrowserConfig{Arguments: []string{"--site-per-process"}}
 		if os.Getenv("BILOBA_TEST_HIGH_FIDELITY") != "" {
 			browserConfig.Mode = engine.ChromeModeHeadless
@@ -379,8 +376,7 @@ var _ = Describe("Out-of-process iframes", func() {
 			Ω(err).ShouldNot(HaveOccurred())
 			browserConfig.ExecutablePath = chrome
 		}
-		// not ctx: the browser has to outlive this BeforeEach, and a SpecContext ends with its node.
-		// StartBrowser decides --no-sandbox for itself (ChromeSandboxDisabled), same as the suite.
+		// not ctx: the browser has to outlive this BeforeEach, and a SpecContext ends with its node
 		isolated, err := engine.StartBrowser(context.Background(), browserConfig)
 		Ω(err).ShouldNot(HaveOccurred())
 		DeferCleanup(isolated.Close)

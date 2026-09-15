@@ -22,11 +22,9 @@ const (
 	maxShellArchiveEntries = 10_000
 )
 
-// chromeCacheStagingMarker tags a version directory's sibling staging directory while an install
-// is still being extracted (see installHeadlessShellArchive). newestCachedChromeHeadlessShell
-// (chrome.go) skips any cache entry whose version directory contains this marker, so a concurrent
-// resolver never returns a half-extracted install racing installHeadlessShellArchive's rename into
-// place.
+// chromeCacheStagingMarker names the directory an install is extracted into before it is renamed
+// into place.  The cache search skips these, so a concurrent resolver never launches a half-extracted
+// Chrome.
 const chromeCacheStagingMarker = ".partial-"
 
 // InstallHeadlessShell downloads Chrome for Testing's stable chrome-headless-shell into Biloba's

@@ -103,16 +103,14 @@ var _ = Describe("LocateChrome's cache search", func() {
 		Expect(engine.LocateChrome("")).To(Equal(pathBinary))
 	})
 
-	It("ignores a still-extracting .partial- staging directory even when it ties or beats a complete install's version", func() {
+	It("ignores an install still being extracted, even for the same version", func() {
 		complete := writeFakeShell(biloba2Root, "153.0.8010.36", "mac-arm64")
-		// A concurrent installer's staging directory for the very same version: extracted enough
-		// to have a binary, but not yet renamed into place.
 		writeFakeShell(biloba2Root, "153.0.8010.36"+engine.ChromeCacheStagingMarkerForTest+"123456", "mac-arm64")
 
 		Expect(engine.LocateChrome("")).To(Equal(complete))
 	})
 
-	It("returns \"\" when only a .partial- staging directory exists", func() {
+	It("finds nothing when the only install is still being extracted", func() {
 		writeFakeShell(biloba2Root, "153.0.8010.36"+engine.ChromeCacheStagingMarkerForTest+"123456", "mac-arm64")
 
 		Expect(engine.LocateChrome("")).To(BeEmpty())

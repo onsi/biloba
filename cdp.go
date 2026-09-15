@@ -78,10 +78,8 @@ func (b *Biloba) cdpContext(timeout time.Duration) (context.Context, context.Can
 	ctx, cancel := context.WithTimeout(b.Context, timeout)
 	if b.pollingCtx != nil {
 		if b.pollingCtx.Err() != nil {
-			// b.pollingCtx is already done: context.AfterFunc would still only notice this
-			// asynchronously (it runs f in its own goroutine even when ctx is already done), which
-			// leaves a window where a command dispatched against ctx right after this call can still
-			// win a race against that goroutine and reach Chrome. Cancel synchronously instead.
+			// AfterFunc runs cancel in its own goroutine even for a context that is already done, and
+			// a command must not reach Chrome in the meantime.
 			cancel()
 			return ctx, cancel
 		}
