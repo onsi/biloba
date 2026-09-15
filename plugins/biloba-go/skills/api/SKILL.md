@@ -1,6 +1,6 @@
 ---
 name: api
-description: One-line reference for every Biloba Go method and matcher, grouped by area — selectors/locators, lifecycle, poll-config (WithTimeout/WithPolling/WithContext/Immediate), capturing a matcher's observed value (.Capture), navigation (GetLocation/GetTitle), cookies/storage, tabs, DOM existence/visibility/contents/properties/forms, clicking and interactions (incl. drag/scroll/tap/modifiers/text-selection), realistic mode, keyboard, uploads, element JS, dialogs, downloads, arbitrary JS (incl. the GetJSValue app-state barrier), network stubbing/aborting/modifying/observing/holding (HoldResponse + Limit/ReleaseNext), screenshots/outline/window, and visual regression (HaveScreenshot + Mask/Tolerance/ChannelTolerance/Animated/InColorSchemes). Use to look up the exact Go method or matcher name and shape. Methods marked (dual) poll until they succeed when fully applied and return a pollable matcher when under-applied.
+description: One-line reference for every Biloba Go method and matcher, grouped by area — selectors/locators, lifecycle, poll-config (WithTimeout/WithPolling/WithContext/Immediate), capturing a matcher's observed value (.Capture), navigation (GetLocation/GetTitle), cookies/storage, tabs, cross-origin iframes (b.Frame frame handles), DOM existence/visibility/contents/properties/forms, clicking and interactions (incl. drag/scroll/tap/modifiers/text-selection), realistic mode, keyboard, uploads, element JS, dialogs, downloads, arbitrary JS (incl. the GetJSValue app-state barrier), network stubbing/aborting/modifying/observing/holding (HoldResponse + Limit/ReleaseNext), screenshots/outline/window, and visual regression (HaveScreenshot + Mask/Tolerance/ChannelTolerance/Animated/InColorSchemes). Use to look up the exact Go method or matcher name and shape. Methods marked (dual) poll until they succeed when fully applied and return a pollable matcher when under-applied.
 ---
 
 # Biloba API reference
@@ -23,7 +23,7 @@ Selectors: CSS strings, `XPath` (`xpath`), or `Locator`s. `b.Immediate()` opts o
 
 **CSS is the default** (stable `#id`/`[data-testid]`, not styling classes); **locators** for a11y + text/label identifiers; **XPath** the rare axis/ordinal tool. Speed: CSS > XPath > locators (full-document ARIA scan).
 
-- **CSS**: `"#id"`, `.cls`, `:has()`. `>>>` pierces one open-shadow-root / same-origin-iframe boundary per occurrence.
+- **CSS**: `"#id"`, `.cls`, `:has()`. `>>>` pierces one open-shadow-root / same-origin-iframe boundary per occurrence. A **cross-origin** iframe needs a frame handle (`b.Frame`, below) — no selector reaches into it from the page.
 - **XPath**: `b.XPath(...)` — pierces neither.
 - **Locators** (`*Contains` variant on every text-valued one): `b.ByRole(r)`, `b.ByText`, `b.ByLabel`, `b.ByPlaceholder`, `b.ByAltText`, `b.ByTitle`, `b.ByTestID(id)` (attr = `biloba.TestIDAttribute`, default `"data-testid"`), `b.ByCSS(sel)` — raw CSS into the algebra, the only *structural* constructor (`b.ByCSS(".story").Nth(1)` for "the 2nd", not `:nth-of-type`). They **pierce open shadow roots** automatically. Accessible name covers aria-labelledby/aria-label/`<label>`/alt/placeholder/value/text/figcaption/caption/title.
 - **Role refinements**: `.WithName(n)`/`.WithNameContains(n)`, `.Level(n)`, `.Checked()`/`.Disabled()`/`.Expanded()`/`.Pressed()`/`.Selected()`.
@@ -95,6 +95,16 @@ Eventually(".figure-frame").Should(b.HaveAttribute("data-block-id", Not(BeEmpty(
 - `b.AllTabs()` / `b.AllSpawnedTabs()` → `Tabs`.
 - `b.HaveTab()` / `b.HaveSpawnedTab()` — chain `.WithURL/.WithTitle/.WithDOMElement(selector)`.
 - `b.TabMatching()` — predicate for `Tabs.Find/Filter`.
+
+## Cross-origin iframes (frame handles)
+
+- `b.Frame(query)` → `*Biloba` frame handle — **polls** until a cross-origin frame below `b` matches (honors all four knobs; fails the spec on timeout). Every DOM method, matcher, getter, `.Capture`, `Run`/`JSFunc`, `SetUpload`, `Realistic()`, screenshot and `HaveScreenshot` works on the handle and runs in the frame's document.
+- `b.FrameMatching()` / `b.HaveFrame()` → `FrameQuery` — chain `.WithURL/.WithTitle/.WithDOMElement(selector)`; `Eventually(b).Should(b.HaveFrame()...)` polls it.
+- `b.AllFrames()` → `Frames` snapshot (`Find`/`Filter`); includes frames nested behind a boundary. `frame.Frame(...)` / `frame.AllFrames()` search inside a frame.
+- `frame.IsFrame()`; `frame.Close()` detaches the handle (`Prepare()` discards all of them).
+- On a frame handle, tab-level methods fail the spec: `Navigate`, `Prepare`, `NewTab`, `SetWindowSize`, `SetCookie`/`ClearCookies`, `StubRequest`/`AbortRequest`/`ModifyRequest`/`ModifyResponse`/`HoldResponse`, dialog handlers/`Dialogs`, downloads. Call them on the tab — its stubs cover the frame's requests and its dialog handling covers the frame's dialogs.
+- A handle belongs to one document: after the iframe is removed/navigated or the tab navigates, calls fail with `frame_detached` — call `b.Frame(...)` again.
+- An **out-of-process** frame (full Chrome runs cross-site frames in their own renderer; chrome-headless-shell doesn't) is driven the same way, except: no screenshots of it (capture the `iframe` element from the tab), the tab's network stubs don't reach its requests, and realistic mode can't see what the embedding page draws over it.
 
 ## Existence, count, visibility, enabled
 

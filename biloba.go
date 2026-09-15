@@ -756,7 +756,9 @@ func (b *Biloba) bootstrapIsolatedTab(allocatorContext context.Context, bootstra
 		}
 
 		tabCtx, cancelTab := chromedp.NewContext(bootstrapCtx, chromedp.WithTargetID(isolatedTargetID))
-		b.Context = tabCtx
+		// Frame handles look their documents up in this registry, and it has to be listening before the
+		// target's first Run, when Chrome announces the documents that already exist.
+		b.Context = engine.TrackFrameWorlds(tabCtx)
 		if _, err := b.RunErr("1"); err != nil {
 			cancelTab()
 			cancelBootstrap()
@@ -892,6 +894,13 @@ type Biloba struct {
 	tabs  map[target.ID]*Biloba
 	close context.CancelFunc
 
+	// frame is set on a frame handle (see frames.go) and nil on a tab.  frames and frameTargets are the
+	// root's caches of the frame handles it has handed out and of its attachments to out-of-process
+	// frame targets; Prepare discards both.
+	frame        *frameScope
+	frames       map[frameHandleKey]*Biloba
+	frameTargets map[target.ID]*frameTarget
+
 	// state is everything this TAB owns, as opposed to the handle you hold onto it with.  It lives
 	// behind a pointer on purpose - see the note on tabState.
 	state *tabState
@@ -965,6 +974,9 @@ func (b *Biloba) inlineScreenshotsEnabled() bool {
 }
 
 func (b *Biloba) GomegaString() string {
+	if b.frame != nil {
+		return fmt.Sprintf("Biloba Frame %p: %s (FrameID=%s, in TargetID=%s)", b, b.frameURL(), b.frame.id, b.targetID)
+	}
 	s := &strings.Builder{}
 	if b.isRootTab() {
 		s.WriteString("Root ")
@@ -980,6 +992,9 @@ func newBiloba(ginkgoT GinkgoTInterface) *Biloba {
 		lock:  &sync.Mutex{},
 		state: newTabState(),
 		tabs:  map[target.ID]*Biloba{},
+
+		frames:       map[frameHandleKey]*Biloba{},
+		frameTargets: map[target.ID]*frameTarget{},
 
 		failureScreenshots:        true,
 		progressReportScreenshots: true,
@@ -1010,10 +1025,14 @@ Read https://onsi.github.io/biloba/#bootstrapping-biloba for details on how to s
 Read https://onsi.github.io/biloba/#parallelization-how-biloba-manages-browsers-and-tabs to build a mental model of how Biloba manages tabs
 */
 func (b *Biloba) Prepare() {
+	if b.refusedOnFrame("Prepare") {
+		return
+	}
 	b.guardConfig("Prepare")
 	if !b.isRootTab() {
 		return
 	}
+	b.detachFrames()
 	//close all tabs
 	closedTargetIDs := []target.ID{}
 	for _, tab := range b.AllTabs() {
@@ -1111,6 +1130,9 @@ Read https://onsi.github.io/biloba/#managing-tabs to learn more about managing t
 */
 func (b *Biloba) NewTab() *Biloba {
 	b.gt.Helper()
+	if b.refusedOnFrame("NewTab") {
+		return nil
+	}
 	b.guardConfig("NewTab")
 	// registerTabFor returns nil if the freshly-created target can't be attached to.  A nil here is a
 	// footgun - callers write b.NewTab().Navigate(...) - so retry with a brand-new target and, only if
@@ -1178,6 +1200,10 @@ In short - if you have a test that involves both downloading files and tabs spaw
 	Eventually(tab.Close).Should(Succeed())
 */
 func (b *Biloba) Close() error {
+	if b.frame != nil {
+		b.closeFrame()
+		return nil
+	}
 	if b.isRootTab() {
 		return fmt.Errorf("invalid attempt to close the root tab")
 	}
@@ -1389,7 +1415,7 @@ func newIsolatedBrowserContextAndTarget(ctx context.Context) (cdp.BrowserContext
 func (b *Biloba) registerTabFor(c context.Context, cancel context.CancelFunc) *Biloba {
 	b.gt.Helper()
 	newG := newBiloba(b.gt)
-	newG.Context = c
+	newG.Context = engine.TrackFrameWorlds(c) // before the probe below: see bootstrapIsolatedTab
 	newG.ChromeConnection = b.ChromeConnection
 	newG.downloadDir = b.downloadDir
 	newG.root = b.root

@@ -32,6 +32,10 @@ var ginkgoFormatter = formatter.New(formatter.ColorModePassthrough)
 var b *biloba.Biloba
 var gt *bilobaT
 var fixtureServer string
+
+// crossOriginFixtureServer serves the same fixtures from another port: a different origin on the same
+// site, which is what a cross-origin iframe spec needs to embed.
+var crossOriginFixtureServer string
 var failures []string
 
 var _ = SynchronizedBeforeSuite(func() {
@@ -182,6 +186,11 @@ func matcherOrEqual(expected interface{}) OmegaMatcher {
 }
 
 func ServeFixtures() {
+	fixtureServer = newFixtureServer()
+	crossOriginFixtureServer = newFixtureServer()
+}
+
+func newFixtureServer() string {
 	s := ghttp.NewServer()
 	s.RouteToHandler("GET", regexp.MustCompile(`^/held$`), func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -211,6 +220,6 @@ func ServeFixtures() {
 	s.RouteToHandler("GET", regexp.MustCompile(`/api/.*`), apiHandler)
 	s.RouteToHandler("POST", regexp.MustCompile(`/api/.*`), apiHandler)
 	s.RouteToHandler("POST", regexp.MustCompile(`^/observed$`), apiHandler)
-	fixtureServer = s.URL()
 	DeferCleanup(s.Close)
+	return s.URL()
 }

@@ -173,7 +173,34 @@ await popup.activate();
 await popup.close();
 ```
 
-Use `tabs()` and `spawnedTabs()` for snapshots, `findTab()` for an optional match, and `waitForTab()` when a popup is expected.  `frames()` and `waitForFrame()` expose cross-origin frame targets as typed sessions.  Closing or preparing an owning session invalidates all of its descendant handles.
+Use `tabs()` and `spawnedTabs()` for snapshots, `findTab()` for an optional match, and `waitForTab()` when a popup is expected.
+
+`frames()` snapshots the cross-origin iframe documents below a session; `waitForFrame()` polls for one by `url`, `title`, and/or a `has` locator. This covers both out-of-process frames (cross-site OOPIF targets) and same-site cross-origin frames such as two local servers on different ports. Biloba asks CDP for Chrome's frame tree and scopes operations directly to the selected frame; it does not read the iframe through parent-page JavaScript or relax the browser's same-origin policy:
+
+```ts
+const frame = await session.waitForFrame(
+  {url: /child-form/, has: 'input[name="email"]'},
+  {timeoutMs: 10_000},
+);
+
+await frame.locator('input[name="email"]').setValue("ada@example.com");
+await frame.locator('button[type="submit"]').click();
+await frame.locator("#success").expectVisible();
+```
+
+Frame handles expose the normal locator, action, assertion, JavaScript, upload, and frame-local storage APIs. Trusted pointer input is translated through the iframe owner's content geometry, including parent scrolling, borders, and CSS transforms. For a same-process frame, realistic actions also check the translated point against the whole tab, so an overlay in the embedding page that covers the frame fails the action instead of taking the click. `frame.evaluate()` runs in the selected frame's normal JavaScript environment, just like `session.evaluate()` does for a tab, so it can read and update globals created by the frame's own scripts. Same-origin iframe and open-shadow-root piercing remains `session.locator("outer >>> inner")`; `frames()` is the cross-origin boundary API.
+
+A frame handle is a document, not a tab. Tab and browser-context controls fail on it with `INVALID_ARGUMENT`: `navigate()`, `prepare()`, `addInitScript()`, `activate()`, `newTab()`, `setWindowSize()`, the emulation setters (device metrics, geolocation, permissions, locale, timezone, media), `setCookies()`/`clearCookies()`, request stubbing, aborting, modifying, routing and holding, network state and cache, and `handleDialogs()`. Call them on the session that owns the frame. Reads that don't change the tab, such as `getCookies()` and `windowSize()`, still work.
+
+A frame handle records its own document's console messages and requests from the moment it is found, so `frame.expectConsoleMessage()` and `frame.waitForRequest()` work for either kind of frame. After navigation, request history keeps only the original document's requests; `waitForRequest()` and `expectNetworkIdle()` reject the stale handle. The owning tab also sees the console output and requests of its same-process frames, but not those of out-of-process frames. Dialogs from any frame are reported and handled on the owning tab. Network interception registered on the tab applies to its same-process frames' requests, not to an out-of-process frame's.
+
+`frame.captureScreenshot()` and a page-level `frame.expectScreenshot()` capture the frame's viewport; element screenshots and masks work inside the frame. Chrome can only capture top-level targets, so screenshots on an out-of-process frame's handle fail with `INVALID_ARGUMENT`; capture the iframe element from the owning session instead.
+
+An iframe with no `src`, or with a `srcdoc`, shares the page's origin, so it is not listed here: reach into it with `>>>`.
+
+If several frames match a `waitForFrame()` query, it returns a ready match without waiting for other renderers. Use a specific URL, title, or `has` locator when you need a particular frame.
+
+`frame.frameId` is the CDP frame identity, while `frame.targetId` is the renderer target that owns it; several same-process frames can therefore share a target. Discovery follows actual frame ancestry across nested renderer boundaries, so a root session includes same-process descendants inside an OOPIF while frame-local discovery excludes siblings. `frame.frameUrl` is the URL snapshot from discovery. Removing, replacing, or navigating the iframe—or navigating its parent tab—makes that document handle stale; its next operation fails with `TARGET_NOT_FOUND`, and `waitForFrame()` returns the replacement document's new handle. Closing a non-owning frame handle does not close independently acquired nested handles. Closing or preparing an owning session invalidates all descendant handles locally with `DRIVER_CLOSED`.
 
 ### Navigating and selecting
 
@@ -309,6 +336,8 @@ try {
 ```
 
 Import `endsWith` (or another Biloba expectation) from the package.  Always release a hold.  Network handlers are first-match-wins; use each handler's `count()` or `stats()` and `networkShadowDiagnostics()` to prove that the intended handler claimed the request.
+
+`routeResponse()` starts its callback timeout after reading the response body. Body reads have a separate timeout of five seconds, or `timeoutMs` if it is longer. For example, `{timeoutMs: 30_000}` allows up to 30 seconds to read the body, then another 30 seconds for the callback. If Chrome refuses to provide a body, as it does for redirects, Biloba continues the response without calling the callback and records the error in the handler's `stats()`.
 
 Dialog handlers are newest-first and removable.  Dialog history records both explicitly handled and safely auto-handled dialogs.  Downloads expose lifecycle metadata, bounded binary content, cancellation, snapshot filters, and polling assertions.
 

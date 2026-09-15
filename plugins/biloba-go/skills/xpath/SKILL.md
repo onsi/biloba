@@ -95,4 +95,4 @@ Prefer the locator engine (`write-tests`): `b.ByText("Submit")` / `b.ByTextConta
 
 ## Limits
 
-XPath crosses neither shadow DOM nor iframe boundaries — `>>>` is CSS-only. For those, use a CSS selector with `>>>`, or a semantic locator.
+XPath crosses neither shadow DOM nor iframe boundaries — `>>>` is CSS-only. For those, use a CSS selector with `>>>`, or a semantic locator. For a cross-origin iframe, build the XPath on a frame handle (`frame := b.Frame(...)`, then `frame.XPath(...)`) — nothing crosses into it from the page.

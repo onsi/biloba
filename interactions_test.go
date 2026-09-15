@@ -111,6 +111,14 @@ var _ = Describe("First-class interactions", func() {
 			Expect(b.GetProperty("#file", "files.length")).To(Equal(1.0))
 		})
 
+		It("accepts a relative path without stalling the tab's next navigation", func() {
+			// Chrome takes a relative path as given, and a file input holding one stalls the next
+			// navigation until it times out.  Biloba resolves it first.
+			b.SetUpload("#file", "./fixtures/upload-sample.txt")
+			Eventually("#filenames").Should(b.HaveInnerText("upload-sample.txt"))
+			b.WithTimeout(5 * time.Second).Navigate(fixtureServer + "/interactions.html")
+		})
+
 		It("attaches multiple files to a multi-file input", func() {
 			a, _ := filepath.Abs("./fixtures/upload-sample.txt")
 			c, _ := filepath.Abs("./fixtures/upload-other.txt")

@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"time"
 
+	"github.com/chromedp/cdproto"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
 	cdpio "github.com/chromedp/cdproto/io"
@@ -43,7 +45,11 @@ func responseBodyContext(ctx context.Context, requestID fetch.RequestID, maxByte
 		return takeErr
 	}))
 	if err != nil {
-		return nil, "", false, err
+		// A protocol error is Chrome's reply refusing the transfer, so the response remains
+		// resumable. Cancellation and transport errors are ambiguous: Chrome may have taken the
+		// body before its reply was lost, and ContinueResponse cannot resume it in that state.
+		var protocolErr *cdproto.Error
+		return nil, "", !errors.As(err, &protocolErr), err
 	}
 	body, err := readBounded(ctx, &cdpStreamReader{ctx: ctx, handle: stream}, maxBytes)
 	return body, stream, true, err
@@ -215,6 +221,9 @@ func (s *Session) RequestsMatching(query RequestQuery) []Request {
 func (s *Session) WaitForRequest(ctx context.Context, query RequestQuery, policy PollPolicy) (Request, error) {
 	var found Request
 	_, err := Poll(ctx, policy, func(context.Context) (Observation, bool, error) {
+		if err := s.frameObservationError("wait for request"); err != nil {
+			return Observation{}, false, err
+		}
 		matches := s.RequestsMatching(query)
 		if len(matches) == 0 {
 			return Observation{}, false, nil
@@ -238,6 +247,9 @@ func (s *Session) HoldResponse(ctx context.Context, expectation Expectation) (st
 
 // HoldResponseWithOptions begins pausing responses whose URLs match expectation.
 func (s *Session) HoldResponseWithOptions(ctx context.Context, expectation Expectation, options ResponseHoldOptions) (string, error) {
+	if err := s.tabOnly("hold response"); err != nil {
+		return "", err
+	}
 	if _, err := MatchExpectation("", expectation); err != nil {
 		return "", &Error{Code: CodeInvalidArgument, Operation: "hold response", Message: err.Error(), Cause: err}
 	}

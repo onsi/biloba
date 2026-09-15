@@ -44,6 +44,8 @@ Then **`Read` the printed PNG path** so you actually see the rendered page (what
 - **`b.Outline()`** — raw DOM; your primary map for an app you own. Hunt for stable, intentional hooks (`#id`, `[data-testid]`) and target them with **CSS** — the default, fastest pathway. Avoid styling classes (`.btn-primary`) that get renamed in redesigns.
 - **`b.A11yOutline()`** — role + accessible name. Use it when there's no good hook, or when you *want* to assert the user-perceivable thing so the spec doubles as an a11y guard: `b.ByRole("button").WithName("Save")`, `b.ByText(...)`, `b.ByLabel("Email")`, `b.ByTestID(...)`. XPath is the rare fallback for axis/ordinal structure (`xpath`).
 
+An `<iframe>` from another origin shows up in the outline as an empty element — its document is out of the page's reach. `for _, f := range b.AllFrames() { fmt.Println(f.GetLocation()) }` lists those frames; dump one with `b.Frame(b.FrameMatching().WithURL(...)).Outline()` and author against it with a frame handle (`write-tests`).
+
 You get the same outline for free on a failure under CI or an AI agent (`debug-failures`) — once you're iterating in step 2, read it from the failure report instead of re-running the scratch spec.
 
 ## 2. Author the real spec

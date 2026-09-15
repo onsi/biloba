@@ -549,11 +549,11 @@ if (!window["_biloba"]) {
         if (!top) return r(false, "DOM element is not hittable at its center point")
         return r(composedContains(n, top), "DOM element is obscured by another element")
     })
-    // measurePoint reports an element's centroid in TOP-LEVEL viewport coordinates (where CDP mouse
-    // events live), plus whether that point is in the viewport, is hittable (the element/descendant
-    // is topmost there), and whether the element is enabled.  It does NOT scroll - callers scroll
-    // first.  Coordinates from inside a same-origin iframe are translated by walking up the
-    // frameElement chain; the hit-test runs in the element's own document with its local coords.
+    // measurePoint reports an element's centroid in this SESSION'S viewport coordinates, plus whether
+    // that point is in the viewport, is hittable (the element/descendant is topmost there), and whether
+    // the element is enabled.  It does NOT scroll - callers scroll first.  A tab session that explicitly
+    // pierces a same-origin iframe still walks from the element back to the session window.  A frame
+    // session stops at its own window, leaving its one frame-owner translation to the CDP side.
     let measurePoint = (n) => {
         let doc = n.ownerDocument, view = doc.defaultView
         let rect = n.getBoundingClientRect()
@@ -569,7 +569,7 @@ if (!window["_biloba"]) {
         let hittable = !!top && composedContains(n, top)
         let cx = lx, cy = ly, translatable = inLocalViewport
         try {
-            while (view && view.frameElement) {
+            while (view && view !== window && view.frameElement) {
                 let fe = view.frameElement, fr = fe.getBoundingClientRect()
                 cx += fr.left + fe.clientLeft
                 cy += fr.top + fe.clientTop
@@ -821,15 +821,14 @@ if (!window["_biloba"]) {
         }
         return attempt(0)
     }
-    // measureCorner reports an element's top-left corner in TOP-LEVEL viewport coordinates (where CDP
-    // mouse events live), plus whether the element is enabled.  Like measurePoint it walks the
-    // frameElement chain so a corner inside a same-origin iframe is translated to top-level coords.
+    // measureCorner reports an element's top-left corner in this session's viewport coordinates, plus
+    // whether the element is enabled.  Like measurePoint it walks only as far as the session window.
     // Callers add their own (offsetX, offsetY) and check the resulting point against the viewport.
     let measureCorner = (n) => {
         let rect = n.getBoundingClientRect()
         let left = rect.left, top = rect.top, view = n.ownerDocument.defaultView, translatable = true
         try {
-            while (view && view.frameElement) {
+            while (view && view !== window && view.frameElement) {
                 let fe = view.frameElement, fr = fe.getBoundingClientRect()
                 left += fr.left + fe.clientLeft
                 top += fr.top + fe.clientTop

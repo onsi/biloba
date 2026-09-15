@@ -45,7 +45,7 @@ When a spec is flaky, order-dependent, or only fails under `-p`/CI, go straight 
 
 Every action/matcher takes:
 
-- a **CSS string** — the default; target stable `#id`/`[data-testid]` hooks, not styling classes. `>>>` pierces open shadow roots / same-origin iframes.
+- a **CSS string** — the default; target stable `#id`/`[data-testid]` hooks, not styling classes. `>>>` pierces open shadow roots / same-origin iframes. A **cross-origin** iframe (another port counts) is reached through a frame handle instead: `frame := b.Frame(b.FrameMatching().WithURL(...))` is a `*Biloba` scoped to that frame's document (`write-tests`).
 - a **semantic `Locator`** — describes an element as a user perceives it (`b.ByRole("button").WithName("Save")`, `b.ByText`, `b.ByLabel`, `b.ByTestID`). Reach for these to assert a11y or when the visible label is the natural identifier. They compose (`.ContainingText`/`.Containing`/`.And`/`.Or`/`.Within`/`.Nth`, each accepting any selector) and pierce open shadow roots automatically. `b.ByCSS(sel)` takes raw CSS *into* that algebra (`b.ByCSS(".story").Nth(1)` for the 2nd match, instead of `:nth-of-type`).
 - an **`XPath`** — the rare power tool for axis/ordinal queries.
 
@@ -61,7 +61,7 @@ chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
 }))
 ```
 
-Use it for geolocation, cross-origin frames, or any CDP feature without a native wrapper. (For real `:hover`/occlusion/scroll, prefer `b.Realistic()`.)
+Use it for geolocation or any CDP feature without a native wrapper. (Cross-origin iframes have a native wrapper: `b.Frame`.) (For real `:hover`/occlusion/scroll, prefer `b.Realistic()`.)
 
 ## Where to go next
 

@@ -54,6 +54,10 @@ type Session struct {
 	openerID              target.ID
 	ownsContext           bool
 	frameTarget           bool
+	frameID               cdp.FrameID
+	frameLoaderID         cdp.LoaderID
+	frameWorld            frameWorld
+	frameOOPIF            bool
 	artifactDir           string
 	mu                    sync.Mutex
 	requestMu             sync.Mutex
@@ -119,6 +123,12 @@ func (s *Session) ContextID() cdp.BrowserContextID { return s.browserContextID }
 
 // TargetID identifies this session's page target.
 func (s *Session) TargetID() target.ID { return s.targetID }
+
+// FrameID identifies the child frame represented by this session, or is empty for tab sessions.
+func (s *Session) FrameID() cdp.FrameID { return s.frameID }
+
+// FrameDocumentID identifies the document generation represented by a frame session.
+func (s *Session) FrameDocumentID() cdp.LoaderID { return s.frameLoaderID }
 
 // OpenerID identifies the target that opened this tab, or is empty for explicitly-created tabs.
 func (s *Session) OpenerID() target.ID { return s.openerID }
@@ -265,6 +275,9 @@ func (s *Session) markTargetDestroyed() {
 
 // NewTab opens another target in this session's browser context, sharing cookies and storage.
 func (s *Session) NewTab(ctx context.Context) (*Session, error) {
+	if err := s.tabOnly("new tab"); err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -288,6 +301,9 @@ func (s *Session) contextRoot() *Session {
 
 // AddInitScript installs JavaScript that runs before every future document in this tab.
 func (s *Session) AddInitScript(ctx context.Context, script string) error {
+	if err := s.tabOnly("add init script"); err != nil {
+		return err
+	}
 	return s.serial(ctx, "add init script", func(opCtx context.Context) error {
 		return chromedp.Run(opCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
 			identifier, err := page.AddScriptToEvaluateOnNewDocument(script).Do(runCtx)
@@ -301,6 +317,9 @@ func (s *Session) AddInitScript(ctx context.Context, script string) error {
 
 // Activate brings this tab to the foreground.
 func (s *Session) Activate(ctx context.Context) error {
+	if err := s.tabOnly("activate tab"); err != nil {
+		return err
+	}
 	return s.serial(ctx, "activate tab", func(opCtx context.Context) error {
 		return s.withBrowserExecutor(opCtx, func(browserCtx context.Context) error {
 			return target.ActivateTarget(s.targetID).Do(browserCtx)
@@ -309,6 +328,9 @@ func (s *Session) Activate(ctx context.Context) error {
 }
 
 func (s *Session) Prepare(ctx context.Context) error {
+	if err := s.tabOnly("prepare"); err != nil {
+		return err
+	}
 	return s.serial(ctx, "prepare", func(opCtx context.Context) error {
 		if s.ownsContext && s.browser != nil {
 			if err := s.browser.closeContextDescendants(opCtx, s); err != nil {
@@ -409,6 +431,9 @@ func (s *Session) Navigate(ctx context.Context, destination string) error {
 // than they are the subject of the test, and letting one through surfaces later as a confusing
 // downstream failure instead of at the navigation that caused it.
 func (s *Session) NavigateWithStatus(ctx context.Context, destination string, expectedStatus int) error {
+	if err := s.tabOnly("navigate"); err != nil {
+		return err
+	}
 	return s.serial(ctx, "navigate", func(opCtx context.Context) error {
 		recoveringCrash := s.hasCrashed()
 		if !recoveringCrash {
@@ -471,6 +496,9 @@ func (s *Session) NavigateWithStatus(ctx context.Context, destination string, ex
 }
 
 func (s *Session) SetCookies(ctx context.Context, cookies []Cookie) error {
+	if err := s.tabOnly("set cookies"); err != nil {
+		return err
+	}
 	return s.serial(ctx, "set cookies", func(opCtx context.Context) error {
 		var location string
 		if err := chromedp.Run(opCtx, chromedp.Location(&location)); err != nil {
@@ -493,6 +521,9 @@ func (s *Session) GetCookies(ctx context.Context) ([]Cookie, error) {
 
 // ClearCookies clears every cookie in this session's isolated browser context.
 func (s *Session) ClearCookies(ctx context.Context) error {
+	if err := s.tabOnly("clear cookies"); err != nil {
+		return err
+	}
 	return s.serial(ctx, "clear cookies", func(opCtx context.Context) error {
 		return ClearCookiesContext(opCtx, s.browserContextID)
 	})
@@ -517,6 +548,9 @@ func (s *Session) evaluate(ctx context.Context, script string, awaitPromise bool
 
 // SetWindowSize changes this session's emulated viewport.
 func (s *Session) SetWindowSize(ctx context.Context, width, height int) error {
+	if err := s.tabOnly("set window size"); err != nil {
+		return err
+	}
 	if width <= 0 || height <= 0 {
 		return &Error{Code: CodeInvalidArgument, Operation: "set window size", Message: "width and height must be positive"}
 	}
@@ -883,7 +917,14 @@ func (s *Session) actionablePoint(ctx context.Context, selector Selector) (actio
 	if !xOK || !yOK || point["enabled"] != true || point["inViewport"] != true || point["hittable"] != true {
 		return actionPoint{}, &Error{Code: CodeActionFailed, Operation: "resolve pointer target", Message: "element is not actionable"}
 	}
-	return actionPoint{x: x, y: y}, nil
+	translated, reachable, err := s.translatePointerPoint(ctx, actionPoint{x: x, y: y})
+	if err != nil {
+		return actionPoint{}, err
+	}
+	if !reachable {
+		return actionPoint{}, frameObscuredError()
+	}
+	return translated, nil
 }
 
 func (s *Session) ensureBiloba(ctx context.Context) error {
@@ -918,6 +959,14 @@ func (s *Session) serial(requestCtx context.Context, operation string, run func(
 	}
 	opCtx, cancel := executorContext(s.ctx, requestCtx)
 	defer cancel()
+	if s.frameID != "" {
+		if err := s.validateFrameDocument(opCtx); err != nil {
+			return err
+		}
+		if s.frameWorld.id != 0 {
+			opCtx = withExecutionContext(opCtx, s.frameWorld)
+		}
+	}
 	if !recovers {
 		// Interrupt an operation that is already waiting on the renderer when it dies.  Without this
 		// the crash is only noticed by the *next* call, and this one still burns its whole deadline.
@@ -939,6 +988,18 @@ func (s *Session) serial(requestCtx context.Context, operation string, run func(
 	}
 	if requestCtx.Err() != nil {
 		return requestContextError(operation, requestCtx, err)
+	}
+	// If the document disappeared after validation, report the stale handle rather
+	// than turning Chrome's missing-context response into a generic action failure.
+	if s.frameID != "" {
+		if frameContextGone(err) {
+			return staleFrameError(operation, s.frameID)
+		}
+		if s.ctx.Err() == nil {
+			if world, worldErr := mainFrameWorld(s.ctx, s.frameID); worldErr != nil || world.uniqueID != s.frameWorld.uniqueID {
+				return staleFrameError(operation, s.frameID)
+			}
+		}
 	}
 	var engineErr *Error
 	if errors.As(err, &engineErr) {

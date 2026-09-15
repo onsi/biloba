@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+<title>Checkout Form</title>
+<style>
+  body { margin: 0; background: rgb(0, 170, 0); }
+  #pay { position: absolute; left: 20px; top: 60px; width: 120px; height: 40px; }
+  #hover-target { position: absolute; left: 180px; top: 60px; width: 120px; height: 40px; }
+  #hover-target:hover { background: rgb(0, 0, 255); }
+</style>
+</head>
+<body>
+<form id="checkout">
+  <label>Email <input id="email" name="email"></label>
+  <button id="pay" type="submit">Pay</button>
+</form>
+<div id="hover-target">hover me</div>
+<input id="upload" type="file">
+<div id="result"></div>
+<script>
+  window.frameState = { loaded: true }
+  document.querySelector("#checkout").onsubmit = (e) => {
+    e.preventDefault()
+    document.querySelector("#result").textContent = "Paid by " + document.querySelector("#email").value
+  }
+  fetch("/api/frame-ready")
+</script>
+</body>
+</html>

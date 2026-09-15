@@ -35,6 +35,9 @@ Read https://onsi.github.io/biloba/#navigation to learn more about navigation
 */
 func (b *Biloba) Navigate(url string) *Biloba {
 	b.gt.Helper()
+	if b.refusedOnFrame("Navigate") {
+		return b
+	}
 	b.guardConfig("Navigate", knobTimeout, knobContext)
 	return b.navigateWithStatus(url, http.StatusOK)
 }
@@ -48,6 +51,9 @@ Read https://onsi.github.io/biloba/#navigation to learn more about navigation
 */
 func (b *Biloba) NavigateWithStatus(url string, status int) *Biloba {
 	b.gt.Helper()
+	if b.refusedOnFrame("NavigateWithStatus") {
+		return b
+	}
 	b.guardConfig("NavigateWithStatus", knobTimeout, knobContext)
 	return b.navigateWithStatus(url, status)
 }

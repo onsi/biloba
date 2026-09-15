@@ -72,6 +72,21 @@ func (b *Biloba) scrollToStablePoint(selector any) (clickPoint, error) {
 	if !ok {
 		return clickPoint{}, fmt.Errorf("unexpected scrollToStablePoint result: %v", r.Result)
 	}
+	return b.tabClickPoint(pt)
+}
+
+// tabClickPoint moves a point biloba.js measured in a frame's viewport into its tab's viewport, where
+// real input lands.  biloba.js can only check occlusion inside the frame's document, so a point that
+// something in the embedding page covers is reported as not hittable here.  A tab's points pass through.
+func (b *Biloba) tabClickPoint(pt clickPoint) (clickPoint, error) {
+	if b.frame == nil {
+		return pt, nil
+	}
+	x, y, reachable, err := b.toTabPoint(pt.x, pt.y)
+	if err != nil {
+		return clickPoint{}, err
+	}
+	pt.x, pt.y, pt.hittable = x, y, pt.hittable && reachable
 	return pt, nil
 }
 
@@ -91,6 +106,13 @@ func (b *Biloba) realisticClickEach(selector any) error {
 		}
 		pt, ok := pointFromResult(r.Result) // nil result (missing/hidden) => skip
 		if !ok || !pt.enabled || !pt.inViewport || !pt.hittable {
+			continue
+		}
+		pt, err := b.tabClickPoint(pt)
+		if err != nil {
+			return err
+		}
+		if !pt.hittable {
 			continue
 		}
 		if err := b.runEngine("dispatch realistic click input", func(ctx context.Context) error {
@@ -155,7 +177,7 @@ func (b *Biloba) resolvePointerTarget(selector any, cfg pointerConfig) (float64,
 	if x < 0 || y < 0 || x > toFloat64(m["innerWidth"]) || y > toFloat64(m["innerHeight"]) {
 		return 0, 0, false, nil
 	}
-	return x, y, true, nil
+	return b.toTabPoint(x, y)
 }
 
 // realisticMouseClick is the shared realistic implementation behind Click, DblClick, RightClick, and
@@ -256,6 +278,15 @@ func (b *Biloba) scrollToStableDragPoints(source, target any) (clickPoint, click
 	tgt, tgtOK := pointFromResult(m["target"])
 	if !srcOK || !tgtOK {
 		return clickPoint{}, clickPoint{}, fmt.Errorf("unexpected scrollToStableDragPoints result: %v", r.Result)
+	}
+	if src, err = b.tabClickPoint(src); err != nil {
+		return clickPoint{}, clickPoint{}, err
+	}
+	if tgt, err = b.tabClickPoint(tgt); err != nil {
+		return clickPoint{}, clickPoint{}, err
+	}
+	if m["ok"] == true && (!src.hittable || !tgt.hittable) {
+		return src, tgt, fmt.Errorf("the embedding page covers this frame where the drag would land: the source (%v) is %s and the target (%v) is %s", source, dragEndpointStatus(src, ""), target, dragEndpointStatus(tgt, ""))
 	}
 	if m["ok"] != true {
 		srcClipper, _ := m["sourceClipper"].(string)

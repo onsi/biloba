@@ -107,6 +107,10 @@ func (s *Session) CaptureElementScreenshot(ctx context.Context, selector Selecto
 }
 
 func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, options ScreenshotCaptureOptions) (shot Screenshot, err error) {
+	if s.frameOOPIF {
+		// Chrome captures only top-level targets, and an out-of-process frame is its own target.
+		return shot, &Error{Code: CodeInvalidArgument, Operation: "capture screenshot", Message: "Chrome cannot screenshot an out-of-process frame directly: capture the iframe element from the session that owns the frame"}
+	}
 	if err = s.ensureBiloba(ctx); err != nil {
 		return shot, err
 	}
@@ -143,7 +147,14 @@ func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, opt
 
 	var pngBytes []byte
 	var originX, originY, cssWidth float64
-	if selector == nil {
+	if selector == nil && s.frameID != "" {
+		var clip *page.Viewport
+		clip, err = s.frameViewportClip(ctx)
+		if err == nil {
+			originX, originY, cssWidth = clip.X, clip.Y, clip.Width
+			pngBytes, err = CaptureClipContext(ctx, clip, false)
+		}
+	} else if selector == nil {
 		pngBytes, err = CapturePageContext(ctx, &cssWidth)
 	} else {
 		response, callErr := RunHandlerContext(ctx, "boundingBox", selector.Encoded())
@@ -163,7 +174,14 @@ func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, opt
 				shot.Warning = fmt.Sprintf("element %s is partially clipped by %s (%.0f%% visible)", selector.Description(), clipper, visibleFraction*100)
 			}
 		}
-		clip := &page.Viewport{X: floatValue(box["x"]), Y: floatValue(box["y"]), Width: floatValue(box["width"]), Height: floatValue(box["height"]), Scale: 1}
+		x, y, width, height, translateErr := s.translateScreenshotRect(ctx,
+			floatValue(box["x"]), floatValue(box["y"]),
+			floatValue(box["width"]), floatValue(box["height"]),
+		)
+		if translateErr != nil {
+			return shot, translateErr
+		}
+		clip := &page.Viewport{X: x, Y: y, Width: width, Height: height, Scale: 1}
 		originX, originY, cssWidth = clip.X, clip.Y, clip.Width
 		inViewport, _ := box["inViewport"].(bool)
 		pngBytes, err = CaptureClipContext(ctx, clip, !inViewport)
@@ -202,8 +220,14 @@ func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, opt
 			if !ok {
 				continue
 			}
-			x, y := floatValue(box["x"])-originX, floatValue(box["y"])-originY
-			w, h := floatValue(box["width"]), floatValue(box["height"])
+			x, y, w, h, translateErr := s.translateScreenshotRect(ctx,
+				floatValue(box["x"]), floatValue(box["y"]),
+				floatValue(box["width"]), floatValue(box["height"]),
+			)
+			if translateErr != nil {
+				return shot, translateErr
+			}
+			x, y = x-originX, y-originY
 			rects = append(rects, image.Rect(int(math.Floor(x*scale)), int(math.Floor(y*scale)), int(math.Ceil((x+w)*scale)), int(math.Ceil((y+h)*scale))))
 		}
 		pngBytes, err = maskScreenshotPNG(pngBytes, rects)
@@ -219,9 +243,27 @@ func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, opt
 	return shot, nil
 }
 
+// frameViewportClip is a same-process frame's page capture (see FrameViewportClipContext).
+func (s *Session) frameViewportClip(ctx context.Context) (*page.Viewport, error) {
+	return FrameViewportClipContext(ctx, s.frameID)
+}
+
+// translateScreenshotRect maps a rectangle from a same-process frame's document into the owning
+// renderer target's document (see FrameScreenshotRectContext). Tab rectangles need no translation, and
+// captureScreenshot rejects out-of-process frames before measuring anything.
+func (s *Session) translateScreenshotRect(ctx context.Context, x, y, width, height float64) (float64, float64, float64, float64, error) {
+	if s.frameOOPIF || s.frameID == "" {
+		return x, y, width, height, nil
+	}
+	return FrameScreenshotRectContext(ctx, s.frameID, x, y, width, height)
+}
+
 func (s *Session) visualCleanupContext() (context.Context, context.CancelFunc) {
 	requestCtx, requestCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	cleanupCtx, cleanupCancel := executorContext(s.ctx, requestCtx)
+	if s.frameWorld.id != 0 {
+		cleanupCtx = withExecutionContext(cleanupCtx, s.frameWorld)
+	}
 	return cleanupCtx, func() {
 		cleanupCancel()
 		requestCancel()

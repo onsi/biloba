@@ -530,7 +530,11 @@ func (s *Session) ClickEach(ctx context.Context, selector Selector, mode Interac
 			if !ok {
 				continue
 			}
-			if clickErr := MouseClickContext(opCtx, numeric(pointMap["x"]), numeric(pointMap["y"]), input.Left, 1, 0); clickErr != nil {
+			point, translateErr := s.translateFramePoint(opCtx, actionPoint{x: numeric(pointMap["x"]), y: numeric(pointMap["y"])})
+			if translateErr != nil {
+				return translateErr
+			}
+			if clickErr := MouseClickContext(opCtx, point.x, point.y, input.Left, 1, 0); clickErr != nil {
 				return clickErr
 			}
 		}
@@ -578,7 +582,18 @@ func (s *Session) resolvePointerTarget(ctx context.Context, selector Selector, o
 	if !leftOK || !topOK || !widthOK || !heightOK || x < 0 || y < 0 || x > width || y > height {
 		return actionPoint{}, &Error{Code: CodeActionFailed, Operation: "resolve pointer target", Message: "element offset is outside the viewport"}
 	}
-	return actionPoint{x: x, y: y}, nil
+	translated, reachable, err := s.translatePointerPoint(ctx, actionPoint{x: x, y: y})
+	if err != nil {
+		return actionPoint{}, err
+	}
+	if !reachable {
+		return actionPoint{}, frameObscuredError()
+	}
+	return translated, nil
+}
+
+func frameObscuredError() error {
+	return &Error{Code: CodeActionFailed, Operation: "resolve pointer target", Message: "element is obscured by the page that embeds its frame"}
 }
 
 type stablePointerPoint struct {
@@ -600,7 +615,46 @@ func (s *Session) stablePointerPoint(ctx context.Context, selector Selector) (st
 	if !xOK || !yOK {
 		return stablePointerPoint{}, malformed("resolve pointer target", response.Result)
 	}
-	return stablePointerPoint{x: x, y: y, enabled: point["enabled"] == true, inViewport: point["inViewport"] == true, hittable: point["hittable"] == true}, nil
+	translated, reachable, err := s.translatePointerPoint(ctx, actionPoint{x: x, y: y})
+	if err != nil {
+		return stablePointerPoint{}, err
+	}
+	return stablePointerPoint{x: translated.x, y: translated.y, enabled: point["enabled"] == true, inViewport: point["inViewport"] == true, hittable: point["hittable"] == true && reachable}, nil
+}
+
+// translateFramePoint maps a point in this session's viewport into the viewport of the renderer target
+// that receives trusted CDP input (see TranslateFramePointsContext). A tab and an out-of-process frame
+// receive input in their own viewport, so their points pass through.
+func (s *Session) translateFramePoint(ctx context.Context, point actionPoint) (actionPoint, error) {
+	points, err := s.translateFramePoints(ctx, []actionPoint{point})
+	if err != nil {
+		return actionPoint{}, err
+	}
+	return points[0], nil
+}
+
+// translatePointerPoint translates a pointer target like translateFramePoint and also reports whether
+// trusted input at the translated point would land in this frame's document (see
+// FramePointReachableContext).
+func (s *Session) translatePointerPoint(ctx context.Context, point actionPoint) (actionPoint, bool, error) {
+	translated, err := s.translateFramePoint(ctx, point)
+	if err != nil || s.frameOOPIF || s.frameID == "" {
+		return translated, err == nil, err
+	}
+	reachable, err := framePointReachable(ctx, s.frameID, translated)
+	if err != nil {
+		return actionPoint{}, false, err
+	}
+	return translated, reachable, nil
+}
+
+// translateFramePoints maps several points from one snapshot of the frame owner's geometry. A
+// screenshot rectangle needs all four corners to agree even when page script is moving the frame.
+func (s *Session) translateFramePoints(ctx context.Context, points []actionPoint) ([]actionPoint, error) {
+	if s.frameOOPIF || s.frameID == "" {
+		return points, nil
+	}
+	return translateFramePoints(ctx, s.frameID, points)
 }
 
 func pointerPayload(offset *Point, modifiers Modifier) map[string]any {

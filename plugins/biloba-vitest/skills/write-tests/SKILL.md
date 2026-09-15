@@ -45,7 +45,9 @@ afterAll(async () => { await browser.close(); });
 ```
 
 - A root `Session` has its own browser context, so cookies and storage are isolated. `session.prepare()` resets it cheaply — call it between tests rather than opening a new session.
-- `await session.newTab()` opens a sibling tab in the same context. Use `tabs()`/`spawnedTabs()` for snapshots, `findTab()`/`waitForTab()` for popup workflows, and `frames()`/`waitForFrame()` for cross-origin frame targets.
+- `await session.newTab()` opens a sibling tab in the same context. Use `tabs()`/`spawnedTabs()` for snapshots and `findTab()`/`waitForTab()` for popup workflows.
+- `frames()` snapshots cross-origin iframe documents and `waitForFrame({url, title, has})` polls for one. It covers nested OOPIFs and same-site cross-origin frames (for example, two localhost ports) through CDP frame scoping. Use the returned session for locators, trusted/fast actions, uploads, assertions, and JavaScript evaluation; `frame.evaluate()` can read globals created by the frame's own scripts. Use `>>>` for same-origin iframe or open-shadow piercing. Removal, iframe/parent navigation, or replacement makes the old handle fail with `TARGET_NOT_FOUND`; closing a non-owning frame leaves independently acquired nested handles live, while owner `prepare()`/`close()` invalidates them with `DRIVER_CLOSED`.
+- A frame handle is a document, not a tab: `navigate()`, `prepare()`, `addInitScript()`, `setWindowSize()`, emulation, `setCookies()`/`clearCookies()`, request stubbing/holding, network state, and `handleDialogs()` fail on it with `INVALID_ARGUMENT` — call them on the owning session. Dialogs from any frame arrive on the owning tab; the frame handle records its own console messages and requests. `frame.captureScreenshot()` captures the frame's viewport; an out-of-process frame can't be screenshotted directly, so capture its `iframe` element from the owning session.
 
 ## 3. Locators
 
@@ -161,6 +163,8 @@ try {
 Always release a hold. Network handlers are first-match-wins, so assert `count()` or inspect `stats()` when the registration itself is part of the test.
 
 Use `requests()`/`responses()` for history and `waitForRequest()` for an atomic winning observation. `stubRequest()`, `abortRequest()`, `modifyRequest()`, `modifyResponse()`, and `routeResponse()` return first-match-wins handlers with `count()`, `stats()`, and `remove()`. Network-state methods cover cache, offline mode, latency, throughput, and connection type.
+
+`routeResponse()` starts its callback timeout after the body is read. The body has a separate timeout of five seconds, or `timeoutMs` if longer. When Chrome refuses to provide a body (for example, on a redirect), Biloba continues the response without calling the callback and records the error in `stats()`.
 
 `modifyResponse()` patches the response: what you leave out is inherited from the original. `routeResponse()` *replaces* it - an unset status means 200, and unset headers or body mean none - so hand back anything you want kept, including headers you read off the intercepted response.
 

@@ -196,6 +196,9 @@ HandleAlertDialogs() registers an alert DialogHandler
 Read https://onsi.github.io/biloba/#handling-dialogs to learn more about handling dialogs
 */
 func (b *Biloba) HandleAlertDialogs() *DialogHandler {
+	if b.refusedOnFrame("HandleAlertDialogs") {
+		return nil
+	}
 	b.guardConfig("HandleAlertDialogs")
 	return b.addDialogHandler(&DialogHandler{dialogType: DialogTypeAlert})
 }
@@ -206,6 +209,9 @@ HandleBeforeunloadDialogs() registers an beforeunload DialogHandler
 Read https://onsi.github.io/biloba/#handling-dialogs to learn more about handling dialogs
 */
 func (b *Biloba) HandleBeforeunloadDialogs() *DialogHandler {
+	if b.refusedOnFrame("HandleBeforeunloadDialogs") {
+		return nil
+	}
 	b.guardConfig("HandleBeforeunloadDialogs")
 	return b.addDialogHandler(&DialogHandler{dialogType: DialogTypeBeforeunload})
 }
@@ -216,6 +222,9 @@ HandleConfirmDialogs() registers a confirm DialogHandler
 Read https://onsi.github.io/biloba/#handling-dialogs to learn more about handling dialogs
 */
 func (b *Biloba) HandleConfirmDialogs() *DialogHandler {
+	if b.refusedOnFrame("HandleConfirmDialogs") {
+		return nil
+	}
 	b.guardConfig("HandleConfirmDialogs")
 	return b.addDialogHandler(&DialogHandler{dialogType: DialogTypeConfirm})
 }
@@ -226,6 +235,9 @@ HandlePromptDialogs() registers a prompt Dialoghandler
 Read https://onsi.github.io/biloba/#handling-dialogs to learn more about handling dialogs
 */
 func (b *Biloba) HandlePromptDialogs() *DialogHandler {
+	if b.refusedOnFrame("HandlePromptDialogs") {
+		return nil
+	}
 	b.guardConfig("HandlePromptDialogs")
 	return b.addDialogHandler(&DialogHandler{dialogType: DialogTypePrompt})
 }
@@ -245,6 +257,9 @@ Pass RemoveDialogHandler() a handler returned by one of the Handle*Dialogs metho
 Read https://onsi.github.io/biloba/#handling-dialogs to learn more about handling dialogs
 */
 func (b *Biloba) RemoveDialogHandler(handler *DialogHandler) {
+	if b.refusedOnFrame("RemoveDialogHandler") {
+		return
+	}
 	b.guardConfig("RemoveDialogHandler")
 	handlers := []*DialogHandler{}
 	b.lock.Lock()
@@ -265,6 +280,9 @@ A beforeunload raised by Prepare's own reset navigation is not included: it belo
 Read https://onsi.github.io/biloba/#inspecting-handled-dialogs to learn more about inspecting handled dialogs
 */
 func (b *Biloba) Dialogs() Dialogs {
+	if b.refusedOnFrame("Dialogs") {
+		return nil
+	}
 	b.guardConfig("Dialogs")
 	b.lock.Lock()
 	defer b.lock.Unlock()

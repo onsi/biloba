@@ -212,6 +212,16 @@ The backstop is **not** a fifth knob: it deliberately ignores `WithTimeout` (whi
 - **Never bound a context chromedp will allocate on.** The first `chromedp.Run` on a context is where chromedp starts the browser and the target's event loop, tying both to *that* context — so a deadline there kills Chrome rather than bounding a hang. That's why `cdpContext` calls `ensureChromedpAllocated` first, and why the connect-time probes in `SpinUpChrome`/`bootstrapIsolatedTab` are deliberately left unbounded.
 - **Parent on `b.Context`**, never `context.Background()`, or chromedp's executor for the tab drops out of the chain.
 
+### Frame handles get your method for free — if it goes through the bridge
+
+A cross-origin frame handle (`b.Frame(...)`, `frames.go`) is a `*Biloba` whose `Context` is pinned to one frame document with `engine.ScopeToFrameContext`. `engine.EvaluateRawContext` reads that pin, so anything that evaluates through `runBilobaHandler`, `runErr`/`Run`, or an engine `*Context` helper on `b.cdpContext` runs in the frame with no extra code. Three things do need care:
+
+- **Evaluate through the engine.** A raw `chromedp.Evaluate`/`runtime.Evaluate` ignores the pin and runs in the *tab's* main document — silently the wrong page.
+- **Coordinates that feed real CDP input or a screenshot clip** come out of biloba.js in the frame's own viewport/document. Pass pointer points through `b.tabClickPoint`/`b.toTabPoint` (translates into the tab and hit-tests the embedding page, so an overlay there reads as not hittable) and clip rectangles through `b.toTabClip`. An out-of-process frame needs no translation — its input lands in its own target — and cannot be screenshotted (`refuseOutOfProcessCapture`). In biloba.js, `measurePoint`/`measureCorner` walk up the `frameElement` chain only as far as the session's own `window`.
+- **Tab-level methods** — navigation, emulation, cookie writes, network interception, dialogs, downloads — start with `if b.refusedOnFrame("Name") { return ... }` so they fail on a frame handle instead of acting on the page that embeds it. Return right away: under the failure-capturing `gt` the spec keeps running. The engine's counterpart is `s.tabOnly(operation)`, and the engine's frame geometry lives in `engine/frame_geometry.go`, shared by both clients.
+
+If the method has frame-specific behavior, add a spec to `frames_test.go` (same-process frames) and, where it differs, to its "Out-of-process iframes" container.
+
 ### The four-bucket model and `guardConfig`
 
 Not every method polls. `guardConfig(name, allowed...)` enforces which config knobs (`knobTimeout`/`knobPolling`/`knobContext`/`knobImmediate`) a method accepts:

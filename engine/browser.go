@@ -75,11 +75,17 @@ type Browser struct {
 	launch       LaunchMetadata
 	mu           sync.Mutex
 	sessions     map[*Session]struct{}
+	frameTargets map[target.ID]*frameTargetContext
 	closedIDs    map[target.ID]struct{}
 	closedOrder  []target.ID
 	closed       bool
 	webSocketURL string
 	debug        *debugDispatcher
+}
+
+type frameTargetContext struct {
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // StartBrowser starts exactly one Chrome process using the supplied executable.
@@ -253,6 +259,8 @@ func (b *Browser) listenForDestroyedTargets() error {
 
 func (b *Browser) removeDestroyedTarget(targetID target.ID) {
 	b.mu.Lock()
+	managed := b.frameTargets[targetID]
+	delete(b.frameTargets, targetID)
 	var destroyed []*Session
 	for session := range b.sessions {
 		if session.targetID == targetID {
@@ -268,6 +276,9 @@ func (b *Browser) removeDestroyedTarget(targetID target.ID) {
 		b.rememberClosedTargetLocked(targetID)
 	}
 	b.mu.Unlock()
+	if managed != nil {
+		managed.cancel()
+	}
 	for _, session := range destroyed {
 		go session.markTargetDestroyed()
 	}
@@ -388,6 +399,7 @@ func (b *Browser) openTabLocked(ctx context.Context, browserContextID cdp.Browse
 		return nil, contextError("open tab", err)
 	}
 	tabCtx, cancelTab := chromedp.NewContext(b.ctx, chromedp.WithTargetID(targetID))
+	tabCtx = trackFrameWorlds(tabCtx)
 	attachDone := make(chan error, 1)
 	go func() {
 		// The first Run owns chromedp's target executor for the session lifetime. It must use the
@@ -447,7 +459,7 @@ func (b *Browser) listenToSession(session *Session) {
 			session.markCrashed()
 		}
 		if request, ok := event.(*network.EventRequestWillBeSent); ok {
-			if session.eventsEnabled.Load() {
+			if session.acceptsDocumentEvent(request.FrameID, request.LoaderID) {
 				session.recordRequest(request)
 				if request.Type != network.ResourceTypeWebSocket {
 					session.trackRequest(request.RequestID)
@@ -455,7 +467,7 @@ func (b *Browser) listenToSession(session *Session) {
 			}
 		}
 		if response, ok := event.(*network.EventResponseReceived); ok {
-			if session.eventsEnabled.Load() {
+			if session.acceptsDocumentEvent(response.FrameID, response.LoaderID) {
 				session.recordResponse(response)
 			}
 		}
@@ -469,7 +481,7 @@ func (b *Browser) listenToSession(session *Session) {
 			session.handlePausedEvent(paused)
 		}
 		if console, ok := event.(*runtime.EventConsoleAPICalled); ok {
-			if session.eventsEnabled.Load() {
+			if session.acceptsConsoleEvent(console.ExecutionContextID) {
 				session.recordConsoleMessage(console)
 			}
 		}
@@ -481,6 +493,37 @@ func (b *Browser) listenToSession(session *Session) {
 		}
 		if progress, ok := event.(*cdpbrowser.EventDownloadProgress); ok {
 			session.handleDownloadProgress(progress)
+		}
+	})
+}
+
+// listenToFrameDocument records a same-process frame's own console messages and requests, so a frame
+// handle observes its document whichever process the frame lives in (an out-of-process frame gets
+// listenToSession on its own target). The tab shares the renderer attachment and records these events
+// too; the handle keeps only its document's. Dialogs and downloads stay with the tab, as does
+// interception, which tabOnly rejects on frame handles.
+func (b *Browser) listenToFrameDocument(session *Session) {
+	chromedp.ListenTarget(session.ctx, func(event any) {
+		switch event := event.(type) {
+		case *runtime.EventConsoleAPICalled:
+			if session.acceptsConsoleEvent(event.ExecutionContextID) {
+				session.recordConsoleMessage(event)
+			}
+		case *network.EventRequestWillBeSent:
+			if session.acceptsDocumentEvent(event.FrameID, event.LoaderID) {
+				session.recordRequest(event)
+				if event.Type != network.ResourceTypeWebSocket {
+					session.trackRequest(event.RequestID)
+				}
+			}
+		case *network.EventResponseReceived:
+			if session.acceptsDocumentEvent(event.FrameID, event.LoaderID) {
+				session.recordResponse(event)
+			}
+		case *network.EventLoadingFinished:
+			session.finishRequest(event.RequestID)
+		case *network.EventLoadingFailed:
+			session.finishRequest(event.RequestID)
 		}
 	})
 }
@@ -549,7 +592,7 @@ func (b *Browser) DebugDropped() uint64 { return b.debug.droppedCount() }
 func (b *Browser) removeSession(session *Session) {
 	b.mu.Lock()
 	delete(b.sessions, session)
-	if session.targetID != "" {
+	if session.targetID != "" && !session.frameTarget {
 		b.rememberClosedTargetLocked(session.targetID)
 	}
 	b.mu.Unlock()

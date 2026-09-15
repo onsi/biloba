@@ -17,6 +17,10 @@ import (
 
 const DefaultInterceptedBodyLimit int64 = 16 << 20
 
+// minResponseBodyTimeout is how long a response handler may wait for an intercepted body when its
+// TransformTimeout is shorter; a longer TransformTimeout extends it.  A var so specs can shorten it.
+var minResponseBodyTimeout = 5 * time.Second
+
 type ResponseOverride struct {
 	Status        *int
 	Headers       map[string]string
@@ -53,7 +57,9 @@ type NetworkHandlerOptions struct {
 	Response          *ResponseOverride
 	Transform         ResponseTransform
 	ResponseBodyLimit int64
-	TransformTimeout  time.Duration
+	// TransformTimeout starts after the body read. Values above five seconds also extend
+	// the separate body-read timeout. Zero uses a five-second callback timeout.
+	TransformTimeout time.Duration
 }
 type NetworkHandler struct{ ID string }
 type NetworkHandlerStats struct {
@@ -124,6 +130,9 @@ const (
 )
 
 func (s *Session) RegisterNetworkHandler(ctx context.Context, options NetworkHandlerOptions) (NetworkHandler, error) {
+	if err := s.tabOnly("register network handler"); err != nil {
+		return NetworkHandler{}, err
+	}
 	if _, err := MatchExpectation("", options.URL); err != nil {
 		return NetworkHandler{}, &Error{Code: CodeInvalidArgument, Operation: "register network handler", Message: err.Error(), Cause: err}
 	}
@@ -485,12 +494,6 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 	s.beginInterception()
 	go func() {
 		defer s.endInterception()
-		timeout := 5 * time.Second
-		if h.options.TransformTimeout > 0 {
-			timeout = h.options.TransformTimeout
-		}
-		ctx, cancel := context.WithTimeout(s.ctx, timeout)
-		defer cancel()
 		o := ResponseOverride{}
 		status := int(event.ResponseStatusCode)
 		headers, orderedHeaders := responseHeaders(event.ResponseHeaders)
@@ -499,7 +502,12 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 		if limit == 0 {
 			limit = DefaultInterceptedBodyLimit
 		}
-		body, stream, bodyTaken, err := responseBodyContext(ctx, event.RequestID, limit)
+		// Reading the intercepted body is transport work, not user callback work. Starting the
+		// transform deadline here made a slow upstream response consume the callback's entire budget
+		// before the callback was invoked.
+		bodyCtx, cancelBody := context.WithTimeout(s.ctx, max(minResponseBodyTimeout, h.options.TransformTimeout))
+		body, stream, bodyTaken, err := responseBodyContext(bodyCtx, event.RequestID, limit)
+		cancelBody()
 		defer closeResponseStream(s.ctx, stream)
 		if err != nil {
 			s.recordNetworkHandlerError(h, err)
@@ -507,6 +515,12 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 			return
 		}
 		if h.options.Transform != nil {
+			timeout := 5 * time.Second
+			if h.options.TransformTimeout > 0 {
+				timeout = h.options.TransformTimeout
+			}
+			transformCtx, cancelTransform := context.WithTimeout(s.ctx, timeout)
+			defer cancelTransform()
 			type transformResult struct {
 				override ResponseOverride
 				err      error
@@ -516,7 +530,7 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 				URL: event.Request.URL, Status: status, Headers: cloneStringMap(headers), HeaderEntries: cloneHeaderEntries(orderedHeaders), Body: append([]byte(nil), body...),
 			}
 			go func() {
-				override, transformErr := h.options.Transform(ctx, response)
+				override, transformErr := h.options.Transform(transformCtx, response)
 				result <- transformResult{override: override, err: transformErr}
 			}()
 			select {
@@ -527,8 +541,8 @@ func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h 
 					s.fallbackResponse(event.RequestID, status, orderedHeaders, body)
 					return
 				}
-			case <-ctx.Done():
-				s.recordNetworkHandlerError(h, ctx.Err())
+			case <-transformCtx.Done():
+				s.recordNetworkHandlerError(h, transformCtx.Err())
 				s.fallbackResponse(event.RequestID, status, orderedHeaders, body)
 				return
 			}
@@ -866,11 +880,17 @@ func (s *Session) InflightRequestCount() int {
 }
 func (s *Session) WaitForNetworkIdle(ctx context.Context, p PollPolicy) (PollResult, error) {
 	return Poll(ctx, p, func(context.Context) (Observation, bool, error) {
+		if err := s.frameObservationError("wait for network idle"); err != nil {
+			return Observation{}, false, err
+		}
 		n := s.InflightRequestCount()
 		return Observation{Value: n}, n == 0, nil
 	})
 }
 func (s *Session) SetNetworkState(ctx context.Context, state NetworkState) error {
+	if err := s.tabOnly("set network state"); err != nil {
+		return err
+	}
 	if state.Latency < 0 || state.DownloadThroughput < 0 || state.UploadThroughput < 0 {
 		return &Error{Code: CodeInvalidArgument, Operation: "set network state", Message: "latency and throughput must not be negative"}
 	}
@@ -920,6 +940,9 @@ func (s *Session) ResetNetworkState(ctx context.Context) error {
 	return s.SetNetworkState(ctx, NetworkState{})
 }
 func (s *Session) SetCacheEnabled(ctx context.Context, enabled bool) error {
+	if err := s.tabOnly("set cache enabled"); err != nil {
+		return err
+	}
 	return s.serial(ctx, "set cache enabled", func(op context.Context) error {
 		s.networkMu.Lock()
 		s.cacheEnabled = enabled
