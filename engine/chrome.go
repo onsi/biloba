@@ -148,6 +148,13 @@ func newestCachedChromeHeadlessShell(binary string) string {
 		matches, _ := filepath.Glob(filepath.Join(cacheRoot, "chrome-headless-shell", "*", "chrome-headless-shell-*", binary))
 		for _, match := range matches {
 			versionDir := filepath.Base(filepath.Dir(filepath.Dir(match)))
+			// installHeadlessShellArchive stages an in-progress install as a sibling of its final
+			// version directory, tagged with chromeCacheStagingMarker, and renames it into place
+			// only once extraction finishes. Skip it - it may have a binary but be missing data
+			// files another process is still unzipping (see chromeCacheStagingMarker's doc).
+			if strings.Contains(versionDir, chromeCacheStagingMarker) {
+				continue
+			}
 			candidate := chromeCacheCandidate{
 				path:       match,
 				version:    parseChromeCacheVersion(versionDir),

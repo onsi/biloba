@@ -68,6 +68,10 @@ func InstallHeadlessShellArchiveForTest(archivePath, destination, platform strin
 	return installHeadlessShellArchive(archivePath, destination, platform)
 }
 
+// ChromeCacheStagingMarkerForTest exposes the marker a still-extracting install's staging
+// directory carries, so specs can construct one without duplicating the literal.
+const ChromeCacheStagingMarkerForTest = chromeCacheStagingMarker
+
 // SetChromeCacheRootsForTest replaces the cache roots LocateChrome searches for a cached
 // chrome-headless-shell, letting specs point it at hermetic fixture directories instead of
 // whatever puppeteer/Biloba caches happen to exist on the host.

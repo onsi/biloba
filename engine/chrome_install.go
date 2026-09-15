@@ -22,6 +22,13 @@ const (
 	maxShellArchiveEntries = 10_000
 )
 
+// chromeCacheStagingMarker tags a version directory's sibling staging directory while an install
+// is still being extracted (see installHeadlessShellArchive). newestCachedChromeHeadlessShell
+// (chrome.go) skips any cache entry whose version directory contains this marker, so a concurrent
+// resolver never returns a half-extracted install racing installHeadlessShellArchive's rename into
+// place.
+const chromeCacheStagingMarker = ".partial-"
+
 // InstallHeadlessShell downloads Chrome for Testing's stable chrome-headless-shell into Biloba's
 // user cache. Callers must opt in; normal browser resolution never calls this function.
 func InstallHeadlessShell(ctx context.Context) (string, error) {
@@ -180,7 +187,7 @@ func installHeadlessShellArchive(archivePath, destination, platform string) erro
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return err
 	}
-	staging, err := os.MkdirTemp(parent, filepath.Base(destination)+".partial-")
+	staging, err := os.MkdirTemp(parent, filepath.Base(destination)+chromeCacheStagingMarker)
 	if err != nil {
 		return err
 	}

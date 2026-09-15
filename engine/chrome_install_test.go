@@ -45,7 +45,7 @@ var _ = Describe("runner-neutral chrome-headless-shell installation", func() {
 		contents, err := os.ReadFile(filepath.Join(destination, "chrome-headless-shell-"+platform, engine.ChromeBinaryName()))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(contents).To(Equal([]byte("complete-binary")))
-		partials, err := filepath.Glob(destination + ".partial-*")
+		partials, err := filepath.Glob(destination + engine.ChromeCacheStagingMarkerForTest + "*")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(partials).To(BeEmpty())
 	})
