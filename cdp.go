@@ -77,6 +77,14 @@ func (b *Biloba) cdpContext(timeout time.Duration) (context.Context, context.Can
 	b.ensureChromedpAllocated()
 	ctx, cancel := context.WithTimeout(b.Context, timeout)
 	if b.pollingCtx != nil {
+		if b.pollingCtx.Err() != nil {
+			// b.pollingCtx is already done: context.AfterFunc would still only notice this
+			// asynchronously (it runs f in its own goroutine even when ctx is already done), which
+			// leaves a window where a command dispatched against ctx right after this call can still
+			// win a race against that goroutine and reach Chrome. Cancel synchronously instead.
+			cancel()
+			return ctx, cancel
+		}
 		stop := context.AfterFunc(b.pollingCtx, cancel)
 		return ctx, func() { stop(); cancel() }
 	}

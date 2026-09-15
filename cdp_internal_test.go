@@ -121,3 +121,23 @@ var _ = ginkgo.Describe("diagnosing why a command failed", ginkgo.Label("no-brow
 		gomega.Expect(b.diagnoseCDPError("evaluate JavaScript in the page", time.Second, context.DeadlineExceeded)).To(gomega.MatchError(context.DeadlineExceeded))
 	})
 })
+
+// cdpContext ties its returned context to b.pollingCtx (a caller's WithContext) via
+// context.AfterFunc, which - like the goroutine executorContext used to spawn unconditionally
+// (engine/browser.go) - only notices an already-done context asynchronously: AfterFunc still runs
+// its callback in its own goroutine even when ctx is already done. A caller that immediately issues
+// a command against the returned context can win that race and reach Chrome before the callback
+// runs. cdpContext must notice a b.pollingCtx that is already done synchronously instead.
+var _ = ginkgo.Describe("cdpContext's WithContext handling", ginkgo.Label("no-browser"), func() {
+	ginkgo.It("cancels synchronously when the caller's WithContext is already done", func() {
+		b := &Biloba{lock: &sync.Mutex{}, state: newTabState(), Context: context.Background()}
+		ctx, cancelPolling := context.WithCancel(context.Background())
+		cancelPolling()
+		b.pollingCtx = ctx
+
+		cdpCtx, cancel := b.cdpContext(time.Second)
+		defer cancel()
+
+		gomega.Expect(cdpCtx.Err()).To(gomega.HaveOccurred(), "an already-done WithContext must be reflected immediately, not after an async AfterFunc goroutine gets scheduled")
+	})
+})
