@@ -185,6 +185,12 @@ Of course, synthetic benchmarks don't necessarily capture real-world performance
 
 Fast browser test suites foster better discipline and open the door to more stable suites.  A recommended workflow is to run a local flake-hunt periodically after an extended coding session.  The 1,689 spec suite described above has a less than 1% suite flake rate thanks to this ceremony (it takes more than 60 suite runs to see a flake appear).  The [documentation](https://onsi.github.io/biloba/#nurturing-maintainable-suites) and `flake-hunt` skill describe how to set flake hunts up.
 
+### What about Lightpanda?
+
+[Lightpanda](https://github.com/lightpanda-io/browser) is a headless browser built for automation that speaks the Chrome DevTools Protocol. We pointed Biloba at it and ran Biloba's own suite plus the real-world app suite described above. The gains were modest. Specs that passed on both browsers ran about 1.5× faster in Biloba's suite and about 1.2× faster in the real-world app. Biloba already avoids most of what makes Chrome slow: it reuses tabs on one shared chrome-headless-shell, and a round trip to Chrome takes well under a millisecond. Most of a spec's time goes to the app's own JavaScript, which runs on V8 in both browsers, and to its server.
+
+The cost was steep: 17% of Biloba's specs and 28% of the real-world app's specs failed. Lightpanda has no layout engine, so element geometry, viewport and scroll checks don't work, and neither do visibility checks that depend on layout. Screenshots aren't real renders, so visual regression is out. Each connection gets one page, so there are no new or spawned tabs. Downloads, much of network interception, the accessibility tree and realistic input are also missing. If you'd still like a faster DOM-only lane built on Lightpanda, [open an issue](https://github.com/onsi/biloba/issues) and we can explore it.
+
 ## Using Biloba with Claude Code
 
 Biloba ships separate [Claude Code](https://claude.com/claude-code) plugins for its Go/Gomega and TypeScript/Vitest clients, with this repo doubling as the marketplace. Install the client you use:
