@@ -43,6 +43,14 @@ var _ = Describe("runner-neutral engine primitives", func() {
 		Expect(string(embedded)).To(Equal(string(canonical)))
 	})
 
+	It("embeds the canonical page clock without drift", func() {
+		canonical, err := os.ReadFile("../clock.js")
+		Expect(err).NotTo(HaveOccurred())
+		embedded, err := os.ReadFile("clock.js")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(embedded)).To(Equal(string(canonical)))
+	})
+
 	It("encodes the pilot locator forms for biloba.js", func() {
 		Expect(engine.CSS("main > button").Encoded()).To(Equal("smain > button"))
 		Expect(engine.XPath("//main//button").Encoded()).To(Equal("x//main//button"))

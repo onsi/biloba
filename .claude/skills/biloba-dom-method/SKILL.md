@@ -35,6 +35,8 @@ Keep checks atomic and pragmatic (e.g. visibility = non-zero offset, not occlusi
 
 `engine/biloba.js` is a generated copy that `bilobad` embeds. After editing `biloba.js`, run `go generate ./engine`; otherwise the engine suite's drift spec fails (see the `biloba-testing` skill).
 
+**Biloba runs on real time.** A spec's page clock (`clock.js`) replaces the page's `setTimeout`, `requestAnimationFrame`, `Date`, and `performance.now`. biloba.js is installed in every document first, and captures the real ones in `real` at the top of the file; anything in biloba.js that waits on a timer or a frame, or reads the time, uses `real.requestAnimationFrame` and friends — never the globals — or it stops working under a paused clock.
+
 ## Step 2 — add the Go wrapper
 
 The Go side calls `b.runBilobaHandler("<jsName>", selector, args...)`, which returns a `*bilobaJSResponse`. **Biloba polls by default**. Internally Biloba builds its matcher form and runs it through Gomega for you (`polling.go`), so the fully-applied form *waits* instead of acting once. Pick the shape that matches the API.

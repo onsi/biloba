@@ -92,7 +92,14 @@ var _ = Describe("frame handles and their tab", func() {
 				_, err := frame.RegisterNetworkHandler(ctx, engine.NetworkHandlerOptions{URL: engine.Expectation{Kind: engine.ExpectContains, Expected: "/api"}, Fulfill: &engine.ResponseOverride{Body: &body}})
 				return err
 			},
-			"new tab": func() error { _, err := frame.NewTab(ctx); return err },
+			"new tab":    func() error { _, err := frame.NewTab(ctx); return err },
+			"clock":      func() error { return frame.InstallClock(ctx, time.Now()) },
+			"pause":      func() error { return frame.PauseClockAt(ctx, time.Now()) },
+			"resume":     func() error { return frame.ResumeClock(ctx) },
+			"run clock":  func() error { return frame.RunClockFor(ctx, time.Second, 0) },
+			"jump clock": func() error { return frame.FastForwardClock(ctx, time.Second) },
+			"fix clock":  func() error { return frame.SetClockFixedTime(ctx, time.Now()) },
+			"set clock":  func() error { return frame.SetClockSystemTime(ctx, time.Now()) },
 			"screencast": func() error {
 				_, err := frame.StartScreencast(ctx, engine.ScreencastParams{})
 				return err

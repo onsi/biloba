@@ -1,5 +1,16 @@
 if (!window["_biloba"]) {
     let b = {}
+    // Biloba runs on real time.  A spec's page clock (clock.js) replaces the page's timers, Date, and
+    // performance.now, but biloba.js is installed in every document before clock.js and before the page's
+    // own scripts, so these are the browser's.  Anything in here that waits on a timer or a frame, or reads
+    // the time, goes through real - never the globals.
+    let real = {
+        requestAnimationFrame: window.requestAnimationFrame.bind(window),
+        setTimeout: window.setTimeout.bind(window),
+        clearTimeout: window.clearTimeout.bind(window),
+        now: performance.now.bind(performance),
+        Date: window.Date,
+    }
     let r = (s, guard) => (s === undefined || s === null) ? { success: true } : { success: s, guard: guard }
     let rErr = (err) => { return { error: err } }
     let rRes = (res) => { return { success: true, result: res } }
@@ -768,9 +779,9 @@ if (!window["_biloba"]) {
         let check = () => {
             let k = key()
             if (k === prev || frames++ > 30) resolve()
-            else { prev = k; requestAnimationFrame(check) }
+            else { prev = k; real.requestAnimationFrame(check) }
         }
-        requestAnimationFrame(check)
+        real.requestAnimationFrame(check)
     })
     // centerIn scrolls an element to the middle of every scrollable ancestor and of the viewport.
     let centerIn = (n) => n.scrollIntoView({ block: "center", inline: "center" })

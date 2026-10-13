@@ -128,6 +128,8 @@ type Session struct {
 	screencasts        map[string]*sessionScreencast
 	recording          *sessionScreencast
 	screencastSequence uint64
+	// clock is the tab's page clock (InstallClock), nil until one is installed.
+	clock *PageClock
 	// crashed is closed by Chrome's Inspector.targetCrashed listener, which runs on chromedp's event
 	// goroutine rather than under mu - hence its own lock.  A channel rather than a bool because an
 	// operation already in flight has to be interrupted, not merely refused next time: CDP does not
@@ -389,6 +391,9 @@ func (s *Session) Prepare(ctx context.Context) error {
 			}
 		}
 		s.initScriptIDs = nil
+		if err := s.removeClock(opCtx); err != nil && !wasCrashed {
+			return err
+		}
 		// Clear storage while the tab still has its current origin. about:blank has an opaque
 		// origin, so navigating first would leave localStorage behind for the next spec. A crashed
 		// renderer has already lost that storage and no longer answers evaluation requests, so skip
@@ -431,6 +436,9 @@ func (s *Session) Prepare(ctx context.Context) error {
 			if err := s.resetEmulation(opCtx); err != nil {
 				return err
 			}
+		}
+		if err := s.removeClock(opCtx); err != nil {
+			return err
 		}
 		viewportWidth, viewportHeight := s.initialWidth, s.initialHeight
 		if s.restoreViewport != nil {

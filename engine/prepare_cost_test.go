@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -11,13 +12,13 @@ import (
 	"github.com/onsi/biloba/engine"
 )
 
-var emulationMethod = regexp.MustCompile(`"method":"(Emulation\.\w+|Browser\.resetPermissions)"`)
+var emulationMethod = regexp.MustCompile(`"method":"(Emulation\.\w+|Browser\.resetPermissions|Page\.removeScriptToEvaluateOnNewDocument)"`)
 
 // Prepare runs before every test, and every command it sends Chrome is a round trip each of those tests
 // pays.  These count the commands through a debug sink on a second worker attached to the suite's
 // Chrome.
 var _ = Describe("what a prepare costs", func() {
-	It("sends no emulation commands during a prepare when nothing was emulated, and clears only what was", func(ctx SpecContext) {
+	It("sends no emulation or page-clock commands during a prepare when nothing was set, and clears only what was", func(ctx SpecContext) {
 		var lock sync.Mutex
 		sent := []string{}
 		worker, err := engine.StartBrowser(ctx, engine.BrowserConfig{WebSocketURL: browser.WebSocketURL(), DebugSink: func(entry engine.DebugEntry) {
@@ -78,6 +79,9 @@ var _ = Describe("what a prepare costs", func() {
 		Expect(tab.SetTimezone(ctx, "America/New_York")).To(Succeed())
 		Expect(tab.ClearTimezone(ctx)).To(Succeed())
 		Expect(emulationCommands(func() { Expect(tab.Prepare(ctx)).To(Succeed()) })).To(Equal(viewportOnly), "a cleared override is no longer outstanding")
+
+		Expect(tab.InstallClock(ctx, time.Now())).To(Succeed())
+		Expect(emulationCommands(func() { Expect(tab.Prepare(ctx)).To(Succeed()) })).To(Equal(append([]string{"Page.removeScriptToEvaluateOnNewDocument"}, viewportOnly...)), "a page clock costs one round trip, and only when installed")
 		Expect(worker.DebugDropped()).To(BeZero())
 	})
 })

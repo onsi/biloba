@@ -43,7 +43,7 @@ CI runs every one of these (`.github/workflows/test.yml`). Two rules keep them h
   binary through the same search the Go suite and `bilobad` use (explicit path →
   `BILOBA_CHROME_HEADLESS_SHELL` → `$PATH` → the newest build in the puppeteer/Biloba caches) and
   installs Chrome for Testing's stable shell when none is found. It is the only guard that
-  `engine/biloba.js` still matches the canonical `biloba.js`, so a quiet skip there would let the
+  `engine/biloba.js` and `engine/clock.js` still match the canonical `biloba.js` and `clock.js`, so a quiet skip there would let the
   copy drift unnoticed. If the install fails, run `make update-chrome`.
 - **`typescript/test/parity.test.ts` fails rather than skips when `BILOBA_DAEMON_EXECUTABLE` is
   unset.** It is the only test that exercises the real daemon end to end; "4 skipped, exit 0" is
@@ -54,7 +54,12 @@ CI runs every one of these (`.github/workflows/test.yml`). Two rules keep them h
 
 `make driver-test` deliberately does *not* run `go generate ./engine` — regenerating
 `engine/biloba.js` there would silently repair the drift the engine suite exists to catch. Run
-`go generate ./engine` yourself after editing `biloba.js`.
+`go generate ./engine` yourself after editing `biloba.js` or `clock.js`.
+
+**Page-clock specs** (`clock_test.go`, `engine/clock_test.go`) install the clock and `PauseAt` *before*
+`Navigate`, so the fixture's timers are fake from the first line of the page and every assertion
+is on exact fake times (`RunFor(300ms)` → exactly 18 animation frames).  A spec that lets time
+flow waits on real time, so give its `Eventually` a few seconds rather than Gomega's 1s default.
 
 ### The e2e suite tests the real topology
 
