@@ -911,7 +911,7 @@ if (!window["_biloba"]) {
         let c = measureCorner(n), rect = n.getBoundingClientRect()
         if (!c.translatable) return rErr("cannot locate the DOM element through a cross-origin frame")
         let x = c.left + (o.hasOffset ? o.ox : rect.width / 2), y = c.top + (o.hasOffset ? o.oy : rect.height / 2)
-        if (x < 0 || y < 0 || x > c.innerWidth || y > c.innerHeight) return rErr("the point (" + x + ", " + y + ") is outside the " + c.innerWidth + "x" + c.innerHeight + " viewport, and the pointer does not scroll - scroll the element into view first (b.ScrollIntoView)")
+        if (x < 0 || y < 0 || x > c.innerWidth || y > c.innerHeight) return rErr("the point (" + x + ", " + y + ") is outside the " + c.innerWidth + "x" + c.innerHeight + " viewport, and the pointer does not scroll - scroll the element into view first")
         return rRes({ x: x, y: y })
     })
     // inputKind classifies a form control so the realistic track can decide how to drive it.
