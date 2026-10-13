@@ -201,6 +201,13 @@ func newFixtureServer() string {
 		code, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/status/"))
 		w.WriteHeader(code)
 	})
+	// /hang never answers: it holds the request until the browser gives up on it
+	s.RouteToHandler("GET", regexp.MustCompile(`^/hang$`), func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(10 * time.Second):
+		}
+	})
 	// /cached/<anything> answers with a fresh value the browser may cache for an hour
 	s.RouteToHandler("GET", regexp.MustCompile(`^/cached/.+$`), func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Cache-Control", "max-age=3600")

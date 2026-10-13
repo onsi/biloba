@@ -976,6 +976,10 @@ type Biloba struct {
 	// the tab's frame handles share the tab's one record instead of each getting a copy.
 	media *mediaEmulation
 
+	// generation counts the root tab's Prepares.  Every tab's listener reads the root's (see
+	// setUpListeners) to drop the events a page from before the last Prepare raises after it.
+	generation *engine.EventGeneration
+
 	// pollTrajectory opts a suite into recording the (elapsed, value) trajectory of polled reads and
 	// attaching the failing read's series on failure (see BilobaConfigPollTrajectory).  On by default.
 	pollTrajectory bool
@@ -1034,6 +1038,7 @@ func newBiloba(ginkgoT GinkgoTInterface) *Biloba {
 		occlusions:                &occlusionRecorder{},
 		unreadableResponseBodies:  &unreadableResponseBodyRecorder{},
 		media:                     &mediaEmulation{},
+		generation:                &engine.EventGeneration{},
 	}
 	return b
 }
@@ -1063,6 +1068,10 @@ func (b *Biloba) Prepare() {
 	if !b.isRootTab() {
 		return
 	}
+	// From here on, whatever the previous spec's page does - a fetch the about:blank navigation below
+	// aborts, the console output and request failures that follow - belongs to an earlier generation,
+	// and the listeners drop it instead of attributing it to the next spec.  See engine.EventOrigins.
+	b.generation.Advance()
 	b.detachFrames()
 	//close all tabs
 	closedTargetIDs := []target.ID{}

@@ -3448,7 +3448,7 @@ Eventually(b.AllPageErrors).Should(BeEmpty())
 Eventually(b.AllConsoleMessages).Should(ContainElement(HaveField("Text", "ready")))
 ```
 
-Biloba keeps the most recent 1000 of each.  A [frame handle](#working-with-cross-origin-iframes) records only its own document's messages and errors, from the moment it is found; the tab records its frames' as well.
+Biloba keeps the most recent 1000 of each.  Both start empty for each spec: what the previous spec's page logs, throws, or requests while `Prepare()` navigates it away (a fetch it had in flight failing with `Failed to fetch`, say) is dropped, not printed, recorded, or replayed.  A [frame handle](#working-with-cross-origin-iframes) records only its own document's messages and errors, from the moment it is found; the tab records its frames' as well.
 
 Together with the request outcomes [recorded for each request](#observing-requests), these make it easy to build an error report after loading a page:
 

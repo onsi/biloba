@@ -80,7 +80,7 @@ Repo-specific testing conventions (see `biloba_suite_test.go`):
 | Window size | `windows.go` | `windows_test.go` |
 | Emulation (`SetMedia`, `SetUserAgent`, geolocation, permissions, locale, time zone, network state, cache; device options live with `SetWindowSize`) | `emulation.go`; engine: `engine/emulation.go`, `engine/network_handlers.go` | `emulation_test.go` |
 | XPath DSL | `xpath.go` | `xpath_test.go` |
-| Tabs / spawned tabs, per-tab listener setup | `tabs.go`, `listeners.go` | `tabs_test.go` |
+| Tabs / spawned tabs, per-tab listener setup; dropping events from the page a Prepare left behind | `tabs.go`, `listeners.go`; engine: `engine/event_generation.go` | `tabs_test.go`, `prepare_test.go` |
 | Cross-origin iframes (`Frame`/`HaveFrame`/`AllFrames`, frame handles, tab-only refusals) | `frames.go`; engine: `engine/frame.go`, `engine/frame_context.go`, `engine/frame_geometry.go` | `frames_test.go`; `engine/frame*_test.go` |
 | Dialogs | `dialog_handling.go` | `dialog_handling_test.go` |
 | Downloads | `downloads.go` | `downloads_test.go` |

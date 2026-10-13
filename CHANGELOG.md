@@ -34,6 +34,7 @@
 - The visual-assertion freeze no longer turns off CSS animations on a scroll or view timeline, which rendered a scrolled page as if it were at the top (both clients).
 - Go: the cleanup `SetWindowSize` registers restores the tab's original screen orientation instead of forcing portrait.
 - Go: the locations Biloba prints for page errors, in stack traces, and in the failure replay are one-based, as editors and DevTools show them, and stack trace lines include the column. The `Line` and `Column` fields stay zero-based.
+- Go: what the previous spec's page does after `Prepare()` starts tearing it down - an in-flight fetch failing with `Uncaught (in promise) TypeError: Failed to fetch`, console output, requests it starts or that fail - is dropped. It used to be printed and recorded in the next spec, often as its first line, and could leave a request stuck in flight for `BeNetworkIdle`.
 - An emulated offline network makes the tab's requests fail, and emulated latency and throughput apply to them. They used to change only `navigator.onLine` and `navigator.connection` (Go's `SetNetworkState` and TypeScript's `setNetworkState()`).
 
 ## 0.17.0

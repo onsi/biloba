@@ -1,6 +1,12 @@
 package biloba_test
 
 import (
+	"strings"
+	"sync/atomic"
+
+	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/runtime"
+	"github.com/chromedp/chromedp"
 	"github.com/onsi/biloba"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -33,6 +39,85 @@ var _ = Describe("Prepare resets per-spec state so it does not leak between spec
 		Expect(b).To(b.HaveNumCookies(0))
 		Expect(b).To(b.HaveNumLocalStorageItems(0))
 		Expect(b).To(b.HaveNumSessionStorageItems(0))
+	})
+
+	It("drops what the previous spec's page raises after Prepare navigates it away", func() {
+		b.Navigate(fixtureServer + "/stragglers.html")
+		Eventually("#hello").Should(b.Exist())
+
+		// Watch the raw CDP events.  This listener is registered after Biloba's, and chromedp calls a
+		// target's listeners in order, so once it has seen an event Biloba has already handled it.
+		var watching atomic.Bool
+		watching.Store(true)
+		DeferCleanup(func() { watching.Store(false) })
+		var hangID, stragglerID atomic.Value
+		seen := make(chan string, 20)
+		chromedp.ListenTarget(b.Context, func(ev any) {
+			if !watching.Load() {
+				return
+			}
+			switch ev := ev.(type) {
+			case *network.EventRequestWillBeSent:
+				if strings.HasSuffix(ev.Request.URL, "/hang") {
+					hangID.Store(ev.RequestID)
+				}
+				if strings.HasSuffix(ev.Request.URL, "/api/straggler") {
+					stragglerID.Store(ev.RequestID)
+					seen <- "request"
+				}
+			case *network.EventLoadingFinished, *network.EventLoadingFailed:
+				var id network.RequestID
+				if finished, ok := ev.(*network.EventLoadingFinished); ok {
+					id = finished.RequestID
+				} else {
+					id = ev.(*network.EventLoadingFailed).RequestID
+				}
+				if hang, ok := hangID.Load().(network.RequestID); ok && hang == id {
+					seen <- "hang ended"
+				}
+				if straggler, ok := stragglerID.Load().(network.RequestID); ok && straggler == id {
+					seen <- "straggler ended"
+				}
+			case *runtime.EventConsoleAPICalled:
+				seen <- "console"
+			case *runtime.EventExceptionThrown:
+				if ev.ExceptionDetails != nil && ev.ExceptionDetails.Exception != nil && strings.Contains(ev.ExceptionDetails.Exception.Description, "straggler") {
+					seen <- "thrown"
+				}
+			}
+		})
+
+		// a fetch that never answers stays in flight into Prepare
+		b.Run(`window.hang()`)
+		Eventually(b).ShouldNot(b.BeNetworkIdle())
+
+		b.Prepare()
+		// the page logs, throws, and sends a request as Prepare navigates it away, and Chrome then
+		// aborts its two requests
+		var events []string
+		Eventually(func() []string {
+			for {
+				select {
+				case event := <-seen:
+					events = append(events, event)
+				default:
+					return events
+				}
+			}
+		}).Should(ContainElements("console", "thrown", "request", "hang ended"))
+
+		Ω(b.AllPageErrors()).Should(BeEmpty())
+		Ω(b.AllConsoleMessages()).Should(BeEmpty())
+		Ω(b.AllRequests()).Should(BeEmpty())
+		Ω(b).Should(b.BeNetworkIdle())
+		Ω(b.SafeAllTabConsoleErrorsForTest()).Should(BeEmpty())
+		Ω(string(gt.buffer.Contents())).ShouldNot(ContainSubstring("straggler"))
+
+		// and the next page's own events still count
+		b.Navigate(fixtureServer + "/page-errors.html")
+		Eventually("#hello").Should(b.Exist())
+		Eventually(b.AllPageErrors).Should(HaveLen(2))
+		Eventually(b.AllRequests).ShouldNot(BeEmpty())
 	})
 
 	It("closes tabs opened during the spec", func() {
