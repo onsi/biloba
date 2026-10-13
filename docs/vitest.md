@@ -295,7 +295,7 @@ await session.getByRole("button", {name: "Pay"}).realistic().click();
 await session.getByTestId("card-number").realistic().setValue("4242 4242 4242 4242");
 ```
 
-The realistic track covers clicks and click variants, tap, hover, typing and value changes, wheel input, and drag.  Biloba scrolls the target into view, checks actionability, and uses real CDP input.  The fast default keeps each action atomic in the page runtime.
+The realistic track covers clicks and click variants, tap, hover, typing and value changes, wheel input, and drag.  Biloba scrolls the target into view when it is not already fully on screen and topmost at its center, checks actionability, and uses real CDP input.  The fast default keeps each action atomic in the page runtime.
 
 An assertion resolves to an `AssertionResult` describing how it got there, which is occasionally useful and always available:
 
@@ -369,7 +369,7 @@ const png = await session.captureScreenshot();
 const path = await session.getByTestId("chart").captureScreenshot({output: "path", name: "chart"});
 ```
 
-`expectScreenshot()` supports page and element baselines, masks, exact or tolerant pixel comparison, animation freezing with an opt-out, light and dark color schemes, update mode, diff artifacts, and structured diagnosis.
+`expectScreenshot()` supports page and element baselines (an element's box is rounded outward to whole CSS pixels, so a fractionally sized element is captured with every pixel it touches), masks, exact or tolerant pixel comparison, animation freezing with an opt-out, light and dark color schemes, update mode, diff artifacts, and structured diagnosis.
 
 ```ts
 const result = await session.getByTestId("chart").expectScreenshot("revenue-chart", {

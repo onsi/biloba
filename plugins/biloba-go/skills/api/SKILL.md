@@ -56,6 +56,8 @@ Shallow `*Biloba` clones (like `Realistic()`); not reset by `Prepare()`. Use per
 | **Snapshot** | `HasElement`/`Count`/`Current*ForEach`/`AllRequests`/`AllConsoleMessages`/`AllPageErrors`/`ResponseHold.Count`/… | error | error | error |
 | **One-shot mutation** | `SetCookie`/`StubRequest`/`*Immediately`/`Run`/`RunAsync`/… | error | error | error |
 
+`b.Pointer()` is its own small bucket: it accepts every knob and keeps the view, `MoveToElement` polls with those knobs, and `MoveTo`/`Down`/`Up` dispatch immediately and ignore them.
+
 Configuring anything that resolves to a **bare matcher** — a `(matcher)` method (`b.HaveScreenshot(name)`, `b.Exist()`, …), or the under-applied dual form (`b.WithTimeout(d).Click()`) — is also a hard error. Configure the `Eventually`, not the matcher.
 
 **Separate from all four: the CDP backstop.** Every command Biloba sends Chrome carries a deadline (30s; 2min for `RunAsync`, whose length is set by the promise your page awaits) so an unresponsive Chrome fails the spec instead of hanging the suite. Not configurable and not a knob — `WithTimeout` bounds retries, not liveness, and does **not** shorten it. Every bucket gets it, including the two that reject every knob. Failures read `deadline_exceeded` / `page_crashed` / `browser_gone` → `debug-failures`.

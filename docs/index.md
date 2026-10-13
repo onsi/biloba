@@ -1103,6 +1103,8 @@ Not every Biloba method polls, so not every method accepts these knobs.  Biloba 
 | **Snapshot / state queries** | `HasElement`, `Count`, every `Current*ForEach`, `GetCookies`, `AllRequests` | error | error | error |
 | **One-shot mutations & raw JS** | `SetWindowSize`, the `*Immediately` family, `Run`, `RunAsync` | error | error | error |
 
+One handle sits across the buckets: [`b.Pointer()`](#driving-the-pointer-directly) accepts every knob and keeps the view it was made from, because its `MoveToElement` polls with them.  Its `MoveTo`, `Down`, and `Up` dispatch immediately, so the knobs have nothing to configure there and are ignored.
+
 The intuition: a method polls (and accepts every knob) when it is *waiting for the DOM to reach a state*.  A **waiting command** like `Navigate` does a single bounded wait for one event, so it keeps a purpose-built default deadline (~30s for navigation and for [awaiting a held response](#holding-a-response-hostage), ~5s for screenshots) that `WithTimeout` can override - but there's no repeated probe for `WithPolling` to tune.  A **snapshot** reads "what's true right now" and so never waits; when you want to wait for a snapshot to change, gate it on a polling matcher first (`Eventually(sel).Should(b.HaveCount(n))`, *then* read).  A **one-shot mutation** (and the raw-JS `Run`/`RunAsync`) just does its thing once.
 
 ### Capturing Values from Matchers
@@ -4004,7 +4006,7 @@ Eventually(".librarian").Should(b.HaveScreenshot("librarian-rail"))  // just thi
 Eventually(b).Should(b.HaveScreenshot("home-desktop"))               // the whole page
 ```
 
-Apply it to a [selector](#working-with-the-dom) to compare a single element — clipped to its bounding box, exactly like [`b.CaptureScreenshotOf`](#capturing-screenshots) — or to the tab itself to compare the whole document.  It's an ordinary matcher, so it composes with the others:
+Apply it to a [selector](#working-with-the-dom) to compare a single element — clipped to its bounding box, exactly like [`b.CaptureScreenshotOf`](#capturing-screenshots) — or to the tab itself to compare the whole document.  An element's box is rounded outward to whole CSS pixels, so an element at a fractional position or size is captured with every pixel it touches.  It's an ordinary matcher, so it composes with the others:
 
 ```go
 Eventually(".card").Should(SatisfyAll(b.BeInViewport(b.Fully()), b.HaveScreenshot("card")))
