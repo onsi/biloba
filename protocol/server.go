@@ -242,6 +242,8 @@ const (
 	LifecycleClearTimezone
 	LifecycleSetMedia
 	LifecycleClearMedia
+	LifecycleSetUserAgent
+	LifecycleClearUserAgent
 )
 
 type Operation struct {
@@ -285,6 +287,8 @@ type LifecycleOperation struct {
 	Height            int
 	DeviceScaleFactor float64
 	Mobile            bool
+	Touch             bool
+	Landscape         bool
 	Latitude          float64
 	Longitude         float64
 	Accuracy          float64
@@ -292,6 +296,7 @@ type LifecycleOperation struct {
 	Permissions       map[string]string
 	Locale            string
 	Timezone          string
+	UserAgent         string
 	MediaType         string
 	ColorScheme       string
 	ReducedMotion     string
@@ -814,6 +819,8 @@ type WireDeviceMetrics struct {
 	Height            int     `json:"height"`
 	DeviceScaleFactor float64 `json:"deviceScaleFactor"`
 	Mobile            bool    `json:"mobile,omitempty"`
+	Touch             bool    `json:"touch,omitempty"`
+	Landscape         bool    `json:"landscape,omitempty"`
 }
 
 type WireGeolocation struct {
@@ -843,6 +850,7 @@ type WireLifecycleOperation struct {
 	Locale      string             `json:"locale,omitempty"`
 	Timezone    string             `json:"timezone,omitempty"`
 	Media       *WireMedia         `json:"media,omitempty"`
+	UserAgent   string             `json:"userAgent,omitempty"`
 }
 
 type LifecycleRequest struct {
@@ -2269,17 +2277,20 @@ func lifecycleOperationFromWire(operation *WireLifecycleOperation, expected *Wir
 		"WAIT_FOR_DEFINED": LifecycleWaitForDefined, "URL": LifecycleURL, "TITLE": LifecycleTitle, "WINDOW_SIZE": LifecycleWindowSize, "OUTLINE": LifecycleOutline, "ACCESSIBILITY_OUTLINE": LifecycleAccessibilityOutline, "CONSOLE_MESSAGES": LifecycleConsoleMessages,
 		"SET_DEVICE_METRICS": LifecycleSetDeviceMetrics, "CLEAR_DEVICE_METRICS": LifecycleClearDeviceMetrics, "SET_GEOLOCATION": LifecycleSetGeolocation, "CLEAR_GEOLOCATION": LifecycleClearGeolocation,
 		"SET_PERMISSIONS": LifecycleSetPermissions, "RESET_PERMISSIONS": LifecycleResetPermissions, "SET_LOCALE": LifecycleSetLocale, "CLEAR_LOCALE": LifecycleClearLocale, "SET_TIMEZONE": LifecycleSetTimezone, "CLEAR_TIMEZONE": LifecycleClearTimezone, "SET_MEDIA": LifecycleSetMedia, "CLEAR_MEDIA": LifecycleClearMedia,
+		"SET_USER_AGENT": LifecycleSetUserAgent, "CLEAR_USER_AGENT": LifecycleClearUserAgent,
 	}
 	kind, ok := kinds[operation.Kind]
 	if !ok {
 		return LifecycleOperation{}, NewError(CodeInvalidArgument, "unsupported lifecycle operation")
 	}
-	result := LifecycleOperation{Kind: kind, Area: operation.Area, Key: operation.Key, ValueJSON: operation.ValueJSON, Expression: operation.Expression, Count: operation.Count, Origin: operation.Origin, Permissions: operation.Permissions, Locale: operation.Locale, Timezone: operation.Timezone}
+	result := LifecycleOperation{Kind: kind, Area: operation.Area, Key: operation.Key, ValueJSON: operation.ValueJSON, Expression: operation.Expression, Count: operation.Count, Origin: operation.Origin, Permissions: operation.Permissions, Locale: operation.Locale, Timezone: operation.Timezone, UserAgent: operation.UserAgent}
 	if operation.Device != nil {
 		result.Width = operation.Device.Width
 		result.Height = operation.Device.Height
 		result.DeviceScaleFactor = operation.Device.DeviceScaleFactor
 		result.Mobile = operation.Device.Mobile
+		result.Touch = operation.Device.Touch
+		result.Landscape = operation.Device.Landscape
 	}
 	if operation.Geolocation != nil {
 		result.Latitude = operation.Geolocation.Latitude

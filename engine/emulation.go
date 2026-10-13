@@ -14,6 +14,8 @@ type DeviceMetrics struct {
 	Height            int
 	DeviceScaleFactor float64
 	Mobile            bool
+	Touch             bool
+	Landscape         bool
 }
 
 type Geolocation struct{ Latitude, Longitude, Accuracy float64 }
@@ -49,7 +51,11 @@ func (s *Session) SetDeviceMetrics(ctx context.Context, metrics DeviceMetrics) e
 		return &Error{Code: CodeInvalidArgument, Operation: "set device metrics", Message: "width, height, and device scale factor must be positive"}
 	}
 	return s.serial(ctx, "set device metrics", func(opCtx context.Context) error {
-		return chromedp.Run(opCtx, emulation.SetDeviceMetricsOverride(int64(metrics.Width), int64(metrics.Height), metrics.DeviceScaleFactor, metrics.Mobile))
+		override := emulation.SetDeviceMetricsOverride(int64(metrics.Width), int64(metrics.Height), metrics.DeviceScaleFactor, metrics.Mobile)
+		if metrics.Landscape {
+			override = override.WithScreenOrientation(&emulation.ScreenOrientation{Type: emulation.OrientationTypeLandscapePrimary, Angle: 90})
+		}
+		return chromedp.Run(opCtx, override, emulation.SetTouchEmulationEnabled(metrics.Touch))
 	})
 }
 
@@ -60,7 +66,7 @@ func (s *Session) ClearDeviceMetrics(ctx context.Context) error {
 	return s.serial(ctx, "clear device metrics", clearDeviceMetrics)
 }
 func clearDeviceMetrics(ctx context.Context) error {
-	return chromedp.Run(ctx, emulation.ClearDeviceMetricsOverride())
+	return chromedp.Run(ctx, emulation.ClearDeviceMetricsOverride(), emulation.SetTouchEmulationEnabled(false))
 }
 
 func (s *Session) SetGeolocation(ctx context.Context, location Geolocation) error {
@@ -173,8 +179,16 @@ func setMedia(ctx context.Context, media Media) error {
 	return chromedp.Run(ctx, emulation.SetEmulatedMedia().WithMedia(media.Type).WithFeatures(features))
 }
 
+func (s *Session) SetUserAgent(ctx context.Context, userAgent string) error {
+	if err := s.tabOnly("set user agent"); err != nil {
+		return err
+	}
+	return s.serial(ctx, "set user agent", func(opCtx context.Context) error { return SetUserAgentContext(opCtx, userAgent) })
+}
+func (s *Session) ClearUserAgent(ctx context.Context) error { return s.SetUserAgent(ctx, "") }
+
 func (s *Session) resetEmulation(ctx context.Context) error {
-	for _, reset := range []func(context.Context) error{clearDeviceMetrics, clearGeolocation, func(c context.Context) error { return setLocale(c, "") }, func(c context.Context) error { return setTimezone(c, "") }, func(c context.Context) error { return setMedia(c, Media{}) }, s.resetPermissions} {
+	for _, reset := range []func(context.Context) error{clearDeviceMetrics, clearGeolocation, func(c context.Context) error { return SetUserAgentContext(c, "") }, func(c context.Context) error { return setLocale(c, "") }, func(c context.Context) error { return setTimezone(c, "") }, func(c context.Context) error { return setMedia(c, Media{}) }, s.resetPermissions} {
 		if err := reset(ctx); err != nil {
 			return err
 		}

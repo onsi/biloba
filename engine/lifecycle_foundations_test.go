@@ -338,6 +338,54 @@ var _ = Describe("lifecycle engine foundations", func() {
 		Expect(reset).To(Equal([]any{false, false, false, false, false}))
 	})
 
+	It("emulates touch, landscape, and the user agent, and clears each one", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		original, err := session.Evaluate(ctx, `navigator.userAgent`)
+		Expect(err).NotTo(HaveOccurred())
+		device := `[navigator.maxTouchPoints > 0, matchMedia("(pointer: coarse)").matches, screen.orientation.type, screen.orientation.angle]`
+
+		Expect(session.SetDeviceMetrics(ctx, engine.DeviceMetrics{Width: 844, Height: 390, DeviceScaleFactor: 1, Touch: true, Landscape: true})).To(Succeed())
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		Expect(session.Evaluate(ctx, device)).To(Equal([]any{true, true, "landscape-primary", float64(90)}))
+
+		Expect(session.SetDeviceMetrics(ctx, engine.DeviceMetrics{Width: 390, Height: 844, DeviceScaleFactor: 1})).To(Succeed())
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		Expect(session.Evaluate(ctx, device)).To(HaveExactElements(false, false, Not(BeEmpty()), float64(0)))
+
+		Expect(session.SetDeviceMetrics(ctx, engine.DeviceMetrics{Width: 844, Height: 390, DeviceScaleFactor: 1, Touch: true, Landscape: true})).To(Succeed())
+		Expect(session.ClearDeviceMetrics(ctx)).To(Succeed())
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		Expect(session.Evaluate(ctx, device)).To(HaveExactElements(false, false, Not(BeEmpty()), float64(0)))
+
+		Expect(session.SetUserAgent(ctx, "BilobaPhone/1.0")).To(Succeed())
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		Expect(session.Evaluate(ctx, `navigator.userAgent`)).To(Equal("BilobaPhone/1.0"))
+		Expect(session.ClearUserAgent(ctx)).To(Succeed())
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		Expect(session.Evaluate(ctx, `navigator.userAgent`)).To(Equal(original))
+	})
+
+	It("restores touch, orientation, and the user agent during prepare", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		original, err := session.Evaluate(ctx, `[navigator.userAgent, navigator.maxTouchPoints, screen.orientation.type, screen.orientation.angle]`)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(session.SetDeviceMetrics(ctx, engine.DeviceMetrics{Width: 390, Height: 844, DeviceScaleFactor: 1, Mobile: true, Touch: true, Landscape: true})).To(Succeed())
+		Expect(session.SetUserAgent(ctx, "BilobaPhone/1.0")).To(Succeed())
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		Expect(session.Evaluate(ctx, `navigator.userAgent`)).To(Equal("BilobaPhone/1.0"))
+
+		Expect(session.Prepare(ctx)).To(Succeed())
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		Expect(session.Evaluate(ctx, `[navigator.userAgent, navigator.maxTouchPoints, screen.orientation.type, screen.orientation.angle]`)).To(Equal(original))
+	})
+
 	It("honors runner-neutral Chrome mode, arguments, and starting size", func(ctx SpecContext) {
 		launched, err := engine.StartBrowser(ctx, engine.BrowserConfig{
 			ExecutablePath: chromePath(),

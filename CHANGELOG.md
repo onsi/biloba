@@ -8,6 +8,8 @@
 - Go: screenshot captures take `b.Frozen()`, which applies the `HaveScreenshot` freeze (web fonts loaded, CSS animations and transitions off, caret hidden) for that capture: `b.CaptureScreenshotToFile(path, b.Frozen())`.
 - Go: `b.AddInitScript(script)` runs JavaScript at the start of every document the tab loads afterwards, and is removed when the spec ends.
 - Go: `b.Pointer()` returns a real pointer for custom gestures, driven one event at a time with `MoveTo(x, y)`, `MoveToElement(sel, b.At(...))`, `Down()`, and `Up()`. Each call dispatches at once with no scrolling or stability wait, it works on frame handles, and `b.Pointer(b.Pen())` dispatches pen input.
+- TypeScript: `session.setUserAgent(ua)` / `clearUserAgent()` override `navigator.userAgent` and the `User-Agent` header; `prepare()` clears the override.
+- TypeScript: `setDeviceMetrics()` takes `touch` and `landscape`, which emulate a touch screen and a landscape screen orientation; `clearDeviceMetrics()` and `prepare()` turn both off.
 
 ### Fixes
 

@@ -59,6 +59,7 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
       if (request.url === "/slow-download") { response.setHeader("content-disposition", "attachment; filename=slow.bin"); response.write(Buffer.alloc(1024)); const timer = setInterval(() => { if (response.destroyed) { clearInterval(timer); return; } response.write(Buffer.alloc(1024)); }, 50); setTimeout(() => { clearInterval(timer); response.end(); }, 1_000); return; }
       if (request.url === "/echo-request") { const chunks: Buffer[] = []; request.on("data", (chunk: Buffer) => chunks.push(chunk)); request.on("end", () => { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({method: request.method, header: request.headers["x-modified"], body: Buffer.concat(chunks).toString("utf8")})); }); return; }
       if (request.url?.startsWith("/network-json") || request.url?.startsWith("/callback")) { response.setHeader("content-type", "text/plain"); response.setHeader("x-duplicate", ["first", "second"]); response.end(request.url.startsWith("/callback") ? "callback" : "network"); return; }
+      if (request.url === "/user-agent") { response.setHeader("content-type", "text/plain"); response.end(request.headers["user-agent"] ?? ""); return; }
       if (request.url === "/slow") { setTimeout(() => response.end("slow"), 100); return; }
       if (request.url === "/slow-callback") {
         response.setHeader("content-type", "text/plain");
@@ -157,6 +158,8 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     await expect(frame.navigate(`${childBaseUrl}/child-form?id=elsewhere`)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
     await expect(frame.addInitScript("window.fromFrameInitScript = true")).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
     await expect(frame.setOffline(true)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(frame.setUserAgent("BilobaFrame/1.0")).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(frame.setDeviceMetrics({width: 400, height: 300, touch: true})).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
     await frameOwner.expectUrl(`${baseUrl}/`, {exact: true});
     await frame.evaluate(`console.log("frame-console-" + window.frameState.id)`);
     expect((await frame.expectConsoleMessage("frame-console-one")).text).toBe("frame-console-one");
@@ -222,6 +225,7 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
       await expect(frame.navigate(`${oopifBaseUrl}/child-form?id=elsewhere`)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
       await expect(frame.addInitScript("window.fromFrameInitScript = true")).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
       await expect(frame.setOffline(true)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+      await expect(frame.setUserAgent("BilobaFrame/1.0")).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
       await expect(frame.captureScreenshot()).rejects.toMatchObject({code: "INVALID_ARGUMENT", message: expect.stringContaining("capture the iframe element")});
       expect((await owner.locator("#oopif").captureScreenshot()).byteLength).toBeGreaterThan(0);
 
@@ -784,7 +788,7 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     await session.prepare();
     const startingSize = await session.windowSize();
     await session.navigate(baseUrl);
-    const startingEmulation = await session.evaluate(`[Intl.NumberFormat().resolvedOptions().locale, Intl.DateTimeFormat().resolvedOptions().timeZone, matchMedia('(prefers-color-scheme: dark)').matches, innerWidth, innerHeight, devicePixelRatio]`);
+    const startingEmulation = await session.evaluate(`[Intl.NumberFormat().resolvedOptions().locale, Intl.DateTimeFormat().resolvedOptions().timeZone, matchMedia('(prefers-color-scheme: dark)').matches, innerWidth, innerHeight, devicePixelRatio, navigator.userAgent, navigator.maxTouchPoints, screen.orientation.angle]`);
     const startingPermission = await session.evaluateAsync<string>(`navigator.permissions.query({name: "geolocation"}).then(result => result.state)`);
     expect(await session.url()).toBe(baseUrl + "/");
     await session.expectUrl(endsWith("/"));
@@ -831,9 +835,12 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     await session.setLocale("fr-FR");
     await session.setTimezone("Europe/Paris");
     await session.setMedia({colorScheme: "dark", reducedMotion: "reduce"});
-    await session.setDeviceMetrics({width: 320, height: 640, deviceScaleFactor: 2, mobile: true});
+    await session.setDeviceMetrics({width: 320, height: 640, deviceScaleFactor: 2, mobile: true, touch: true, landscape: true});
+    await session.setUserAgent("BilobaPhone/1.0");
     expect(await session.evaluate(`[Intl.NumberFormat().resolvedOptions().locale, Intl.DateTimeFormat().resolvedOptions().timeZone, matchMedia('(prefers-color-scheme: dark)').matches]`)).toEqual(["fr-FR", "Europe/Paris", true]);
     expect(await session.evaluate(`[screen.width, screen.height, devicePixelRatio, innerWidth]`)).toEqual([320, 640, 2, 980]);
+    expect(await session.evaluate(`[navigator.maxTouchPoints > 0, screen.orientation.type, screen.orientation.angle, navigator.userAgent]`)).toEqual([true, "landscape-primary", 90, "BilobaPhone/1.0"]);
+    expect(await session.evaluateAsync<string>(`fetch("/user-agent").then(response => response.text())`)).toBe("BilobaPhone/1.0");
     await session.navigate(baseUrl);
     expect(await session.evaluate("window.lifecycleInit")).toBe("installed");
 
@@ -860,7 +867,7 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     expect(await session.windowSize()).toEqual(startingSize);
     expect(await session.consoleMessages()).toEqual([]);
     await session.navigate(baseUrl);
-    expect(await session.evaluate(`[Intl.NumberFormat().resolvedOptions().locale, Intl.DateTimeFormat().resolvedOptions().timeZone, matchMedia('(prefers-color-scheme: dark)').matches, innerWidth, innerHeight, devicePixelRatio]`)).toEqual(startingEmulation);
+    expect(await session.evaluate(`[Intl.NumberFormat().resolvedOptions().locale, Intl.DateTimeFormat().resolvedOptions().timeZone, matchMedia('(prefers-color-scheme: dark)').matches, innerWidth, innerHeight, devicePixelRatio, navigator.userAgent, navigator.maxTouchPoints, screen.orientation.angle]`)).toEqual(startingEmulation);
     expect(await session.evaluateAsync<string>(`navigator.permissions.query({name: "geolocation"}).then(result => result.state)`)).toBe(startingPermission);
     await session.setPermissions(baseUrl, {geolocation: "granted"});
     const resetGeolocation = await session.evaluateAsync<number>(`new Promise(resolve => navigator.geolocation.getCurrentPosition(() => resolve(0), error => resolve(error.code), {timeout: 100}))`);

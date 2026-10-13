@@ -304,6 +304,15 @@ var _ = Describe("driver protocol", func() {
 		Expect(recorder.lastOperation().Lifecycle.Key).To(Equal("ready"))
 		Expect(recorder.lastOperation().Poll.Timeout).To(Equal(250 * time.Millisecond))
 
+		Expect(client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "SET_DEVICE_METRICS", Device: &protocol.WireDeviceMetrics{Width: 390, Height: 844, DeviceScaleFactor: 3, Mobile: true, Touch: true, Landscape: true}}}, nil)).To(Succeed())
+		device := recorder.lastOperation().Lifecycle
+		Expect([]any{device.Kind, device.Width, device.Height, device.DeviceScaleFactor, device.Mobile, device.Touch, device.Landscape}).To(Equal([]any{protocol.LifecycleSetDeviceMetrics, 390, 844, 3.0, true, true, true}))
+		Expect(client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "SET_USER_AGENT", UserAgent: "BilobaPhone/1.0"}}, nil)).To(Succeed())
+		Expect(recorder.lastOperation().Lifecycle.Kind).To(Equal(protocol.LifecycleSetUserAgent))
+		Expect(recorder.lastOperation().Lifecycle.UserAgent).To(Equal("BilobaPhone/1.0"))
+		Expect(client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "CLEAR_USER_AGENT"}}, nil)).To(Succeed())
+		Expect(recorder.lastOperation().Lifecycle.Kind).To(Equal(protocol.LifecycleClearUserAgent))
+
 		err := client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "STORAGE_GET", Area: "indexedDB"}}, nil)
 		Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
 		err = client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "RAW_CDP"}}, nil)

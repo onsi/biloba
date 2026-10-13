@@ -543,6 +543,9 @@ describe("Biloba TypeScript client", () => {
     await session.setGeolocation({latitude: 0, longitude: 0});
     await session.setPermissions("https://app.test", {clipboardReadWrite: "granted", geolocation: "denied"});
     await session.setMedia({colorScheme: "dark", reducedMotion: "reduce"});
+    await session.setDeviceMetrics({width: 390, height: 844, mobile: true, touch: true, landscape: true});
+    await session.setUserAgent("BilobaPhone/1.0");
+    await session.clearUserAgent();
 
     expect(requests).toEqual(expect.arrayContaining([
       expect.objectContaining({method: "ListTabs", request: expect.objectContaining({spawnedOnly: true})}),
@@ -550,6 +553,9 @@ describe("Biloba TypeScript client", () => {
       expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "WAIT_FOR_DEFINED", expression: "window.ready"}, poll: {timeoutMs: 50}})}),
       expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "SET_GEOLOCATION", geolocation: {latitude: 0, longitude: 0}}})}),
       expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "SET_PERMISSIONS", origin: "https://app.test", permissions: {clipboardReadWrite: "granted", geolocation: "denied"}}})}),
+      expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "SET_DEVICE_METRICS", device: {width: 390, height: 844, deviceScaleFactor: 1, mobile: true, touch: true, landscape: true}}})}),
+      expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "SET_USER_AGENT", userAgent: "BilobaPhone/1.0"}})}),
+      expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "CLEAR_USER_AGENT"}})}),
     ]));
   });
 

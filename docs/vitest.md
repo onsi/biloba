@@ -175,6 +175,18 @@ await popup.close();
 
 Use `tabs()` and `spawnedTabs()` for snapshots, `findTab()` for an optional match, and `waitForTab()` when a popup is expected.
 
+A session can emulate a device and its environment. Each setter has a matching `clear...()` (`resetPermissions()` for permissions), and `prepare()` clears them all:
+
+```ts
+await session.setDeviceMetrics({width: 390, height: 844, deviceScaleFactor: 3, mobile: true, touch: true, landscape: true});
+await session.setUserAgent("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) ...");
+await session.setMedia({colorScheme: "dark", reducedMotion: "reduce"});
+await session.setLocale("fr-FR");
+await session.setTimezone("Europe/Paris");
+```
+
+`touch` makes `navigator.maxTouchPoints` positive and matches `(pointer: coarse)`; `landscape` reports a landscape `screen.orientation`. `setUserAgent()` changes both `navigator.userAgent` and the `User-Agent` request header. `setGeolocation()` and `setPermissions()` cover location and permission prompts.
+
 `frames()` snapshots the cross-origin iframe documents below a session; `waitForFrame()` polls for one by `url`, `title`, and/or a `has` locator. This covers both out-of-process frames (cross-site OOPIF targets) and same-site cross-origin frames such as two local servers on different ports. Biloba asks CDP for Chrome's frame tree and scopes operations directly to the selected frame; it does not read the iframe through parent-page JavaScript or relax the browser's same-origin policy:
 
 ```ts
@@ -190,7 +202,7 @@ await frame.locator("#success").expectVisible();
 
 Frame handles expose the normal locator, action, assertion, JavaScript, upload, and frame-local storage APIs. Trusted pointer input is translated through the iframe owner's content geometry, including parent scrolling, borders, and CSS transforms. For a same-process frame, realistic actions also check the translated point against the whole tab, so an overlay in the embedding page that covers the frame fails the action instead of taking the click. `frame.evaluate()` runs in the selected frame's normal JavaScript environment, just like `session.evaluate()` does for a tab, so it can read and update globals created by the frame's own scripts. Same-origin iframe and open-shadow-root piercing remains `session.locator("outer >>> inner")`; `frames()` is the cross-origin boundary API.
 
-A frame handle is a document, not a tab. Tab and browser-context controls fail on it with `INVALID_ARGUMENT`: `navigate()`, `prepare()`, `addInitScript()`, `activate()`, `newTab()`, `setWindowSize()`, the emulation setters (device metrics, geolocation, permissions, locale, timezone, media), `setCookies()`/`clearCookies()`, request stubbing, aborting, modifying, routing and holding, network state and cache, and `handleDialogs()`. Call them on the session that owns the frame. Reads that don't change the tab, such as `getCookies()` and `windowSize()`, still work.
+A frame handle is a document, not a tab. Tab and browser-context controls fail on it with `INVALID_ARGUMENT`: `navigate()`, `prepare()`, `addInitScript()`, `activate()`, `newTab()`, `setWindowSize()`, the emulation setters (device metrics, geolocation, permissions, locale, timezone, media, user agent), `setCookies()`/`clearCookies()`, request stubbing, aborting, modifying, routing and holding, network state and cache, and `handleDialogs()`. Call them on the session that owns the frame. Reads that don't change the tab, such as `getCookies()` and `windowSize()`, still work.
 
 A frame handle records its own document's console messages and requests from the moment it is found, so `frame.expectConsoleMessage()` and `frame.waitForRequest()` work for either kind of frame. After navigation, request history keeps only the original document's requests; `waitForRequest()` and `expectNetworkIdle()` reject the stale handle. The owning tab also sees the console output and requests of its same-process frames, but not those of out-of-process frames. Dialogs from any frame are reported and handled on the owning tab. Network interception registered on the tab applies to its same-process frames' requests, not to an out-of-process frame's.
 

@@ -75,6 +75,8 @@ var _ = Describe("frame handles and their tab", func() {
 			"locale":      func() error { return frame.SetLocale(ctx, "fr-FR") },
 			"timezone":    func() error { return frame.SetTimezone(ctx, "Asia/Tokyo") },
 			"media":       func() error { return frame.SetMedia(ctx, engine.Media{ColorScheme: "dark"}) },
+			"user agent":  func() error { return frame.SetUserAgent(ctx, "BilobaFrame/1.0") },
+			"clear agent": func() error { return frame.ClearUserAgent(ctx) },
 			"offline":     func() error { return frame.SetNetworkState(ctx, engine.NetworkState{Offline: true}) },
 			"cache":       func() error { return frame.SetCacheEnabled(ctx, false) },
 			"hold": func() error {

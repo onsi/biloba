@@ -1153,7 +1153,7 @@ func (s *engineSession) lifecycle(ctx context.Context, operation protocol.Operat
 		}
 		return observedResult(started, consoleMessagesToWire(s.session.ConsoleMessages())), nil
 	case protocol.LifecycleSetDeviceMetrics:
-		return oneAttempt(started, s.session.SetDeviceMetrics(ctx, engine.DeviceMetrics{Width: lifecycle.Width, Height: lifecycle.Height, DeviceScaleFactor: lifecycle.DeviceScaleFactor, Mobile: lifecycle.Mobile}))
+		return oneAttempt(started, s.session.SetDeviceMetrics(ctx, engine.DeviceMetrics{Width: lifecycle.Width, Height: lifecycle.Height, DeviceScaleFactor: lifecycle.DeviceScaleFactor, Mobile: lifecycle.Mobile, Touch: lifecycle.Touch, Landscape: lifecycle.Landscape}))
 	case protocol.LifecycleClearDeviceMetrics:
 		return oneAttempt(started, s.session.ClearDeviceMetrics(ctx))
 	case protocol.LifecycleSetGeolocation:
@@ -1180,6 +1180,10 @@ func (s *engineSession) lifecycle(ctx context.Context, operation protocol.Operat
 		return oneAttempt(started, s.session.SetMedia(ctx, engine.Media{Type: lifecycle.MediaType, ColorScheme: lifecycle.ColorScheme, ReducedMotion: lifecycle.ReducedMotion}))
 	case protocol.LifecycleClearMedia:
 		return oneAttempt(started, s.session.ClearMedia(ctx))
+	case protocol.LifecycleSetUserAgent:
+		return oneAttempt(started, s.session.SetUserAgent(ctx, lifecycle.UserAgent))
+	case protocol.LifecycleClearUserAgent:
+		return oneAttempt(started, s.session.ClearUserAgent(ctx))
 	default:
 		return protocol.Result{}, protocol.NewError(protocol.CodeInvalidArgument, "unsupported lifecycle operation")
 	}

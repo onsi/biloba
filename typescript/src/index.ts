@@ -387,7 +387,7 @@ export interface NetworkShadowDiagnostic {readonly url: string; readonly stage: 
 export interface NetworkHandler {readonly id: string; count(options?: CommandOptions): Promise<number>; stats(options?: CommandOptions): Promise<NetworkHandlerStats>; remove(options?: CommandOptions): Promise<void>}
 export type ConnectionType = "none" | "cellular2g" | "cellular3g" | "cellular4g" | "bluetooth" | "ethernet" | "wifi" | "wimax" | "other";
 export interface NetworkState {readonly offline?: boolean | undefined; readonly latencyMs?: number | undefined; readonly downloadThroughput?: number | undefined; readonly uploadThroughput?: number | undefined; readonly connectionType?: ConnectionType | undefined}
-export interface DeviceMetrics {readonly width: number; readonly height: number; readonly deviceScaleFactor?: number | undefined; readonly mobile?: boolean | undefined}
+export interface DeviceMetrics {readonly width: number; readonly height: number; readonly deviceScaleFactor?: number | undefined; readonly mobile?: boolean | undefined; readonly touch?: boolean | undefined; readonly landscape?: boolean | undefined}
 export interface Geolocation {readonly latitude: number; readonly longitude: number; readonly accuracy?: number | undefined}
 export type Permission =
   | "ar" | "audioCapture" | "automaticFullscreen" | "backgroundFetch" | "backgroundSync"
@@ -687,6 +687,8 @@ export interface Session {
   clearTimezone(options?: CommandOptions): Promise<void>;
   setMedia(media: MediaEmulation, options?: CommandOptions): Promise<void>;
   clearMedia(options?: CommandOptions): Promise<void>;
+  setUserAgent(userAgent: string, options?: CommandOptions): Promise<void>;
+  clearUserAgent(options?: CommandOptions): Promise<void>;
   sendKeys(keys: string, options?: WindowKeyboardOptions): Promise<void>;
   clearSelection(options?: CancellationOptions): Promise<void>;
   normalizeColor(color: string, options?: CancellationOptions): Promise<string>;
