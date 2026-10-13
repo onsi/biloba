@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/http"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -285,6 +286,7 @@ Note: Biloba considers a tab idle the instant its in-flight request count reache
 Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
 */
 func (b *Biloba) BeNetworkIdle() types.GomegaMatcher {
+	report := &networkIdleReport{}
 	return gcustom.MakeMatcher(func(_ *Biloba) (bool, error) {
 		if err := b.validateFrameObservation("inspect its in-flight requests"); err != nil {
 			if b.frameValidationStopsPolling(err) {
@@ -294,12 +296,9 @@ func (b *Biloba) BeNetworkIdle() types.GomegaMatcher {
 		}
 		b.lock.Lock()
 		defer b.lock.Unlock()
+		report.record(b.state.inflightRequests)
 		return len(b.state.inflightRequests) == 0, nil
-	}).WithTemplate("Expected the tab to be network idle, but it has {{.Data}} in-flight request(s).", func() int {
-		b.lock.Lock()
-		defer b.lock.Unlock()
-		return len(b.state.inflightRequests)
-	}())
+	}).WithTemplate("Expected the tab to be network idle, but it has {{.Data.Describe}}", report)
 }
 
 /*
@@ -1564,7 +1563,51 @@ func (b *Biloba) handleEventRequestWillBeSent(ev *network.EventRequestWillBeSent
 	req := newRequest(ev.Request, ev.Type)
 	b.state.requests = append(b.state.requests, req)
 	b.state.requestsByID[ev.RequestID] = req
-	b.state.inflightRequests[ev.RequestID] = true
+	started := time.Now()
+	if hop, ok := b.state.inflightRequests[ev.RequestID]; ok {
+		started = hop.started
+	}
+	b.state.inflightRequests[ev.RequestID] = inflightRequest{method: req.Method, url: req.URL, resourceType: req.ResourceType, started: started}
+}
+
+// inflightRequest is what BeNetworkIdle reports about a request Chrome announced and has not yet
+// finished or failed.  A redirect replaces it with the next hop, keeping the original start.
+type inflightRequest struct {
+	method, url, resourceType string
+	started                   time.Time
+}
+
+// networkIdleReport is what BeNetworkIdle's failure message describes: the requests its most recent
+// attempt saw in flight.  The matcher fills it on every attempt and the message reads it at failure
+// time; the lock is there because a progress report renders the message from Ginkgo's goroutine while
+// the poll is still running.
+type networkIdleReport struct {
+	lock     sync.Mutex
+	inflight []inflightRequest
+	at       time.Time
+}
+
+func (r *networkIdleReport) record(inflight map[network.RequestID]inflightRequest) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	r.inflight = r.inflight[:0]
+	for _, req := range inflight {
+		r.inflight = append(r.inflight, req)
+	}
+	sort.Slice(r.inflight, func(i, j int) bool { return r.inflight[i].started.Before(r.inflight[j].started) })
+	r.at = time.Now()
+}
+
+// Describe renders the in-flight requests, oldest first, for the failure message template.
+func (r *networkIdleReport) Describe() string {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	out := &strings.Builder{}
+	fmt.Fprintf(out, "%d in-flight request(s)", len(r.inflight))
+	for _, req := range r.inflight {
+		fmt.Fprintf(out, "\n  %s %s (%s, in flight for %s)", req.method, req.url, req.resourceType, r.at.Sub(req.started).Round(time.Millisecond))
+	}
+	return out.String()
 }
 
 func (b *Biloba) handleEventResponseReceived(ev *network.EventResponseReceived) {

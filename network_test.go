@@ -1158,5 +1158,20 @@ var _ = Describe("Observing the network", func() {
 			Eventually(b).Should(b.BeNetworkIdle())
 			Eventually("#result").Should(b.HaveInnerText("slow done"))
 		})
+
+		It("names the requests still in flight when it fails, as of its last attempt", func() {
+			b.Navigate(fixtureServer + "/network-interception.html")
+			Eventually("#hello").Should(b.Exist())
+			idle := b.BeNetworkIdle() // built before the request exists: the message must not be frozen here
+			hold := b.HoldResponse(ContainSubstring("/api/echo"))
+			b.Click("#fetch")
+			hold.Await()
+
+			Ω(idle.Match(b)).Should(BeFalse())
+			Ω(idle.FailureMessage(b)).Should(MatchRegexp(`(?s)Expected the tab to be network idle, but it has 1 in-flight request\(s\)\n  GET http://\S+/api/echo\S* \(Fetch, in flight for \d+ms\)$`))
+
+			hold.Release()
+			Eventually(b).Should(b.BeNetworkIdle())
+		})
 	})
 })

@@ -877,7 +877,7 @@ type tabState struct {
 	// requestsByID points at the latest record for each request ID (a redirect reuses the ID for its
 	// next hop), so response and failure events can fill in that record's Status and Failure.
 	requestsByID     map[network.RequestID]*Request
-	inflightRequests map[network.RequestID]bool
+	inflightRequests map[network.RequestID]inflightRequest
 	requestHandlers  []*requestHandler       // ordered, first-match-wins: stub / abort / modify-request
 	responseHandlers []*ResponseModification // ordered, first-match-wins: modify-response (response stage)
 	fetchEnabled     bool
@@ -892,7 +892,7 @@ func newTabState() *tabState {
 		dialogHandlers:   []*DialogHandler{},
 		dialogs:          Dialogs{},
 		requestsByID:     map[network.RequestID]*Request{},
-		inflightRequests: map[network.RequestID]bool{},
+		inflightRequests: map[network.RequestID]inflightRequest{},
 	}
 }
 
