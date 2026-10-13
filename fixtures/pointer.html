@@ -19,6 +19,9 @@
 <script>
   // every pointer event the page sees, in order; specs read window.pointerLog
   window.pointerLog = []
+  // set once the page has rendered two frames; see settlePointerLog in pointer_test.go
+  window.framesRendered = false
+  requestAnimationFrame(() => requestAnimationFrame(() => { window.framesRendered = true }))
   for (const type of ["pointerdown", "pointermove", "pointerup"]) {
     document.addEventListener(type, (e) => {
       window.pointerLog.push({ type: e.type, pointerType: e.pointerType, buttons: e.buttons, x: e.clientX, y: e.clientY, pressure: e.pressure, target: e.target.id })

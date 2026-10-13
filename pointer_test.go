@@ -32,6 +32,17 @@ func clearPointerLog(tab *biloba.Biloba) {
 	tab.Run("window.pointerLog = []")
 }
 
+// settlePointerLog empties the log once the page has rendered, so it holds only what the spec
+// dispatches.  On Linux, chrome-headless-shell moves the mouse to (0, 0) when a page from a new site
+// renders its first frame - and Prepare's about:blank makes every spec's first page one - so the page
+// would otherwise open its log with a pointermove the spec never sent.  The move arrives with the
+// first frame; the fixture flags the second.
+func settlePointerLog(tab *biloba.Biloba) {
+	GinkgoHelper()
+	Eventually("window.framesRendered").Should(tab.EvaluateTo(BeTrue()))
+	clearPointerLog(tab)
+}
+
 func pointerEventMatching(typ, pointerType string, buttons int, x, y float64) OmegaMatcher {
 	return MatchFields(IgnoreExtras, Fields{
 		"Type":        Equal(typ),
@@ -46,6 +57,7 @@ var _ = Describe("Pointer", func() {
 	BeforeEach(func() {
 		b.Navigate(fixtureServer + "/pointer.html")
 		Eventually("#pad").Should(b.Exist())
+		settlePointerLog(b)
 	})
 
 	It("dispatches real mouse moves, presses, and releases where it is told", func() {
@@ -89,6 +101,7 @@ var _ = Describe("Pointer", func() {
 		b.SetUserAgent("Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1")
 		b.Navigate(fixtureServer + "/pointer.html")
 		Eventually("#pad").Should(b.Exist())
+		settlePointerLog(b)
 
 		pen := b.Pointer(b.Pen())
 		pen.MoveTo(30, 60)
@@ -238,6 +251,7 @@ var _ = Describe("A pointer left pressed when the spec ends", Ordered, func() {
 	BeforeAll(func() {
 		b.Navigate(fixtureServer + "/pointer.html")
 		Eventually("#pad").Should(b.Exist())
+		settlePointerLog(b)
 	})
 
 	It("is pressed by the first spec", func() {
