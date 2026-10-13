@@ -92,9 +92,8 @@ func (b *Biloba) setUpListeners() {
 	b.listenForCrashOnTheBrowser()
 
 	// the previous spec's page can still raise events after Prepare: drop them, unprinted and unrecorded
-	origins := engine.NewEventOrigins(b.root.generation)
 	chromedp.ListenTarget(b.Context, func(ev any) {
-		if origins.Stale(ev) {
+		if b.boundary.Stale(ev) {
 			return
 		}
 		switch ev := ev.(type) {

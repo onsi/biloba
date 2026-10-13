@@ -1564,17 +1564,11 @@ func (b *Biloba) handleEventRequestWillBeSent(ev *network.EventRequestWillBeSent
 	b.state.requests = append(b.state.requests, req)
 	b.state.requestsByID[ev.RequestID] = req
 	started := time.Now()
+	// a redirect replaces the entry with the next hop, keeping the original start
 	if hop, ok := b.state.inflightRequests[ev.RequestID]; ok {
-		started = hop.started
+		started = hop.Started
 	}
-	b.state.inflightRequests[ev.RequestID] = inflightRequest{method: req.Method, url: req.URL, resourceType: req.ResourceType, started: started}
-}
-
-// inflightRequest is what BeNetworkIdle reports about a request Chrome announced and has not yet
-// finished or failed.  A redirect replaces it with the next hop, keeping the original start.
-type inflightRequest struct {
-	method, url, resourceType string
-	started                   time.Time
+	b.state.inflightRequests[ev.RequestID] = engine.InflightRequest{Method: req.Method, URL: req.URL, ResourceType: req.ResourceType, Started: started}
 }
 
 // networkIdleReport is what BeNetworkIdle's failure message describes: the requests its most recent
@@ -1583,18 +1577,18 @@ type inflightRequest struct {
 // the poll is still running.
 type networkIdleReport struct {
 	lock     sync.Mutex
-	inflight []inflightRequest
+	inflight []engine.InflightRequest
 	at       time.Time
 }
 
-func (r *networkIdleReport) record(inflight map[network.RequestID]inflightRequest) {
+func (r *networkIdleReport) record(inflight map[network.RequestID]engine.InflightRequest) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 	r.inflight = r.inflight[:0]
 	for _, req := range inflight {
 		r.inflight = append(r.inflight, req)
 	}
-	sort.Slice(r.inflight, func(i, j int) bool { return r.inflight[i].started.Before(r.inflight[j].started) })
+	sort.Slice(r.inflight, func(i, j int) bool { return r.inflight[i].Started.Before(r.inflight[j].Started) })
 	r.at = time.Now()
 }
 
@@ -1602,12 +1596,7 @@ func (r *networkIdleReport) record(inflight map[network.RequestID]inflightReques
 func (r *networkIdleReport) Describe() string {
 	r.lock.Lock()
 	defer r.lock.Unlock()
-	out := &strings.Builder{}
-	fmt.Fprintf(out, "%d in-flight request(s)", len(r.inflight))
-	for _, req := range r.inflight {
-		fmt.Fprintf(out, "\n  %s %s (%s, in flight for %s)", req.method, req.url, req.resourceType, r.at.Sub(req.started).Round(time.Millisecond))
-	}
-	return out.String()
+	return engine.DescribeInflightRequests(r.inflight, r.at)
 }
 
 func (b *Biloba) handleEventResponseReceived(ev *network.EventResponseReceived) {

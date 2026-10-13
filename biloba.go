@@ -887,7 +887,7 @@ type tabState struct {
 	// requestsByID points at the latest record for each request ID (a redirect reuses the ID for its
 	// next hop), so response and failure events can fill in that record's Status and Failure.
 	requestsByID     map[network.RequestID]*Request
-	inflightRequests map[network.RequestID]inflightRequest
+	inflightRequests map[network.RequestID]engine.InflightRequest
 	requestHandlers  []*requestHandler       // ordered, first-match-wins: stub / abort / modify-request
 	responseHandlers []*ResponseModification // ordered, first-match-wins: modify-response (response stage)
 	fetchEnabled     bool
@@ -902,7 +902,7 @@ func newTabState() *tabState {
 		dialogHandlers:   []*DialogHandler{},
 		dialogs:          Dialogs{},
 		requestsByID:     map[network.RequestID]*Request{},
-		inflightRequests: map[network.RequestID]inflightRequest{},
+		inflightRequests: map[network.RequestID]engine.InflightRequest{},
 	}
 }
 
@@ -976,9 +976,9 @@ type Biloba struct {
 	// the tab's frame handles share the tab's one record instead of each getting a copy.
 	media *mediaEmulation
 
-	// generation counts the root tab's Prepares.  Every tab's listener reads the root's (see
-	// setUpListeners) to drop the events a page from before the last Prepare raises after it.
-	generation *engine.EventGeneration
+	// boundary tells this tab's listener which events come from the page the last Prepare left behind
+	// (see setUpListeners).  Only the root tab's is ever reset: Prepare closes every other tab.
+	boundary *engine.DocumentBoundary
 
 	// pollTrajectory opts a suite into recording the (elapsed, value) trajectory of polled reads and
 	// attaching the failing read's series on failure (see BilobaConfigPollTrajectory).  On by default.
@@ -1038,7 +1038,7 @@ func newBiloba(ginkgoT GinkgoTInterface) *Biloba {
 		occlusions:                &occlusionRecorder{},
 		unreadableResponseBodies:  &unreadableResponseBodyRecorder{},
 		media:                     &mediaEmulation{},
-		generation:                &engine.EventGeneration{},
+		boundary:                  &engine.DocumentBoundary{},
 	}
 	return b
 }
@@ -1069,9 +1069,9 @@ func (b *Biloba) Prepare() {
 		return
 	}
 	// From here on, whatever the previous spec's page does - a fetch the about:blank navigation below
-	// aborts, the console output and request failures that follow - belongs to an earlier generation,
-	// and the listeners drop it instead of attributing it to the next spec.  See engine.EventOrigins.
-	b.generation.Advance()
+	// aborts, the console output and request failures that follow - belongs to the previous spec, and
+	// the listener drops it instead of attributing it to the next one.  See engine.DocumentBoundary.
+	b.boundary.Reset()
 	b.detachFrames()
 	//close all tabs
 	closedTargetIDs := []target.ID{}

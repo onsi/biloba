@@ -2,8 +2,10 @@ package engine
 
 import (
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/fetch"
 	cdplog "github.com/chromedp/cdproto/log"
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	ginkgo "github.com/onsi/ginkgo/v2"
 	gomega "github.com/onsi/gomega"
@@ -55,5 +57,47 @@ var _ = ginkgo.Describe("documentBoundary", ginkgo.Label("no-browser"), func() {
 		boundary.reset()
 		boundary.reset()
 		gomega.Expect(boundary.staleRequest("new-document", "3")).To(gomega.BeFalse(), "two resets later nothing from that spec is still talking")
+	})
+	ginkgo.It("treats a request the old document starts after the reset as stale, through its log entry", func() {
+		boundary := &documentBoundary{}
+		boundary.observe(request("old-document", "1"))
+		boundary.reset()
+		boundary.observe(request("old-document", "2"))
+		gomega.Expect(boundary.staleRequestID("2")).To(gomega.BeTrue())
+		gomega.Expect(boundary.staleLogEntry(&cdplog.Entry{NetworkRequestID: "2"})).To(gomega.BeTrue())
+	})
+
+	ginkgo.It("lets no request without a loader make the next spec's loaderless requests stale", func() {
+		boundary := &documentBoundary{}
+		boundary.observe(request("", "worker-1"))
+		boundary.reset()
+		boundary.observe(request("", "worker-2"))
+		gomega.Expect(boundary.staleRequest("", "worker-2")).To(gomega.BeFalse())
+		gomega.Expect(boundary.staleRequestID("worker-1")).To(gomega.BeTrue())
+	})
+
+	ginkgo.Describe("DocumentBoundary.Stale, the Go client's entry point", func() {
+		ginkgo.It("classifies each event it attributes, and observes as it goes", func() {
+			boundary := &DocumentBoundary{}
+			gomega.Expect(boundary.Stale(created(1))).To(gomega.BeFalse())
+			gomega.Expect(boundary.Stale(request("old-document", "1"))).To(gomega.BeFalse())
+			boundary.Reset()
+			gomega.Expect(boundary.Stale(created(2))).To(gomega.BeFalse())
+
+			gomega.Expect(boundary.Stale(&runtime.EventConsoleAPICalled{ExecutionContextID: 1})).To(gomega.BeTrue())
+			gomega.Expect(boundary.Stale(&runtime.EventExceptionThrown{ExceptionDetails: &runtime.ExceptionDetails{ExecutionContextID: 1}})).To(gomega.BeTrue())
+			gomega.Expect(boundary.Stale(&runtime.EventConsoleAPICalled{ExecutionContextID: 2})).To(gomega.BeFalse())
+			gomega.Expect(boundary.Stale(&runtime.EventExceptionThrown{ExceptionDetails: &runtime.ExceptionDetails{ExecutionContextID: 2}})).To(gomega.BeFalse())
+
+			gomega.Expect(boundary.Stale(request("old-document", "2"))).To(gomega.BeTrue())
+			gomega.Expect(boundary.Stale(&network.EventResponseReceived{LoaderID: "old-document", RequestID: "1"})).To(gomega.BeTrue())
+			gomega.Expect(boundary.Stale(&network.EventLoadingFinished{RequestID: "1"})).To(gomega.BeTrue())
+			gomega.Expect(boundary.Stale(&network.EventLoadingFailed{RequestID: "2"})).To(gomega.BeTrue())
+			gomega.Expect(boundary.Stale(request("new-document", "3"))).To(gomega.BeFalse())
+			gomega.Expect(boundary.Stale(&network.EventLoadingFinished{RequestID: "3"})).To(gomega.BeFalse())
+
+			gomega.Expect(boundary.Stale(&page.EventJavascriptDialogOpening{})).To(gomega.BeFalse(), "dialogs are not attributed")
+			gomega.Expect(boundary.Stale(&fetch.EventRequestPaused{RequestID: "1"})).To(gomega.BeFalse(), "a paused request must still be answered")
+		})
 	})
 })

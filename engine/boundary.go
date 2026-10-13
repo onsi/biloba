@@ -46,12 +46,21 @@ func (d *documentBoundary) observe(event any) {
 		clear(d.staleContexts)
 	case *network.EventRequestWillBeSent:
 		if _, stale := d.staleLoaders[event.LoaderID]; stale {
+			// a request the old document starts after the reset: its response, finish, failure, and
+			// log entry are the old document's too
+			if d.staleRequests == nil {
+				d.staleRequests = map[network.RequestID]struct{}{}
+			}
+			d.staleRequests[event.RequestID] = struct{}{}
 			return
 		}
 		if d.loaders == nil {
 			d.loaders, d.requests = map[cdp.LoaderID]struct{}{}, map[network.RequestID]struct{}{}
 		}
-		d.loaders[event.LoaderID] = struct{}{}
+		// a request with no loader (a worker's, say) names no document, so it can't make one stale
+		if event.LoaderID != "" {
+			d.loaders[event.LoaderID] = struct{}{}
+		}
 		d.requests[event.RequestID] = struct{}{}
 	}
 }
@@ -92,4 +101,44 @@ func (d *documentBoundary) staleLogEntry(entry *cdplog.Entry) bool {
 		}
 	}
 	return len(d.staleContexts) > 0
+}
+
+// DocumentBoundary is documentBoundary for a listener outside the engine - the Go client's tab
+// listeners.  Feed it every event from the target, in stream order, through Stale, and call Reset
+// when a Prepare starts tearing the old document down.  It sends no CDP commands.
+type DocumentBoundary struct{ boundary documentBoundary }
+
+// Reset marks everything observed so far as the previous spec's.
+func (d *DocumentBoundary) Reset() { d.boundary.reset() }
+
+// Stale observes event and reports whether it comes from a document the last Reset left behind: a
+// console call or exception from one of its execution contexts, a request it starts, and the
+// response, finish, failure, and Chrome log entry of a request it started.  Events it does not
+// attribute (dialogs, paused requests, downloads, ...) are never stale.
+func (d *DocumentBoundary) Stale(event any) bool {
+	d.boundary.observe(event)
+	switch event := event.(type) {
+	case *runtime.EventConsoleAPICalled:
+		return d.boundary.staleContext(event.ExecutionContextID)
+	case *runtime.EventExceptionThrown:
+		return event.ExceptionDetails != nil && d.boundary.staleContext(event.ExceptionDetails.ExecutionContextID)
+	case *network.EventRequestWillBeSent:
+		return d.boundary.staleRequest(event.LoaderID, event.RequestID)
+	case *network.EventResponseReceived:
+		return d.boundary.staleRequest(event.LoaderID, event.RequestID)
+	case *network.EventLoadingFinished:
+		return d.boundary.staleRequestID(event.RequestID)
+	case *network.EventLoadingFailed:
+		return d.boundary.staleRequestID(event.RequestID)
+	case *cdplog.EventEntryAdded:
+		return event.Entry != nil && d.boundary.staleLogEntry(event.Entry)
+	}
+	return false
+}
+
+func (d *documentBoundary) staleRequestID(id network.RequestID) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, stale := d.staleRequests[id]
+	return stale
 }

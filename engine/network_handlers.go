@@ -928,8 +928,15 @@ func (s *Session) WaitForNetworkIdle(ctx context.Context, p PollPolicy) (PollRes
 // NetworkIdleFailureMessage describes the requests still in flight at time at, the way both clients
 // report a network-idle assertion that timed out.
 func NetworkIdleFailureMessage(inflight []InflightRequest, at time.Time) string {
+	return "expected the session to be network idle, but it has " + DescribeInflightRequests(inflight, at)
+}
+
+// DescribeInflightRequests renders "N in-flight request(s)" followed by one line per request: method,
+// URL, resource type, and how long it had been in flight at at.  Both clients' network-idle failures
+// use it.
+func DescribeInflightRequests(inflight []InflightRequest, at time.Time) string {
 	out := &strings.Builder{}
-	fmt.Fprintf(out, "expected the session to be network idle, but it has %d in-flight request(s)", len(inflight))
+	fmt.Fprintf(out, "%d in-flight request(s)", len(inflight))
 	for _, request := range inflight {
 		fmt.Fprintf(out, "\n  %s %s (%s, in flight for %s)", request.Method, request.URL, request.ResourceType, at.Sub(request.Started).Round(time.Millisecond))
 	}
