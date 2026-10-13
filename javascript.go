@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/chromedp/cdproto/page"
 	"github.com/onsi/biloba/engine"
 	"github.com/onsi/gomega/gcustom"
 )
@@ -194,6 +195,46 @@ func (b *Biloba) RunAsync(script string, args ...any) any {
 		b.gt.Fatalf("Failed to run async script:\n%s\n\n%s", script, err.Error())
 	}
 	return res
+}
+
+/*
+AddInitScript(script) installs script to run at the start of every document this tab loads from now
+on - before the page's own scripts, in the document and in each of its frames:
+
+	b.AddInitScript(`window.__seed = 42`)
+	b.Navigate(url) // the page's scripts see window.__seed
+
+It does not run in the document that is already loaded, so call it before Navigate.  The script stays
+installed across navigations until the spec ends, when a DeferCleanup removes it.  AddInitScript applies
+to a tab, not a frame handle, and configuring it (WithTimeout/WithPolling/WithContext/Immediate) is a
+hard error.
+
+Read https://onsi.github.io/biloba/#init-scripts to learn more about init scripts
+*/
+func (b *Biloba) AddInitScript(script string) {
+	b.gt.Helper()
+	if b.refusedOnFrame("AddInitScript") {
+		return
+	}
+	b.guardConfig("AddInitScript")
+	var identifier page.ScriptIdentifier
+	err := b.runEngine("add an init script", func(ctx context.Context) error {
+		var err error
+		identifier, err = engine.AddInitScriptContext(ctx, script)
+		return err
+	})
+	if err != nil {
+		b.gt.Fatalf("Failed to add init script:\n%s\n\n%s", script, err.Error())
+		return
+	}
+	b.gt.DeferCleanup(func() {
+		err := b.runEngine("remove an init script", func(ctx context.Context) error {
+			return engine.RemoveInitScriptContext(ctx, identifier)
+		})
+		if err != nil {
+			b.gt.Fatalf("Failed to remove init script:\n%s\n\n%s", script, err.Error())
+		}
+	})
 }
 
 /*

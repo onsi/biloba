@@ -587,7 +587,7 @@ Derive it from `b.Context` (not `context.Background()`) so chromedp's executor f
 
 #### Emulation and device conveniences (drop to chromedp)
 
-Device and environment **emulation** - viewport/device metrics, geolocation, permissions, offline, locale/timezone, color-scheme, and reduced-motion/media - is, by design, *not* wrapped by Biloba: it's session-level state that rarely changes mid-spec, the CDP calls are already ergonomic, and wrapping them would add surface without removing real friction.  Reach through `b.Context` with `cdproto`'s `emulation` and `network` domains.  Here are the common recipes:
+Biloba wraps the window size and CSS media natively - see [Window Size](#window-size) and [Emulating Media and Devices](#emulating-media-and-devices).  The rest of device and environment **emulation** - geolocation, permissions, offline, locale/timezone - is not wrapped in Go yet.  Reach through `b.Context` with `cdproto`'s `emulation` and `network` domains.  Here are the common recipes:
 
 ```go
 import (
@@ -612,21 +612,11 @@ chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
 	return emulation.SetTimezoneOverride("Europe/Paris").Do(ctx)
 }))
 
-// Color scheme / reduced motion (and other media features)
-chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
-	return emulation.SetEmulatedMedia().WithFeatures([]*emulation.MediaFeature{
-		{Name: "prefers-color-scheme", Value: "dark"},
-		{Name: "prefers-reduced-motion", Value: "reduce"},
-	}).Do(ctx)
-}))
-
 // Offline / throttled network
 chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
 	return network.OverrideNetworkState(true, 0, -1, -1).Do(ctx) // offline=true, latency, down, up
 }))
 ```
-
-(`SetWindowSize` is the one piece of this Biloba *does* wrap natively - see [Window Size](#window-size-screenshots-configuration-and-debugging).)
 
 Multi-browser (Firefox/WebKit) is a deliberate non-goal - Biloba is Chrome-only by design.
 
@@ -3435,6 +3425,17 @@ var result map[string]int
 b.Run("({a:1, b:2})", &result)
 ```
 
+### Init Scripts
+
+`b.AddInitScript` installs JavaScript that runs at the start of every document the tab loads from then on, before the page's own scripts and in each of its frames.  Use it to seed globals or install shims the page reads while it boots:
+
+```go
+b.AddInitScript(`window.__featureFlags = {newCheckout: true}`)
+b.Navigate("/checkout")
+```
+
+It does not run in the document that is already loaded, so call it before `b.Navigate`.  The script stays installed across navigations until the spec ends, when a `DeferCleanup` removes it.
+
 ## Stubbing and Observing the Network
 
 Real browser tests usually talk to a backend.  This is a good thing as you _really_ want rich and expressive tests that are running against the _actual_ backend.  Such an approach _can_ lead to slow (every spec waits on real network round-trips) and flaky (the backend has to be up, seeded, and deterministic) tests if you aren't disciplined.  In general you should lean into discipline and stick with a real backend; investing effort to make it more performant and stable.
@@ -3723,6 +3724,19 @@ b.SetWindowSize(width, height)
 this also accepts any [`chromedp.EmulateViewportOption`](https://pkg.go.dev/github.com/chromedp/chromedp#EmulateViewportOption) after `height`.  `b.SetWindowSize` automatically sets up a Ginkgo `DeferCleanup` to reset the window size when the spec ends.  You can query the window size of a tab at any time using `b.WindowSize()`.
 
 One quick hack to speed up a test suite is to use the _smallest_ viable window size to run the tests.  You can then pass `BilobaConfigFailureScreenshotsSize(width, height)` to `ConnectToChrome(...)` to configure the size of Biloba's automatically generated screenshots.  Biloba will scale the window up on failure, take a screenshot, then scale it back down to proceed with other tests.  As an anecdotal data-point a 30% speed-up was observed for a Biloba test suite against a complex web-app running in parallel when the screen-size was minimized in this way.
+
+### Emulating Media and Devices
+
+`b.SetMedia` emulates CSS media for a tab - `prefers-color-scheme`, `prefers-reduced-motion`, and the media type:
+
+```go
+b.SetMedia(biloba.Media{ColorScheme: "dark", ReducedMotion: "reduce"})
+b.SetMedia(biloba.Media{Type: "print"})
+```
+
+Each call replaces the tab's previous media (an empty field leaves that aspect to the browser), and the media holds across navigations.  Like `b.SetWindowSize`, `b.SetMedia` registers a `DeferCleanup` that undoes it when the spec ends.  It applies to a tab and every frame in it; calling it on a frame handle fails the spec.
+
+[Visual assertions](#visual-assertions) render in the tab's media.  `b.InColorSchemes(...)` overrides only the colour scheme for its own captures and then restores the tab's media, so a spec running in dark mode with reduced motion stays that way after it.
 
 ### Capturing Screenshots
 
@@ -4141,7 +4155,7 @@ That's the shape on purpose.  A suite-wide default is one number, tuned once, wi
 Eventually(b).Should(b.HaveScreenshot("home", b.InColorSchemes("light", "dark")))
 ```
 
-Each scheme gets its own baseline — `home-light.png` and `home-dark.png` — and a failure names the scheme it belongs to (`home (prefers-color-scheme: dark)`).  Without the option Biloba doesn't emulate `prefers-color-scheme` at all and stores a single `home.png`.
+Each scheme gets its own baseline — `home-light.png` and `home-dark.png` — and a failure names the scheme it belongs to (`home (prefers-color-scheme: dark)`).  Without the option the capture renders in the tab's own media (see [Emulating Media and Devices](#emulating-media-and-devices)) and stores a single `home.png`.  With it, each scheme overrides only `prefers-color-scheme`, and the tab's own media is restored afterwards.
 
 **The emulation drives the media query, so your app has to be listening to it.**  An app with a manual theme override — a tri-state `system`/`light`/`dark` toggle that puts `data-theme` on `<html>` — only follows `prefers-color-scheme` while it's in its follow-the-system state.  A spec that has pinned the theme (directly, through a helper, or through a leftover stored preference) captures **the same rendering twice** and writes it to both `home-light.png` and `home-dark.png`.  Both baselines look right.  Both comparisons pass.  Forever.  The filename is the only thing claiming the dark rendering was ever exercised.
 

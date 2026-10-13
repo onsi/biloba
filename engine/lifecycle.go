@@ -63,6 +63,24 @@ func InstallScriptOnNewDocumentContext(ctx context.Context, script string) error
 	}))
 }
 
+// AddInitScriptContext installs script to run at the start of every new document and returns the
+// identifier RemoveInitScriptContext takes to uninstall it.
+func AddInitScriptContext(ctx context.Context, script string) (page.ScriptIdentifier, error) {
+	var identifier page.ScriptIdentifier
+	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
+		var err error
+		identifier, err = page.AddScriptToEvaluateOnNewDocument(script).Do(runCtx)
+		return err
+	}))
+	return identifier, err
+}
+
+// RemoveInitScriptContext uninstalls a script AddInitScriptContext installed.  Documents it already
+// ran in keep whatever it did.
+func RemoveInitScriptContext(ctx context.Context, identifier page.ScriptIdentifier) error {
+	return chromedp.Run(ctx, page.RemoveScriptToEvaluateOnNewDocument(identifier))
+}
+
 // DisableInterceptionContext tears request interception down and restores the HTTP cache.
 // Symmetric with EnableInterceptionContext, and just as order-dependent in reverse: leaving the
 // cache disabled would silently change how later work is served.

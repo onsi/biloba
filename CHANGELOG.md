@@ -2,6 +2,9 @@
 
 ### Features
 
+- Go: `b.SetMedia(biloba.Media{...})` emulates `prefers-color-scheme`, `prefers-reduced-motion`, and the media type for a tab, and undoes itself when the spec ends. `HaveScreenshot` renders in the tab's media, and `InColorSchemes` now restores it after its captures instead of clearing it.
+- Go: `b.AddInitScript(script)` runs JavaScript at the start of every document the tab loads afterwards, and is removed when the spec ends.
+
 ### Fixes
 
 ## 0.17.0

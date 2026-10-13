@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 
-	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
@@ -85,9 +84,10 @@ func CaptureFullScreenshotContext(ctx context.Context, quality int) (img []byte,
 // reports an error may still have landed, so the flag has to go up before the call and only come
 // down when a clear actually succeeds.
 func EmulateColorSchemeContext(ctx context.Context, scheme string) error {
-	params := emulation.SetEmulatedMedia()
-	if scheme != "" {
-		params = params.WithFeatures([]*emulation.MediaFeature{{Name: "prefers-color-scheme", Value: scheme}})
-	}
-	return chromedp.Run(ctx, params)
+	return EmulateMediaContext(ctx, Media{ColorScheme: scheme})
 }
+
+// EmulateMediaContext replaces the page's emulated CSS media with media; the zero Media clears every
+// override.  The override is per target and outlives navigation, so the same outstanding-override
+// bookkeeping applies as for EmulateColorSchemeContext.
+func EmulateMediaContext(ctx context.Context, media Media) error { return setMedia(ctx, media) }

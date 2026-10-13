@@ -60,7 +60,7 @@ The shape line (`one box`, `changed regions: N boxes`, `scattered`, `uniform shi
 
 **"never settled" is printed during an update run, not on a failure.** The run stays green, but the baseline it just wrote was captured from a page still changing and the next normal run will fail against it. Mask the moving region (or stop it moving) and re-run the update; re-running alone changes nothing. → `visual-assertions`
 
-**"Failed to clear the emulated prefers-color-scheme"** — a dropped `b.InColorSchemes` teardown. The override is target-level and survives navigation, so `b.Prepare()` clears the leak before the next spec; the spec that printed the warning, though, finished rendering in the emulated scheme. Read any odd-looking screenshot from that spec with that in mind.
+**"Failed to restore the tab's prefers-color-scheme"** — a dropped `b.InColorSchemes` teardown. The override is target-level and survives navigation, so `b.Prepare()` clears the leak before the next spec; the spec that printed the warning, though, finished rendering in the emulated scheme. Read any odd-looking screenshot from that spec with that in mind.
 
 ### The `⚠` diagnostic notes
 

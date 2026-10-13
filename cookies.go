@@ -191,5 +191,5 @@ func (b *Biloba) resetBrowsingState() {
 		return engine.ClearCookiesContext(ctx, b.browserContextID)
 	})
 	b.RunErr(`try { window.localStorage.clear(); window.sessionStorage.clear(); } catch (e) {}`)
-	b.clearLeakedColorSchemeEmulation()
+	b.clearEmulatedMedia()
 }

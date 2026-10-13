@@ -305,13 +305,11 @@ func (s *Session) AddInitScript(ctx context.Context, script string) error {
 		return err
 	}
 	return s.serial(ctx, "add init script", func(opCtx context.Context) error {
-		return chromedp.Run(opCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
-			identifier, err := page.AddScriptToEvaluateOnNewDocument(script).Do(runCtx)
-			if err == nil {
-				s.initScriptIDs = append(s.initScriptIDs, identifier)
-			}
-			return err
-		}))
+		identifier, err := AddInitScriptContext(opCtx, script)
+		if err == nil {
+			s.initScriptIDs = append(s.initScriptIDs, identifier)
+		}
+		return err
 	})
 }
 
@@ -357,7 +355,7 @@ func (s *Session) Prepare(ctx context.Context) error {
 			return err
 		}
 		for _, identifier := range s.initScriptIDs {
-			if err := chromedp.Run(opCtx, page.RemoveScriptToEvaluateOnNewDocument(identifier)); err != nil {
+			if err := RemoveInitScriptContext(opCtx, identifier); err != nil {
 				return err
 			}
 		}

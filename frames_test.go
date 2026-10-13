@@ -213,6 +213,8 @@ var _ = Describe("Cross-origin iframes", func() {
 		It("refuses tab-level methods on a frame handle", func() {
 			checkout.Navigate(crossOriginFixtureServer + "/dom.html")
 			checkout.SetWindowSize(400, 300)
+			checkout.SetMedia(biloba.Media{ColorScheme: "dark"})
+			checkout.AddInitScript(`window.__seed = 42`)
 			checkout.StubRequest("/api/anything", biloba.StubResponse{Body: "stubbed"})
 			checkout.HandleAlertDialogs()
 			checkout.SetCookie(biloba.Cookie{Name: "frame", Value: "cookie"})
@@ -220,6 +222,8 @@ var _ = Describe("Cross-origin iframes", func() {
 			ExpectFailures(
 				"Navigate acts on the tab, not a frame: call it on the tab that owns this frame",
 				"SetWindowSize acts on the tab, not a frame: call it on the tab that owns this frame",
+				"SetMedia acts on the tab, not a frame: call it on the tab that owns this frame",
+				"AddInitScript acts on the tab, not a frame: call it on the tab that owns this frame",
 				"StubRequest acts on the tab, not a frame: call it on the tab that owns this frame",
 				"HandleAlertDialogs acts on the tab, not a frame: call it on the tab that owns this frame",
 				"SetCookie acts on the tab, not a frame: call it on the tab that owns this frame",
@@ -235,6 +239,11 @@ var _ = Describe("Cross-origin iframes", func() {
 			checkout.Run(`setTimeout(() => { document.querySelector("#result").textContent = confirm("Sure?") ? "confirmed" : "declined" }, 0)`)
 			Eventually("#result").Should(checkout.HaveInnerText("confirmed"))
 			Ω(b.Dialogs().MostRecent().Message).Should(Equal("Sure?"))
+		})
+
+		It("renders in its tab's emulated media", func() {
+			b.SetMedia(biloba.Media{ReducedMotion: "reduce"})
+			Ω(`matchMedia("(prefers-reduced-motion: reduce)").matches`).Should(checkout.EvaluateTo(true))
 		})
 
 		It("reports its tab's window", func() {

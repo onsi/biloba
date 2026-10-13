@@ -154,8 +154,10 @@ match for the assertion to pass:
 
 	Eventually(b).Should(b.HaveScreenshot("home", b.InColorSchemes("light", "dark")))
 
-Each scheme gets its own baseline, named <name>-<scheme>.png.  Without this option Biloba does not
-emulate prefers-color-scheme at all and stores a single <name>.png.
+Each scheme gets its own baseline, named <name>-<scheme>.png.  Without this option the capture
+renders in whatever media the tab emulates (see [Biloba.SetMedia]) and stores a single <name>.png.
+With it, each scheme overrides only prefers-color-scheme for its capture, and the tab's own media is
+restored afterwards.
 
 The emulation drives the media query, so an app with a manual theme override only follows it while
 that app is in its follow-the-system state.  A spec that has pinned the theme captures the same
@@ -578,10 +580,10 @@ func (b *Biloba) captureForComparison(selector any, cfg screenshotConfig, scheme
 		}
 		defer func() {
 			if err := b.emulateColorScheme(""); err != nil {
-				// A dropped clear used to be silent, and the override outlives Navigate: every later
+				// A dropped restore used to be silent, and the override outlives Navigate: every later
 				// assertion in this tab would have rendered in the emulated scheme with no signal.  Say
-				// so, and leave the flag set so the next Prepare() tries again.
-				b.gt.Printf("Failed to clear the emulated prefers-color-scheme (%s) after a screenshot capture:\n  %s\nThis tab keeps rendering as %s until the next b.Prepare().\n", scheme, err.Error(), scheme)
+				// so; the override stays marked outstanding, so the next Prepare() clears it.
+				b.gt.Printf("Failed to restore the tab's prefers-color-scheme after a screenshot capture in %s:\n  %s\nThis tab keeps rendering as %s until the next b.Prepare().\n", scheme, err.Error(), scheme)
 			}
 		}()
 	}
@@ -648,45 +650,21 @@ func (b *Biloba) captureForComparison(selector any, cfg screenshotConfig, scheme
 	return masked, clippedNote, err
 }
 
-// emulateColorScheme overrides prefers-color-scheme for this tab; the empty scheme clears the
-// override.  It keeps b.colorSchemeEmulated honest so Prepare() knows whether there is anything to
-// clean up: the flag goes up BEFORE the command that sets the override (a command that reports an
-// error may still have landed) and only comes down when a clear actually succeeds.
+// emulateColorScheme layers a prefers-color-scheme override over the tab's own emulated media (see
+// SetMedia); the empty scheme restores the tab's own media.
 func (b *Biloba) emulateColorScheme(scheme string) error {
+	media := b.media.media
+	if scheme != "" {
+		media.ColorScheme = scheme
+	}
 	timeout := b.waitingTimeout(screenshotCaptureTimeout)
 	ctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
-	if scheme != "" {
-		b.setColorSchemeEmulated(true)
-	}
-	err := b.runEngineIn(ctx, timeout, "emulate the page color scheme", func(runCtx context.Context) error {
-		return engine.EmulateColorSchemeContext(runCtx, scheme)
+	return b.media.apply(media, func(m engine.Media) error {
+		return b.runEngineIn(ctx, timeout, "emulate the page color scheme", func(runCtx context.Context) error {
+			return engine.EmulateMediaContext(runCtx, m)
+		})
 	})
-	if scheme == "" && err == nil {
-		b.setColorSchemeEmulated(false)
-	}
-	return err
-}
-
-func (b *Biloba) setColorSchemeEmulated(emulated bool) {
-	if b.colorSchemeEmulated != nil {
-		*b.colorSchemeEmulated = emulated
-	}
-}
-
-// clearLeakedColorSchemeEmulation is Prepare()'s half of the colour-scheme teardown, called from
-// resetBrowsingState.  emulation.SetEmulatedMedia is a TARGET-level override: it survives Navigate,
-// so the one capture whose deferred clear did not land (an expired capture timeout, a cancelled
-// context) would otherwise leave every later spec in this process rendering in dark mode.  Gated on
-// the flag rather than run unconditionally - Prepare runs before every spec, and in the overwhelming
-// case there is no override and this costs nothing.
-func (b *Biloba) clearLeakedColorSchemeEmulation() {
-	if b.colorSchemeEmulated == nil || !*b.colorSchemeEmulated {
-		return
-	}
-	if err := b.emulateColorScheme(""); err != nil {
-		b.gt.Printf("Failed to clear a leaked emulated prefers-color-scheme during Prepare():\n  %s\n", err.Error())
-	}
 }
 
 // fullPageScreenshot captures the whole document and also reports its width in CSS pixels.  The two

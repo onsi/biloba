@@ -2,6 +2,7 @@ package biloba_test
 
 import (
 	"context"
+	"net/url"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -300,6 +301,41 @@ var _ = Describe("Javascript", func() {
 			Ω(b.WithPolling(10 * time.Millisecond).GetJSValue("window.__biloba_knob_test")).Should(Equal("ok"))
 			Ω(b.WithContext(context.Background()).GetJSValue("window.__biloba_knob_test")).Should(Equal("ok"))
 			Ω(b.Immediate().GetJSValue("window.__biloba_knob_test")).Should(Equal("ok"))
+		})
+	})
+
+	Describe("AddInitScript", func() {
+		Describe("installing and removing", Ordered, func() {
+			It("runs before the page's own scripts, in every document the tab loads from then on", func() {
+				b.Navigate(fixtureServer + "/init_script.html")
+				Eventually("#seed").Should(b.HaveInnerText("undefined"))
+
+				b.AddInitScript(`window.__seed = 42`)
+				Ω(b.Run(`typeof window.__seed`)).Should(Equal("undefined"), "it does not run in the document that is already loaded")
+
+				b.Navigate(fixtureServer + "/init_script.html")
+				Eventually("#seed").Should(b.HaveInnerText("42"))
+				b.Navigate(fixtureServer + "/init_script.html?again")
+				Eventually("#seed").Should(b.HaveInnerText("42"))
+			})
+
+			It("is removed when the spec ends", func() {
+				b.Navigate(fixtureServer + "/init_script.html")
+				Eventually("#seed").Should(b.HaveInnerText("undefined"))
+			})
+		})
+
+		It("runs in the tab's frames too", func() {
+			b.AddInitScript(`window.__seed = 42`)
+			frameURL := crossOriginFixtureServer + "/frame-form.html"
+			b.Navigate(fixtureServer + "/frames.html?child=" + url.QueryEscape(frameURL))
+			frame := b.Frame(b.FrameMatching().WithURL(frameURL).WithDOMElement("#email"))
+			Ω(frame.Run(`window.__seed`)).Should(BeEquivalentTo(42))
+		})
+
+		It("is a one-shot mutation, so it rejects the poll knobs", func() {
+			b.WithTimeout(time.Second).AddInitScript(`window.__seed = 42`)
+			ExpectFailures(ContainSubstring("AddInitScript does not support WithTimeout"))
 		})
 	})
 

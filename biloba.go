@@ -942,14 +942,13 @@ type Biloba struct {
 	screenshotTolerance screenshotTolerance
 	updateScreenshots   bool
 
-	// colorSchemeEmulated records whether this TARGET currently carries an emulated
-	// prefers-color-scheme (see InColorSchemes).  Unlike the freeze stylesheet, which lives in the
-	// page and dies with a navigation, emulation.SetEmulatedMedia is a target-level override that
-	// outlives Navigate - so Prepare() clears it, but only when this flag says there is something to
-	// clear (Prepare runs before every spec and an unconditional CDP round trip there is not free).
-	// It is a pointer so the shallow clone-with-a-flag views (Realistic() and friends) share the
-	// tab's one flag instead of each getting a copy that the tab never sees.
-	colorSchemeEmulated *bool
+	// media is this TARGET's emulated CSS media (see SetMedia and InColorSchemes).  Unlike the freeze
+	// stylesheet, which lives in the page and dies with a navigation, emulation.SetEmulatedMedia is a
+	// target-level override that outlives Navigate - so Prepare() clears it, but only when there is
+	// something to clear (Prepare runs before every spec and an unconditional CDP round trip there is
+	// not free).  It is a pointer so the shallow clone-with-a-flag views (Realistic() and friends) and
+	// the tab's frame handles share the tab's one record instead of each getting a copy.
+	media *mediaEmulation
 
 	// pollTrajectory opts a suite into recording the (elapsed, value) trajectory of polled reads and
 	// attaching the failing read's series on failure (see BilobaConfigPollTrajectory).  On by default.
@@ -1008,7 +1007,7 @@ func newBiloba(ginkgoT GinkgoTInterface) *Biloba {
 		probes:                    &probeRecorder{},
 		occlusions:                &occlusionRecorder{},
 		unreadableResponseBodies:  &unreadableResponseBodyRecorder{},
-		colorSchemeEmulated:       new(bool),
+		media:                     &mediaEmulation{},
 	}
 	return b
 }

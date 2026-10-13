@@ -229,8 +229,8 @@ func ScreenshotSettleScheduleForTest() []time.Duration {
 	return schedule
 }
 
-// EmulateColorSchemeForTest applies (or, with the empty string, clears) a prefers-color-scheme
-// override on this tab, so visual_test.go can simulate the capture whose deferred teardown never
+// EmulateColorSchemeForTest applies a prefers-color-scheme override on this tab (or, with the empty
+// string, restores the tab's own media), so visual_test.go can simulate the capture whose deferred teardown never
 // landed and assert that the next Prepare() cleans it up.
 func (b *Biloba) EmulateColorSchemeForTest(scheme string) error {
 	return b.emulateColorScheme(scheme)

@@ -573,10 +573,10 @@ func (b *Biloba) frameHandle(info engine.FrameInfo) *Biloba {
 	frame.downloadDir = b.downloadDir
 	frame.pollTrajectory = root.pollTrajectory
 	// A frame's diagnostics belong to the page it sits in: its polls and occluded clicks render with its
-	// tab's failure artifacts, and a colour-scheme emulation it applies is its tab's to clear.
+	// tab's failure artifacts, and a colour-scheme emulation it applies is its tab's to restore.
 	frame.probes = b.probes
 	frame.occlusions = b.occlusions
-	frame.colorSchemeEmulated = b.colorSchemeEmulated
+	frame.media = b.media
 	frame.close = cancel
 	frame.frame = &frameScope{owner: b, id: info.ID, loaderID: info.LoaderID, url: info.URL, outOfProcess: outOfProcess}
 

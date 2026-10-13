@@ -102,7 +102,7 @@ Eventually(".figure-frame").Should(b.HaveAttribute("data-block-id", Not(BeEmpty(
 - `b.FrameMatching()` / `b.HaveFrame()` → `FrameQuery` — chain `.WithURL/.WithTitle/.WithDOMElement(selector)`; `Eventually(b).Should(b.HaveFrame()...)` polls it.
 - `b.AllFrames()` → `Frames` snapshot (`Find`/`Filter`); includes frames nested behind a boundary. `frame.Frame(...)` / `frame.AllFrames()` search inside a frame.
 - `frame.IsFrame()`; `frame.Close()` detaches the handle (`Prepare()` discards all of them).
-- On a frame handle, tab-level methods fail the spec: `Navigate`, `Prepare`, `NewTab`, `SetWindowSize`, `SetCookie`/`ClearCookies`, `StubRequest`/`AbortRequest`/`ModifyRequest`/`ModifyResponse`/`HoldResponse`, dialog handlers/`Dialogs`, downloads. Call them on the tab — its stubs cover the frame's requests and its dialog handling covers the frame's dialogs.
+- On a frame handle, tab-level methods fail the spec: `Navigate`, `Prepare`, `NewTab`, `SetWindowSize`, `SetMedia`, `AddInitScript`, `SetCookie`/`ClearCookies`, `StubRequest`/`AbortRequest`/`ModifyRequest`/`ModifyResponse`/`HoldResponse`, dialog handlers/`Dialogs`, downloads. Call them on the tab — its stubs cover the frame's requests and its dialog handling covers the frame's dialogs.
 - A handle belongs to one document: after the iframe is removed/navigated or the tab navigates, calls fail with `frame_detached` — call `b.Frame(...)` again.
 - An **out-of-process** frame (full Chrome runs cross-site frames in their own renderer; chrome-headless-shell doesn't) is driven the same way, except: no screenshots of it (capture the `iframe` element from the tab), the tab's network stubs don't reach its requests, and realistic mode can't see what the embedding page draws over it.
 
@@ -227,6 +227,7 @@ Each produces a genuine `window.getSelection()` range and dispatches `mouseup` (
 
 - `b.Run(script[, &ptr])` → any — a synchronous **expression**; returns the decoded value. A top-level `return` is illegal (errors with a hint pointing at `RunAsync`/IIFE). Pollable: `Eventually(b.Run).WithArguments(expr).Should(matcher)` — it's a `func(string,...any) any`. → `flaky-specs`
 - `b.RunAsync(script[, &ptr])` — the body of an async fn; you `return` the awaited value (use for `await`/`fetch`).
+- `b.AddInitScript(script)` — runs at the start of every document the tab loads afterwards (before the page's scripts, in its frames too); not in the current document, so call it before `Navigate`. Removed by its own `DeferCleanup` at spec end.
 - `b.RunErr(script, ...args)` / `b.RunErrAsync(...)` → `(any, error)` — error-returning siblings; handle the error yourself instead of failing the spec.
 - `b.EvaluateTo(value|matcher)` — assert a JS expression's result. Numbers decode to `float64` — `BeNumerically`, not `Equal(intLiteral)`. **Asymmetry:** the sub-matcher sees the **raw JSON-decoded** value (`[]any` of `map[string]any` — `HaveKeyWithValue`, not `HaveField`); `.Capture(&typed)` hands you the value decoded into your struct.
 - `b.JSFunc(script)` → `.Invoke(...args)` string — JSON-encodes args into an invocable snippet. · `b.JSVar(nameOrExpr)` — reference a JS variable/expression as a `JSFunc` argument (don't quote it).
@@ -264,6 +265,7 @@ Intercepts the **real** response and holds it in flight until you release it (th
 - `b.CaptureScreenshot()` → []byte (PNG) · `b.CaptureImgcatScreenshot()` → string · `b.CaptureScreenshotToFile(path)` → abs path.
 - `b.CaptureScreenshotOf(selector)` · `b.CaptureImgcatScreenshotOf(selector)` · `b.CaptureScreenshotOfToFile(selector, path)` — clipped to the first match (any selector; works below the fold and across `>>>`).
 - `b.SetWindowSize(w, h, ...opt)` · `b.WindowSize()`. `SetWindowSize` registers its own `DeferCleanup` to restore the prior size — don't restore manually, and don't call it from inside another `DeferCleanup` (Ginkgo forbids nesting). Call it bare in `BeforeEach`/`BeforeAll`.
+- `b.SetMedia(biloba.Media{ColorScheme: "dark", ReducedMotion: "reduce", Type: "print"})` — emulated CSS media for the tab (and its frames), held across navigations, replaced wholesale by the next call, undone by its own `DeferCleanup`. `HaveScreenshot` renders in it; `InColorSchemes` overrides only the scheme and restores it.
 
 ## Visual regression → `visual-assertions`
 

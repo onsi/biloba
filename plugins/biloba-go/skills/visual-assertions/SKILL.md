@@ -201,7 +201,7 @@ Eventually(".prose").Should(b.HaveScreenshot("prose", b.ChannelTolerance(8)))  /
 Eventually(b).Should(b.HaveScreenshot("home", b.InColorSchemes("light", "dark")))
 ```
 
-Captures and compares once per scheme with `prefers-color-scheme` emulated, and **all** must match. Baselines are `home-light.png` and `home-dark.png`; a failure names the scheme (`home (prefers-color-scheme: dark)`). Without the option Biloba doesn't emulate `prefers-color-scheme` at all and stores one `home.png`. The emulation is always reset, including on the error path — don't hand-roll a shoot-both-themes helper.
+Captures and compares once per scheme with `prefers-color-scheme` emulated, and **all** must match. Baselines are `home-light.png` and `home-dark.png`; a failure names the scheme (`home (prefers-color-scheme: dark)`). Without the option the capture renders in the tab's own media (`b.SetMedia`, if any) and stores one `home.png`. With it, each scheme overrides only `prefers-color-scheme` and the tab's own media is restored afterwards, including on the error path — don't hand-roll a shoot-both-themes helper.
 
 **The emulation drives the media query — your app has to be listening.** An app with a manual theme override (a `system`/`light`/`dark` toggle that sets `data-theme` on `<html>`) only follows `prefers-color-scheme` while it is in its follow-the-system state. A spec that pinned the theme — directly, through a helper, or through a leftover stored preference — captures the same rendering twice and writes it to both baselines. Both look right, both pass, and the dark assertion cannot fail. Biloba warns when two schemes capture byte-identical images; treat it as a finding. → `flaky-specs` §7
 
