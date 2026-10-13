@@ -35,7 +35,7 @@ func (s *Session) applyVisualColor(ctx context.Context, scheme string) error {
 	if s.visual.emulate == nil {
 		media := s.media
 		media.ColorScheme = scheme
-		return setMedia(ctx, media)
+		return s.applyMedia(ctx, media)
 	}
 	return s.emulateVisualColor(ctx, scheme)
 }
@@ -46,7 +46,7 @@ func (s *Session) clearVisualColor(ctx context.Context) error {
 	}
 	var err error
 	if s.visual.emulate == nil {
-		err = setMedia(ctx, s.visual.previousMedia)
+		err = s.applyMedia(ctx, s.visual.previousMedia)
 	} else {
 		err = s.emulateVisualColor(ctx, s.visual.previousMedia.ColorScheme)
 	}

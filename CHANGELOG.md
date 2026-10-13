@@ -18,6 +18,7 @@
 
 ### Fixes
 
+- TypeScript: `prepare()` only clears the emulation the test set, so a test that emulated nothing no longer pays eight round trips to Chrome for it.
 - **Baseline-affecting:** element captures round the element's box outward to whole CSS pixels, as Playwright does, so a fractional box no longer loses its last row or column (both clients). An element `HaveScreenshot` baseline whose element has a fractional width, height, or position comes out a pixel larger and fails until it is regenerated once with `BILOBA_UPDATE_SCREENSHOTS=1`.
 - Go: `BeNetworkIdle`'s failure message names each request still in flight (method, URL, resource type, and how long it has been in flight), and reports what its last attempt saw. It used to report only a count, and that count was taken when the matcher was built rather than when it failed.
 - Realistic single-element interactions (click, hover, tap, type, and the rest) no longer scroll a target that is already entirely on screen and topmost at its center. They used to center every target, which moved the page under the spec (both clients).

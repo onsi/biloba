@@ -107,8 +107,13 @@ type Session struct {
 	restoreViewport       *ViewportSize
 	visual                visualLifecycle
 	media                 Media
-	highFidelity          bool
-	initScriptIDs         []page.ScriptIdentifier
+	emulated              emulationOverrides
+	// permissionsSet is raised on the context owner when any session in its context sets a
+	// permission, so the owner's Prepare knows to reset them.  Atomic because a spawned tab raises it
+	// under its own lock, not the owner's.
+	permissionsSet atomic.Bool
+	highFidelity   bool
+	initScriptIDs  []page.ScriptIdentifier
 	// crashed is closed by Chrome's Inspector.targetCrashed listener, which runs on chromedp's event
 	// goroutine rather than under mu - hence its own lock.  A channel rather than a bool because an
 	// operation already in flight has to be interrupted, not merely refused next time: CDP does not
