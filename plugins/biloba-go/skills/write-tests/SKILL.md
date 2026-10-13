@@ -1,6 +1,6 @@
 ---
 name: write-tests
-description: Author Biloba specs in a Go Ginkgo/Gomega suite — the dual immediate/matcher API (act now vs. return a matcher you poll with Eventually), capturing a matcher's observed value with .Capture instead of asserting-then-re-reading, first-vs-all naming, the navigate-then-readiness-anchor shape (gate on the DOM, then read GetLocation), selecting elements (CSS targeting stable hooks as the default, semantic role/text/label locators, anchoring a locator scope so a negative assertion isn't vacuous, the >>> piercing combinator, XPath), the interaction vocabulary (click variants, drag, scroll, tap, text selection), realistic mode for occlusion/hover smoke tests, visual regression with b.HaveScreenshot against a committed baseline, hermetic tests via request stubbing/aborting/modifying/holding, the GetJSValue app-state barrier (and when it gates nothing), multi-tab flows, cross-origin iframes (b.Frame frame handles), and seeding state. Use when writing or reviewing Biloba browser tests.
+description: Author Biloba specs in a Go Ginkgo/Gomega suite — the dual immediate/matcher API (act now vs. return a matcher you poll with Eventually), capturing a matcher's observed value with .Capture instead of asserting-then-re-reading, first-vs-all naming, the navigate-then-readiness-anchor shape (gate on the DOM, then read GetLocation), selecting elements (CSS targeting stable hooks as the default, semantic role/text/label locators, anchoring a locator scope so a negative assertion isn't vacuous, the >>> piercing combinator, XPath), the interaction vocabulary (click variants, drag, scroll, tap, text selection), realistic mode for occlusion/hover smoke tests, visual regression with b.HaveScreenshot against a committed baseline, hermetic tests via request stubbing/aborting/modifying/holding, the GetJSValue app-state barrier (and when it gates nothing), multi-tab flows, cross-origin iframes (b.Frame frame handles), time-dependent UI with the page clock (b.InstallClock + PauseAt/RunFor/FastForward), and seeding state. Use when writing or reviewing Biloba browser tests.
 ---
 
 # Writing Biloba specs
@@ -369,4 +369,23 @@ Eventually("#receipt").Should(checkout.HaveInnerText(ContainSubstring("Paid")))
 
 ## When Biloba can't express it
 
-Realism (occlusion, scroll-into-view, real CSS `:hover`) → `b.Realistic()`. Real keystrokes → `b.Type`, not `SetValue`. Cross-origin iframes → `b.Frame(...)` (above). Geolocation, permissions, locale, time zone, offline/latency, and the HTTP cache → `b.SetGeolocation`/`SetPermissions`/`SetLocale`/`SetTimezone`/`SetNetworkState`/`SetOffline`/`SetCacheEnabled` (`api`). Everything else — a CDP feature without a wrapper — drop to chromedp via `b.Context` (`overview`). When you do, wrap it: `b.Context` carries no deadline, and Biloba's backstop covers only its own commands, so `ctx, cancel := context.WithTimeout(b.Context, 30*time.Second)` is what keeps a wedged Chrome from hanging the suite (derive from `b.Context`, not `context.Background()`, so the tab's executor stays in the chain). Propose an issue if a common pattern is missing.
+Realism (occlusion, scroll-into-view, real CSS `:hover`) → `b.Realistic()`. Real keystrokes → `b.Type`, not `SetValue`. Cross-origin iframes → `b.Frame(...)` (above). Geolocation, permissions, locale, time zone, offline/latency, and the HTTP cache → `b.SetGeolocation`/`SetPermissions`/`SetLocale`/`SetTimezone`/`SetNetworkState`/`SetOffline`/`SetCacheEnabled` (`api`). Time-dependent UI (a countdown, "5 minutes ago", a debounce, a session expiry) → the page clock, below. Everything else — a CDP feature without a wrapper — drop to chromedp via `b.Context` (`overview`). When you do, wrap it: `b.Context` carries no deadline, and Biloba's backstop covers only its own commands, so `ctx, cancel := context.WithTimeout(b.Context, 30*time.Second)` is what keeps a wedged Chrome from hanging the suite (derive from `b.Context`, not `context.Background()`, so the tab's executor stays in the chain). Propose an issue if a common pattern is missing.
+
+## Time-dependent UI: the page clock
+
+Don't wait real seconds for a timer, and don't race one. Install the page clock before `Navigate`, pause it, and move time yourself:
+
+```go
+clock := b.InstallClock(time.Date(2024, 2, 2, 8, 0, 0, 0, time.UTC))
+clock.PauseAt(time.Date(2024, 2, 2, 8, 0, 0, 0, time.UTC))
+b.Navigate(appURL + "/checkout")
+Eventually("#hold-timer").Should(b.HaveInnerText("10:00"))
+
+clock.RunFor(9 * time.Minute)               // every timer and frame that falls due, in order
+Ω(b.GetInnerText("#hold-timer")).Should(Equal("1:00"))
+clock.FastForward(time.Hour)                // like waking a laptop: each due timer fires once
+Eventually("#hold-expired").Should(b.BeVisible())
+```
+
+Biloba itself stays on real time, so **polling never moves a paused clock**: `Eventually("#countdown").Should(b.HaveInnerText("9"))` with the clock paused times out (the failure says the clock is paused). Advance first, then assert. `SetFixedTime(t)` pins `Date` while timers run; `SetSystemTime(t)` moves the time without firing timers. CSS animations are not the clock's — those are the screenshot freeze's. Method details → `api`.
+

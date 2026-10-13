@@ -22,7 +22,7 @@ So an agent or CI run needs nothing: `ginkgo -r -p`, then read the outline and t
 ## Read the artifacts in this order
 
 1. **Console errors** — any `console.error`/`console.assert` and any uncaught exception or unhandled rejection (`Uncaught …`) before the failure, replayed under "Console errors logged before this failure" at the **top** of the failure block. On a JS crash (a React error boundary) this is the root cause. Everything here (and in the streamed timeline, `AllPageErrors`, `AllConsoleMessages`, `AllRequests`) comes from this spec: what the previous spec's page raised as `Prepare()` navigated it away is dropped. Locations (`app.js:12:5`) are one-based, so they open at the right line in an editor. Chrome's own warnings and errors (`[network] Failed to load resource: … (url)`, `[intervention] …`) appear in the streamed timeline but not in this replay; read the timeline for a failed load, or `b.AllConsoleMessages()` / `b.AllRequests()` for the full record.
-2. **`⚠` diagnostic notes** — they name the cause outright.
+2. **`⚠` diagnostic notes** — they name the cause outright. "Page clock paused" (or the same line at the end of a poll's timeout: `This tab's page clock is paused at <t>; …`) means the page's timers were stopped by the spec's own `b.InstallClock`/`PauseAt` — advance the clock before asserting (`flaky-specs` §9).
 3. **Poll trajectory** — what the read you failed on did over its whole deadline (absent when the failure had no value read behind it).
 4. **Visual diagnosis** — only on a failed `b.HaveScreenshot`: pixel counts plus the *shape* of the change, in words, before you open any image.
 5. **Screenshot** — `Read` the printed PNG path.

@@ -22,6 +22,7 @@
 - Go: Chrome's own warnings and errors (`[network] Failed to load resource: ...`) print to the `GinkgoWriter` like the page's `console.warn` and `console.error`. They are not replayed with the console errors when a spec fails.
 - TypeScript: `session.pointer()` returns a real pointer for custom gestures, driven one event at a time with `moveTo(x, y)`, `moveToElement(target, {position})`, `down()`, and `up()`, like Go's `b.Pointer()`. Only `moveToElement` polls; `prepare()` releases a pointer left pressed. `session.pointer({type: "pen"})` dispatches pen input, and frame handles work in the frame's viewport.
 - TypeScript: `session.startScreencast({format, quality, maxWidth, maxHeight, everyNthFrame})` records a tab's frames as Chrome draws them, like Go's `b.StartScreencast`; `recording.stop()` returns them sorted by Chrome's frame-swap timestamp, each with its image bytes and metadata. `prepare()` and `close()` discard a recording still running.
+- Go: `b.InstallClock(t0)` installs a page clock: fake `Date`, `performance.now`, timers, animation frames, and idle callbacks for the page's own code, in the tab and its frames, removed when the spec ends. The returned `*Clock` has `PauseAt`, `Resume`, `RunFor`, `FastForward`, `SetFixedTime`, and `SetSystemTime`; `b.Clock()` returns it. A poll that times out while the clock is paused says so. Biloba itself keeps running on real time.
 
 ### Fixes
 

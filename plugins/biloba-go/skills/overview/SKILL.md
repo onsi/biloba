@@ -61,7 +61,7 @@ b.SetGeolocation(biloba.Geolocation{Latitude: 48.8584, Longitude: 2.2945, Accura
 b.SetLocale("fr-FR"); b.SetTimezone("Europe/Paris"); b.SetOffline(true)
 ```
 
-Each is per tab, undone at spec end, and refused on a frame handle (`api`).
+Each is per tab, undone at spec end, and refused on a frame handle (`api`). Time is too: `b.InstallClock(t0)` fakes the page's timers and `Date`, so a spec can `PauseAt`, `RunFor`, or `FastForward` through a countdown or a debounce instead of waiting for it (`write-tests`).
 
 Biloba deliberately does not hide chromedp. Every tab exposes `b.Context` for a CDP feature without a native wrapper:
 

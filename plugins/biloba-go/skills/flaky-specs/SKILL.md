@@ -1,6 +1,6 @@
 ---
 name: flaky-specs
-description: Diagnose and prevent flaky Go/Ginkgo Biloba specs — specs that pass locally but fail in CI, fail intermittently under `-p` or load, or fail somewhere other than the line that is actually wrong. Biloba polls by default, so the headline rule is "don't reach for b.Immediate()". Covers the residual smells — single-shot `b.Run(expr,&x)` reads and gate-then-re-read pairs (fix with .Capture); the non-polling SendKeysToWindowImmediately and `*Immediately` verbs; optimistic-UI and server-reconciliation traps (barrier on app state with b.GetJSValue, force the arrival order with b.HoldResponse + Limit/ReleaseNext); async-settling geometry, layout, and document-order reads; AllowMissing for properties absent on the element type; network handlers accumulating across an Ordered container; vacuous assertions that can never fail (an unresolved locator scope, BeNetworkIdle before the request starts, an empty Current*ForEach under a negation, a visual baseline written without ever being reviewed, a screenshot tolerance widened until nothing can fail, BILOBA_UPDATE_SCREENSHOTS left set in CI); and gating on a DOM anchor instead of the URL. Use when a browser spec is flaky, nondeterministic, order-dependent, load-sensitive, or CI-only, or when reviewing a suite for latent races.
+description: Diagnose and prevent flaky Go/Ginkgo Biloba specs — specs that pass locally but fail in CI, fail intermittently under `-p` or load, or fail somewhere other than the line that is actually wrong. Biloba polls by default, so the headline rule is "don't reach for b.Immediate()". Covers the residual smells — single-shot `b.Run(expr,&x)` reads and gate-then-re-read pairs (fix with .Capture); the non-polling SendKeysToWindowImmediately and `*Immediately` verbs; optimistic-UI and server-reconciliation traps (barrier on app state with b.GetJSValue, force the arrival order with b.HoldResponse + Limit/ReleaseNext); async-settling geometry, layout, and document-order reads; AllowMissing for properties absent on the element type; network handlers accumulating across an Ordered container; vacuous assertions that can never fail (an unresolved locator scope, BeNetworkIdle before the request starts, an empty Current*ForEach under a negation, a visual baseline written without ever being reviewed, a screenshot tolerance widened until nothing can fail, BILOBA_UPDATE_SCREENSHOTS left set in CI); gating on a DOM anchor instead of the URL; and timer-driven UI (debounces, countdowns, expiries) taken off real time with the page clock (b.InstallClock, PauseAt/RunFor/FastForward), including why a poll never advances a paused clock. Use when a browser spec is flaky, nondeterministic, order-dependent, load-sensitive, or CI-only, or when reviewing a suite for latent races.
 ---
 
 # Flaky Biloba specs
@@ -19,6 +19,8 @@ Failure *artifacts* (outlines, screenshots, poll trajectory) → `debug-failures
 | Fails only under `-p` / load | Single-shot `b.Run` read racing an async settle | `Eventually(b.Run).WithArguments(expr)` | [1](#1-reads-you-take-yourself) |
 | Fails at an assertion, not at the interaction before it | `b.Immediate()` acted a frame early | delete the `Immediate()` | [2](#2-actions-that-dont-poll) |
 | Times out *consistently*, not intermittently | Value is stably wrong — product bug, not a short timeout | read the poll trajectory; fix product-side | [4](#4-layout-geometry-and-document-order) |
+| Spec on a countdown, debounce, "x minutes ago", or expiry is slow or timing-sensitive | It waits on the page's real timers | `b.InstallClock` + `PauseAt`, then `RunFor`/`FastForward` | [9](#9-time-dependent-ui) |
+| Poll times out with "This tab's page clock is paused at …" | Polling doesn't advance a paused page clock | `clock.RunFor`/`FastForward`/`Resume` before the assertion | [9](#9-time-dependent-ui) |
 | Getter times out on an element that's plainly there | Property is never *defined* on that element type | `b.AllowMissing("name")` | [5](#5-two-axis-getters) |
 | Green forever, even against a broken page | Vacuous assertion (empty scope / empty slice / t=0 idle) | anchor the subject first | [7](#7-assertions-that-cannot-fail) |
 | Green in test, broken against a real server | Asserted the optimistic DOM, or a Go-side HTTP read | barrier on app state | [3](#3-optimistic-ui--server-reconciliation) |
@@ -329,3 +331,24 @@ Eventually("#dashboard-root").Should(b.Exist())     // the destination actually 
 `b.GetLocation()`/`b.GetTitle()` are polling getters honoring all four knobs, and they treat a transient `Inspected target navigated or closed (-32000)` as a retryable miss. So `Eventually(b.GetLocation)` is safe; it's just still the weaker assertion.
 
 **Fast interactions act in place.** `b.Click`/`b.Tap` do **not** `scrollIntoView` and do **not** move focus. If a scroll position changes around a fast click, the cause is app-side. Scroll-into-view comes only from `b.Realistic()` and from focus-bearing ops (`b.Focus`, `b.SetValue`, `b.Type`) whose `.focus()` scrolls its target. If a spec asserts on scroll position, keep focus-bearing ops off the element under test.
+
+## 9. Time-dependent UI
+
+A spec that waits for a real `setTimeout` (a debounce, a toast that hides after 3s, a countdown, a "5 minutes ago" label refreshed every 30s, a session expiry) is slow when it works and flaky under load when the timer and the poll deadline race. Don't widen the timeout — take the timers away from real time:
+
+```go
+clock := b.InstallClock(t0)   // before Navigate, so every timer the page creates is fake
+clock.PauseAt(t0)
+b.Navigate(appURL)
+b.Click("#save")
+clock.RunFor(300 * time.Millisecond)   // the debounce fires now, deterministically
+Ω(b.GetInnerText("#status")).Should(Equal("saved"))
+```
+
+`RunFor` runs every due timer and animation frame in order with promise callbacks in between, then returns; `FastForward` jumps and fires each due timer once. Two traps:
+
+- **Polling does not move a paused clock.** Biloba runs on real time; the page doesn't. An `Eventually` waiting for a timer-driven change times out, and the failure ends with `This tab's page clock is paused at <t>; timers and animation frames won't run until you call RunFor, FastForward, or Resume.` (for your own `Eventually`, it's the "Page clock paused" report entry). Advance the clock, then assert.
+- **Installed after `Navigate`, the clock misses timers the page already scheduled** — those keep running on real time. Install first.
+
+CSS animations and transitions aren't on the clock (the screenshot freeze handles those); frames in another process (full Chrome's cross-site iframes) run on real time.
+

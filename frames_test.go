@@ -254,6 +254,8 @@ var _ = Describe("Cross-origin iframes", func() {
 			checkout.SetNetworkState(biloba.NetworkState{Offline: true})
 			checkout.SetOffline(true)
 			checkout.SetCacheEnabled(false)
+			checkout.InstallClock(time.Now())
+			checkout.Clock()
 			ExpectFailures(
 				"Navigate acts on the tab, not a frame: call it on the tab that owns this frame",
 				"SetWindowSize acts on the tab, not a frame: call it on the tab that owns this frame",
@@ -274,6 +276,8 @@ var _ = Describe("Cross-origin iframes", func() {
 				"SetNetworkState acts on the tab, not a frame: call it on the tab that owns this frame",
 				"SetOffline acts on the tab, not a frame: call it on the tab that owns this frame",
 				"SetCacheEnabled acts on the tab, not a frame: call it on the tab that owns this frame",
+				"InstallClock acts on the tab, not a frame: call it on the tab that owns this frame",
+				"Clock acts on the tab, not a frame: call it on the tab that owns this frame",
 			)
 			Ω(checkout.NetworkState()).Should(BeZero(), "reading the tab's network state still works")
 			Ω(b.GetTitle()).Should(Equal("Frames Parent"), "the tab must not have navigated")

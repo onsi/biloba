@@ -1071,13 +1071,13 @@ Not every Biloba method polls, so not every method accepts these knobs.  Biloba 
 | Bucket | Examples | `WithTimeout` / `WithContext` | `WithPolling` | `Immediate` |
 |---|---|---|---|---|
 | **Polling** - actions & value-getters | `Click`, `SetValue`, `Type`, `GetProperty`, `GetValue`, `GetInnerText`, `InvokeOn`, `GetLocation`, `GetTitle`, `GetJSValue` | honored | honored | honored |
-| **Waiting commands** - one bounded wait | `Navigate`, the `CaptureScreenshot*` family, `HoldResponse(...).Await()` | honored (overrides the built-in deadline) | error | error |
+| **Waiting commands** - one bounded wait | `Navigate`, the `CaptureScreenshot*` family, `HoldResponse(...).Await()`, `Clock().RunFor` | honored (overrides the built-in deadline) | error | error |
 | **Snapshot / state queries** | `HasElement`, `Count`, every `Current*ForEach`, `GetCookies`, `AllRequests` | error | error | error |
-| **One-shot mutations & raw JS** | `SetWindowSize`, the `*Immediately` family, `Run`, `RunAsync` | error | error | error |
+| **One-shot mutations & raw JS** | `SetWindowSize`, the `*Immediately` family, `Run`, `RunAsync`, `InstallClock` and the other clock methods | error | error | error |
 
 One handle sits across the buckets: [`b.Pointer()`](#driving-the-pointer-directly) accepts every knob and keeps the view it was made from, because its `MoveToElement` polls with them.  Its `MoveTo`, `Down`, and `Up` dispatch immediately, so the knobs have nothing to configure there and are ignored.
 
-The intuition: a method polls (and accepts every knob) when it is *waiting for the DOM to reach a state*.  A **waiting command** like `Navigate` does a single bounded wait for one event, so it keeps a purpose-built default deadline (~30s for navigation and for [awaiting a held response](#holding-a-response-hostage), ~5s for screenshots) that `WithTimeout` can override - but there's no repeated probe for `WithPolling` to tune.  A **snapshot** reads "what's true right now" and so never waits; when you want to wait for a snapshot to change, gate it on a polling matcher first (`Eventually(sel).Should(b.HaveCount(n))`, *then* read).  A **one-shot mutation** (and the raw-JS `Run`/`RunAsync`) just does its thing once.
+The intuition: a method polls (and accepts every knob) when it is *waiting for the DOM to reach a state*.  A **waiting command** like `Navigate` does a single bounded wait for one event, so it keeps a purpose-built default deadline (~30s for navigation and for [awaiting a held response](#holding-a-response-hostage), ~5s for screenshots, 10s for a [page clock's](#controlling-time) `RunFor`) that `WithTimeout` can override - but there's no repeated probe for `WithPolling` to tune.  A **snapshot** reads "what's true right now" and so never waits; when you want to wait for a snapshot to change, gate it on a polling matcher first (`Eventually(sel).Should(b.HaveCount(n))`, *then* read).  A **one-shot mutation** (and the raw-JS `Run`/`RunAsync`) just does its thing once.
 
 ### Capturing Values from Matchers
 
@@ -3836,7 +3836,7 @@ b.SetLocale("fr-FR")
 b.SetTimezone("Europe/Paris")
 ```
 
-`b.SetLocale` sets the default locale of the page's `Intl` APIs and `toLocaleString()`, so dates, numbers, and sorting come out in French.  It does not change `navigator.language` or the `Accept-Language` header.  `b.SetTimezone` takes an IANA time zone name and changes what `Date` and `Intl.DateTimeFormat` report.  Both fail the spec on a name Chrome doesn't recognize, and `""` removes the override.
+`b.SetLocale` sets the default locale of the page's `Intl` APIs and `toLocaleString()`, so dates, numbers, and sorting come out in French.  It does not change `navigator.language` or the `Accept-Language` header.  `b.SetTimezone` takes an IANA time zone name and changes what `Date` and `Intl.DateTimeFormat` report.  Both fail the spec on a name Chrome doesn't recognize, and `""` removes the override.  To set the time itself, see [Controlling Time](#controlling-time).
 
 #### Network conditions and the HTTP cache
 
@@ -3850,6 +3850,61 @@ b.SetOffline(true)
 `Offline` sets `navigator.onLine` to false and makes the tab's requests fail.  `Latency` delays every request, `DownloadThroughput` and `UploadThroughput` cap throughput in bytes per second (0 leaves it alone), and `ConnectionType` is what the page sees in `navigator.connection`.  Each call replaces the previous state.  `b.SetOffline(true)` takes the tab offline and keeps the rest of its state, and `b.SetOffline(false)` brings it back.  `b.NetworkState()` returns the state the tab is emulating.
 
 `b.SetCacheEnabled(false)` turns off the tab's HTTP cache, so every request goes to the network.  [Network interception](#stubbing-and-observing-the-network) turns the cache off too, because a response served from the cache would skip the stubs: once a spec registers a stub, abort, modification, or hold, the cache stays off until the spec ends, whatever `b.SetCacheEnabled` says.
+
+### Controlling Time
+
+Time-dependent UI is slow and flaky to test on real time: a countdown, a "5 minutes ago" label, a debounced save, a session that expires after half an hour.  `b.InstallClock` gives the tab a page clock - fake timers for the page's own code - so a spec can move time forward instead of waiting for it:
+
+```go
+It("expires the session after 30 minutes", func() {
+	clock := b.InstallClock(time.Date(2024, 2, 2, 8, 0, 0, 0, time.UTC))
+	clock.PauseAt(time.Date(2024, 2, 2, 8, 0, 0, 0, time.UTC))
+	b.Navigate(fixtureServer + "/dashboard")
+	Eventually("#welcome").Should(b.Exist())
+
+	clock.RunFor(29 * time.Minute)
+	Ω("#session-warning").ShouldNot(b.Exist())
+	clock.RunFor(time.Minute)
+	Eventually("#session-expired").Should(b.BeVisible())
+})
+```
+
+The page clock replaces the page's `Date` (every constructor form, and `Date.now`; `Date.parse` and `Date.UTC` behave as usual), `performance.now`, `setTimeout`/`clearTimeout`, `setInterval`/`clearInterval`, `requestAnimationFrame`/`cancelAnimationFrame`, and `requestIdleCallback`/`cancelIdleCallback`.  It does not touch CSS animations and transitions or the Web Animations API (`element.animate`), which run on the compositor's timeline - the [screenshot freeze](#freezing-animations-for-a-capture) is the tool for those.  Nothing changes until a spec installs the clock, and it is removed when the spec ends.
+
+Once installed, time flows from the start time at the real rate.  The clock's methods move it:
+
+- `clock.PauseAt(t)` stops time at `t`: no timer or animation frame runs until you call `RunFor`, `FastForward`, or `Resume`.  When `t` is ahead of the clock it gets there the way `FastForward` does.  When `t` is behind it - time flows after `InstallClock`, so pausing at the start time usually goes back a few milliseconds - the clock moves back without firing anything.
+- `clock.RunFor(d)` advances the clock by `d` and runs every timer and animation frame that falls due, in order.  Each runs in its own task, so the page's promise callbacks run in between, as they would on real time.  `RunFor` returns once they have all run.
+- `clock.FastForward(d)` jumps ahead by `d` and fires each timer that fell due along the way once, at the new time - the way a laptop's timers catch up when it wakes from sleep.  An interval that should have fired ten times fires once.
+- `clock.Resume()` lets time flow again at the real rate.
+- `clock.SetFixedTime(t)` pins what `Date` reports to `t`, while timers and animation frames keep running on the clock's own time.
+- `clock.SetSystemTime(t)` moves the clock's time to `t`, forwards or backwards, without firing anything: a pending timer keeps the delay it had left.  It also unpins `SetFixedTime`.
+
+Times have millisecond resolution.  `RunFor`, `FastForward`, and `PauseAt` work the same whether time is flowing or paused, and leave it the way it was (except `PauseAt`, which pauses).
+
+`b.Clock()` returns the installed clock, so a helper doesn't have to be handed it.  It acts through the view it is called on, which is how you give `RunFor` more time: it is a [waiting command](#which-methods-honor-which-knobs) that gives up after 10 seconds of real time by default, and fails with how far it got.  A page that keeps scheduling work (a 1ms interval, a busy animation loop) makes a long `RunFor` slow; `b.WithTimeout(time.Minute).Clock().RunFor(time.Hour)` allows it longer, and `FastForward` skips ahead without running every callback.  `WithContext` aborts it.  `InstallClock` and the other clock methods are one-shot mutations that take no knobs.
+
+#### Installing before or after Navigate
+
+Install the clock before `Navigate` to cover everything the page does.  It also works on a page that has already loaded: the clock replaces the timers in the current document, and `performance.now` carries on from where it was rather than starting again at zero.  But timers the page scheduled before `InstallClock` keep running on real time, and code that kept a reference to the real `Date` or `setTimeout` keeps using it.
+
+Every document the tab loads after `InstallClock` - a navigation, a reload, an iframe - gets the clock in the state it is in, so a page that loads while the clock is paused at noon starts paused at noon.
+
+#### Frames and tabs
+
+The clock covers the tab and its frames: each document has its own fake timers, and every clock method advances all of them, the tab's own document first and then its frames.  Frames in another process - in full Chrome, a cross-site iframe runs in its own process (see [Frames in Another Process](#frames-in-another-process)) - are not covered and keep running on real time.  `InstallClock` applies to a tab, so calling it (or `b.Clock()`) on a frame handle fails the spec.  A tab the page opens (a spawned tab) and a tab from `b.NewTab()` don't share the clock; install one on that tab if it needs it.  A second `InstallClock` on the same tab fails.
+
+#### Biloba keeps running on real time
+
+The clock controls the page's code, not Biloba's.  Biloba's polling, realistic interactions, and screenshot captures run on real time whether the clock is flowing or paused.  That means polling does not move a paused clock: `Eventually("#countdown").Should(b.HaveInnerText("9"))` against a page whose clock is paused will time out, because the page's interval never runs.  Call `RunFor` (or `FastForward`, or `Resume`) first.  When a poll times out while the tab's clock is paused, Biloba adds a line to the failure:
+
+```
+This tab's page clock is paused at 2024-02-02T08:00:00.000Z; timers and animation frames won't run until you call RunFor, FastForward, or Resume.
+```
+
+A `b.Get*` or action that times out carries it in its own failure message; when the timeout came from your own `Eventually`, it appears in the failure report as "Page clock paused".
+
+While time flows, the page's clock advances in steps of up to a frame (about 16ms), so code that spins in a loop waiting for `Date.now()` to change does not see it change.  An exception thrown by a callback the clock runs is reported as an uncaught page error, as it would be on real time.
 
 ### Capturing Screenshots
 
@@ -3904,7 +3959,7 @@ b.CaptureScreenshotToFile("home.png", b.Frozen())
 b.CaptureScreenshotOf("#hero", b.Frozen())
 ```
 
-Animations on a scroll or view timeline (`animation-timeline: scroll()`) keep running, since they depend only on the scroll position.  Animations started from JavaScript (`element.animate`, `requestAnimationFrame` loops) are not touched.
+Animations on a scroll or view timeline (`animation-timeline: scroll()`) keep running, since they depend only on the scroll position.  Animations started from JavaScript (`element.animate`, `requestAnimationFrame` loops) are not touched; pausing the [page clock](#controlling-time) stops the `requestAnimationFrame` loops and timers.
 
 To hide only the blinking text caret and leave animations running, pass `b.HideCaret()` instead.
 
@@ -4270,7 +4325,7 @@ A relative timestamp is the case that kills a naive baseline on the first day: "
 
 That stylesheet goes into **every open shadow root** as well as into the document, and is removed from all of them afterwards.  A `*` rule in a document stylesheet doesn't cross a shadow boundary, so a web component would otherwise keep animating — and keep blinking its caret — right through the capture.  A **closed** shadow root can't be reached from script at all, so a component that uses one is left alone; if a capture of such a component won't settle, that's a likely cause.
 
-**A page that never stops changing — only partly handled.**  The settle rule that update mode runs (three consecutive equal captures, at deliberately unequal intervals) defeats any page animating on a fixed period.  It cannot certify a page that has only two or three distinct renderings: something alternating between two frames can come out the same three times in a row by chance, and no sampling schedule fixes that.  The freeze above already removes CSS animations, transitions, and the caret, so what's left in practice is a hand-rolled JavaScript pulse — a `setInterval` swapping a class, a canvas redrawing itself.  The backstop is the never-settled warning plus the fact that the next normal run fails; when either shows up, mask the region rather than re-running the update.
+**A page that never stops changing — only partly handled.**  The settle rule that update mode runs (three consecutive equal captures, at deliberately unequal intervals) defeats any page animating on a fixed period.  It cannot certify a page that has only two or three distinct renderings: something alternating between two frames can come out the same three times in a row by chance, and no sampling schedule fixes that.  The freeze above already removes CSS animations, transitions, and the caret, so what's left in practice is a hand-rolled JavaScript pulse — a `setInterval` swapping a class, a canvas redrawing itself.  Pausing the [page clock](#controlling-time) stops those at the source.  The backstop is the never-settled warning plus the fact that the next normal run fails; when either shows up, mask the region rather than re-running the update.
 
 **A late one-shot change — mostly handled, and the exception is worth knowing.**  Web fonts are the common case, and Biloba waits for `document.fonts.ready` before every capture, on both paths.  What the settle rule *cannot* see is a one-shot change that has not started yet from some other source — a lazy image decode, a late `ResizeObserver`: three captures 100ms and 140ms apart all agree because nothing has happened, the baseline is written, and the change lands at 400ms.  This is the one place where the two paths have genuinely different guarantees: **the poll protects the comparison, not the write.**  An assertion re-captures on every attempt and rides a late change out; a baseline write passes on the first settled capture it takes and has no second chance.  If a subject depends on something that lands late and isn't a font, gate the update on it yourself before generating the baseline.
 

@@ -883,6 +883,10 @@ type tabState struct {
 	// screencast is the recording StartScreencast has running on this tab, nil when none is.
 	screencast *ScreencastRecording
 
+	// clock is the page clock InstallClock installed on this tab, nil when none is.  Prepare reads it
+	// before the reset to remove a clock whose spec-end cleanup did not land.
+	clock *tabClock
+
 	requests []*Request
 	// requestsByID points at the latest record for each request ID (a redirect reuses the ID for its
 	// next hop), so response and failure events can fill in that record's Status and Failure.
@@ -1099,7 +1103,7 @@ func (b *Biloba) Prepare() {
 	// Reset through the shared pointer, not by replacing it: every view of this tab holds the same
 	// *tabState, and swapping in a new one would leave the views pointing at the old.  bilobaIsInstalled
 	// is carried over deliberately - it tracks the page, and Prepare does not navigate.
-	installed, emulation, permissions := b.state.bilobaIsInstalled, b.state.emulation, b.state.permissions
+	installed, emulation, permissions, clock := b.state.bilobaIsInstalled, b.state.emulation, b.state.permissions, b.state.clock
 	*b.state = *newTabState()
 	b.state.bilobaIsInstalled = installed
 	// carried over so resetBrowsingState can clear whatever emulation the previous spec leaked
@@ -1110,6 +1114,9 @@ func (b *Biloba) Prepare() {
 	// previous spec is a real Chrome Fetch pause, and disabling Fetch underneath one would wedge
 	// the tab.  Force-release before we tear interception down.
 	releaseHeldResponses(discardedResponseHandlers)
+
+	// belt and braces with the DeferCleanup InstallClock registers
+	b.removeLeakedClock(clock)
 
 	// disable request interception if a previous spec stubbed requests, so the catch-all
 	// pause doesn't carry into specs that don't stub - and restore the HTTP cache that

@@ -309,3 +309,6 @@ func (rec *ScreencastRecording) FramesSoFarForTest() []ScreencastFrame {
 	}
 	return frames
 }
+
+// PausedClockReportForTest is the paused-clock entry a failure report would add for this tab now.
+func (b *Biloba) PausedClockReportForTest() string { return b.pausedClockReport() }

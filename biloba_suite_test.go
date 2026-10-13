@@ -109,6 +109,10 @@ type bilobaT struct {
 	ginkgoT  biloba.GinkgoTInterface
 	buffer   *gbytes.Buffer
 	failures []string
+	// failed makes Failed() report true, for a spec that checks what Biloba does on a failed spec
+	// without failing; reportEntries records the names of the report entries Biloba adds.
+	failed        bool
+	reportEntries []string
 }
 
 func newBilobaT(ginkgoT biloba.GinkgoTInterface) *bilobaT {
@@ -121,6 +125,8 @@ func newBilobaT(ginkgoT biloba.GinkgoTInterface) *bilobaT {
 func (b *bilobaT) reset() {
 	Ω(b.buffer.Clear()).Should(Succeed())
 	b.failures = []string{}
+	b.failed = false
+	b.reportEntries = nil
 }
 
 func (b *bilobaT) Name() string { return b.ginkgoT.Name() }
@@ -134,7 +140,7 @@ func (b *bilobaT) Fatalf(format string, args ...interface{}) {
 	b.failures = append(b.failures, fmt.Sprintf(format, args...))
 }
 func (b *bilobaT) TempDir() string { return b.ginkgoT.TempDir() }
-func (b *bilobaT) Failed() bool    { return b.ginkgoT.Failed() }
+func (b *bilobaT) Failed() bool    { return b.failed || b.ginkgoT.Failed() }
 
 func (b *bilobaT) GinkgoRecover()           { b.ginkgoT.GinkgoRecover() }
 func (b *bilobaT) DeferCleanup(args ...any) { b.ginkgoT.DeferCleanup(args...) }
@@ -160,6 +166,7 @@ func (b *bilobaT) Fiw(indentation uint, maxWidth uint, format string, args ...an
 	return ginkgoFormatter.Fiw(indentation, maxWidth, format, args...)
 }
 func (b *bilobaT) AddReportEntryVisibilityFailureOrVerbose(name string, args ...any) {
+	b.reportEntries = append(b.reportEntries, name)
 	b.ginkgoT.AddReportEntryVisibilityFailureOrVerbose(name, args...)
 }
 func (b *bilobaT) ParallelProcess() int {
