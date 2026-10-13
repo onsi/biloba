@@ -199,6 +199,15 @@ var _ = Describe("Cross-origin iframes", func() {
 			Ω(rgb(img, 2, img.Bounds().Dy()-3)).Should(Equal([]uint32{0, 170, 0}), "the frame's background, not the embedding page's")
 		})
 
+		It("captures a region of the frame's viewport with Clip", func() {
+			img := decode(checkout.CaptureScreenshot(checkout.Clip(0, 200, 50, 40)))
+			Ω(img.Bounds().Dx()).Should(Equal(50))
+			Ω(img.Bounds().Dy()).Should(Equal(40))
+			Ω(rgb(img, 2, 37)).Should(Equal([]uint32{0, 170, 0}), "the frame's background, not the embedding page's")
+			checkout.CaptureScreenshot(checkout.Clip(0, 0, 400, 10))
+			ExpectFailures(ContainSubstring("reaches outside the"))
+		})
+
 		It("captures an element inside the frame at the frame's position in the tab", func() {
 			img := decode(checkout.CaptureScreenshotOf("#pay"))
 			Ω(img.Bounds().Dx()).Should(BeNumerically("~", 120, 1))

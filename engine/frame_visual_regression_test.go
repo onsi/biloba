@@ -48,7 +48,9 @@ var _ = Describe("frame visual regressions", func() {
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(shot.Width).To(Equal(60))
-		Expect(shot.Height).To(Equal(45))
+		// The 0.75 scale puts the 45px-tall subject at y=1002.5 in the tab, so it touches 46 rows and the
+		// capture rounds out to all of them.
+		Expect(shot.Height).To(Equal(46))
 		Expect(pixelAt(shot.PNG, 8, 8)).To(Equal(color.NRGBA{R: 128, G: 128, B: 128, A: 255}))
 		Expect(pixelAt(shot.PNG, 30, 22)).To(Equal(color.NRGBA{G: 255, A: 255}))
 	})

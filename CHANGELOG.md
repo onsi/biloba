@@ -6,6 +6,8 @@
 - Go: `b.SetUserAgent(ua)` overrides `navigator.userAgent` and the `User-Agent` header for a tab until the spec ends.
 - Go: `SetWindowSize` takes Biloba device options, `b.DeviceScaleFactor(f)`, `b.Mobile()`, `b.TouchScreen()`, and `b.Landscape()`, so emulating a device no longer needs chromedp.
 - Go: screenshot captures take `b.Frozen()`, which applies the `HaveScreenshot` freeze (web fonts loaded, CSS animations and transitions off, caret hidden) for that capture: `b.CaptureScreenshotToFile(path, b.Frozen())`.
+- Go: `b.Viewport()` and `b.Clip(x, y, w, h)` capture what is on screen, or a region of it, without resizing the viewport the way a full-page capture does; `b.HideCaret()` hides only the text caret for a capture.
+- Go: `AllConsoleMessages` includes the messages Chrome generates itself (failed resource loads, interventions, violations, deprecations), marked with a `Source`.
 - Go: `b.AddInitScript(script)` runs JavaScript at the start of every document the tab loads afterwards, and is removed when the spec ends.
 - Go: `b.Pointer()` returns a real pointer for custom gestures, driven one event at a time with `MoveTo(x, y)`, `MoveToElement(sel, b.At(...))`, `Down()`, and `Up()`. Each call dispatches at once with no scrolling or stability wait, it works on frame handles, and `b.Pointer(b.Pen())` dispatches pen input.
 - TypeScript: `session.setUserAgent(ua)` / `clearUserAgent()` override `navigator.userAgent` and the `User-Agent` header; `prepare()` clears the override.
@@ -16,6 +18,8 @@
 
 ### Fixes
 
+- **Baseline-affecting:** element captures round the element's box outward to whole CSS pixels, as Playwright does, so a fractional box no longer loses its last row or column (both clients). An element `HaveScreenshot` baseline whose element has a fractional width, height, or position comes out a pixel larger and fails until it is regenerated once with `BILOBA_UPDATE_SCREENSHOTS=1`.
+- Realistic single-element interactions (click, hover, tap, type, and the rest) no longer scroll a target that is already entirely on screen and topmost at its center. They used to center every target, which moved the page under the spec (both clients).
 - The visual-assertion freeze no longer turns off CSS animations on a scroll or view timeline, which rendered a scrolled page as if it were at the top (both clients).
 - Go: the cleanup `SetWindowSize` registers restores the tab's original screen orientation instead of forcing portrait.
 

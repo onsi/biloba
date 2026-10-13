@@ -40,7 +40,7 @@ Selection is track-agnostic (CSS, `>>>`, locators, XPath all work through either
 
 | Interaction | Fast (`b`) | Realistic (`b.Realistic()`) |
 |---|---|---|
-| `Click` | `el.click()`, no scroll/occlusion test | scroll to center, wait for stability, verify enabled + **topmost** (no click-through), real mouse press/release. Coords inside same-origin `>>>` iframes are translated |
+| `Click` | `el.click()`, no scroll/occlusion test | scroll to center (skipped when already fully on screen and topmost), wait for stability, verify enabled + **topmost** (no click-through), real mouse press/release. Coords inside same-origin `>>>` iframes are translated |
 | `DblClick`/`RightClick`/`MiddleClick` | synthetic `dblclick`/`contextmenu`/`auxclick` | scroll + stability + occlusion + real button input (native context menu fires) |
 | `ClickEachImmediately` | clicks all visible+enabled matches | real input, scrolling and re-measuring each in turn; skips hidden/disabled/off-screen/obscured |
 | `Hover` | JS pointer/mouse events; **no** CSS `:hover` | real pointer → CSS `:hover` activates |

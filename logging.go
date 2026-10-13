@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	cdplog "github.com/chromedp/cdproto/log"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/onsi/biloba/engine"
 )
@@ -126,12 +127,15 @@ func newStack(frames []engine.ConsoleStackFrame) []StackFrame {
 }
 
 /*
-ConsoleMessage is one call the page made to the console API.  Type is the console method ("log", "info", "warning", "error", "debug", "assert", ...).  Text joins the previews of the call's arguments with a space; the TypeScript client renders it the same way.
+ConsoleMessage is one message in the page's console.  Most are calls the page made to the console API: Type is the console method ("log", "info", "warning", "error", "debug", "assert", ...), Source is empty, and Text joins the previews of the call's arguments with a space (the TypeScript client renders it the same way).
+
+The rest are messages Chrome generated itself and shows in DevTools' console alongside them - an intervention, a performance violation, a resource that failed to load, a deprecation.  Their Source names the origin ("intervention", "violation", "network", "deprecation", "rendering", ...) and Type is the level ("debug", "info", "warning", "error").  They are recorded on the tab, not on a frame handle, and are not streamed to the GinkgoWriter.
 
 Read https://onsi.github.io/biloba/#console-messages-and-page-errors to learn more about console messages and page errors
 */
 type ConsoleMessage struct {
 	Type      string
+	Source    string
 	Text      string
 	Timestamp time.Time
 	Stack     []StackFrame
@@ -205,6 +209,19 @@ func (b *Biloba) recordConsoleMessage(ev *runtime.EventConsoleAPICalled) {
 	defer b.lock.Unlock()
 	b.state.consoleMessages = appendBounded(b.state.consoleMessages, ConsoleMessage{
 		Type: message.Type, Text: message.Text, Timestamp: message.Timestamp, Stack: newStack(message.Stack),
+	})
+}
+
+// recordLogEntry adds a message Chrome generated itself (Log.entryAdded) to this tab's console history.
+func (b *Biloba) recordLogEntry(ev *cdplog.EventEntryAdded) {
+	if ev.Entry == nil {
+		return
+	}
+	message := engine.NewLogEntryMessage(ev.Entry)
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	b.state.consoleMessages = appendBounded(b.state.consoleMessages, ConsoleMessage{
+		Type: message.Type, Source: message.Source, Text: message.Text, Timestamp: message.Timestamp, Stack: newStack(message.Stack),
 	})
 }
 

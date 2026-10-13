@@ -609,7 +609,7 @@ func (b *Biloba) captureForComparison(selector any, cfg screenshotConfig, scheme
 	} else {
 		var clip *page.Viewport
 		var notes captureNotes
-		img, clip, notes, err = b.elementScreenshot(selector)
+		img, clip, notes, err = b.elementScreenshot(selector, false)
 		clipped := notes.clipped
 		if clip != nil {
 			originX, originY, cssWidth = clip.X, clip.Y, clip.Width

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en-US">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Viewport Capture Testpage</title>
+
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            background-color: #ffffff;
+        }
+
+        /* A tall document whose bands are a known colour at a known height, so a capture reveals
+           which part of the document it shows. */
+        .band {
+            height: 200px;
+        }
+
+        #red { background-color: #ff0000; }
+        #green { background-color: #00ff00; }
+        #blue { background-color: #0000ff; }
+        #filler { height: 2000px; background-color: #888888; }
+    </style>
+</head>
+
+<body>
+    <div class="band" id="red"></div>
+    <div class="band" id="green"></div>
+    <div class="band" id="blue"></div>
+    <div id="filler"></div>
+    <script>
+        // Every resize the page sees, so a spec can tell whether a capture laid the page out again.
+        window.resizes = 0
+        window.addEventListener("resize", () => window.resizes++)
+    </script>
+</body>
+
+</html>

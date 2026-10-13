@@ -13,10 +13,14 @@ import (
 )
 
 var _ = Describe("Console messages and page errors", func() {
+	// consoleSummary is the page's own console calls; Chrome's messages (a non-empty Source) have specs
+	// of their own.
 	consoleSummary := func() []string {
 		out := []string{}
 		for _, message := range b.AllConsoleMessages() {
-			out = append(out, message.Type+": "+message.Text)
+			if message.Source == "" {
+				out = append(out, message.Type+": "+message.Text)
+			}
 		}
 		return out
 	}
@@ -45,6 +49,16 @@ var _ = Describe("Console messages and page errors", func() {
 			b.Run(`console.debug("a", 1, true, null, [1, 2], {x: 1})`)
 			Eventually(consoleSummary).Should(ContainElement(`debug: a 1 true <nil> Array(2) Object`))
 			Ω(gt.buffer).Should(gbytes.Say(`"hello" - 3`), "the console still streams to the GinkgoWriter")
+		})
+
+		It("records the messages Chrome generates itself, naming their source", func() {
+			b.Run(`fetch("/status/404").then(r => r.text())`)
+			Eventually(b.AllConsoleMessages).Should(ContainElement(SatisfyAll(
+				HaveField("Source", "network"),
+				HaveField("Type", "error"),
+				HaveField("Text", ContainSubstring("404")),
+			)))
+			Ω(b.AllConsoleMessages()[0].Source).Should(BeEmpty(), "the page's own console calls have no source")
 		})
 
 		It("records uncaught exceptions and unhandled promise rejections", func() {
@@ -128,7 +142,8 @@ var _ = Describe("Console messages and page errors", func() {
 			}
 		}
 		for _, message := range b.AllConsoleMessages() {
-			if message.Type == "error" || message.Type == "warning" {
+			// Chrome's own "Failed to load resource" messages would repeat the request outcomes above
+			if message.Source == "" && (message.Type == "error" || message.Type == "warning") {
 				report = append(report, message.Type+": "+message.Text)
 			}
 		}

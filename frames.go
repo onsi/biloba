@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/chromedp/cdproto/cdp"
+	cdplog "github.com/chromedp/cdproto/log"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
@@ -523,6 +524,8 @@ func (b *Biloba) frameTargetContext(id target.ID) (context.Context, error) {
 			owner.handleEventConsoleAPICalled(ev)
 		case *runtime.EventExceptionThrown:
 			owner.handleEventExceptionThrown(ev)
+		case *cdplog.EventEntryAdded:
+			owner.recordLogEntry(ev)
 		}
 	})
 	return ctx, nil

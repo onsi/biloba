@@ -181,7 +181,7 @@ func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, opt
 		if translateErr != nil {
 			return shot, translateErr
 		}
-		clip := &page.Viewport{X: x, Y: y, Width: width, Height: height, Scale: 1}
+		clip := EnclosingClip(&page.Viewport{X: x, Y: y, Width: width, Height: height, Scale: 1})
 		originX, originY, cssWidth = clip.X, clip.Y, clip.Width
 		inViewport, _ := box["inViewport"].(bool)
 		pngBytes, err = CaptureClipContext(ctx, clip, !inViewport)

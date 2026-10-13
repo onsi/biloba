@@ -737,6 +737,27 @@ if (!window["_biloba"]) {
         }
         return rRes(true)
     }
+    // hideCaret/showCaret back the HideCaret capture option: the caret half of the freeze on its own, for
+    // a capture that should keep its animations.  Same roots, same idempotence.
+    let caretCSS = "*, *::before, *::after { caret-color: transparent !important; }"
+    b.hideCaret = () => {
+        for (let root of freezeRoots()) {
+            if (root.getElementById("_biloba-caret")) continue
+            let s = document.createElement("style")
+            s.id = "_biloba-caret"
+            s.textContent = caretCSS
+            let host = (root === document) ? document.head : root
+            host.appendChild(s)
+        }
+        return rRes(true)
+    }
+    b.showCaret = () => {
+        for (let root of freezeRoots()) {
+            let s = root.getElementById("_biloba-caret")
+            if (s) s.remove()
+        }
+        return rRes(true)
+    }
     // whenStable resolves once EVERY node's box has stopped moving - two consecutive animation frames
     // with the same rects, bounded so a perpetually-animating element can't hang.  Realistic input has
     // to land where the element will still be when the event arrives, so every scroll below waits here
@@ -753,6 +774,15 @@ if (!window["_biloba"]) {
     })
     // centerIn scrolls an element to the middle of every scrollable ancestor and of the viewport.
     let centerIn = (n) => n.scrollIntoView({ block: "center", inline: "center" })
+    // bringIntoView is centerIn for a single realistic interaction, but it leaves alone an element that
+    // is already entirely on screen (in the viewport, cut off by no ancestor) and topmost at its center:
+    // scrolling that one would only move the page under the user for nothing, and would re-frame a
+    // spec's later screenshots.  Anything less than that - partly off screen, clipped by a pane, under
+    // a sticky header - is centered, which is what clears those.
+    let bringIntoView = (n) => {
+        if (fullyInViewport(n) && !clipperOf(n) && measurePoint(n).hittable) return
+        centerIn(n)
+    }
     // scrollableAncestors lists the INNER ancestors that can actually scroll n, nearest first.  Only
     // ones with somewhere to scroll count: an overflow:auto box whose content fits cannot move
     // anything, and treating it as the scroller a pair shares would frame them by scrolling nothing.
@@ -786,13 +816,14 @@ if (!window["_biloba"]) {
         }
     }
     // scrollToStablePoint backs single-element realistic interactions: it scrolls the element to the
-    // viewport center, waits for its box to stop moving, then returns measurePoint.  Async (returns a
+    // viewport center unless it is already on screen and clickable (bringIntoView), waits for its box to
+    // stop moving, then returns measurePoint.  Async (returns a
     // Promise); invoked with awaitPromise on the Go side.
     b.scrollToStablePoint = (s) => {
         let n = sel(s)
         if (!n) return Promise.resolve(notFound(s))
         if (!b.isVisible(n).success) return Promise.resolve(rErr("DOM element is not visible" + ann(s)))
-        centerIn(n)
+        bringIntoView(n)
         return whenStable([n]).then(() => rRes(measurePoint(n)))
     }
     // scrollToStableDragPoints measures BOTH endpoints of a realistic drag at a single scroll position.
@@ -853,15 +884,15 @@ if (!window["_biloba"]) {
         } catch (e) { translatable = false } // cross-origin frame: cannot translate
         return { left: left, top: top, translatable: translatable, enabled: !n.disabled, innerWidth: window.innerWidth, innerHeight: window.innerHeight }
     }
-    // scrollToStableCorner backs ClickAt in realistic mode: it scrolls the element to the viewport
-    // center, waits for its box to stop moving (same stability wait as scrollToStablePoint), then
+    // scrollToStableCorner backs ClickAt in realistic mode: it brings the element into view the way
+    // scrollToStablePoint does, waits for its box to stop moving (same stability wait as scrollToStablePoint), then
     // returns its top-left corner in top-level viewport coordinates.  One element, one scroll, so it
     // has nothing of scrollToStableDragPoints' two-endpoint problem.  Async (returns a Promise).
     b.scrollToStableCorner = (s) => {
         let n = sel(s)
         if (!n) return Promise.resolve(notFound(s))
         if (!b.isVisible(n).success) return Promise.resolve(rErr("DOM element is not visible" + ann(s)))
-        centerIn(n)
+        bringIntoView(n)
         return whenStable([n]).then(() => rRes(measureCorner(n)))
     }
     // scrollToAndPointAt backs realistic ClickEach: scroll+measure the index-th match (no stability
@@ -869,7 +900,7 @@ if (!window["_biloba"]) {
     b.scrollToAndPointAt = each((ns, i) => {
         let n = ns[i]
         if (!n || !b.isVisible(n).success) return rRes(null)
-        centerIn(n)
+        bringIntoView(n)
         return rRes(measurePoint(n))
     })
     // pointerTarget backs Pointer.MoveToElement: the element's center, or (o.ox, o.oy) from its top-left

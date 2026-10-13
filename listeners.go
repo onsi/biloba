@@ -7,6 +7,7 @@ import (
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/inspector"
+	cdplog "github.com/chromedp/cdproto/log"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
@@ -98,6 +99,8 @@ func (b *Biloba) setUpListeners() {
 			b.handleEventConsoleAPICalled(ev)
 		case *runtime.EventExceptionThrown:
 			b.handleEventExceptionThrown(ev)
+		case *cdplog.EventEntryAdded:
+			b.recordLogEntry(ev)
 		case *page.EventFrameNavigated:
 			b.handleEventFrameNavigated(ev)
 		case *browser.EventDownloadWillBegin:

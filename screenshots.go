@@ -120,14 +120,18 @@ func inlineImagesSupported() bool {
 
 /*
 CaptureOption configures a screenshot capture ([Biloba.CaptureScreenshot], [Biloba.CaptureScreenshotOf],
-and their imgcat and to-file variants).  The only option is [Biloba.Frozen].
+and their imgcat and to-file variants): [Biloba.Frozen], [Biloba.HideCaret], [Biloba.Viewport], and
+[Biloba.Clip].
 
 Read https://onsi.github.io/biloba/#capturing-screenshots for details.
 */
 type CaptureOption func(*captureConfig)
 
 type captureConfig struct {
-	frozen bool
+	frozen    bool
+	hideCaret bool
+	viewport  bool
+	clip      *page.Viewport
 }
 
 func newCaptureConfig(opts []CaptureOption) captureConfig {
@@ -153,6 +157,50 @@ func (b *Biloba) Frozen() CaptureOption {
 	return func(c *captureConfig) { c.frozen = true }
 }
 
+/*
+HideCaret() is a [CaptureOption] that hides the blinking text caret for the duration of the capture and
+leaves everything else, animations included, running.  [Biloba.Frozen] hides it too.
+
+Read https://onsi.github.io/biloba/#capturing-screenshots for details.
+*/
+func (b *Biloba) HideCaret() CaptureOption {
+	return func(c *captureConfig) { c.hideCaret = true }
+}
+
+/*
+Viewport() is a [CaptureOption] that captures exactly what is on screen.  Without it, [Biloba.CaptureScreenshot]
+captures the whole document, and when the document is bigger than the viewport Chrome lays the page out
+again at the full document size to do that - which a responsive page can notice.  With it, the viewport
+is never resized:
+
+	b.CaptureScreenshotToFile("above-the-fold.png", b.Viewport())
+
+On [Biloba.CaptureScreenshotOf], Viewport() refuses an element that is not entirely in view instead of
+expanding the viewport to reach it.
+
+Read https://onsi.github.io/biloba/#capturing-screenshots for details.
+*/
+func (b *Biloba) Viewport() CaptureOption {
+	return func(c *captureConfig) { c.viewport = true }
+}
+
+/*
+Clip(x, y, width, height) is a [CaptureOption] for [Biloba.CaptureScreenshot] that captures one region of
+the viewport, measured in CSS pixels from the viewport's top-left corner (the frame's viewport, on a frame
+handle).  Like [Biloba.Viewport] it never resizes the viewport; a region that reaches outside it fails the
+spec.
+
+	b.CaptureScreenshot(b.Clip(0, 0, 400, 300))
+
+Read https://onsi.github.io/biloba/#capturing-screenshots for details.
+*/
+func (b *Biloba) Clip(x, y, width, height float64) CaptureOption {
+	return func(c *captureConfig) {
+		c.viewport = true
+		c.clip = &page.Viewport{X: x, Y: y, Width: width, Height: height, Scale: 1}
+	}
+}
+
 // frozenRendering freezes rendering, returning the function that undoes the freeze.  The freeze lives in
 // the page, so the caller must defer the undo: a freeze stylesheet left behind on an error path would
 // stop every later animation the spec relies on.  With fonts it first waits for web fonts to load, which
@@ -169,8 +217,23 @@ func (b *Biloba) frozenRendering(fonts bool) (func(), error) {
 	return func() { b.runBilobaFunc("unfreezeRendering") }, nil
 }
 
+// prepareCapture applies the page-side capture options - the freeze, the hidden caret - and returns the
+// function that undoes them, which the caller must defer.
+func (b *Biloba) prepareCapture(cfg captureConfig) (func(), error) {
+	if cfg.frozen {
+		return b.frozenRendering(true)
+	}
+	if cfg.hideCaret {
+		if r := b.runBilobaFunc("hideCaret"); r.Error() != nil {
+			return func() {}, r.Error()
+		}
+		return func() { b.runBilobaFunc("showCaret") }, nil
+	}
+	return func() {}, nil
+}
+
 /*
-CaptureScreenshot() returns a full screenshot of the current tab as a []byte array (you can decode it with the image package).  Pass [Biloba.Frozen] to freeze animations for the capture.
+CaptureScreenshot() returns a full screenshot of the current tab as a []byte array (you can decode it with the image package).  Pass [Biloba.Viewport] or [Biloba.Clip] to capture only what is on screen, and [Biloba.Frozen] or [Biloba.HideCaret] to hold the page still for the capture.
 
 Like all the screenshot captures it is a waiting command bounded by its own ~5s default deadline; override that with [Biloba.WithTimeout] or abort it with [Biloba.WithContext] (WithPolling and Immediate are not supported).
 
@@ -187,22 +250,42 @@ func (b *Biloba) CaptureScreenshot(opts ...CaptureOption) []byte {
 // WithTimeout/WithContext knobs a waiting command is allowed.
 func (b *Biloba) captureScreenshot(opts ...CaptureOption) []byte {
 	b.gt.Helper()
-	if newCaptureConfig(opts).frozen {
-		unfreeze, err := b.frozenRendering(true)
-		defer unfreeze()
-		if err != nil {
-			b.gt.Fatalf("Failed to freeze rendering for a screenshot:\n%s", err.Error())
-			return nil
-		}
+	cfg := newCaptureConfig(opts)
+	undo, err := b.prepareCapture(cfg)
+	defer undo()
+	if err != nil {
+		b.gt.Fatalf("Failed to prepare the page for a screenshot:\n%s", err.Error())
+		return nil
 	}
 	timeout := b.waitingTimeout(screenshotCaptureTimeout)
 	ctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
 	var img []byte
-	err := b.runEngineIn(ctx, timeout, "capture a screenshot", func(runCtx context.Context) error {
+	err = b.runEngineIn(ctx, timeout, "capture a screenshot", func(runCtx context.Context) error {
 		var err error
 		if b.frame != nil {
-			img, _, err = b.captureFrameViewport(runCtx)
+			if cfg.clip == nil {
+				img, _, err = b.captureFrameViewport(runCtx)
+				return err
+			}
+			// A frame's capture is already its viewport, clipped out of the tab; a region is a smaller clip
+			// at an offset into it.
+			if err := b.refuseOutOfProcessCapture(); err != nil {
+				return err
+			}
+			frameViewport, err := engine.FrameViewportClipContext(runCtx, b.frame.id)
+			if err != nil {
+				return err
+			}
+			clip, err := engine.ViewportRegionClip(cfg.clip, frameViewport.X, frameViewport.Y, frameViewport.Width, frameViewport.Height)
+			if err != nil {
+				return err
+			}
+			img, err = engine.CaptureClipContext(runCtx, clip, false)
+			return err
+		}
+		if cfg.viewport {
+			img, err = engine.CaptureViewportContext(runCtx, cfg.clip)
 			return err
 		}
 		img, err = engine.CapturePageContext(runCtx, nil)
@@ -283,15 +366,18 @@ func (b *Biloba) CaptureScreenshotOf(selector any, opts ...CaptureOption) []byte
 // honors the WithTimeout/WithContext knobs a waiting command is allowed.
 func (b *Biloba) captureScreenshotOf(selector any, opts ...CaptureOption) []byte {
 	b.gt.Helper()
-	if newCaptureConfig(opts).frozen {
-		unfreeze, err := b.frozenRendering(true)
-		defer unfreeze()
-		if err != nil {
-			b.gt.Fatalf("Failed to freeze rendering for a screenshot:\n%s", err.Error())
-			return nil
-		}
+	cfg := newCaptureConfig(opts)
+	if cfg.clip != nil {
+		b.gt.Fatalf("b.Clip() selects a region of the viewport, so it applies to CaptureScreenshot - an element capture is already clipped to its element")
+		return nil
 	}
-	img, _, notes, err := b.elementScreenshot(selector)
+	undo, err := b.prepareCapture(cfg)
+	defer undo()
+	if err != nil {
+		b.gt.Fatalf("Failed to prepare the page for a screenshot:\n%s", err.Error())
+		return nil
+	}
+	img, _, notes, err := b.elementScreenshot(selector, cfg.viewport)
 	if err != nil {
 		b.gt.Fatalf("Failed to capture screenshot of element:\n%s", err.Error())
 		return nil
@@ -384,7 +470,10 @@ func expandsViewport(box map[string]any) bool {
 // It also reports what the capture noticed about its subject - see captureNotes.
 // Unlike captureScreenshotOf it returns errors rather than failing the spec: a matcher polls it, and
 // an error there means "retry".
-func (b *Biloba) elementScreenshot(selector any) ([]byte, *page.Viewport, captureNotes, error) {
+//
+// With viewportOnly it refuses an element that is not entirely in view rather than expanding the
+// viewport to reach it - see Biloba.Viewport.
+func (b *Biloba) elementScreenshot(selector any, viewportOnly bool) ([]byte, *page.Viewport, captureNotes, error) {
 	notes := captureNotes{}
 	r := b.runBilobaHandler("boundingBox", selector)
 	if r.Error() != nil {
@@ -399,6 +488,9 @@ func (b *Biloba) elementScreenshot(selector any) ([]byte, *page.Viewport, captur
 	}
 	var clip *page.Viewport
 	beyondViewport := expandsViewport(box)
+	if viewportOnly && beyondViewport {
+		return nil, nil, notes, fmt.Errorf("the element matching %v is not entirely in the viewport, and b.Viewport() never resizes the viewport to reach the rest of it.  Scroll it into view first (b.ScrollIntoView)", selector)
+	}
 	timeout := b.waitingTimeout(screenshotCaptureTimeout)
 	cctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
@@ -409,6 +501,7 @@ func (b *Biloba) elementScreenshot(selector any) ([]byte, *page.Viewport, captur
 		if clip, err = b.toTabClip(runCtx, toFloat64(box["x"]), toFloat64(box["y"]), toFloat64(box["width"]), toFloat64(box["height"])); err != nil {
 			return err
 		}
+		clip = engine.EnclosingClip(clip)
 		img, err = engine.CaptureClipContext(runCtx, clip, beyondViewport)
 		return err
 	})

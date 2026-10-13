@@ -120,6 +120,14 @@ var _ = Describe("Screenshots", func() {
 			Ω(bl >> 8).Should(BeNumerically("<", 60))
 		})
 
+		It("rounds a fractional box outward, so the capture holds every pixel the element touches", func() {
+			b.Run(`const d = document.createElement("div"); d.id = "fractional"; d.style.cssText = "position:absolute;left:10.5px;top:20.25px;width:100.5px;height:50.5px;background:#f00"; document.body.appendChild(d)`)
+			cfg, _, err := image.DecodeConfig(bytes.NewBuffer(b.CaptureScreenshotOf("#fractional")))
+			Ω(err).ShouldNot(HaveOccurred())
+			Ω(cfg.Width).Should(Equal(101))
+			Ω(cfg.Height).Should(Equal(51))
+		})
+
 		It("fails the spec when no element matches", func() {
 			b.CaptureScreenshotOf("#does-not-exist")
 			ExpectFailures(ContainSubstring("Failed to capture screenshot of element"))
@@ -167,6 +175,99 @@ var _ = Describe("Screenshots", func() {
 			Ω(err).ShouldNot(HaveOccurred())
 			Ω(centerOf(data, 40, 40)).Should(Equal(green))
 			Ω(b.CaptureImgcatScreenshot(b.Frozen())).ShouldNot(BeEmpty())
+		})
+	})
+
+	Describe("capturing only the viewport", func() {
+		decode := func(data []byte) image.Image {
+			GinkgoHelper()
+			img, _, err := image.Decode(bytes.NewBuffer(data))
+			Ω(err).ShouldNot(HaveOccurred())
+			return img
+		}
+		red, green := color.RGBA{0xff, 0, 0, 0xff}, color.RGBA{0, 0xff, 0, 0xff}
+
+		BeforeEach(func() {
+			b.SetWindowSize(300, 250)
+			b.Navigate(fixtureServer + "/viewport_capture.html")
+			Eventually("#filler").Should(b.Exist())
+			b.Run(`window.scrollTo(0, 150)`) // the viewport now shows the bottom 50px of red, then all of green
+			Eventually(`window.scrollY`).Should(b.EvaluateTo(150.))
+			b.Run(`window.resizes = 0`)
+		})
+
+		It("captures a full page by laying it out at the document's size", func() {
+			img := decode(b.CaptureScreenshot())
+			Ω(img.Bounds().Dy()).Should(BeNumerically(">", 2000))
+		})
+
+		It("captures exactly what is on screen with Viewport, without resizing it", func() {
+			img := decode(b.CaptureScreenshot(b.Viewport()))
+			Ω(img.Bounds().Dx()).Should(Equal(300))
+			Ω(img.Bounds().Dy()).Should(Equal(250))
+			Ω(img.At(150, 25)).Should(Equal(red))
+			Ω(img.At(150, 100)).Should(Equal(green))
+			Ω(img.At(150, 245)).Should(Equal(green), "blue starts just below the fold, and a viewport capture stops there")
+			Ω(`window.resizes`).Should(b.EvaluateTo(0.))
+			Ω(`window.scrollY`).Should(b.EvaluateTo(150.))
+		})
+
+		It("captures a region of the viewport with Clip", func() {
+			img := decode(b.CaptureScreenshot(b.Clip(10, 25, 100, 50)))
+			Ω(img.Bounds().Dx()).Should(Equal(100))
+			Ω(img.Bounds().Dy()).Should(Equal(50))
+			Ω(img.At(50, 5)).Should(Equal(red))
+			Ω(img.At(50, 45)).Should(Equal(green))
+			Ω(`window.resizes`).Should(b.EvaluateTo(0.))
+		})
+
+		It("refuses a Clip that reaches outside the viewport", func() {
+			b.CaptureScreenshot(b.Clip(250, 0, 100, 100))
+			b.CaptureScreenshot(b.Clip(0, 0, 0, 100))
+			ExpectFailures(
+				ContainSubstring("reaches outside the 300 x 250 viewport"),
+				ContainSubstring("must have a positive width and height"),
+			)
+		})
+
+		It("refuses Clip on an element capture", func() {
+			b.CaptureScreenshotOf("#green", b.Clip(0, 0, 10, 10))
+			ExpectFailures(ContainSubstring("b.Clip() selects a region of the viewport, so it applies to CaptureScreenshot"))
+		})
+
+		It("captures an element in view with Viewport, and refuses one it would have to resize the viewport to reach", func() {
+			img := decode(b.CaptureScreenshotOf("#green", b.Viewport()))
+			Ω(img.Bounds().Dy()).Should(Equal(200))
+			Ω(img.At(150, 100)).Should(Equal(green))
+
+			b.CaptureScreenshotOf("#filler", b.Viewport())
+			ExpectFailures(ContainSubstring("is not entirely in the viewport, and b.Viewport() never resizes the viewport"))
+			Ω(`window.resizes`).Should(b.EvaluateTo(0.))
+		})
+
+		It("captures in device pixels", func() {
+			b.SetWindowSize(300, 250, b.DeviceScaleFactor(2))
+			Eventually(`window.devicePixelRatio`).Should(b.EvaluateTo(2.))
+			img := decode(b.CaptureScreenshot(b.Clip(0, 0, 100, 50)))
+			Ω(img.Bounds().Dx()).Should(Equal(200))
+			Ω(img.Bounds().Dy()).Should(Equal(100))
+		})
+	})
+
+	Describe("HideCaret", func() {
+		BeforeEach(func() {
+			b.Navigate(fixtureServer + "/visual_scroll_driven.html")
+			Eventually("#timed").Should(b.Exist())
+		})
+
+		It("hides the caret for the capture and leaves animations running", func() {
+			b.Run(`window._caretDuring = null; const orig = _biloba.showCaret; _biloba.showCaret = () => { window._caretDuring = getComputedStyle(document.body).caretColor; return orig() }`)
+			data := b.CaptureScreenshotOf("#timed", b.HideCaret())
+			Ω(b.Run(`window._caretDuring`)).Should(Equal("rgba(0, 0, 0, 0)"), "the caret was transparent while the capture ran")
+			img, _, err := image.Decode(bytes.NewBuffer(data))
+			Ω(err).ShouldNot(HaveOccurred())
+			Ω(img.At(40, 40)).Should(Equal(color.RGBA{0xaa, 0, 0, 0xff}), "the animation kept running")
+			Ω(b.HasElement("#_biloba-caret")).Should(BeFalse())
 		})
 	})
 

@@ -2390,7 +2390,7 @@ Eventually(".menu").Should(rb.Hover()) // moves the real mouse, activating CSS :
 
 In realistic mode:
 
-- **`Click`** scrolls the element to the center of the viewport, **waits for its box to stop moving**, verifies it is enabled and is the topmost element at its center point (so an occluding overlay or an off-screen element does **not** click through - the matcher form keeps polling, the immediate form fails the spec), moves the real pointer to it (so hover-gated clicks register), then dispatches a real `mousePressed`/`mouseReleased`.  This is the inverse of plain `Click`, which clicks the element directly regardless of what's on top of it.  Clicks through `>>>` same-origin iframe boundaries are translated to top-level viewport coordinates so the real mouse lands in the right place.  [Pointer options](#pointer-options-offsets-and-modifiers) are honored natively: `b.At(x,y)` retargets to the offset point (translated to the viewport and bounds-checked), and `b.Shift()`/etc. hold a real CDP modifier bitmask down.
+- **`Click`** scrolls the element to the center of the viewport - unless it is already entirely on screen and topmost at its center, in which case the page stays where it is - **waits for its box to stop moving**, verifies it is enabled and is the topmost element at its center point (so an occluding overlay or an off-screen element does **not** click through - the matcher form keeps polling, the immediate form fails the spec), moves the real pointer to it (so hover-gated clicks register), then dispatches a real `mousePressed`/`mouseReleased`.  This is the inverse of plain `Click`, which clicks the element directly regardless of what's on top of it.  Clicks through `>>>` same-origin iframe boundaries are translated to top-level viewport coordinates so the real mouse lands in the right place.  [Pointer options](#pointer-options-offsets-and-modifiers) are honored natively: `b.At(x,y)` retargets to the offset point (translated to the viewport and bounds-checked), and `b.Shift()`/etc. hold a real CDP modifier bitmask down.
 - **`ClickEachImmediately`** clicks every matching element with real input, scrolling and re-measuring each in turn, and skipping any that are hidden, disabled, off-screen, or obscured.
 - **`DblClick`** / **`RightClick`** / **`MiddleClick`** apply the same scroll/stability/occlusion machinery as `Click`, then dispatch a real double-click (two click sequences with an incrementing click-count, so Chrome fires a genuine `dblclick`), right-button click (firing the browser's native `contextmenu`), or middle-button click (firing `auxclick`) - all honoring pointer options.
 - **`DragTo`** measures stable, actionable points for *both* the source and target **at one scroll position**, then drives a real CDP pointer drag - press at the source, several interpolated moves toward the target, release at the target - so pointer-based drag-and-drop libraries see genuine pointer input (it still does not drive native HTML5 `draggable`).  The single scroll position matters: measuring one endpoint at a time scrolls the target into view and moves the source out from under the coordinate already recorded for it, and for two rows of one `overflow: auto` list both coordinates land on the pane's center - where the press and release arrive together and the page receives a click on the target.  So Biloba tries the current scroll position first (the common case, and it disturbs nothing), then the pair framed around their midpoint, then each endpoint scrolled in with the other scrolled second (which is what endpoints in separate panes need).  If no position shows both - endpoints further apart than their pane is tall - it fails and names both endpoints rather than dispatching a drag it knows is wrong.
@@ -3461,6 +3461,8 @@ It does not run in the document that is already loaded, so call it before `b.Nav
 
 Biloba streams the page's console output to the `GinkgoWriter` as it happens.  It also records it: `b.AllConsoleMessages()` returns every console message the tab has logged since the last `Prepare()`, oldest first.  Each `ConsoleMessage` has a `Type` (`"log"`, `"info"`, `"warning"`, `"error"`, `"debug"`, ...), a `Text` that joins the call's arguments with spaces, a `Timestamp`, and a `Stack`.
 
+The list also holds the messages Chrome adds to the console itself, the ones DevTools shows next to the page's own: a resource that failed to load, an intervention, a performance violation, a deprecation warning.  These have a `Source` naming where they came from (`"network"`, `"intervention"`, `"violation"`, `"deprecation"`, ...) and a `Type` that is their level; the page's own console calls have an empty `Source`.  Chrome's messages are recorded on the tab rather than on a frame handle, and are not streamed to the `GinkgoWriter`.
+
 `b.AllPageErrors()` returns the uncaught exceptions and unhandled promise rejections the tab has seen since the last `Prepare()`.  Each `PageError` has a `Message` that reads the way DevTools prints it (`"Uncaught TypeError: x is not a function"`, `"Uncaught (in promise) Error: boom"`), the `URL`, `Line`, and `Column` it was thrown from, a `Stack`, and a `Timestamp`.  Page errors stream to the `GinkgoWriter` in red, like `console.error`, and when a spec fails they are replayed with the [console errors](#outline) at the top of the failure block.  Line and column numbers are zero-based, as Chrome reports them.
 
 Both are snapshots: they don't poll and take none of the poll-config knobs.  To wait for something to be logged, poll the snapshot:
@@ -3490,7 +3492,8 @@ for _, req := range b.AllRequests() {
 	}
 }
 for _, message := range b.AllConsoleMessages() {
-	if message.Type == "error" || message.Type == "warning" {
+	// Chrome's own "Failed to load resource" messages repeat the request outcomes above
+	if message.Source == "" && (message.Type == "error" || message.Type == "warning") {
 		report = append(report, message.Type+": "+message.Text)
 	}
 }
@@ -3861,6 +3864,22 @@ You can use the `ReportEntryVisibilityFailureOrVerbose` decorator to only emit t
 AddReportEntry("some description", b.CaptureImgcatScreenshot(), ReportEntryVisibilityFailureOrVerbose)
 ```
 
+#### Capturing only what is on screen
+
+`b.CaptureScreenshot()` captures the whole document.  When the document is taller or wider than the viewport, Chrome lays the page out again at the document's full size to do that, and a responsive page can notice: media queries flip, resize handlers run, and the capture may not look like what the user sees.  `b.Viewport()` captures exactly what is on screen and never resizes the viewport:
+
+```go
+b.CaptureScreenshotToFile("above-the-fold.png", b.Viewport())
+```
+
+`b.Clip(x, y, width, height)` captures one region of the viewport, measured in CSS pixels from its top-left corner.  It also never resizes the viewport, and a region that reaches outside it fails the spec:
+
+```go
+b.CaptureScreenshot(b.Clip(0, 0, 400, 300))
+```
+
+On a frame handle both are measured in the frame's viewport.  `b.Viewport()` also works on `b.CaptureScreenshotOf`, where it refuses an element that is not entirely in view instead of expanding the viewport to reach it.
+
 #### Freezing animations for a capture
 
 Every capture method takes `b.Frozen()`, which captures the page the way a [visual assertion](#visual-assertions) does: it waits for web fonts to load and, for the duration of the capture, turns off CSS animations and transitions and hides the text caret.
@@ -3871,6 +3890,8 @@ b.CaptureScreenshotOf("#hero", b.Frozen())
 ```
 
 Animations on a scroll or view timeline (`animation-timeline: scroll()`) keep running, since they depend only on the scroll position.  Animations started from JavaScript (`element.animate`, `requestAnimationFrame` loops) are not touched.
+
+To hide only the blinking text caret and leave animations running, pass `b.HideCaret()` instead.
 
 #### Saving screenshots to files
 

@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	cdplog "github.com/chromedp/cdproto/log"
 	"github.com/chromedp/cdproto/runtime"
 )
 
@@ -29,7 +30,10 @@ type ConsoleStackFrame struct {
 }
 
 type ConsoleMessage struct {
-	Type       string
+	Type string
+	// Source is empty for the page's own console API calls; for a message Chrome generated itself
+	// (NewLogEntryMessage) it names the origin: "intervention", "violation", "network", ...
+	Source     string
 	Text       string
 	Args       []any
 	Timestamp  time.Time
@@ -156,6 +160,22 @@ func NewConsoleMessage(event *runtime.EventConsoleAPICalled) ConsoleMessage {
 		parts = append(parts, fmt.Sprint(value))
 	}
 	message.Text = strings.Join(parts, " ")
+	return message
+}
+
+// NewLogEntryMessage converts a message Chrome generated itself (Log.entryAdded: an intervention, a
+// violation, a failed resource load, a deprecation) into a ConsoleMessage, the way DevTools shows it
+// in the console next to the page's own calls.  Type uses the console vocabulary: Chrome's "verbose"
+// level becomes "debug".
+func NewLogEntryMessage(entry *cdplog.Entry) ConsoleMessage {
+	level := string(entry.Level)
+	if level == "verbose" {
+		level = "debug"
+	}
+	message := ConsoleMessage{Type: level, Source: string(entry.Source), Text: truncateUTF8(entry.Text, DefaultConsolePreviewBytes), Stack: ConsoleStack(entry.StackTrace)}
+	if entry.Timestamp != nil {
+		message.Timestamp = entry.Timestamp.Time()
+	}
 	return message
 }
 
