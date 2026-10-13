@@ -421,7 +421,7 @@ func (s *Session) attachFrame(ctx context.Context, descriptor frameDescriptor) (
 		browserContextID: s.browserContextID, targetID: descriptor.targetID,
 		frameID: descriptor.frame.ID, frameLoaderID: descriptor.frame.LoaderID,
 		frameWorld: world, frameOOPIF: descriptor.oopif,
-		root: s.contextRoot(), artifactDir: s.artifactDir, frameTarget: true,
+		root: s.contextRoot(), frameTab: s.tabSession(), artifactDir: s.artifactDir, frameTarget: true,
 		initialWidth: s.initialWidth, initialHeight: s.initialHeight,
 		highFidelity: s.highFidelity, cacheEnabled: true,
 	}

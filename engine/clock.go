@@ -154,12 +154,27 @@ func (c *PageClock) RunForContext(ctx context.Context, d, budget time.Duration) 
 		return err
 	}
 	if exceeded {
-		return &Error{Code: CodeTimeout, Operation: operation, Message: fmt.Sprintf(
+		cause := &ClockRunExceeded{Duration: d, Budget: budget, Fired: fired, Reached: clockTime(c.snapshot.Now)}
+		return &Error{Code: CodeTimeout, Operation: operation, Cause: cause, Message: fmt.Sprintf(
 			"RunFor(%s) did not finish within %s: after %d timer and animation-frame callbacks the page clock had reached %s.\n"+
 				"The page keeps scheduling work, so running every callback in that much time is slow.  FastForward skips ahead firing each due timer once, or allow RunFor more time.",
-			d, budget, fired, FormatClockTime(clockTime(c.snapshot.Now)))}
+			d, budget, fired, FormatClockTime(cause.Reached))}
 	}
 	return nil
+}
+
+// ClockRunExceeded is the cause of the CodeTimeout a RunFor reports when it runs out of real time,
+// so a client can say how far it got in its own method names.
+type ClockRunExceeded struct {
+	// Duration is how far RunFor was asked to advance the clock, and Budget the real time it had.
+	Duration, Budget time.Duration
+	// Fired counts the callbacks it ran, and Reached is the clock's time when it gave up.
+	Fired   int
+	Reached time.Time
+}
+
+func (e *ClockRunExceeded) Error() string {
+	return fmt.Sprintf("the page clock ran %d callbacks and reached %s before running out of time", e.Fired, FormatClockTime(e.Reached))
 }
 
 // UninstallContext restores the real timers in every document of the tab and stops installing the
@@ -370,9 +385,17 @@ func (s *Session) SetClockSystemTime(ctx context.Context, t time.Time) error {
 }
 
 // ClockState reports this tab's page clock as of its last operation, and false when none is
-// installed.  It sends nothing to Chrome, so a failure report can say the clock was paused without
+// installed.  On a frame handle it reports the clock of the tab the frame was found from, which
+// covers a frame in the tab's process; a frame in another process runs on real time and reports
+// none.  It sends nothing to Chrome, so a failure report can say the clock was paused without
 // another round trip.
 func (s *Session) ClockState() (ClockState, bool) {
+	if s.frameID != "" {
+		if s.frameOOPIF || s.frameTab == nil {
+			return ClockState{}, false
+		}
+		return s.frameTab.ClockState()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.clock == nil {
@@ -404,4 +427,12 @@ func (s *Session) removeClock(ctx context.Context) error {
 	}
 	s.clock = nil
 	return nil
+}
+
+// tabSession is the tab a session belongs to: itself, or for a frame handle the tab it was found from.
+func (s *Session) tabSession() *Session {
+	if s.frameTab != nil {
+		return s.frameTab
+	}
+	return s
 }

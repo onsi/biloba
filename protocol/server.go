@@ -27,7 +27,7 @@ var Capabilities = []string{
 	"action.set_upload", "viewport.set", "evaluate", "evaluate.async", "assert.visible", "assert.text", "assert.count", "assert.attribute",
 	"assert.value", "assert.url", "assert.evaluate", "assert.exists", "assert.enabled", "assert.clickable", "assert.property", "assert.all_text", "assert.request", "poll.server_side", "diagnostics.structured",
 	"dom.typed", "dom.collections", "dom.geometry", "dom.style", "dom.selection", "action.pointer_options", "action.pointer_handle", "action.scroll", "action.element_javascript", "keyboard.modifiers",
-	"lifecycle.tabs", "lifecycle.context_identity", "lifecycle.cookies", "lifecycle.storage", "lifecycle.javascript", "lifecycle.page_state", "lifecycle.console", "lifecycle.page_errors", "lifecycle.emulation", "lifecycle.frames",
+	"lifecycle.tabs", "lifecycle.context_identity", "lifecycle.cookies", "lifecycle.storage", "lifecycle.javascript", "lifecycle.page_state", "lifecycle.console", "lifecycle.page_errors", "lifecycle.emulation", "lifecycle.frames", "lifecycle.clock",
 	"dialogs.handlers", "dialogs.history", "dialogs.warnings", "downloads.history", "downloads.content", "downloads.cancel",
 	"network.history", "network.request_outcomes", "network.idle.http", "network.handlers", "network.response_callbacks", "network.holds", "network.emulation", "network.cache",
 	"screenshot.capture", "screenshot.capture_options", "screencast", "visual.compare",
@@ -268,6 +268,13 @@ const (
 	LifecycleSetUserAgent
 	LifecycleClearUserAgent
 	LifecyclePageErrors
+	LifecycleInstallClock
+	LifecyclePauseClockAt
+	LifecycleResumeClock
+	LifecycleRunClockFor
+	LifecycleFastForwardClock
+	LifecycleSetClockFixedTime
+	LifecycleSetClockSystemTime
 )
 
 type Operation struct {
@@ -324,6 +331,13 @@ type LifecycleOperation struct {
 	MediaType         string
 	ColorScheme       string
 	ReducedMotion     string
+	// ClockTime, ClockDuration, and ClockTimeout are the page-clock operations' arguments: the time
+	// INSTALL_CLOCK, PAUSE_CLOCK_AT, and the SET_CLOCK_* operations move the clock to, how far
+	// RUN_CLOCK_FOR and FAST_FORWARD_CLOCK advance it, and RUN_CLOCK_FOR's real-time budget (zero for
+	// the engine's default).
+	ClockTime     time.Time
+	ClockDuration time.Duration
+	ClockTimeout  time.Duration
 }
 
 type CookieQuery struct {
@@ -588,13 +602,16 @@ type Observation struct {
 }
 
 type Diagnostics struct {
-	Locator        string                      `json:"locator,omitempty"`
-	Expected       string                      `json:"expected,omitempty"`
-	DOMOutline     string                      `json:"domOutline,omitempty"`
-	ScreenshotPath string                      `json:"screenshotPath,omitempty"`
-	DaemonDetail   string                      `json:"daemonDetail,omitempty"`
-	Visual         *WireVisualResult           `json:"visual,omitempty"`
-	Context        *ContextDiagnosticsResponse `json:"context,omitempty"`
+	Locator        string `json:"locator,omitempty"`
+	Expected       string `json:"expected,omitempty"`
+	DOMOutline     string `json:"domOutline,omitempty"`
+	ScreenshotPath string `json:"screenshotPath,omitempty"`
+	DaemonDetail   string `json:"daemonDetail,omitempty"`
+	// PausedClockAt is the time the tab's page clock was paused at when a poll ran out of time, as
+	// engine.FormatClockTime renders it: the likely reason the page never changed.
+	PausedClockAt string                      `json:"pausedClockAt,omitempty"`
+	Visual        *WireVisualResult           `json:"visual,omitempty"`
+	Context       *ContextDiagnosticsResponse `json:"context,omitempty"`
 }
 
 // The wire structs below are the authoritative JSON protocol definition.  The
@@ -872,22 +889,32 @@ type WireMedia struct {
 	ReducedMotion string `json:"reducedMotion,omitempty"`
 }
 
+// WireClockOperation carries a page-clock operation's arguments, in milliseconds.  timeMs is a time
+// since the Unix epoch; durationMs is how far to advance; timeoutMs is RUN_CLOCK_FOR's real-time
+// budget, omitted for the default.  The request's own deadline has to outlast that budget.
+type WireClockOperation struct {
+	TimeMs     *int64 `json:"timeMs,omitempty"`
+	DurationMs *int64 `json:"durationMs,omitempty"`
+	TimeoutMs  int64  `json:"timeoutMs,omitempty"`
+}
+
 type WireLifecycleOperation struct {
-	Kind        string             `json:"kind"`
-	Area        string             `json:"area,omitempty"`
-	Key         string             `json:"key,omitempty"`
-	ValueJSON   string             `json:"valueJson,omitempty"`
-	Expression  string             `json:"expression,omitempty"`
-	Cookie      *WireCookieQuery   `json:"cookie,omitempty"`
-	Count       bool               `json:"count,omitempty"`
-	Device      *WireDeviceMetrics `json:"device,omitempty"`
-	Geolocation *WireGeolocation   `json:"geolocation,omitempty"`
-	Origin      string             `json:"origin,omitempty"`
-	Permissions map[string]string  `json:"permissions,omitempty"`
-	Locale      string             `json:"locale,omitempty"`
-	Timezone    string             `json:"timezone,omitempty"`
-	Media       *WireMedia         `json:"media,omitempty"`
-	UserAgent   string             `json:"userAgent,omitempty"`
+	Kind        string              `json:"kind"`
+	Area        string              `json:"area,omitempty"`
+	Key         string              `json:"key,omitempty"`
+	ValueJSON   string              `json:"valueJson,omitempty"`
+	Expression  string              `json:"expression,omitempty"`
+	Cookie      *WireCookieQuery    `json:"cookie,omitempty"`
+	Count       bool                `json:"count,omitempty"`
+	Device      *WireDeviceMetrics  `json:"device,omitempty"`
+	Geolocation *WireGeolocation    `json:"geolocation,omitempty"`
+	Origin      string              `json:"origin,omitempty"`
+	Permissions map[string]string   `json:"permissions,omitempty"`
+	Locale      string              `json:"locale,omitempty"`
+	Timezone    string              `json:"timezone,omitempty"`
+	Media       *WireMedia          `json:"media,omitempty"`
+	UserAgent   string              `json:"userAgent,omitempty"`
+	Clock       *WireClockOperation `json:"clock,omitempty"`
 }
 
 type LifecycleRequest struct {
@@ -2378,6 +2405,8 @@ func lifecycleOperationFromWire(operation *WireLifecycleOperation, expected *Wir
 		"SET_DEVICE_METRICS": LifecycleSetDeviceMetrics, "CLEAR_DEVICE_METRICS": LifecycleClearDeviceMetrics, "SET_GEOLOCATION": LifecycleSetGeolocation, "CLEAR_GEOLOCATION": LifecycleClearGeolocation,
 		"SET_PERMISSIONS": LifecycleSetPermissions, "RESET_PERMISSIONS": LifecycleResetPermissions, "SET_LOCALE": LifecycleSetLocale, "CLEAR_LOCALE": LifecycleClearLocale, "SET_TIMEZONE": LifecycleSetTimezone, "CLEAR_TIMEZONE": LifecycleClearTimezone, "SET_MEDIA": LifecycleSetMedia, "CLEAR_MEDIA": LifecycleClearMedia,
 		"SET_USER_AGENT": LifecycleSetUserAgent, "CLEAR_USER_AGENT": LifecycleClearUserAgent,
+		"INSTALL_CLOCK": LifecycleInstallClock, "PAUSE_CLOCK_AT": LifecyclePauseClockAt, "RESUME_CLOCK": LifecycleResumeClock, "RUN_CLOCK_FOR": LifecycleRunClockFor,
+		"FAST_FORWARD_CLOCK": LifecycleFastForwardClock, "SET_CLOCK_FIXED_TIME": LifecycleSetClockFixedTime, "SET_CLOCK_SYSTEM_TIME": LifecycleSetClockSystemTime,
 	}
 	kind, ok := kinds[operation.Kind]
 	if !ok {
@@ -2401,6 +2430,9 @@ func lifecycleOperationFromWire(operation *WireLifecycleOperation, expected *Wir
 		result.MediaType = operation.Media.Type
 		result.ColorScheme = operation.Media.ColorScheme
 		result.ReducedMotion = operation.Media.ReducedMotion
+	}
+	if err := clockOperationFromWire(kind, operation.Clock, &result); err != nil {
+		return LifecycleOperation{}, err
 	}
 	if expected != nil {
 		expectation, err := expectationFromWire(expected, 0)
@@ -2697,4 +2729,34 @@ func normalizeError(err error) *ProtocolError {
 	default:
 		return NewError(CodeDriver, fmt.Sprintf("daemon operation failed: %v", err))
 	}
+}
+
+// clockOperationFromWire checks a page-clock operation has the arguments it needs: a time for the
+// operations that move the clock to one, a non-negative duration for those that advance it.
+func clockOperationFromWire(kind LifecycleOperationKind, clock *WireClockOperation, result *LifecycleOperation) *ProtocolError {
+	needsTime := kind == LifecycleInstallClock || kind == LifecyclePauseClockAt || kind == LifecycleSetClockFixedTime || kind == LifecycleSetClockSystemTime
+	needsDuration := kind == LifecycleRunClockFor || kind == LifecycleFastForwardClock
+	if !needsTime && !needsDuration {
+		return nil
+	}
+	if clock == nil {
+		clock = &WireClockOperation{}
+	}
+	if needsTime {
+		if clock.TimeMs == nil {
+			return NewError(CodeInvalidArgument, "clock.timeMs is required")
+		}
+		result.ClockTime = time.UnixMilli(*clock.TimeMs).UTC()
+	}
+	if needsDuration {
+		if clock.DurationMs == nil || *clock.DurationMs < 0 {
+			return NewError(CodeInvalidArgument, "clock.durationMs must be a non-negative number of milliseconds")
+		}
+		result.ClockDuration = time.Duration(*clock.DurationMs) * time.Millisecond
+	}
+	if clock.TimeoutMs < 0 {
+		return NewError(CodeInvalidArgument, "clock.timeoutMs must not be negative")
+	}
+	result.ClockTimeout = time.Duration(clock.TimeoutMs) * time.Millisecond
+	return nil
 }

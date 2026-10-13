@@ -118,6 +118,11 @@ var _ = Describe("the page clock", func() {
 		Expect(evaluate(ctx, session, `window.log.length`)).To(Equal(float64(5)))
 		Expect(evaluate(ctx, frame.Session, `window.log`)).To(Equal([]any{"frame@16", "microtask@100", "interval@200", "interval@400", "timeout@500"}))
 
+		state, installed := frame.ClockState()
+		Expect(installed).To(BeTrue(), "a frame handle reports the clock of the tab that covers it")
+		Expect(state.Paused).To(BeTrue())
+		Expect(state.Now).To(Equal(t0.Add(500 * time.Millisecond)))
+
 		Expect(code(frame.InstallClock(ctx, t0))).To(Equal(engine.CodeInvalidArgument))
 		Expect(code(frame.RunClockFor(ctx, time.Second, 0))).To(Equal(engine.CodeInvalidArgument))
 	})
@@ -130,7 +135,12 @@ var _ = Describe("the page clock", func() {
 		err := session.RunClockFor(ctx, time.Hour, 50*time.Millisecond)
 		Expect(code(err)).To(Equal(engine.CodeTimeout))
 		Expect(err.Error()).To(ContainSubstring("RunFor(1h0m0s) did not finish within 50ms"))
+		var exceeded *engine.ClockRunExceeded
+		Expect(errors.As(err, &exceeded)).To(BeTrue(), "a client can phrase the overrun in its own names")
+		Expect([]time.Duration{exceeded.Duration, exceeded.Budget}).To(Equal([]time.Duration{time.Hour, 50 * time.Millisecond}))
+		Expect(exceeded.Fired).To(BeNumerically(">", 0))
 		state, _ := session.ClockState()
+		Expect(exceeded.Reached).To(Equal(state.Now))
 		Expect(state.Now).To(BeTemporally(">", t0))
 		Expect(state.Now).To(BeTemporally("<", t0.Add(time.Hour)))
 	})

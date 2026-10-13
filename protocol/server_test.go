@@ -29,7 +29,7 @@ var _ = Describe("driver protocol", func() {
 		Expect(client.call("handshake", protocol.HandshakeRequest{ProtocolVersion: protocol.Version}, &response)).To(Succeed())
 		Expect(response.ProtocolVersion).To(Equal(protocol.Version))
 		Expect(response.Capabilities).NotTo(BeEmpty())
-		Expect(response.Capabilities).To(ContainElements("lifecycle.tabs", "lifecycle.cookies", "lifecycle.storage", "lifecycle.emulation", "lifecycle.frames"))
+		Expect(response.Capabilities).To(ContainElements("lifecycle.tabs", "lifecycle.cookies", "lifecycle.storage", "lifecycle.emulation", "lifecycle.frames", "lifecycle.clock"))
 
 		err := client.call("handshake", protocol.HandshakeRequest{ProtocolVersion: "999"}, nil)
 		Expect(err).To(MatchError(ContainSubstring("protocol version mismatch")))
@@ -366,6 +366,40 @@ var _ = Describe("driver protocol", func() {
 		Expect(recorder.lastOperation().Lifecycle.Permissions).To(Equal(map[string]string{"camera": "granted", "microphone": "denied"}))
 		err = client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "SET_PERMISSIONS", Permissions: map[string]string{"videoCapture": "granted"}}}, nil)
 		Expect(err.Message).To(ContainSubstring("unsupported permission videoCapture"), "Chrome rejects CDP's internal names")
+	})
+
+	It("carries the page-clock operations and their arguments", func() {
+		recorder := &recordingSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+		lifecycle := func(kind string, clock *protocol.WireClockOperation) *protocol.ProtocolError {
+			return client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: kind, Clock: clock}}, nil)
+		}
+		ms := func(value int64) *int64 { return &value }
+		t0 := time.Date(2024, 2, 2, 8, 0, 0, 0, time.UTC)
+
+		for kind, expected := range map[string]protocol.LifecycleOperationKind{"INSTALL_CLOCK": protocol.LifecycleInstallClock, "PAUSE_CLOCK_AT": protocol.LifecyclePauseClockAt, "SET_CLOCK_FIXED_TIME": protocol.LifecycleSetClockFixedTime, "SET_CLOCK_SYSTEM_TIME": protocol.LifecycleSetClockSystemTime} {
+			Expect(lifecycle(kind, &protocol.WireClockOperation{TimeMs: ms(t0.UnixMilli())})).To(Succeed())
+			Expect(recorder.lastOperation().Lifecycle.Kind).To(Equal(expected))
+			Expect(recorder.lastOperation().Lifecycle.ClockTime).To(Equal(t0))
+			Expect(lifecycle(kind, nil).Message).To(ContainSubstring("clock.timeMs is required"))
+		}
+		Expect(lifecycle("INSTALL_CLOCK", &protocol.WireClockOperation{TimeMs: ms(0)})).To(Succeed())
+		Expect(recorder.lastOperation().Lifecycle.ClockTime).To(Equal(time.Unix(0, 0).UTC()), "the epoch is a time, not a missing one")
+
+		Expect(lifecycle("RUN_CLOCK_FOR", &protocol.WireClockOperation{DurationMs: ms(1500), TimeoutMs: 20_000})).To(Succeed())
+		run := recorder.lastOperation().Lifecycle
+		Expect([]any{run.Kind, run.ClockDuration, run.ClockTimeout}).To(Equal([]any{protocol.LifecycleRunClockFor, 1500 * time.Millisecond, 20 * time.Second}))
+		Expect(lifecycle("FAST_FORWARD_CLOCK", &protocol.WireClockOperation{DurationMs: ms(0)})).To(Succeed())
+		Expect(recorder.lastOperation().Lifecycle.Kind).To(Equal(protocol.LifecycleFastForwardClock))
+		Expect(lifecycle("RESUME_CLOCK", nil)).To(Succeed())
+		Expect(recorder.lastOperation().Lifecycle.Kind).To(Equal(protocol.LifecycleResumeClock))
+
+		Expect(lifecycle("FAST_FORWARD_CLOCK", nil).Code).To(Equal(protocol.CodeInvalidArgument))
+		Expect(lifecycle("RUN_CLOCK_FOR", &protocol.WireClockOperation{DurationMs: ms(-1)}).Message).To(ContainSubstring("clock.durationMs must be a non-negative number of milliseconds"))
+		Expect(lifecycle("RUN_CLOCK_FOR", &protocol.WireClockOperation{DurationMs: ms(1), TimeoutMs: -1}).Message).To(ContainSubstring("clock.timeoutMs must not be negative"))
 	})
 
 	It("registers discovered handles once and invalidates context siblings on prepare", func() {

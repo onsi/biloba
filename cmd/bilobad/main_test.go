@@ -88,6 +88,13 @@ var _ = Describe("bilobad", func() {
 		})
 	})
 
+	It("says how far an overrunning runFor got in the TypeScript client's names", func() {
+		message := clockRunExceededMessage(&engine.ClockRunExceeded{Duration: time.Hour, Budget: 50 * time.Millisecond, Fired: 7, Reached: time.Date(2024, 2, 2, 8, 0, 0, 120_000_000, time.UTC)})
+		Expect(message).To(HavePrefix("run the page clock: runFor(3600000) did not finish within 50ms: after 7 timer and animation-frame callbacks the page clock had reached 2024-02-02T08:00:00.120Z."))
+		Expect(message).To(ContainSubstring("fastForward skips ahead firing each due timer once, or give runFor a larger timeoutMs."))
+		Expect(message).NotTo(ContainSubstring("RunFor"))
+	})
+
 	It("serializes empty attached Chrome arguments as an array", func() {
 		for _, metadata := range []any{
 			(&engineBackend{launch: protocol.WireLaunchMetadata{Attached: true}}).LaunchMetadata(),

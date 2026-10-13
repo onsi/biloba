@@ -1242,6 +1242,26 @@ func (s *engineSession) lifecycle(ctx context.Context, operation protocol.Operat
 		return oneAttempt(started, s.session.SetUserAgent(ctx, lifecycle.UserAgent))
 	case protocol.LifecycleClearUserAgent:
 		return oneAttempt(started, s.session.ClearUserAgent(ctx))
+	case protocol.LifecycleInstallClock:
+		return oneAttempt(started, s.session.InstallClock(ctx, lifecycle.ClockTime))
+	case protocol.LifecyclePauseClockAt:
+		return oneAttempt(started, s.session.PauseClockAt(ctx, lifecycle.ClockTime))
+	case protocol.LifecycleResumeClock:
+		return oneAttempt(started, s.session.ResumeClock(ctx))
+	case protocol.LifecycleRunClockFor:
+		// The request's deadline outlasts the budget: the client puts its slack on top of it.
+		err := s.session.RunClockFor(ctx, lifecycle.ClockDuration, lifecycle.ClockTimeout)
+		var exceeded *engine.ClockRunExceeded
+		if errors.As(err, &exceeded) {
+			return protocol.Result{}, protocol.NewError(protocol.CodeTimeout, clockRunExceededMessage(exceeded))
+		}
+		return oneAttempt(started, err)
+	case protocol.LifecycleFastForwardClock:
+		return oneAttempt(started, s.session.FastForwardClock(ctx, lifecycle.ClockDuration))
+	case protocol.LifecycleSetClockFixedTime:
+		return oneAttempt(started, s.session.SetClockFixedTime(ctx, lifecycle.ClockTime))
+	case protocol.LifecycleSetClockSystemTime:
+		return oneAttempt(started, s.session.SetClockSystemTime(ctx, lifecycle.ClockTime))
 	default:
 		return protocol.Result{}, protocol.NewError(protocol.CodeInvalidArgument, "unsupported lifecycle operation")
 	}
@@ -1838,7 +1858,7 @@ func (s *engineSession) poll(ctx context.Context, operation protocol.Operation, 
 	diagnostics, diagnosticErr := s.captureContextDiagnostics(diagnosticCtx, protocol.ContextDiagnosticsOptions{Purpose: "failure", Name: "biloba-failure", Screenshots: true, Outlines: true, MaxBytes: s.maxScreenshotBytes}, "biloba-failure")
 	converted.Diagnostics = protocol.Diagnostics{
 		Locator: locatorDescription(operation), Expected: expectedDescription(operation),
-		DaemonDetail: pollErr.Error(), Context: &diagnostics,
+		DaemonDetail: pollErr.Error(), PausedClockAt: s.pausedClockAt(policy), Context: &diagnostics,
 	}
 	if len(diagnostics.Tabs) > 0 {
 		converted.Diagnostics.DOMOutline = diagnostics.Tabs[0].DOMOutline
@@ -1848,6 +1868,28 @@ func (s *engineSession) poll(ctx context.Context, operation protocol.Operation, 
 		converted.Diagnostics.DaemonDetail += "; capture diagnostics: " + diagnosticErr.Error()
 	}
 	return converted, nil
+}
+
+// pausedClockAt is when the tab's page clock is paused, for a poll that ran out of time while it was:
+// the page's timers never ran, which is the likely reason the poll never came true.  It reads the
+// state the last clock operation reported, so a tab without a clock costs nothing.  A one-shot read
+// and a Consistently that saw a change didn't time out waiting, so they get no note.
+func (s *engineSession) pausedClockAt(policy engine.PollPolicy) string {
+	if policy.Mode != engine.PollEventually {
+		return ""
+	}
+	state, installed := s.session.ClockState()
+	if !installed || !state.Paused {
+		return ""
+	}
+	return engine.FormatClockTime(state.Now)
+}
+
+// clockRunExceededMessage is the engine's RunFor overrun in the TypeScript client's names.
+func clockRunExceededMessage(exceeded *engine.ClockRunExceeded) string {
+	return fmt.Sprintf("run the page clock: runFor(%d) did not finish within %dms: after %d timer and animation-frame callbacks the page clock had reached %s.\n"+
+		"The page keeps scheduling work, so running every callback in that much time is slow.  fastForward skips ahead firing each due timer once, or give runFor a larger timeoutMs.",
+		exceeded.Duration.Milliseconds(), exceeded.Budget.Milliseconds(), exceeded.Fired, engine.FormatClockTime(exceeded.Reached))
 }
 
 func withDefaultPollTimeout(policy engine.PollPolicy) engine.PollPolicy {

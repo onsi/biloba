@@ -130,6 +130,9 @@ type Session struct {
 	screencastSequence uint64
 	// clock is the tab's page clock (InstallClock), nil until one is installed.
 	clock *PageClock
+	// frameTab is, on a frame handle, the tab session it was found from: the one whose page clock
+	// covers it.
+	frameTab *Session
 	// crashed is closed by Chrome's Inspector.targetCrashed listener, which runs on chromedp's event
 	// goroutine rather than under mu - hence its own lock.  A channel rather than a bool because an
 	// operation already in flight has to be interrupted, not merely refused next time: CDP does not

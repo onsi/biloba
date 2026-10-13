@@ -58,6 +58,7 @@ export interface Diagnostics {
   domOutline?: string;
   screenshotPath?: string;
   daemonDetail?: string;
+  pausedClockAt?: string;
   visual?: VisualResult;
   context?: ContextDiagnosticsResponse;
 }
@@ -319,8 +320,14 @@ export interface Media {
   reducedMotion?: string;
 }
 
+export interface ClockOperation {
+  timeMs?: number;
+  durationMs?: number;
+  timeoutMs?: number;
+}
+
 export interface LifecycleOperation {
-  kind: "GET_COOKIES" | "CLEAR_COOKIES" | "COOKIE_QUERY" | "STORAGE_SET" | "STORAGE_GET" | "STORAGE_GET_ALL" | "STORAGE_REMOVE" | "STORAGE_CLEAR" | "STORAGE_LENGTH" | "WAIT_FOR_DEFINED" | "URL" | "TITLE" | "WINDOW_SIZE" | "OUTLINE" | "ACCESSIBILITY_OUTLINE" | "CONSOLE_MESSAGES" | "PAGE_ERRORS" | "SET_DEVICE_METRICS" | "CLEAR_DEVICE_METRICS" | "SET_GEOLOCATION" | "CLEAR_GEOLOCATION" | "SET_PERMISSIONS" | "RESET_PERMISSIONS" | "SET_LOCALE" | "CLEAR_LOCALE" | "SET_TIMEZONE" | "CLEAR_TIMEZONE" | "SET_MEDIA" | "CLEAR_MEDIA" | "SET_USER_AGENT" | "CLEAR_USER_AGENT";
+  kind: "GET_COOKIES" | "CLEAR_COOKIES" | "COOKIE_QUERY" | "STORAGE_SET" | "STORAGE_GET" | "STORAGE_GET_ALL" | "STORAGE_REMOVE" | "STORAGE_CLEAR" | "STORAGE_LENGTH" | "WAIT_FOR_DEFINED" | "URL" | "TITLE" | "WINDOW_SIZE" | "OUTLINE" | "ACCESSIBILITY_OUTLINE" | "CONSOLE_MESSAGES" | "PAGE_ERRORS" | "SET_DEVICE_METRICS" | "CLEAR_DEVICE_METRICS" | "SET_GEOLOCATION" | "CLEAR_GEOLOCATION" | "SET_PERMISSIONS" | "RESET_PERMISSIONS" | "SET_LOCALE" | "CLEAR_LOCALE" | "SET_TIMEZONE" | "CLEAR_TIMEZONE" | "SET_MEDIA" | "CLEAR_MEDIA" | "SET_USER_AGENT" | "CLEAR_USER_AGENT" | "INSTALL_CLOCK" | "PAUSE_CLOCK_AT" | "RESUME_CLOCK" | "RUN_CLOCK_FOR" | "FAST_FORWARD_CLOCK" | "SET_CLOCK_FIXED_TIME" | "SET_CLOCK_SYSTEM_TIME";
   area?: string;
   key?: string;
   valueJson?: string;
@@ -335,6 +342,7 @@ export interface LifecycleOperation {
   timezone?: string;
   media?: Media;
   userAgent?: string;
+  clock?: ClockOperation;
 }
 
 export interface LifecycleRequest {
