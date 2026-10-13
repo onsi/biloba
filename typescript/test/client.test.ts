@@ -77,10 +77,13 @@ describe("Biloba TypeScript client", () => {
   let closeSessionError: string | undefined;
   let daemonVersion: string | undefined;
   const requests: Array<{method: string; request: Record<string, unknown>}> = [];
+  // The deadline each request carried, in step with requests.
+  const deadlines: Array<number | undefined> = [];
   let openedSessions = 0;
 
   beforeEach(() => {
     requests.length = 0;
+    deadlines.length = 0;
     openedSessions = 0;
     assertImplementation = (_request, respond) => {
       respond(operationResult({
@@ -115,6 +118,7 @@ describe("Biloba TypeScript client", () => {
     const request = envelope.params as Record<string, unknown>;
     const method = envelope.method[0]!.toUpperCase() + envelope.method.slice(1);
     requests.push({method, request});
+    deadlines.push(envelope.timeoutMs);
     const reply = (result: unknown) => toClient.write(encodeFrame({id: envelope.id, result}));
     const respond: Respond = reply;
     switch (envelope.method) {
@@ -621,6 +625,60 @@ describe("Biloba TypeScript client", () => {
     await expect(session.startScreencast({quality: 101})).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
     await expect(session.startScreencast({maxHeight: -1})).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
     await expect(session.startScreencast({timeoutMs: 5} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+  });
+
+  it("drives the page clock through typed lifecycle operations, giving runFor a deadline past its budget", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    const t0 = new Date(Date.UTC(2024, 1, 2, 8));
+    const clock = await session.installClock(t0);
+    await clock.pauseAt(t0.getTime());
+    await clock.runFor(1_500);
+    await clock.runFor(60_000, {timeoutMs: 30_000});
+    await clock.fastForward(3_600_000);
+    await clock.setFixedTime(new Date(0));
+    await clock.setSystemTime(t0);
+    await session.clock().resume();
+    const lifecycle = requests.map((entry, index) => ({...entry, deadline: deadlines[index]})).filter(({method}) => method === "Lifecycle");
+    expect(lifecycle.map(({request}) => request.operation)).toEqual([
+      {kind: "INSTALL_CLOCK", clock: {timeMs: t0.getTime()}},
+      {kind: "PAUSE_CLOCK_AT", clock: {timeMs: t0.getTime()}},
+      {kind: "RUN_CLOCK_FOR", clock: {durationMs: 1_500, timeoutMs: 10_000}},
+      {kind: "RUN_CLOCK_FOR", clock: {durationMs: 60_000, timeoutMs: 30_000}},
+      {kind: "FAST_FORWARD_CLOCK", clock: {durationMs: 3_600_000}},
+      {kind: "SET_CLOCK_FIXED_TIME", clock: {timeMs: 0}},
+      {kind: "SET_CLOCK_SYSTEM_TIME", clock: {timeMs: t0.getTime()}},
+      {kind: "RESUME_CLOCK"},
+    ]);
+    expect(lifecycle[2]!.deadline).toBeGreaterThan(10_000);
+    expect(lifecycle[3]!.deadline).toBeGreaterThan(30_000);
+
+    await expect(session.installClock(new Date(Number.NaN))).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(clock.fastForward(-1)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(clock.runFor(Number.POSITIVE_INFINITY)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(clock.runFor(10, {timeoutMs: 0})).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(clock.resume({timeoutMs: 5} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(clock.runFor(10, {intervalMs: 5} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+  });
+
+  it("says the page clock is paused when a poll times out under it", async () => {
+    const pausedClock = {locator: `locator("#countdown")`, daemonDetail: "timed out", pausedClockAt: "2024-02-02T08:00:00.000Z"};
+    const note = "This tab's page clock is paused at 2024-02-02T08:00:00.000Z; timers and animation frames won't run until you call runFor, fastForward, or resume.";
+    assertImplementation = (_request, respond) => respond(operationResult({matched: false, observedJson: JSON.stringify("10"), trajectory: [{attempt: 1, elapsedMs: 0, observedJson: JSON.stringify("10")}], diagnostics: {...pausedClock, expected: "9"}}));
+    clickImplementation = (_request, respond) => respond(operationResult({matched: false, attemptCount: 1, trajectory: [{attempt: 1, elapsedMs: 0}], diagnostics: {...pausedClock, expected: "operation to succeed"}}));
+    browser = await connectClient();
+    const session = await browser.openSession();
+
+    const assertion = await session.locator("#countdown").expectText("9", {timeoutMs: 50}).catch((reason: unknown) => reason);
+    expectTimedOutAssertion(assertion, {locator: `locator("#countdown")`, expected: "9"});
+    expect(assertion.message).toContain(note);
+    const action = await session.locator("#countdown").click({timeoutMs: 50}).catch((reason: unknown) => reason);
+    expectTimedOutAction(action, {locator: `locator("#countdown")`, operation: "click"});
+    expect(action.message).toContain(note);
+
+    assertImplementation = (_request, respond) => respond(operationResult({matched: false, observedJson: JSON.stringify("10"), trajectory: [{attempt: 1, elapsedMs: 0}], diagnostics: {locator: `locator("#countdown")`, expected: "9"}}));
+    const unpaused = await session.locator("#countdown").expectText("9", {timeoutMs: 50}).catch((reason: unknown) => reason);
+    expect((unpaused as Error).message).not.toContain("page clock");
   });
 
   it("serializes live handles, storage, page state, and emulation through typed lifecycle operations", async () => {

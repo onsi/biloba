@@ -56,7 +56,8 @@ CI runs every one of these (`.github/workflows/test.yml`). Two rules keep them h
 `engine/biloba.js` there would silently repair the drift the engine suite exists to catch. Run
 `go generate ./engine` yourself after editing `biloba.js` or `clock.js`.
 
-**Page-clock specs** (`clock_test.go`, `engine/clock_test.go`) install the clock and `PauseAt` *before*
+**Page-clock specs** (`clock_test.go`, `engine/clock_test.go`, and the "page clock" block of
+`typescript/test/parity.test.ts`, which serves the same `fixtures/clock.html`) install the clock and `PauseAt` *before*
 `Navigate`, so the fixture's timers are fake from the first line of the page and every assertion
 is on exact fake times (`RunFor(300ms)` → exactly 18 animation frames).  A spec that lets time
 flow waits on real time, so give its `Eventually` a few seconds rather than Gomega's 1s default.

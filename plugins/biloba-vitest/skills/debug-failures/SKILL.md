@@ -19,6 +19,8 @@ try {
 
 The trajectory tells you what the daemon observed on every attempt. A flat trajectory is usually a stable product/test bug; a monotone approach suggests latency; a match followed by failures points to a detached or replaced node. Widen a timeout only when the evidence shows genuine slow progress.
 
+A timeout whose message ends `This tab's page clock is paused at <t>; timers and animation frames won't run until you call runFor, fastForward, or resume.` comes from the test's own `installClock`/`pauseAt`: the page's timers never ran, so the trajectory is flat. Advance the clock before asserting (`biloba-vitest:flaky-tests`).
+
 ## Failure codes
 
 | Code | Meaning |

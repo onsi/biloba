@@ -4,7 +4,7 @@ import {createServer, type Server} from "node:http";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {fileURLToPath} from "node:url";
-import {afterAll, beforeAll, describe, expect, it} from "vitest";
+import {afterAll, beforeAll, beforeEach, describe, expect, it} from "vitest";
 
 import {
   allOf,
@@ -29,8 +29,8 @@ import {expectTimedOutAction, expectTimedOutAssertion} from "./support/assertion
 const fixturePath = fileURLToPath(new URL("../../fixtures/graft-parity.html", import.meta.url));
 const expectedPath = fileURLToPath(new URL("../../fixtures/graft-parity-expected.json", import.meta.url));
 const daemonExecutable = process.env.BILOBA_DAEMON_EXECUTABLE;
-// The Go suite's own fixtures, so the pointer and screencast specs here drive the pages Go's pointer_test.go
-// and screencast_test.go do.
+// The Go suite's own fixtures, so the pointer, screencast, and clock specs here drive the pages Go's
+// pointer_test.go, screencast_test.go, and clock_test.go do.
 const goFixture = (name: string) => fileURLToPath(new URL(`../../fixtures/${name}`, import.meta.url));
 
 // This is the only test that drives the real daemon against a real Chrome, so it fails loudly when
@@ -63,7 +63,7 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
       if (request.url === "/slow-download") { response.setHeader("content-disposition", "attachment; filename=slow.bin"); response.write(Buffer.alloc(1024)); const timer = setInterval(() => { if (response.destroyed) { clearInterval(timer); return; } response.write(Buffer.alloc(1024)); }, 50); setTimeout(() => { clearInterval(timer); response.end(); }, 1_000); return; }
       if (request.url === "/echo-request") { const chunks: Buffer[] = []; request.on("data", (chunk: Buffer) => chunks.push(chunk)); request.on("end", () => { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({method: request.method, header: request.headers["x-modified"], body: Buffer.concat(chunks).toString("utf8")})); }); return; }
       if (request.url?.startsWith("/network-json") || request.url?.startsWith("/callback")) { response.setHeader("content-type", "text/plain"); response.setHeader("x-duplicate", ["first", "second"]); response.end(request.url.startsWith("/callback") ? "callback" : "network"); return; }
-      if (request.url === "/pointer.html" || request.url === "/screencast.html") { response.setHeader("content-type", "text/html"); createReadStream(goFixture(request.url.slice(1))).pipe(response); return; }
+      if (request.url === "/pointer.html" || request.url === "/screencast.html" || request.url === "/clock.html") { response.setHeader("content-type", "text/html"); createReadStream(goFixture(request.url.slice(1))).pipe(response); return; }
       if (request.url === "/released") { pointerReleases++; response.end(); return; }
       if (request.url === "/user-agent") { response.setHeader("content-type", "text/plain"); response.end(request.headers["user-agent"] ?? ""); return; }
       if (request.url === "/slow") { setTimeout(() => response.end("slow"), 100); return; }
@@ -95,7 +95,7 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     baseUrl = `http://127.0.0.1:${address.port}`;
 
     childServer = createServer((request, response) => {
-      if (request.url === "/pointer.html") { response.setHeader("content-type", "text/html"); createReadStream(goFixture("pointer.html")).pipe(response); return; }
+      if (request.url === "/pointer.html" || request.url === "/clock.html") { response.setHeader("content-type", "text/html"); createReadStream(goFixture(request.url.slice(1))).pipe(response); return; }
       const id = new URL(request.url ?? "/", "http://child.test").searchParams.get("id") ?? "child";
       const serializedId = JSON.stringify(id);
       response.setHeader("content-type", "text/html");
@@ -559,6 +559,133 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
       await tab.prepare();
       await expect(forgotten.stop()).rejects.toMatchObject({code: "TARGET_NOT_FOUND", message: expect.stringContaining("discards its recordings when it is prepared or closed")});
       await (await tab.startScreencast()).stop();
+    });
+  });
+
+  describe("the page clock", () => {
+    const t0 = new Date(Date.UTC(2024, 1, 2, 8));
+    const at = (ms: number) => t0.getTime() + ms;
+    const pausedNote = "This tab's page clock is paused at 2024-02-02T08:00:00.000Z; timers and animation frames won't run until you call runFor, fastForward, or resume.";
+    const text = async (on: Session, selector: string) => await on.locator(selector).innerText();
+    const onRealTime = async (on: Session) => {
+      expect(await on.evaluate("typeof window._bilobaClock")).toBe("undefined");
+      expect(Math.abs(await on.evaluate<number>("Date.now()") - Date.now())).toBeLessThan(5_000);
+    };
+    let tab: Session;
+
+    beforeAll(async () => { tab = await browser.openSession(); });
+    beforeEach(async () => { await tab.prepare(); });
+    afterAll(async () => { await tab.close(); });
+
+    const pausedPage = async () => {
+      const clock = await tab.installClock(t0);
+      await clock.pauseAt(t0);
+      await tab.navigate(`${baseUrl}/clock.html`);
+      return clock;
+    };
+
+    it("starts the page where it was paused and runs its timers and animation frames only when told to", async () => {
+      const clock = await pausedPage();
+      expect(await text(tab, "#now")).toBe("2024-02-02T08:00:00.000Z");
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect([await text(tab, "#countdown"), await text(tab, "#frames")]).toEqual(["10", "0"]);
+
+      await clock.runFor(300);
+      expect([await text(tab, "#chain"), await text(tab, "#frames"), await text(tab, "#later")]).toEqual(["one two three", "18", ""]);
+      await clock.runFor(4_700);
+      expect([await text(tab, "#countdown"), await text(tab, "#later")]).toEqual(["5", "later"]);
+      expect(await tab.evaluate("Date.now()")).toBe(at(5_000));
+    });
+
+    it("fires each due timer once with fastForward, pins Date with setFixedTime, and moves it with setSystemTime", async () => {
+      const clock = await pausedPage();
+      await clock.fastForward(3_600_000);
+      expect([await text(tab, "#countdown"), await text(tab, "#ago")]).toEqual(["9", "60 minutes ago"]);
+      expect(await tab.evaluate("Date.now()")).toBe(at(3_600_000));
+
+      const fixed = Date.UTC(2030, 0, 1);
+      await clock.setFixedTime(new Date(fixed));
+      await clock.runFor(1_000);
+      expect(await text(tab, "#countdown")).toBe("8");
+      expect(await tab.evaluate("[Date.now(), new Date().getTime()]")).toEqual([fixed, fixed]);
+
+      await clock.setSystemTime(at(-3_600_000));
+      expect(await tab.evaluate("Date.now()")).toBe(at(-3_600_000));
+      await clock.runFor(999);
+      expect(await text(tab, "#countdown")).toBe("8");
+      await clock.runFor(1);
+      expect(await text(tab, "#countdown")).toBe("7");
+    });
+
+    it("hands back the installed clock from session.clock(), and lets time flow again with resume", async () => {
+      await pausedPage();
+      await tab.clock().runFor(1_000);
+      expect(await text(tab, "#countdown")).toBe("9");
+      await tab.clock().resume();
+      await tab.locator("#countdown").expectText("8", {timeoutMs: 3_000});
+      await expect.poll(async () => Number(await text(tab, "#frames"))).toBeGreaterThan(5);
+    });
+
+    it("bounds runFor by real time and says how far it got", async () => {
+      const clock = await pausedPage();
+      await tab.evaluate("setInterval(() => {}, 1)");
+      await expect(clock.runFor(3_600_000, {timeoutMs: 50})).rejects.toMatchObject({code: "TIMEOUT", message: expect.stringMatching(/runFor\(3600000\) did not finish within 50ms[\s\S]*fastForward skips ahead/)});
+    });
+
+    it("says the clock is paused when a poll times out, and not for an immediate read or once time flows", async () => {
+      const clock = await pausedPage();
+      const assertion = await tab.locator("#countdown").expectText("9", {timeoutMs: 100}).catch((reason: unknown) => reason);
+      expectTimedOutAssertion(assertion, {locator: `locator("#countdown")`, expected: "9"});
+      expect(assertion.message).toContain(pausedNote);
+      const action = await tab.locator("#not-there").click({timeoutMs: 100}).catch((reason: unknown) => reason);
+      expectTimedOutAction(action, {locator: `locator("#not-there")`, operation: "click"});
+      expect(action.message).toContain(pausedNote);
+
+      await expect(tab.locator("#countdown").expectText("9", {immediate: true})).rejects.toSatisfy((error: Error) => !error.message.includes("page clock"));
+      await clock.resume();
+      await expect(tab.locator("#not-there").click({timeoutMs: 100})).rejects.toSatisfy((error: Error) => error.message.includes("timed out") && !error.message.includes("page clock"));
+    });
+
+    it("covers the tab's same-process frames, which refuse to control it", async () => {
+      const clock = await tab.installClock(t0);
+      await clock.pauseAt(t0);
+      await tab.navigate(baseUrl);
+      await tab.evaluate(`url => { const frame = document.createElement("iframe"); frame.src = url; document.body.append(frame) }`, [`${childBaseUrl}/clock.html`]);
+      const frame = await tab.waitForFrame({has: "#countdown"}, {timeoutMs: 5_000});
+      expect(await text(frame, "#now")).toBe("2024-02-02T08:00:00.000Z");
+      await clock.runFor(5_000);
+      expect([await text(frame, "#countdown"), await text(frame, "#later")]).toEqual(["5", "later"]);
+
+      const failure = await frame.locator("#countdown").expectText("4", {timeoutMs: 100}).catch((reason: unknown) => reason);
+      expect((failure as Error).message).toContain("This tab's page clock is paused at 2024-02-02T08:00:05.000Z");
+      await expect(frame.installClock(t0)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+      await expect(frame.clock().runFor(1_000)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    });
+
+    it("is per tab", async () => {
+      const other = await tab.newTab();
+      try {
+        await (await other.installClock(t0)).pauseAt(t0);
+        await other.navigate(`${baseUrl}/clock.html`);
+        expect(await text(other, "#now")).toBe("2024-02-02T08:00:00.000Z");
+        await tab.navigate(`${baseUrl}/clock.html`);
+        await onRealTime(tab);
+      } finally {
+        await other.close();
+      }
+    });
+
+    it("refuses a second install and calls without one, and prepare() removes it", async () => {
+      await expect(tab.clock().runFor(1)).rejects.toMatchObject({code: "INVALID_ARGUMENT", message: expect.stringContaining("this tab has no page clock")});
+      await pausedPage();
+      await expect(tab.installClock(t0)).rejects.toMatchObject({code: "INVALID_ARGUMENT", message: expect.stringContaining("already installed")});
+      expect(await tab.evaluate("Date.now()")).toBe(t0.getTime());
+
+      await tab.prepare();
+      await tab.navigate(`${baseUrl}/clock.html`);
+      await onRealTime(tab);
+      await expect(tab.clock().resume()).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+      await tab.installClock(t0);
     });
   });
 

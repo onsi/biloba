@@ -82,6 +82,8 @@ import {
   type ScreencastOptions,
   type ScreencastFrame,
   type ScreencastRecording,
+  type Clock,
+  type ClockTime,
 } from "../index.js";
 import {packageVersion} from "./package-version.js";
 import {StdioTransport} from "./stdio-transport.js";
@@ -658,6 +660,17 @@ class ClientSession implements Session {
     return new ClientScreencastRecording(this, result.id);
   }
 
+  async installClock(start: ClockTime, options: CommandOptions = {}): Promise<Clock> {
+    const clock = new ClientClock(this);
+    await clock.command("INSTALL_CLOCK", {timeMs: clockTimeMs(start, "installClock")}, options, "installClock");
+    return clock;
+  }
+
+  clock(): Clock {
+    this.#assertOpen();
+    return new ClientClock(this);
+  }
+
   async #listHandles(kind: "tabs" | "frames", spawnedOnly: boolean, options: CommandOptions): Promise<readonly Session[]> {
     this.#assertOpen();
     assertCancellationOptions(options, kind);
@@ -1076,6 +1089,54 @@ class ClientPointer implements Pointer {
     const response = await this.#session.dom({...operation, pointerId: this.#id, pointerType: this.type}, options);
     operationResult(response, label, callsiteStack);
   }
+}
+
+// The engine's DefaultClockRunTimeout: how long runFor may spend, in real time, unless told otherwise.
+const defaultClockRunTimeoutMs = 10_000;
+
+// A handle on the tab's page clock.  The daemon owns the clock (engine.Session keeps it, and prepare()
+// removes it), so the handle holds no state and every call names the operation and its arguments.
+class ClientClock implements Clock {
+  readonly #session: ClientSession;
+
+  constructor(session: ClientSession) { this.#session = session; }
+
+  async pauseAt(time: ClockTime, options: CommandOptions = {}): Promise<void> { await this.command("PAUSE_CLOCK_AT", {timeMs: clockTimeMs(time, "clock.pauseAt")}, options, "clock.pauseAt"); }
+  async resume(options: CommandOptions = {}): Promise<void> { await this.command("RESUME_CLOCK", undefined, options, "clock.resume"); }
+  async fastForward(ms: number, options: CommandOptions = {}): Promise<void> { await this.command("FAST_FORWARD_CLOCK", {durationMs: clockDurationMs(ms, "clock.fastForward")}, options, "clock.fastForward"); }
+  async setFixedTime(time: ClockTime, options: CommandOptions = {}): Promise<void> { await this.command("SET_CLOCK_FIXED_TIME", {timeMs: clockTimeMs(time, "clock.setFixedTime")}, options, "clock.setFixedTime"); }
+  async setSystemTime(time: ClockTime, options: CommandOptions = {}): Promise<void> { await this.command("SET_CLOCK_SYSTEM_TIME", {timeMs: clockTimeMs(time, "clock.setSystemTime")}, options, "clock.setSystemTime"); }
+
+  // runFor is a waiting command: timeoutMs is its real-time budget, which the daemon enforces in the
+  // page, and the request's own deadline sits on top of it so the daemon reports how far it got.
+  async runFor(ms: number, options: WaitingCommandOptions = {}): Promise<void> {
+    assertWaitingCommandOptions(options, "clock.runFor");
+    const durationMs = clockDurationMs(ms, "clock.runFor");
+    const timeoutMs = options.timeoutMs ?? defaultClockRunTimeoutMs;
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new BilobaError({code: "INVALID_ARGUMENT", message: `clock.runFor timeoutMs must be a positive number of milliseconds, got ${timeoutMs}`});
+    const budget = Math.ceil(timeoutMs);
+    const callsiteStack = new Error().stack;
+    const response = await this.#session.lifecycleOperation({kind: "RUN_CLOCK_FOR", clock: {durationMs, timeoutMs: budget}}, {...(options.signal && {signal: options.signal}), timeoutMs: budget, mode: "immediate"});
+    operationResult(response, "clock.runFor", callsiteStack);
+  }
+
+  async command(kind: WireLifecycleOperation["kind"], clock: WireLifecycleOperation["clock"], options: CommandOptions, label: string): Promise<void> {
+    assertCancellationOptions(options, label);
+    const callsiteStack = new Error().stack;
+    const response = await this.#session.lifecycleOperation({kind, ...(clock && {clock})}, {...options, mode: "immediate"});
+    operationResult(response, label, callsiteStack);
+  }
+}
+
+function clockTimeMs(time: ClockTime, operation: string): number {
+  const ms = time instanceof Date ? time.getTime() : time;
+  if (typeof ms !== "number" || !Number.isFinite(ms)) throw new BilobaError({code: "INVALID_ARGUMENT", message: `${operation} requires a valid Date or a number of milliseconds since the epoch, got ${String(time)}`});
+  return Math.floor(ms);
+}
+
+function clockDurationMs(ms: number, operation: string): number {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) throw new BilobaError({code: "INVALID_ARGUMENT", message: `${operation} requires a non-negative number of milliseconds, got ${String(ms)}`});
+  return Math.floor(ms);
 }
 
 class ClientScreencastRecording implements ScreencastRecording {
@@ -1937,6 +1998,7 @@ function assertionResult(response: DriverOperationResult, callsiteStack: string 
       diagnostics.expected ? `expected: ${diagnostics.expected}` : undefined,
       `last observed: ${JSON.stringify(observed)}`,
       `attempts: ${response.attemptCount ?? trajectory.length}`,
+      pausedClockNote(diagnostics.pausedClockAt),
     ].filter((line): line is string => line !== undefined).join("\n");
     throw new BilobaError({
       code: "TIMEOUT",
@@ -1968,6 +2030,12 @@ function diagnosticsFromWire(value: import("../generated/protocol.js").ContextDi
   return {purpose: value.purpose as ContextDiagnostics["purpose"], ...(value.artifactDir && {artifactDir: value.artifactDir}), tabs: value.tabs.map((tab) => ({...(tab.sessionId && {sessionId: tab.sessionId}), targetId: tab.targetId, title: tab.title, ...(tab.screenshotPath && {screenshotPath: tab.screenshotPath}), ...(tab.screenshotBase64 && {screenshot: decodeBinaryBody(tab.screenshotBase64)}), ...(tab.outlinePath && {outlinePath: tab.outlinePath}), ...(tab.domOutline && {domOutline: tab.domOutline}), errors: tab.errors as import("../index.js").DiagnosticsArtifactError[]}))};
 }
 
+// A poll that ran out of time while the tab's page clock was paused most likely waited on a timer that
+// could never run: say so, in the client's own method names.
+function pausedClockNote(pausedAt: string | undefined): string | undefined {
+  return pausedAt ? `This tab's page clock is paused at ${pausedAt}; timers and animation frames won't run until you call runFor, fastForward, or resume.` : undefined;
+}
+
 function operationResult(
   response: DriverOperationResult,
   operation: string,
@@ -1988,6 +2056,7 @@ function operationResult(
       `Biloba ${operation} timed out`,
       diagnostics.locator ? `locator: ${diagnostics.locator}` : undefined,
       `attempts: ${response.attemptCount ?? trajectory.length}`,
+      pausedClockNote(diagnostics.pausedClockAt),
     ].filter((line): line is string => line !== undefined).join("\n"),
     ...(diagnostics.locator && {locator: diagnostics.locator}),
     ...(diagnostics.expected && {expected: diagnostics.expected}),

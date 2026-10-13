@@ -304,6 +304,37 @@ export interface Pointer {
   /** Release the primary button where the pointer is.  Releasing a released pointer is an INVALID_ARGUMENT error. */
   up(options?: CancellationOptions): Promise<void>;
 }
+/** A page-clock time: a Date, or milliseconds since the Unix epoch.  The clock has millisecond resolution. */
+export type ClockTime = Date | number;
+/**
+ * A tab's page clock: fake timers for the page's own code, so a test can move time instead of waiting
+ * for it.  session.installClock() installs it and returns one; session.clock() returns one for the
+ * tab.  Every method fails with INVALID_ARGUMENT when the tab has no clock installed, or on a frame
+ * handle.  Biloba itself keeps running on real time, so polling never advances a paused clock.
+ */
+export interface Clock {
+  /**
+   * Stop the page's time at `time`: no timer or animation frame runs until runFor, fastForward, or
+   * resume.  A time ahead of the clock gets there the way fastForward does; a time behind it (time
+   * flows after installClock, so pausing at the start time usually goes back a little) moves the clock
+   * back without firing anything.
+   */
+  pauseAt(time: ClockTime, options?: CommandOptions): Promise<void>;
+  /** Let the page's time flow again at the real rate, from wherever the clock is. */
+  resume(options?: CommandOptions): Promise<void>;
+  /**
+   * Advance the clock by `ms`, running every timer and animation frame that falls due, in order, each
+   * in its own task so promise callbacks run in between.  It gives up after `timeoutMs` of real time
+   * (10 seconds by default) with a TIMEOUT that says how far it got.
+   */
+  runFor(ms: number, options?: WaitingCommandOptions): Promise<void>;
+  /** Jump the clock ahead by `ms`, firing each timer that fell due along the way once, at the new time. */
+  fastForward(ms: number, options?: CommandOptions): Promise<void>;
+  /** Pin what the page's Date reports to `time`.  Timers and animation frames keep running on the clock's own time. */
+  setFixedTime(time: ClockTime, options?: CommandOptions): Promise<void>;
+  /** Move the clock to `time`, forwards or backwards, without firing any timer; unpins setFixedTime. */
+  setSystemTime(time: ClockTime, options?: CommandOptions): Promise<void>;
+}
 export interface ScreencastOptions extends CancellationOptions {
   /** "jpeg" (the default) or "png". */
   format?: "jpeg" | "png" | undefined;
@@ -798,6 +829,15 @@ export interface Session {
    * stop a recording that is still running and discard it: stop it first to keep its frames.
    */
   startScreencast(options?: ScreencastOptions): Promise<ScreencastRecording>;
+  /**
+   * Install the page clock on this tab and its same-process frames, starting at `start` with time
+   * flowing at the real rate, and return the Clock that controls it.  Install before navigate() to
+   * cover every timer the page creates.  A second installClock() before prepare() fails with
+   * INVALID_ARGUMENT, as does installClock() on a frame handle.  prepare() and close() remove it.
+   */
+  installClock(start: ClockTime, options?: CommandOptions): Promise<Clock>;
+  /** This tab's page clock, installed earlier with installClock(), for code that wasn't handed it. */
+  clock(): Clock;
   clearSelection(options?: CancellationOptions): Promise<void>;
   normalizeColor(color: string, options?: CancellationOptions): Promise<string>;
   close(): Promise<void>;

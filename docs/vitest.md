@@ -185,7 +185,7 @@ await session.setLocale("fr-FR");
 await session.setTimezone("Europe/Paris");
 ```
 
-`touch` makes `navigator.maxTouchPoints` positive and matches `(pointer: coarse)`; `landscape` reports a landscape `screen.orientation`. `setUserAgent()` changes both `navigator.userAgent` and the `User-Agent` request header. `setGeolocation()` and `setPermissions()` cover location and permission prompts.  Permissions use the names `navigator.permissions.query` takes - `"camera"`, `"microphone"`, `"geolocation"`, `"notifications"`, `"clipboard-read"`, `"clipboard-write"`, and the rest of the `Permission` type - and apply to an origin (`""` for every origin):
+`touch` makes `navigator.maxTouchPoints` positive and matches `(pointer: coarse)`; `landscape` reports a landscape `screen.orientation`.  `setTimezone()` changes the time zone, not the time; to control the time itself, see [Controlling time](#controlling-time). `setUserAgent()` changes both `navigator.userAgent` and the `User-Agent` request header. `setGeolocation()` and `setPermissions()` cover location and permission prompts.  Permissions use the names `navigator.permissions.query` takes - `"camera"`, `"microphone"`, `"geolocation"`, `"notifications"`, `"clipboard-read"`, `"clipboard-write"`, and the rest of the `Permission` type - and apply to an origin (`""` for every origin):
 
 ```ts
 await session.setPermissions("http://localhost:3000", {camera: "granted", microphone: "denied"});
@@ -206,7 +206,7 @@ await frame.locator("#success").expectVisible();
 
 Frame handles expose the normal locator, action, assertion, JavaScript, upload, and frame-local storage APIs. Trusted pointer input is translated through the iframe owner's content geometry, including parent scrolling, borders, and CSS transforms. For a same-process frame, realistic actions also check the translated point against the whole tab, so an overlay in the embedding page that covers the frame fails the action instead of taking the click. `frame.evaluate()` runs in the selected frame's normal JavaScript environment, just like `session.evaluate()` does for a tab, so it can read and update globals created by the frame's own scripts. Same-origin iframe and open-shadow-root piercing remains `session.locator("outer >>> inner")`; `frames()` is the cross-origin boundary API.
 
-A frame handle is a document, not a tab. Tab and browser-context controls fail on it with `INVALID_ARGUMENT`: `navigate()`, `prepare()`, `addInitScript()`, `activate()`, `newTab()`, `setWindowSize()`, the emulation setters (device metrics, geolocation, permissions, locale, timezone, media, user agent), `setCookies()`/`clearCookies()`, request stubbing, aborting, modifying, routing and holding, network state and cache, and `handleDialogs()`. Call them on the session that owns the frame. Reads that don't change the tab, such as `getCookies()` and `windowSize()`, still work.
+A frame handle is a document, not a tab. Tab and browser-context controls fail on it with `INVALID_ARGUMENT`: `navigate()`, `prepare()`, `addInitScript()`, `activate()`, `newTab()`, `setWindowSize()`, the emulation setters (device metrics, geolocation, permissions, locale, timezone, media, user agent), the page clock (`installClock()` and the methods of `clock()`), `setCookies()`/`clearCookies()`, request stubbing, aborting, modifying, routing and holding, network state and cache, and `handleDialogs()`. Call them on the session that owns the frame. Reads that don't change the tab, such as `getCookies()` and `windowSize()`, still work.
 
 A frame handle records its own document's console messages, page errors, and requests from the moment it is found, so `frame.expectConsoleMessage()` and `frame.waitForRequest()` work for either kind of frame. After navigation, request history keeps only the original document's requests; `waitForRequest()` and `expectNetworkIdle()` reject the stale handle. The owning tab also sees the console output and requests of its same-process frames, but not those of out-of-process frames. Dialogs from any frame are reported and handled on the owning tab. Network interception registered on the tab applies to its same-process frames' requests, not to an out-of-process frame's.
 
@@ -460,6 +460,62 @@ Some things to know:
 - **Frames are the size of the window, in CSS pixels.**  An emulated device scale factor changes how the page renders but does not enlarge the frames.  Use `captureScreenshot()` for a full-resolution still.
 - **Frames are held in memory** until `stop()` returns them.  At 1024x768 a JPEG frame is roughly 40-60KB, a PNG frame 500KB or more, so ten seconds of a busy page at 60 frames a second is tens of megabytes as JPEG.  Shrink the frames with `maxWidth`/`maxHeight`, or record fewer with `everyNthFrame`, for long recordings.
 - **The two Chrome builds behave differently.**  `chrome-headless-shell` (the default) delivers frames steadily, in order, each timestamped within a few milliseconds of being drawn - even while other workers drive their own tabs.  Full Chrome (`mode: "headless"`) encodes frames on several threads and slows down when other tabs in the same browser are busy: frames can arrive out of order (which is why `stop()` sorts them), a recording can go a few hundred milliseconds without a frame, a frame can be timestamped hundreds of milliseconds after it was drawn, and with an emulated device scale factor the first frame or two can ignore `maxWidth`/`maxHeight`.  For frame timing you intend to rely on, record in `chrome-headless-shell`.
+
+### Controlling time
+
+Time-dependent UI is slow and flaky to test on real time: a countdown, a "5 minutes ago" label, a debounced save, a session that expires after half an hour.  `session.installClock()` gives the tab a page clock - fake timers for the page's own code - so a test can move time forward instead of waiting for it:
+
+```ts
+it("expires the session after 30 minutes", async () => {
+  const t0 = new Date("2024-02-02T08:00:00Z");
+  const clock = await session.installClock(t0);
+  await clock.pauseAt(t0);
+  await session.navigate("http://localhost:3000/dashboard");
+  await session.locator("#welcome").expectVisible();
+
+  await clock.runFor(29 * 60_000);
+  await session.locator("#session-warning").expectCount(0);
+  await clock.runFor(60_000);
+  await session.locator("#session-expired").expectVisible();
+});
+```
+
+The page clock replaces the page's `Date` (every constructor form, and `Date.now`; `Date.parse` and `Date.UTC` behave as usual), `performance.now`, `setTimeout`/`clearTimeout`, `setInterval`/`clearInterval`, `requestAnimationFrame`/`cancelAnimationFrame`, and `requestIdleCallback`/`cancelIdleCallback`.  It does not touch CSS animations and transitions or the Web Animations API (`element.animate`), which run on the compositor's timeline - `expectScreenshot` and `captureScreenshot({frozen: true})` turn those off for a capture.  Nothing changes until a test installs the clock, and `prepare()` removes it.
+
+Once installed, time flows from the start time at the real rate.  The clock's methods move it.  Times are a `Date` or milliseconds since the epoch, and durations are milliseconds:
+
+- `clock.pauseAt(time)` stops time at `time`: no timer or animation frame runs until you call `runFor`, `fastForward`, or `resume`.  When `time` is ahead of the clock it gets there the way `fastForward` does.  When it is behind - time flows after `installClock`, so pausing at the start time usually goes back a few milliseconds - the clock moves back without firing anything.
+- `clock.runFor(ms)` advances the clock by `ms` and runs every timer and animation frame that falls due, in order.  Each runs in its own task, so the page's promise callbacks run in between, as they would on real time.  `runFor` resolves once they have all run.
+- `clock.fastForward(ms)` jumps ahead by `ms` and fires each timer that fell due along the way once, at the new time - the way a laptop's timers catch up when it wakes from sleep.  An interval that should have fired ten times fires once.
+- `clock.resume()` lets time flow again at the real rate.
+- `clock.setFixedTime(time)` pins what `Date` reports to `time`, while timers and animation frames keep running on the clock's own time.
+- `clock.setSystemTime(time)` moves the clock's time to `time`, forwards or backwards, without firing anything: a pending timer keeps the delay it had left.  It also unpins `setFixedTime`.
+
+Times have millisecond resolution.  `runFor`, `fastForward`, and `pauseAt` work the same whether time is flowing or paused, and leave it the way it was (except `pauseAt`, which pauses).
+
+`session.clock()` returns the tab's clock, so a helper doesn't have to be handed it.  Its methods fail with `INVALID_ARGUMENT` when the tab has no clock installed.  `runFor` gives up after 10 seconds of real time by default and fails with `TIMEOUT`, saying how far it got.  A page that keeps scheduling work (a 1ms interval, a busy animation loop) makes a long `runFor` slow; `clock.runFor(3_600_000, {timeoutMs: 60_000})` allows it longer, and `fastForward` skips ahead without running every callback.  Every clock method takes a `signal`.
+
+#### Installing before or after navigate
+
+Install the clock before `navigate()` to cover everything the page does.  It also works on a page that has already loaded: the clock replaces the timers in the current document, and `performance.now` carries on from where it was rather than starting again at zero.  But timers the page scheduled before `installClock` keep running on real time, and code that kept a reference to the real `Date` or `setTimeout` keeps using it.
+
+Every document the tab loads after `installClock` - a navigation, a reload, an iframe - gets the clock in the state it is in, so a page that loads while the clock is paused at noon starts paused at noon.
+
+#### Frames and tabs
+
+The clock covers the tab and its frames: each document has its own fake timers, and every clock method advances all of them, the tab's own document first and then its frames.  Out-of-process frames - in full Chrome (`mode: "headless"`), a cross-site iframe runs in its own process - are not covered and keep running on real time.  The clock belongs to the tab, so `installClock()` and the methods of `clock()` fail with `INVALID_ARGUMENT` on a frame handle.  A tab from `newTab()` or one the page opens doesn't share the clock; install one on that tab if it needs it.  A second `installClock()` on the same tab fails with `INVALID_ARGUMENT`.
+
+#### Biloba keeps running on real time
+
+The clock controls the page's code, not Biloba's.  Polling, realistic interactions, and screenshot captures run on real time whether the clock is flowing or paused.  That means polling does not move a paused clock: `await session.locator("#countdown").expectText("9")` against a page whose clock is paused will time out, because the page's interval never runs.  Call `runFor` (or `fastForward`, or `resume`) first.  When an action or assertion times out while the tab's clock is paused, the failure says so:
+
+```
+This tab's page clock is paused at 2024-02-02T08:00:00.000Z; timers and animation frames won't run until you call runFor, fastForward, or resume.
+```
+
+Vitest's own `expect.poll` doesn't know about the clock, so a poll of your own gets no such line.
+
+While time flows, the page's clock advances in steps of up to a frame (about 16ms), so code that spins in a loop waiting for `Date.now()` to change does not see it change.  An exception thrown by a callback the clock runs is reported as a page error, as it would be on real time.
 
 ### When something fails
 
