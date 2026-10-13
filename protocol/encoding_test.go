@@ -57,6 +57,8 @@ var _ = Describe("the generated protocol declarations", func() {
 		Entry("OperationResult", "OperationResult", protocol.OperationResult{}),
 		Entry("PollObservation", "PollObservation", protocol.PollObservation{}),
 		Entry("Timings", "Timings", protocol.Timings{}),
+		Entry("ScreencastFramesResponse", "ScreencastFramesResponse", protocol.ScreencastFramesResponse{}),
+		Entry("ScreencastFrame", "ScreencastFrame", protocol.WireScreencastFrame{}),
 	)
 
 	It("keeps a fully-populated operation result inside its declaration", func() {

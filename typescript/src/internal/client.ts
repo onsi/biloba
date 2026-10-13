@@ -75,6 +75,13 @@ import {
   type ContextDiagnostics,
   type DriverDebugEvent,
   type BilobaWarning,
+  type Pointer,
+  type PointerHandleOptions,
+  type PointerType,
+  type MoveToElementOptions,
+  type ScreencastOptions,
+  type ScreencastFrame,
+  type ScreencastRecording,
 } from "../index.js";
 import {packageVersion} from "./package-version.js";
 import {StdioTransport} from "./stdio-transport.js";
@@ -260,6 +267,7 @@ class ClientSession implements Session {
   readonly #liveTeardown = new Map<LiveEventKind, Promise<void>>();
   #warningFlush: Promise<void> | undefined;
   #eventGeneration = 0;
+  #pointerSequence = 0;
   closed = false;
 
   constructor(
@@ -629,6 +637,26 @@ class ClientSession implements Session {
   async clearMedia(options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "CLEAR_MEDIA"}, options); }
   async setUserAgent(userAgent: string, options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "SET_USER_AGENT", userAgent}, options); }
   async clearUserAgent(options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "CLEAR_USER_AGENT"}, options); }
+
+  pointer(options: PointerHandleOptions = {}): Pointer {
+    this.#assertOpen();
+    assertOptionKeys(options, "pointer", new Set(["type"]));
+    const type = options.type ?? "mouse";
+    if (type !== "mouse" && type !== "pen") throw new BilobaError({code: "INVALID_ARGUMENT", message: `pointer type must be "mouse" or "pen", got ${JSON.stringify(type)}`});
+    return new ClientPointer(this, ++this.#pointerSequence, type);
+  }
+
+  async startScreencast(options: ScreencastOptions = {}): Promise<ScreencastRecording> {
+    assertOptionKeys(options, "startScreencast", new Set(["signal", "format", "quality", "maxWidth", "maxHeight", "everyNthFrame"]));
+    if (options.format !== undefined && options.format !== "jpeg" && options.format !== "png") throw new BilobaError({code: "INVALID_ARGUMENT", message: `startScreencast format must be "jpeg" or "png", got ${JSON.stringify(options.format)}`});
+    for (const name of ["quality", "maxWidth", "maxHeight", "everyNthFrame"] as const) {
+      const value = options[name];
+      if (value !== undefined && (!Number.isInteger(value) || value < 0 || (name === "quality" && value > 100))) throw new BilobaError({code: "INVALID_ARGUMENT", message: `startScreencast ${name} must be ${name === "quality" ? "an integer from 0 to 100" : "a non-negative integer"}, got ${value}`});
+    }
+    const {signal, ...settings} = options;
+    const result = await this.eventfulValue<{id: string}>({kind: "START_SCREENCAST", screencast: definedEntries(settings)}, signal ? {signal} : {});
+    return new ClientScreencastRecording(this, result.id);
+  }
 
   async #listHandles(kind: "tabs" | "frames", spawnedOnly: boolean, options: CommandOptions): Promise<readonly Session[]> {
     this.#assertOpen();
@@ -1011,6 +1039,81 @@ class ClientStorage implements BrowserStorage {
   async length(options: CommandOptions = {}): Promise<number> { const response = await this.session.lifecycleOperation({kind: "STORAGE_LENGTH", area: this.area}, {...options, mode: "immediate"}); return parseJson(response.observedJson) as number; }
   async expectItem<T = unknown>(key: string, expected: ExpectedValue = {kind: "anything"}, options: PollOptions = {}): Promise<T> { const response = await this.session.lifecycleOperation({kind: "STORAGE_GET", area: this.area, key}, options, wireExpectation(expected)); operationResult(response, "storage item assertion", new Error().stack); return parseJson(response.observedJson) as T; }
   async expectLength(expected: number | Expectation, options: PollOptions = {}): Promise<AssertionResult> { return assertionResult(await this.session.lifecycleOperation({kind: "STORAGE_LENGTH", area: this.area}, options, wireExpectation(expected)), new Error().stack); }
+}
+
+class ClientPointer implements Pointer {
+  readonly #session: ClientSession;
+  readonly #id: number;
+  readonly type: PointerType;
+
+  constructor(session: ClientSession, id: number, type: PointerType) {
+    this.#session = session;
+    this.#id = id;
+    this.type = type;
+  }
+
+  async moveTo(x: number, y: number, options: CancellationOptions = {}): Promise<void> {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new BilobaError({code: "INVALID_ARGUMENT", message: "pointer.moveTo requires finite coordinates"});
+    await this.#dispatch({kind: "POINTER_MOVE", point: {x, y}}, options, "pointer.moveTo");
+  }
+
+  async moveToElement(target: Locator | string, options: MoveToElementOptions = {}): Promise<void> {
+    assertOptionKeys(options, "pointer.moveToElement", new Set(["timeoutMs", "intervalMs", "signal", "mode", "immediate", "position"]));
+    if (options.mode === "consistently") throw new BilobaError({code: "INVALID_ARGUMENT", message: "pointer.moveToElement does not support consistently"});
+    const {position, ...poll} = options;
+    const callsiteStack = new Error().stack;
+    const response = await this.#session.dom({kind: "POINTER_MOVE_TO_ELEMENT", locator: wireSessionLocator(this.#session, target, "pointer.moveToElement"), pointerId: this.#id, pointerType: this.type, ...(position && {offset: {x: position.x, y: position.y}})}, poll);
+    operationResult(response, "pointer.moveToElement", callsiteStack);
+  }
+
+  async down(options: CancellationOptions = {}): Promise<void> { await this.#dispatch({kind: "POINTER_DOWN"}, options, "pointer.down"); }
+  async up(options: CancellationOptions = {}): Promise<void> { await this.#dispatch({kind: "POINTER_UP"}, options, "pointer.up"); }
+
+  // Moves, presses, and releases dispatch once on the daemon whatever the poll says; they take no poll.
+  async #dispatch(operation: Pick<WireDOMOperation, "kind" | "point">, options: CancellationOptions, label: string): Promise<void> {
+    assertCancellationOptions(options, label);
+    const callsiteStack = new Error().stack;
+    const response = await this.#session.dom({...operation, pointerId: this.#id, pointerType: this.type}, options);
+    operationResult(response, label, callsiteStack);
+  }
+}
+
+class ClientScreencastRecording implements ScreencastRecording {
+  readonly #session: ClientSession;
+  readonly #id: string;
+  #frames: readonly ScreencastFrame[] | undefined;
+  #stopping: Promise<readonly ScreencastFrame[]> | undefined;
+
+  constructor(session: ClientSession, id: string) {
+    this.#session = session;
+    this.#id = id;
+  }
+
+  async stop(options: CancellationOptions = {}): Promise<readonly ScreencastFrame[]> {
+    assertCancellationOptions(options, "stop");
+    if (this.#frames) return this.#frames;
+    this.#stopping ??= this.#collect(options).finally(() => { this.#stopping = undefined; });
+    this.#frames = await this.#stopping;
+    return this.#frames;
+  }
+
+  // The daemon answers the stop with the first chunk of frames that fits its response budget, and the
+  // rest on request: a long recording would not fit in one protocol frame.
+  async #collect(options: CancellationOptions): Promise<readonly ScreencastFrame[]> {
+    type Chunk = import("../generated/protocol.js").ScreencastFramesResponse;
+    let chunk = await this.#session.eventfulValue<Chunk>({kind: "STOP_SCREENCAST", id: this.#id}, options);
+    const frames = chunk.frames.map(screencastFrame);
+    while (frames.length < chunk.count) {
+      chunk = await this.#session.eventfulValue<Chunk>({kind: "SCREENCAST_FRAMES", id: this.#id, offset: frames.length}, options);
+      if (chunk.offset !== frames.length || chunk.frames.length === 0) throw driverShapeError("screencast frames response did not continue where the last one ended");
+      frames.push(...chunk.frames.map(screencastFrame));
+    }
+    return Object.freeze(frames);
+  }
+}
+
+function screencastFrame(frame: import("../generated/protocol.js").ScreencastFrame): ScreencastFrame {
+  return {data: decodeBytes(frame.dataBase64), timestamp: frame.timestampMs, deviceWidth: frame.deviceWidth, deviceHeight: frame.deviceHeight, pageScaleFactor: frame.pageScaleFactor, scrollOffsetX: frame.scrollOffsetX, scrollOffsetY: frame.scrollOffsetY, offsetTop: frame.offsetTop};
 }
 
 class ClientResponseHold implements ResponseHold {
@@ -1649,6 +1752,12 @@ function wireLocator(locator: Locator | string): WireLocator {
   }
   if (locator instanceof ClientLocator) return locator.wireLocator();
   throw new BilobaError({code: "INVALID_ARGUMENT", message: "locator belongs to a different Biloba client"});
+}
+
+function wireSessionLocator(session: ClientSession, locator: Locator | string, operation: string): WireLocator {
+  if (typeof locator === "string") return {kind: "CSS", value: locator, match: "EXACT", first: false};
+  if (locator instanceof ClientLocator && locator.belongsTo(session)) return locator.wireLocator();
+  throw new BilobaError({code: "INVALID_ARGUMENT", message: `${operation} locator belongs to a different session`});
 }
 
 function wireScreenshotSubject(session: ClientSession, locator: Locator | string): WireLocator {

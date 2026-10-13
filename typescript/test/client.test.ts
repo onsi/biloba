@@ -149,6 +149,13 @@ describe("Biloba TypeScript client", () => {
           REGISTER_NETWORK_HANDLER: {id: "network-1"}, NETWORK_HANDLER_STATS: {id: "network-1", callsite: "test", count: 1, shadowed: 0, lastError: ""}, NETWORK_SHADOWS: [],
           HOLD_RESPONSE: {id: "hold-2"}, AWAIT_RESPONSE_HOLD: {id: "response-1", url: "/api", status: 200, headers: [], bodyBase64: Buffer.from("held").toString("base64")}, RESPONSE_HOLD_STATS: {count: 1, held: 1, passedThrough: 0, holding: 1, lastError: ""}, NETWORK_STATE: {offline: false, latencyMs: 0, downloadThroughput: 0, uploadThroughput: 0, connectionType: "wifi"},
         };
+        if (operation.kind === "START_SCREENCAST") { reply({id: "recording-1"}); break; }
+        if (operation.kind === "STOP_SCREENCAST" || operation.kind === "SCREENCAST_FRAMES") {
+          // Three frames, one per chunk, the way the daemon splits a recording too big for one response.
+          const offset = (request.operation as {offset?: number}).offset ?? 0;
+          reply({count: 3, offset, frames: [{dataBase64: Buffer.from([offset]).toString("base64"), timestampMs: 1_000.5 + offset, deviceWidth: 800, deviceHeight: 600, pageScaleFactor: 1, scrollOffsetX: 0, scrollOffsetY: offset, offsetTop: 0}]});
+          break;
+        }
         reply(values[operation.kind ?? ""] ?? {});
         break;
       }
@@ -570,6 +577,52 @@ describe("Biloba TypeScript client", () => {
     expect(await session.getCookies()).toEqual([{name: "auth", value: "abc", path: "/", session: true}]);
   });
 
+  it("drives a pointer through POINTER_* DOM operations, polling only moveToElement", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    const mouse = session.pointer();
+    const pen = session.pointer({type: "pen"});
+    expect([mouse.type, pen.type]).toEqual(["mouse", "pen"]);
+    await pen.moveTo(10, 20);
+    await pen.down();
+    await pen.moveToElement(session.getByTestId("track"), {position: {x: 0, y: 10}, timeoutMs: 500});
+    await pen.up();
+    await mouse.moveToElement("#pad", {immediate: true});
+    expect(requests.filter(({method}) => method === "Dom").map(({request}) => [request.operation, request.poll])).toEqual([
+      [{kind: "POINTER_MOVE", point: {x: 10, y: 20}, pointerId: 2, pointerType: "pen"}, {}],
+      [{kind: "POINTER_DOWN", pointerId: 2, pointerType: "pen"}, {}],
+      [{kind: "POINTER_MOVE_TO_ELEMENT", locator: {kind: "TEST_ID", value: "track", match: "EXACT", first: false}, pointerId: 2, pointerType: "pen", offset: {x: 0, y: 10}}, {timeoutMs: 500}],
+      [{kind: "POINTER_UP", pointerId: 2, pointerType: "pen"}, {}],
+      [{kind: "POINTER_MOVE_TO_ELEMENT", locator: {kind: "CSS", value: "#pad", match: "EXACT", first: false}, pointerId: 1, pointerType: "mouse"}, {mode: "IMMEDIATE"}],
+    ]);
+
+    expect(() => session.pointer({type: "touch" as never})).toThrow(/pointer type must be "mouse" or "pen"/);
+    await expect(mouse.moveTo(1, 2, {timeoutMs: 5} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(mouse.moveToElement("#pad", {mode: "consistently"})).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    const other = await browser.openSession();
+    await expect(mouse.moveToElement(other.locator("#pad"))).rejects.toMatchObject({code: "INVALID_ARGUMENT", message: expect.stringContaining("different session")});
+  });
+
+  it("collects a screencast's frames chunk by chunk, once", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    const recording = await session.startScreencast({format: "png", maxWidth: 400, everyNthFrame: 2});
+    const frames = await recording.stop();
+    expect(frames).toEqual([0, 1, 2].map((index) => ({data: new Uint8Array([index]), timestamp: 1_000.5 + index, deviceWidth: 800, deviceHeight: 600, pageScaleFactor: 1, scrollOffsetX: 0, scrollOffsetY: index, offsetTop: 0})));
+    expect(await recording.stop()).toBe(frames);
+    expect(requests.filter(({method}) => method === "Eventful").map(({request}) => request.operation)).toEqual([
+      {kind: "START_SCREENCAST", screencast: {format: "png", maxWidth: 400, everyNthFrame: 2}},
+      {kind: "STOP_SCREENCAST", id: "recording-1"},
+      {kind: "SCREENCAST_FRAMES", id: "recording-1", offset: 1},
+      {kind: "SCREENCAST_FRAMES", id: "recording-1", offset: 2},
+    ]);
+
+    await expect(session.startScreencast({format: "webp" as never})).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(session.startScreencast({quality: 101})).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(session.startScreencast({maxHeight: -1})).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(session.startScreencast({timeoutMs: 5} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+  });
+
   it("serializes live handles, storage, page state, and emulation through typed lifecycle operations", async () => {
     browser = await connectClient();
     const session = await browser.openSession();
@@ -585,7 +638,7 @@ describe("Biloba TypeScript client", () => {
     expect(await session.accessibilityOutline()).toContain("button");
     expect(await session.consoleMessages()).toHaveLength(1);
     await session.setGeolocation({latitude: 0, longitude: 0});
-    await session.setPermissions("https://app.test", {clipboardReadWrite: "granted", geolocation: "denied"});
+    await session.setPermissions("https://app.test", {"clipboard-read": "granted", geolocation: "denied"});
     await session.setMedia({colorScheme: "dark", reducedMotion: "reduce"});
     await session.setDeviceMetrics({width: 390, height: 844, mobile: true, touch: true, landscape: true});
     await session.setUserAgent("BilobaPhone/1.0");
@@ -596,7 +649,7 @@ describe("Biloba TypeScript client", () => {
       expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "STORAGE_GET", area: "localStorage", key: "count"}})}),
       expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "WAIT_FOR_DEFINED", expression: "window.ready"}, poll: {timeoutMs: 50}})}),
       expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "SET_GEOLOCATION", geolocation: {latitude: 0, longitude: 0}}})}),
-      expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "SET_PERMISSIONS", origin: "https://app.test", permissions: {clipboardReadWrite: "granted", geolocation: "denied"}}})}),
+      expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "SET_PERMISSIONS", origin: "https://app.test", permissions: {"clipboard-read": "granted", geolocation: "denied"}}})}),
       expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "SET_DEVICE_METRICS", device: {width: 390, height: 844, deviceScaleFactor: 1, mobile: true, touch: true, landscape: true}}})}),
       expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "SET_USER_AGENT", userAgent: "BilobaPhone/1.0"}})}),
       expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "CLEAR_USER_AGENT"}})}),

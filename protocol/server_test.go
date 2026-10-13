@@ -360,8 +360,12 @@ var _ = Describe("driver protocol", func() {
 		Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
 		err = client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "SET_PERMISSIONS", Permissions: map[string]string{"not-a-cdp-permission": "granted"}}}, nil)
 		Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
-		err = client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "SET_PERMISSIONS", Permissions: map[string]string{"clipboardReadWrite": "sometimes"}}}, nil)
+		err = client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "SET_PERMISSIONS", Permissions: map[string]string{"clipboard-read": "sometimes"}}}, nil)
 		Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
+		Expect(client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "SET_PERMISSIONS", Permissions: map[string]string{"camera": "granted", "microphone": "denied"}}}, nil)).To(Succeed())
+		Expect(recorder.lastOperation().Lifecycle.Permissions).To(Equal(map[string]string{"camera": "granted", "microphone": "denied"}))
+		err = client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "SET_PERMISSIONS", Permissions: map[string]string{"videoCapture": "granted"}}}, nil)
+		Expect(err.Message).To(ContainSubstring("unsupported permission videoCapture"), "Chrome rejects CDP's internal names")
 	})
 
 	It("registers discovered handles once and invalidates context siblings on prepare", func() {
@@ -595,6 +599,66 @@ var _ = Describe("driver protocol", func() {
 		err = client.call("dom", invalidEvery, nil)
 		Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
 		Expect(err.Message).To(ContainSubstring("every is only valid"))
+	})
+
+	It("carries pointer operations and rejects malformed ones", func() {
+		recorder := &recordingSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+		dom := func(operation protocol.WireDOMOperation) *protocol.ProtocolError {
+			return client.call("dom", protocol.DOMRequest{SessionID: opened.SessionID, Operation: &operation}, nil)
+		}
+
+		Expect(dom(protocol.WireDOMOperation{Kind: "POINTER_MOVE", PointerID: 3, PointerType: "pen", Point: &protocol.WirePoint{X: 12, Y: 34}})).To(Succeed())
+		operation := recorder.lastOperation().DOM
+		Expect([]any{operation.Kind, operation.PointerID, operation.PointerType, operation.PointX, operation.PointY}).To(Equal([]any{protocol.DOMPointerMove, 3, "pen", 12.0, 34.0}))
+		Expect(dom(protocol.WireDOMOperation{Kind: "POINTER_MOVE_TO_ELEMENT", PointerID: 3, PointerType: "pen", Locator: &protocol.WireLocator{Kind: "CSS", Value: "#track"}, Offset: &protocol.WirePoint{X: 0, Y: 10}})).To(Succeed())
+		operation = recorder.lastOperation().DOM
+		Expect([]any{operation.Kind, operation.Locator.Value, operation.HasOffset, operation.OffsetY}).To(Equal([]any{protocol.DOMPointerMoveToElement, "#track", true, 10.0}))
+		Expect(dom(protocol.WireDOMOperation{Kind: "POINTER_DOWN", PointerID: 1, PointerType: "mouse"})).To(Succeed())
+		Expect(recorder.lastOperation().DOM.Kind).To(Equal(protocol.DOMPointerDown))
+		Expect(dom(protocol.WireDOMOperation{Kind: "POINTER_UP", PointerID: 1, PointerType: "mouse"})).To(Succeed())
+		Expect(recorder.lastOperation().DOM.Kind).To(Equal(protocol.DOMPointerUp))
+
+		for _, invalid := range []struct {
+			operation protocol.WireDOMOperation
+			message   string
+		}{
+			{protocol.WireDOMOperation{Kind: "POINTER_DOWN", PointerType: "mouse"}, "positive pointerId"},
+			{protocol.WireDOMOperation{Kind: "POINTER_DOWN", PointerID: 1, PointerType: "touch"}, `pointerType must be "mouse" or "pen"`},
+			{protocol.WireDOMOperation{Kind: "POINTER_MOVE", PointerID: 1, PointerType: "mouse"}, "POINTER_MOVE requires a point"},
+			{protocol.WireDOMOperation{Kind: "POINTER_MOVE_TO_ELEMENT", PointerID: 1, PointerType: "mouse"}, "locator"},
+			{protocol.WireDOMOperation{Kind: "HOVER", Locator: &protocol.WireLocator{Kind: "CSS", Value: "#x"}, PointerID: 1}, "only valid for pointer operations"},
+		} {
+			err := dom(invalid.operation)
+			Expect(err).NotTo(BeNil())
+			Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
+			Expect(err.Message).To(ContainSubstring(invalid.message))
+		}
+	})
+
+	It("carries screencast operations", func() {
+		recorder := &recordingEventfulSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+		eventful := func(operation protocol.WireEventfulOperation) *protocol.ProtocolError {
+			return client.call("eventful", protocol.EventfulRequest{SessionID: opened.SessionID, Operation: &operation}, nil)
+		}
+
+		Expect(eventful(protocol.WireEventfulOperation{Kind: "START_SCREENCAST", Screencast: &protocol.WireScreencastOptions{Format: "png", Quality: 80, MaxWidth: 400, MaxHeight: 300, EveryNthFrame: 2}})).To(Succeed())
+		Expect(recorder.operation.Kind).To(Equal(protocol.EventfulStartScreencast))
+		Expect(recorder.operation.Screencast).To(Equal(protocol.WireScreencastOptions{Format: "png", Quality: 80, MaxWidth: 400, MaxHeight: 300, EveryNthFrame: 2}))
+		Expect(eventful(protocol.WireEventfulOperation{Kind: "STOP_SCREENCAST", ID: "rec-1"})).To(Succeed())
+		Expect([]any{recorder.operation.Kind, recorder.operation.ID}).To(Equal([]any{protocol.EventfulStopScreencast, "rec-1"}))
+		Expect(eventful(protocol.WireEventfulOperation{Kind: "SCREENCAST_FRAMES", ID: "rec-1", Offset: 40})).To(Succeed())
+		Expect([]any{recorder.operation.Kind, recorder.operation.Offset}).To(Equal([]any{protocol.EventfulScreencastFrames, 40}))
+
+		Expect(eventful(protocol.WireEventfulOperation{Kind: "STOP_SCREENCAST"}).Message).To(ContainSubstring("screencast id is required"))
+		Expect(eventful(protocol.WireEventfulOperation{Kind: "SCREENCAST_FRAMES", ID: "rec-1", Offset: -1}).Message).To(ContainSubstring("offset must not be negative"))
 	})
 
 	It("rejects invalid semantic locator refinements at the protocol boundary", func() {

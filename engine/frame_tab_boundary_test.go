@@ -93,6 +93,10 @@ var _ = Describe("frame handles and their tab", func() {
 				return err
 			},
 			"new tab": func() error { _, err := frame.NewTab(ctx); return err },
+			"screencast": func() error {
+				_, err := frame.StartScreencast(ctx, engine.ScreencastParams{})
+				return err
+			},
 		}
 		for name, control := range controls {
 			Expect(engineCode(control())).To(Equal(engine.CodeInvalidArgument), name)

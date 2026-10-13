@@ -26,12 +26,26 @@ var Capabilities = []string{
 	"session.prepare", "session.new_tab", "session.add_init_script", "session.activate", "navigation", "cookies", "action.click", "action.set_value", "action.realistic", "action.type", "action.send_keys", "action.drag_to",
 	"action.set_upload", "viewport.set", "evaluate", "evaluate.async", "assert.visible", "assert.text", "assert.count", "assert.attribute",
 	"assert.value", "assert.url", "assert.evaluate", "assert.exists", "assert.enabled", "assert.clickable", "assert.property", "assert.all_text", "assert.request", "poll.server_side", "diagnostics.structured",
-	"dom.typed", "dom.collections", "dom.geometry", "dom.style", "dom.selection", "action.pointer_options", "action.scroll", "action.element_javascript", "keyboard.modifiers",
+	"dom.typed", "dom.collections", "dom.geometry", "dom.style", "dom.selection", "action.pointer_options", "action.pointer_handle", "action.scroll", "action.element_javascript", "keyboard.modifiers",
 	"lifecycle.tabs", "lifecycle.context_identity", "lifecycle.cookies", "lifecycle.storage", "lifecycle.javascript", "lifecycle.page_state", "lifecycle.console", "lifecycle.page_errors", "lifecycle.emulation", "lifecycle.frames",
 	"dialogs.handlers", "dialogs.history", "dialogs.warnings", "downloads.history", "downloads.content", "downloads.cancel",
 	"network.history", "network.request_outcomes", "network.idle.http", "network.handlers", "network.response_callbacks", "network.holds", "network.emulation", "network.cache",
-	"screenshot.capture", "screenshot.capture_options", "visual.compare",
+	"screenshot.capture", "screenshot.capture_options", "screencast", "visual.compare",
 	"browser.launch_metadata", "session.context_diagnostics", "session.console_events", "session.page_error_events", "session.warning_events", "browser.debug_events",
+}
+
+// PermissionNames are the permissions SET_PERMISSIONS accepts: the names navigator.permissions.query
+// takes, which are the names Chrome's Browser.setPermission accepts (CDP's camelCase PermissionType
+// names, such as "videoCapture", are not).  A permission whose descriptor needs more than a name -
+// "push" (userVisibleOnly), "fullscreen" (allowWithoutGesture), MIDI with sysex, camera pan-tilt-zoom -
+// cannot be set by name and is left out.  The engine suite grants each one against Chrome.
+var PermissionNames = []string{
+	"accelerometer", "ambient-light-sensor", "background-fetch", "background-sync", "camera", "captured-surface-control",
+	"clipboard-read", "clipboard-write", "display-capture", "geolocation", "gyroscope", "idle-detection", "keyboard-lock",
+	"local-fonts", "local-network", "local-network-access", "loopback-network", "magnetometer", "microphone", "midi", "nfc",
+	"notifications", "payment-handler", "periodic-background-sync", "persistent-storage", "pointer-lock", "screen-wake-lock",
+	"speaker-selection", "storage-access", "system-wake-lock", "top-level-storage-access", "web-app-installation",
+	"window-management",
 }
 
 type ErrorCode string
@@ -408,6 +422,10 @@ const (
 	DOMComputedStyle
 	DOMComputedStyleNumber
 	DOMNormalizeColor
+	DOMPointerMove
+	DOMPointerMoveToElement
+	DOMPointerDown
+	DOMPointerUp
 )
 
 type NameSpec struct {
@@ -451,6 +469,12 @@ type DOMOperation struct {
 	ArgumentsJSON string
 	Fully         bool
 	Relation      string
+	// PointerID and PointerType name the pointer a POINTER_* operation drives; PointX and PointY are
+	// where POINTER_MOVE moves it.
+	PointerID   int
+	PointerType string
+	PointX      float64
+	PointY      float64
 }
 
 type LocatorFilterKind uint8
@@ -780,6 +804,9 @@ type WireDOMOperation struct {
 	ArgumentsJSON string         `json:"argumentsJson,omitempty"`
 	Fully         bool           `json:"fully,omitempty"`
 	Relation      string         `json:"relation,omitempty"`
+	PointerID     int            `json:"pointerId,omitempty"`
+	PointerType   string         `json:"pointerType,omitempty"`
+	Point         *WirePoint     `json:"point,omitempty"`
 }
 
 type DOMRequest struct {
@@ -1730,12 +1757,13 @@ func domOperationFromWire(operation *WireDOMOperation) (DOMOperation, *ProtocolE
 		"RELATIVE_BOXES": DOMRelativeBoxes, "GEOMETRY_RELATION": DOMGeometryRelation, "GAP_BETWEEN": DOMGapBetween,
 		"IN_VIEWPORT": DOMInViewport, "DOCUMENT_ORDER": DOMDocumentOrder, "COMPUTED_STYLE": DOMComputedStyle,
 		"COMPUTED_STYLE_NUMBER": DOMComputedStyleNumber, "NORMALIZE_COLOR": DOMNormalizeColor,
+		"POINTER_MOVE": DOMPointerMove, "POINTER_MOVE_TO_ELEMENT": DOMPointerMoveToElement, "POINTER_DOWN": DOMPointerDown, "POINTER_UP": DOMPointerUp,
 	}
 	kind, ok := kinds[operation.Kind]
 	if !ok {
 		return DOMOperation{}, NewError(CodeInvalidArgument, fmt.Sprintf("unsupported DOM operation %q", operation.Kind))
 	}
-	result := DOMOperation{Kind: kind, TextMode: operation.TextMode, Name: operation.Name, ValueJSON: operation.ValueJSON, All: operation.All, Every: operation.Every, ProjectName: operation.ProjectName, State: operation.State, Realistic: operation.Realistic, Button: operation.Button, ClickCount: operation.ClickCount, Modifiers: append([]string(nil), operation.Modifiers...), Keys: operation.Keys, TopOffset: operation.TopOffset, HasTopOffset: operation.HasTopOffset, DeltaX: operation.DeltaX, DeltaY: operation.DeltaY, Substring: operation.Substring, Occurrence: operation.Occurrence, Start: operation.Start, End: operation.End, Range: operation.Range, Method: operation.Method, Expression: operation.Expression, ArgumentsJSON: operation.ArgumentsJSON, Fully: operation.Fully, Relation: operation.Relation}
+	result := DOMOperation{Kind: kind, TextMode: operation.TextMode, Name: operation.Name, ValueJSON: operation.ValueJSON, All: operation.All, Every: operation.Every, ProjectName: operation.ProjectName, State: operation.State, Realistic: operation.Realistic, Button: operation.Button, ClickCount: operation.ClickCount, Modifiers: append([]string(nil), operation.Modifiers...), Keys: operation.Keys, TopOffset: operation.TopOffset, HasTopOffset: operation.HasTopOffset, DeltaX: operation.DeltaX, DeltaY: operation.DeltaY, Substring: operation.Substring, Occurrence: operation.Occurrence, Start: operation.Start, End: operation.End, Range: operation.Range, Method: operation.Method, Expression: operation.Expression, ArgumentsJSON: operation.ArgumentsJSON, Fully: operation.Fully, Relation: operation.Relation, PointerID: operation.PointerID, PointerType: operation.PointerType}
 	if operation.Offset != nil {
 		result.HasOffset, result.OffsetX, result.OffsetY = true, operation.Offset.X, operation.Offset.Y
 	}
@@ -1745,7 +1773,24 @@ func domOperationFromWire(operation *WireDOMOperation) (DOMOperation, *ProtocolE
 		}
 		result.Names = append(result.Names, NameSpec{Name: name.Name, AllowMissing: name.AllowMissing})
 	}
-	withoutLocator := kind == DOMSendKeys || kind == DOMClearSelection || kind == DOMNormalizeColor
+	pointer := kind == DOMPointerMove || kind == DOMPointerMoveToElement || kind == DOMPointerDown || kind == DOMPointerUp
+	if pointer {
+		if operation.PointerID <= 0 {
+			return DOMOperation{}, NewError(CodeInvalidArgument, "pointer operations require a positive pointerId")
+		}
+		if operation.PointerType != "mouse" && operation.PointerType != "pen" {
+			return DOMOperation{}, NewError(CodeInvalidArgument, `pointerType must be "mouse" or "pen"`)
+		}
+		if kind == DOMPointerMove {
+			if operation.Point == nil {
+				return DOMOperation{}, NewError(CodeInvalidArgument, "POINTER_MOVE requires a point")
+			}
+			result.PointX, result.PointY = operation.Point.X, operation.Point.Y
+		}
+	} else if operation.PointerID != 0 || operation.PointerType != "" || operation.Point != nil {
+		return DOMOperation{}, NewError(CodeInvalidArgument, "pointerId, pointerType, and point are only valid for pointer operations")
+	}
+	withoutLocator := kind == DOMSendKeys || kind == DOMClearSelection || kind == DOMNormalizeColor || kind == DOMPointerMove || kind == DOMPointerDown || kind == DOMPointerUp
 	if !withoutLocator {
 		locator, err := locatorFromWire(operation.Locator)
 		if err != nil {
@@ -2239,6 +2284,7 @@ func eventfulOperationFromWire(wire *WireEventfulOperation, pollWire PollOptions
 		"RELEASE_NEXT_RESPONSE": EventfulReleaseNextResponse, "RESPONSE_HOLD_STATS": EventfulResponseHoldStats,
 		"SET_NETWORK_STATE": EventfulSetNetworkState, "NETWORK_STATE": EventfulNetworkState,
 		"SET_CACHE_ENABLED": EventfulSetCacheEnabled,
+		"START_SCREENCAST":  EventfulStartScreencast, "STOP_SCREENCAST": EventfulStopScreencast, "SCREENCAST_FRAMES": EventfulScreencastFrames,
 	}
 	kind, ok := kinds[wire.Kind]
 	if !ok {
@@ -2271,6 +2317,16 @@ func eventfulOperationFromWire(wire *WireEventfulOperation, pollWire PollOptions
 	}
 	if wire.Network != nil {
 		operation.Network = *wire.Network
+	}
+	if wire.Screencast != nil {
+		operation.Screencast = *wire.Screencast
+	}
+	operation.Offset = wire.Offset
+	if operation.Offset < 0 {
+		return EventfulOperation{}, NewError(CodeInvalidArgument, "offset must not be negative")
+	}
+	if (kind == EventfulStopScreencast || kind == EventfulScreencastFrames) && operation.ID == "" {
+		return EventfulOperation{}, NewError(CodeInvalidArgument, "screencast id is required")
 	}
 	if kind == EventfulRegisterNetworkHandler {
 		actions := map[string]bool{"fulfill": true, "abort": true, "request": true, "response": true, "callback": true}
@@ -2373,7 +2429,10 @@ func lifecycleOperationFromWire(operation *WireLifecycleOperation, expected *Wir
 		return LifecycleOperation{}, NewError(CodeInvalidArgument, "storage set requires valueJson")
 	}
 	if operation.Kind == "SET_PERMISSIONS" {
-		validPermissions := map[string]bool{"ar": true, "audioCapture": true, "automaticFullscreen": true, "backgroundFetch": true, "backgroundSync": true, "cameraPanTiltZoom": true, "capturedSurfaceControl": true, "clipboardReadWrite": true, "clipboardSanitizedWrite": true, "displayCapture": true, "durableStorage": true, "geolocation": true, "handTracking": true, "idleDetection": true, "keyboardLock": true, "localFonts": true, "localNetwork": true, "localNetworkAccess": true, "loopbackNetwork": true, "midi": true, "midiSysex": true, "nfc": true, "notifications": true, "paymentHandler": true, "periodicBackgroundSync": true, "pointerLock": true, "protectedMediaIdentifier": true, "sensors": true, "smartCard": true, "speakerSelection": true, "storageAccess": true, "topLevelStorageAccess": true, "videoCapture": true, "vr": true, "wakeLockScreen": true, "wakeLockSystem": true, "webAppInstallation": true, "webPrinting": true, "windowManagement": true}
+		validPermissions := map[string]bool{}
+		for _, name := range PermissionNames {
+			validPermissions[name] = true
+		}
 		for permission, state := range operation.Permissions {
 			if !validPermissions[permission] {
 				return LifecycleOperation{}, NewError(CodeInvalidArgument, "unsupported permission "+permission)

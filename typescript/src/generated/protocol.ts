@@ -16,6 +16,42 @@ export type ErrorCode =
   | "VISUAL_BASELINE"
 ;
 
+export type PermissionName =
+  | "accelerometer"
+  | "ambient-light-sensor"
+  | "background-fetch"
+  | "background-sync"
+  | "camera"
+  | "captured-surface-control"
+  | "clipboard-read"
+  | "clipboard-write"
+  | "display-capture"
+  | "geolocation"
+  | "gyroscope"
+  | "idle-detection"
+  | "keyboard-lock"
+  | "local-fonts"
+  | "local-network"
+  | "local-network-access"
+  | "loopback-network"
+  | "magnetometer"
+  | "microphone"
+  | "midi"
+  | "nfc"
+  | "notifications"
+  | "payment-handler"
+  | "periodic-background-sync"
+  | "persistent-storage"
+  | "pointer-lock"
+  | "screen-wake-lock"
+  | "speaker-selection"
+  | "storage-access"
+  | "system-wake-lock"
+  | "top-level-storage-access"
+  | "web-app-installation"
+  | "window-management"
+;
+
 export interface Diagnostics {
   locator?: string;
   expected?: string;
@@ -191,7 +227,7 @@ export interface Point {
 }
 
 export interface DOMOperation {
-  kind: "TEXT" | "TEXTS" | "CLASSES" | "CLASSES_FOR_EACH" | "DISTINCT_ATTRIBUTE_COUNT" | "ATTRIBUTES" | "ATTRIBUTES_FOR_EACH" | "JSON_ATTRIBUTE" | "PROPERTIES" | "PROPERTIES_FOR_EACH" | "PROPERTY_FOR_EACH" | "VALUES" | "STATE" | "ALL_STATE" | "SET_PROPERTY" | "FOCUS" | "BLUR" | "HOVER" | "TYPE" | "SEND_KEYS" | "CLICK" | "CLICK_EACH" | "TAP" | "DRAG" | "SCROLL_INTO_VIEW" | "SCROLL_WHEEL" | "SELECT" | "CLEAR_SELECTION" | "INVOKE_METHOD" | "INVOKE_FUNCTION" | "INVOKE_METHOD_FOR_EACH" | "INVOKE_FUNCTION_FOR_EACH" | "BOUNDING_BOX" | "SCROLL_OFFSET" | "OFFSET_WITHIN" | "RELATIVE_BOXES" | "GEOMETRY_RELATION" | "GAP_BETWEEN" | "IN_VIEWPORT" | "DOCUMENT_ORDER" | "COMPUTED_STYLE" | "COMPUTED_STYLE_NUMBER" | "NORMALIZE_COLOR";
+  kind: "TEXT" | "TEXTS" | "CLASSES" | "CLASSES_FOR_EACH" | "DISTINCT_ATTRIBUTE_COUNT" | "ATTRIBUTES" | "ATTRIBUTES_FOR_EACH" | "JSON_ATTRIBUTE" | "PROPERTIES" | "PROPERTIES_FOR_EACH" | "PROPERTY_FOR_EACH" | "VALUES" | "STATE" | "ALL_STATE" | "SET_PROPERTY" | "FOCUS" | "BLUR" | "HOVER" | "TYPE" | "SEND_KEYS" | "CLICK" | "CLICK_EACH" | "TAP" | "DRAG" | "SCROLL_INTO_VIEW" | "SCROLL_WHEEL" | "SELECT" | "CLEAR_SELECTION" | "INVOKE_METHOD" | "INVOKE_FUNCTION" | "INVOKE_METHOD_FOR_EACH" | "INVOKE_FUNCTION_FOR_EACH" | "BOUNDING_BOX" | "SCROLL_OFFSET" | "OFFSET_WITHIN" | "RELATIVE_BOXES" | "GEOMETRY_RELATION" | "GAP_BETWEEN" | "IN_VIEWPORT" | "DOCUMENT_ORDER" | "COMPUTED_STYLE" | "COMPUTED_STYLE_NUMBER" | "NORMALIZE_COLOR" | "POINTER_MOVE" | "POINTER_MOVE_TO_ELEMENT" | "POINTER_DOWN" | "POINTER_UP";
   locator?: Locator;
   target?: Locator;
   container?: Locator;
@@ -223,6 +259,9 @@ export interface DOMOperation {
   argumentsJson?: string;
   fully?: boolean;
   relation?: "above" | "below" | "leftOf" | "rightOf" | "encloses" | "overlaps";
+  pointerId?: number;
+  pointerType?: "mouse" | "pen";
+  point?: Point;
 }
 
 export interface DOMRequest {
@@ -356,6 +395,33 @@ export interface EventfulOperation {
   transformTimeoutMs?: number;
   network?: NetworkState;
   cacheEnabled?: boolean;
+  screencast?: ScreencastOptions;
+  offset?: number;
+}
+
+export interface ScreencastOptions {
+  format?: "jpeg" | "png";
+  quality?: number;
+  maxWidth?: number;
+  maxHeight?: number;
+  everyNthFrame?: number;
+}
+
+export interface ScreencastFrame {
+  dataBase64: string;
+  timestampMs: number;
+  deviceWidth: number;
+  deviceHeight: number;
+  pageScaleFactor: number;
+  scrollOffsetX: number;
+  scrollOffsetY: number;
+  offsetTop: number;
+}
+
+export interface ScreencastFramesResponse {
+  count: number;
+  offset: number;
+  frames: ScreencastFrame[];
 }
 
 export interface EventfulRequest {

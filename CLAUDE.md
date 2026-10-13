@@ -66,7 +66,7 @@ Repo-specific testing conventions (see `biloba_suite_test.go`):
 | Clicking, pointer interactions (buttons, modifiers, `At`), keyboard input, uploads | `clicks.go`, `keyboard.go`, `upload.go` | `interactions_test.go`, `keyboard_test.go` |
 | Element/selector locators (`ByCSS`/`ByRole`/`ByText`/...) | `locator.go` | `locator_test.go` |
 | Realistic interaction track (`Realistic`, scroll-into-view, real pointer/wheel events) | `realistic.go` | `realistic_test.go` |
-| Low-level pointer handle (`Pointer`, `Pen`, `MoveTo`/`MoveToElement`/`Down`/`Up`) | `pointer.go`; engine: `DispatchPointerContext` in `engine/input.go` | `pointer_test.go` |
+| Low-level pointer handle (`Pointer`, `Pen`, `MoveTo`/`MoveToElement`/`Down`/`Up`) | `pointer.go`; engine: `DispatchPointerContext` in `engine/input.go`, `Session.Pointer` (TypeScript's state, held by the daemon) in `engine/pointer.go` | `pointer_test.go`; `engine/pointer_test.go` |
 | Property get/set/match | `properties.go` | `properties_test.go` |
 | Geometry getters/matchers (GetBoundingBox/GetScrollOffset/GetOffsetTopWithin, pairwise/viewport/document-order, GetComputedStyle) | `geometry.go` | `geometry_test.go` |
 | Capturing a matcher's observed value (`*ValueMatcher`/`.Capture`) | `capture.go` | (exercised from each matcher's `*_test.go`) |
@@ -76,7 +76,7 @@ Repo-specific testing conventions (see `biloba_suite_test.go`):
 | Visual regression (`HaveScreenshot`, baselines, masking, the freeze) | `visual.go` | `visual_test.go` |
 | Image diff + the failure diagnosis it renders | `visual_diff.go` | `visual_diff_internal_test.go` |
 | Screenshots (capture, inline protocols, to-file) | `screenshots.go` | `screenshots_test.go` |
-| Screencasts (`StartScreencast`, frame acks, Stop) | `screencast.go`; engine: `engine/screencast.go` | `screencast_test.go` |
+| Screencasts (`StartScreencast`, frame acks, Stop) | `screencast.go`; engine: `engine/screencast.go`, `Session.StartScreencast`/`StopScreencast` in `engine/screencast_session.go` (TypeScript collects frames in chunks; `screencastChunkOf` in `cmd/bilobad`) | `screencast_test.go`; `engine/screencast_session_test.go` |
 | Window size | `windows.go` | `windows_test.go` |
 | Emulation (`SetMedia`, `SetUserAgent`, geolocation, permissions, locale, time zone, network state, cache; device options live with `SetWindowSize`) | `emulation.go`; engine: `engine/emulation.go`, `engine/network_handlers.go` | `emulation_test.go` |
 | XPath DSL | `xpath.go` | `xpath_test.go` |

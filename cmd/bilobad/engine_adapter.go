@@ -126,6 +126,20 @@ func (s *engineSession) ExecuteEventful(ctx context.Context, operation protocol.
 		return networkStateToWire(s.session.CurrentNetworkState()), nil
 	case protocol.EventfulSetCacheEnabled:
 		return nil, engineRPCError(s.session.SetCacheEnabled(ctx, operation.CacheEnabled))
+	case protocol.EventfulStartScreencast:
+		options := operation.Screencast
+		id, err := s.session.StartScreencast(ctx, engine.ScreencastParams{Format: options.Format, Quality: options.Quality, MaxWidth: options.MaxWidth, MaxHeight: options.MaxHeight, EveryNthFrame: options.EveryNthFrame})
+		if err != nil {
+			return nil, engineRPCError(err)
+		}
+		return map[string]any{"id": id}, nil
+	case protocol.EventfulStopScreencast:
+		if operation.Offset != 0 {
+			return nil, protocol.NewError(protocol.CodeInvalidArgument, "STOP_SCREENCAST takes no offset; ask SCREENCAST_FRAMES for the rest")
+		}
+		return s.screencastChunk(ctx, operation.ID, 0)
+	case protocol.EventfulScreencastFrames:
+		return s.screencastChunk(ctx, operation.ID, operation.Offset)
 	default:
 		return nil, protocol.NewError(protocol.CodeInvalidArgument, "unsupported eventful operation")
 	}
@@ -863,6 +877,11 @@ func (s *engineSession) Execute(ctx context.Context, operation protocol.Operatio
 		}
 		return s.poll(ctx, operation, assertion)
 	case protocol.OperationDOM:
+		if kind := operation.DOM.Kind; kind == protocol.DOMPointerMove || kind == protocol.DOMPointerDown || kind == protocol.DOMPointerUp {
+			// The pointer's moves, presses, and releases dispatch at once and never poll: the caller
+			// owns the timeline.
+			return oneAttempt(started, s.dispatchPointer(ctx, operation.DOM))
+		}
 		assertion, err := s.domAssertion(operation.DOM)
 		if err != nil {
 			return protocol.Result{}, err
@@ -1608,6 +1627,16 @@ func (s *engineSession) domAssertion(operation protocol.DOMOperation) (engine.As
 			observation, operationErr = s.session.ComputedStyleNumber(ctx, selector, operation.Name)
 		case protocol.DOMNormalizeColor:
 			observation, operationErr = s.session.NormalizeColor(ctx, operation.ValueJSON)
+		case protocol.DOMPointerMoveToElement:
+			pointer, pointerErr := s.session.Pointer(uint64(operation.PointerID), engine.PointerType(operation.PointerType))
+			if pointerErr != nil {
+				return observation, false, engine.Fatal(pointerErr)
+			}
+			var offset *engine.Point
+			if operation.HasOffset {
+				offset = &engine.Point{X: operation.OffsetX, Y: operation.OffsetY}
+			}
+			operationErr = pointer.MoveToElement(ctx, selector, offset)
 		default:
 			return observation, false, engine.Fatal(protocol.NewError(protocol.CodeInvalidArgument, "unsupported DOM operation"))
 		}
@@ -1625,6 +1654,69 @@ func (s *engineSession) domAssertion(operation protocol.DOMOperation) (engine.As
 		}
 		return observation, matched, operationErr
 	}, nil
+}
+
+func (s *engineSession) dispatchPointer(ctx context.Context, operation protocol.DOMOperation) error {
+	pointer, err := s.session.Pointer(uint64(operation.PointerID), engine.PointerType(operation.PointerType))
+	if err != nil {
+		return err
+	}
+	switch operation.Kind {
+	case protocol.DOMPointerMove:
+		return pointer.MoveTo(ctx, operation.PointX, operation.PointY)
+	case protocol.DOMPointerDown:
+		return pointer.Down(ctx)
+	default:
+		return pointer.Up(ctx)
+	}
+}
+
+// screencastChunk answers STOP_SCREENCAST and SCREENCAST_FRAMES, and forgets the recording once its
+// last frame has been sent.
+func (s *engineSession) screencastChunk(ctx context.Context, id string, offset int) (protocol.ScreencastFramesResponse, error) {
+	frames, err := s.session.StopScreencast(ctx, id)
+	if err != nil {
+		// A failed stop still ended the recording, so asking again returns its frames.
+		return protocol.ScreencastFramesResponse{}, engineRPCError(err)
+	}
+	response, err := screencastChunkOf(frames, offset, protocol.MaxScreencastChunkBytes)
+	if err != nil {
+		return protocol.ScreencastFramesResponse{}, err
+	}
+	if offset+len(response.Frames) == len(frames) {
+		s.session.ReleaseScreencast(id)
+	}
+	return response, nil
+}
+
+// screencastChunkOf returns the frames from offset on whose data fits in budget bytes - always at
+// least one, so a frame larger than the budget still goes out on its own.
+func screencastChunkOf(frames []engine.ScreencastFrame, offset, budget int) (protocol.ScreencastFramesResponse, error) {
+	if offset > len(frames) {
+		return protocol.ScreencastFramesResponse{}, protocol.NewError(protocol.CodeInvalidArgument, fmt.Sprintf("offset %d is past the recording's %d frames", offset, len(frames)))
+	}
+	response := protocol.ScreencastFramesResponse{Count: len(frames), Offset: offset, Frames: []protocol.WireScreencastFrame{}}
+	size := 0
+	for _, frame := range frames[offset:] {
+		if len(response.Frames) > 0 && size+len(frame.Data) > budget {
+			break
+		}
+		size += len(frame.Data)
+		response.Frames = append(response.Frames, screencastFrameToWire(frame))
+	}
+	return response, nil
+}
+
+func screencastFrameToWire(frame engine.ScreencastFrame) protocol.WireScreencastFrame {
+	timestamp := 0.0
+	if !frame.Timestamp.IsZero() {
+		timestamp = float64(frame.Timestamp.UnixNano()) / 1e6
+	}
+	return protocol.WireScreencastFrame{
+		DataBase64: base64.StdEncoding.EncodeToString(frame.Data), TimestampMS: timestamp,
+		DeviceWidth: frame.DeviceWidth, DeviceHeight: frame.DeviceHeight, PageScaleFactor: frame.PageScaleFactor,
+		ScrollOffsetX: frame.ScrollOffsetX, ScrollOffsetY: frame.ScrollOffsetY, OffsetTop: frame.OffsetTop,
+	}
 }
 
 func everyMatches(actual any, projectName string, expectation engine.Expectation) (bool, error) {

@@ -11,6 +11,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/onsi/biloba/engine"
+	"github.com/onsi/biloba/protocol"
 )
 
 var _ = Describe("lifecycle engine foundations", func() {
@@ -336,6 +337,23 @@ var _ = Describe("lifecycle engine foundations", func() {
 		reset, err := session.Evaluate(ctx, `[innerWidth === 390, devicePixelRatio === 2, matchMedia("(prefers-color-scheme: dark)").matches, matchMedia("(prefers-reduced-motion: reduce)").matches, Intl.DateTimeFormat().resolvedOptions().timeZone === "America/New_York"]`)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(reset).To(Equal([]any{false, false, false, false, false}))
+	})
+
+	It("grants every permission the daemon accepts, camera and microphone included", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		// The daemon's whitelist is what the TypeScript Permission type is generated from, so every name
+		// on it has to be one Chrome's Browser.setPermission accepts.
+		for _, name := range protocol.PermissionNames {
+			Expect(session.SetPermissions(ctx, server.URL, map[engine.Permission]engine.PermissionState{engine.Permission(name): engine.PermissionGranted})).To(Succeed(), name)
+		}
+		Expect(session.ResetPermissions(ctx)).To(Succeed())
+		Expect(session.SetPermissions(ctx, server.URL, map[engine.Permission]engine.PermissionState{engine.PermissionCamera: engine.PermissionGranted, engine.PermissionMicrophone: engine.PermissionDenied})).To(Succeed())
+		states, err := session.EvaluateAsync(ctx, `Promise.all(["camera", "microphone"].map(name => navigator.permissions.query({name}).then(result => result.state)))`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(states).To(Equal([]any{"granted", "denied"}))
 	})
 
 	It("emulates touch, landscape, and the user agent, and clears each one", func(ctx SpecContext) {

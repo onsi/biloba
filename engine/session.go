@@ -119,6 +119,15 @@ type Session struct {
 	permissionsSet atomic.Bool
 	highFidelity   bool
 	initScriptIDs  []page.ScriptIdentifier
+	// pointers holds the state of the pointers driven through Pointer, keyed by the caller's id.
+	// Guarded by mu: every pointer operation runs under serial.
+	pointers map[uint64]*pointerState
+	// screencastMu guards the session's screencast recordings, which a frame listener appends to
+	// outside serial.
+	screencastMu       sync.Mutex
+	screencasts        map[string]*sessionScreencast
+	recording          *sessionScreencast
+	screencastSequence uint64
 	// crashed is closed by Chrome's Inspector.targetCrashed listener, which runs on chromedp's event
 	// goroutine rather than under mu - hence its own lock.  A channel rather than a bool because an
 	// operation already in flight has to be interrupted, not merely refused next time: CDP does not
@@ -228,10 +237,12 @@ func (s *Session) Close() error {
 		s.mu.Unlock()
 		return nil
 	}
+	s.releasePointersOnClose()
 	s.closed = true
 	s.clearDialogs()
 	s.clearResponseHoldBookkeeping()
 	s.clearNetworkBookkeeping()
+	s.discardScreencasts()
 	var disposeErr error
 	if s.browser != nil && s.ownsContext {
 		ctx, cancel := context.WithTimeout(s.browser.ctx, 5*time.Second)
@@ -350,6 +361,12 @@ func (s *Session) Prepare(ctx context.Context) error {
 		s.boundary.reset()
 		defer s.eventsEnabled.Store(true)
 		wasCrashed := s.hasCrashed()
+		if !wasCrashed {
+			s.releasePointers(opCtx)
+			s.stopScreencastForReset(opCtx)
+		}
+		s.pointers = nil
+		s.discardScreencasts()
 		if err := s.cleanupVisualState(opCtx, !wasCrashed); err != nil && !wasCrashed {
 			return err
 		}

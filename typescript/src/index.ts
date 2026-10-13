@@ -273,6 +273,68 @@ export interface ClickOptions extends PointerOptions {
   button?: "left" | "right" | "middle" | undefined;
   clickCount?: 1 | 2 | undefined;
 }
+export type PointerType = "mouse" | "pen";
+export interface PointerHandleOptions {
+  /** "mouse" (the default) or "pen": every event the pointer dispatches reaches the page with this pointerType. */
+  type?: PointerType | undefined;
+}
+export interface MoveToElementOptions extends WaitOptions {
+  /** A point measured from the element's top-left corner, in CSS pixels.  The default is the element's center. */
+  position?: Point | undefined;
+}
+/**
+ * A real pointer you drive one event at a time, from session.pointer().  It remembers where it is
+ * (starting at 0, 0) and whether its primary button is pressed; moves while it is pressed carry
+ * buttons: 1, so the page sees a drag.  A pen reports a pressure of 0.5 while it touches and 0 while
+ * it hovers.
+ *
+ * moveTo, down, and up dispatch real CDP input at once - one round trip each - with no scroll, no
+ * stability wait, and no polling.  moveToElement polls until the element exists and is visible, then
+ * dispatches; it does not scroll, so an element whose point is outside the viewport fails.  prepare()
+ * releases a pointer left pressed and returns every pointer to (0, 0).
+ */
+export interface Pointer {
+  readonly type: PointerType;
+  /** Move to (x, y), in CSS pixels from the top-left of the viewport (the frame's viewport, on a frame handle). */
+  moveTo(x: number, y: number, options?: CancellationOptions): Promise<void>;
+  /** Move to the element's center, or to options.position from its top-left corner. */
+  moveToElement(target: Locator | string, options?: MoveToElementOptions): Promise<void>;
+  /** Press the primary button where the pointer is.  Pressing a pressed pointer is an INVALID_ARGUMENT error. */
+  down(options?: CancellationOptions): Promise<void>;
+  /** Release the primary button where the pointer is.  Releasing a released pointer is an INVALID_ARGUMENT error. */
+  up(options?: CancellationOptions): Promise<void>;
+}
+export interface ScreencastOptions extends CancellationOptions {
+  /** "jpeg" (the default) or "png". */
+  format?: "jpeg" | "png" | undefined;
+  /** JPEG quality, 0-100; 0 or omitted leaves it to Chrome.  PNG ignores it. */
+  quality?: number | undefined;
+  /** Shrink frames to fit, in pixels; Chrome keeps the aspect ratio and never enlarges a frame. */
+  maxWidth?: number | undefined;
+  maxHeight?: number | undefined;
+  /** Keep one frame in every n. */
+  everyNthFrame?: number | undefined;
+}
+/**
+ * One screencast frame.  timestamp is when Chrome swapped the frame onto the screen, in milliseconds
+ * since the Unix epoch (fractional), so on the machine running Chrome it compares directly with
+ * Date.now(); it is 0 if Chrome sent none.  deviceWidth and deviceHeight are the viewport size the
+ * image shows, in CSS pixels; scrollOffsetX and scrollOffsetY are the page's scroll position; offsetTop
+ * is how far down the image the page starts.
+ */
+export interface ScreencastFrame {
+  readonly data: Uint8Array; readonly timestamp: number;
+  readonly deviceWidth: number; readonly deviceHeight: number; readonly pageScaleFactor: number;
+  readonly scrollOffsetX: number; readonly scrollOffsetY: number; readonly offsetTop: number;
+}
+/** A screencast in progress, from session.startScreencast(). */
+export interface ScreencastRecording {
+  /**
+   * Stop the screencast and return its frames in timestamp order.  It waits for Chrome to confirm, so
+   * no frame arrives after it resolves; calling it again returns the same frames.
+   */
+  stop(options?: CancellationOptions): Promise<readonly ScreencastFrame[]>;
+}
 export interface KeyboardOptions extends WaitOptions {modifiers?: readonly Modifier[] | undefined}
 export interface WindowKeyboardOptions extends CancellationOptions {modifiers?: readonly Modifier[] | undefined}
 export interface ScrollIntoViewOptions extends WaitOptions {
@@ -431,15 +493,8 @@ export type ConnectionType = "none" | "cellular2g" | "cellular3g" | "cellular4g"
 export interface NetworkState {readonly offline?: boolean | undefined; readonly latencyMs?: number | undefined; readonly downloadThroughput?: number | undefined; readonly uploadThroughput?: number | undefined; readonly connectionType?: ConnectionType | undefined}
 export interface DeviceMetrics {readonly width: number; readonly height: number; readonly deviceScaleFactor?: number | undefined; readonly mobile?: boolean | undefined; readonly touch?: boolean | undefined; readonly landscape?: boolean | undefined}
 export interface Geolocation {readonly latitude: number; readonly longitude: number; readonly accuracy?: number | undefined}
-export type Permission =
-  | "ar" | "audioCapture" | "automaticFullscreen" | "backgroundFetch" | "backgroundSync"
-  | "cameraPanTiltZoom" | "capturedSurfaceControl" | "clipboardReadWrite" | "clipboardSanitizedWrite"
-  | "displayCapture" | "durableStorage" | "geolocation" | "handTracking" | "idleDetection"
-  | "keyboardLock" | "localFonts" | "localNetwork" | "localNetworkAccess" | "loopbackNetwork"
-  | "midi" | "midiSysex" | "nfc" | "notifications" | "paymentHandler" | "periodicBackgroundSync"
-  | "pointerLock" | "protectedMediaIdentifier" | "sensors" | "smartCard" | "speakerSelection"
-  | "storageAccess" | "topLevelStorageAccess" | "videoCapture" | "vr" | "wakeLockScreen"
-  | "wakeLockSystem" | "webAppInstallation" | "webPrinting" | "windowManagement";
+/** A permission name, as navigator.permissions.query takes it ("camera", "clipboard-read", ...). */
+export type Permission = import("./generated/protocol.js").PermissionName;
 export type PermissionState = "granted" | "denied" | "prompt";
 export interface MediaEmulation {readonly type?: "screen" | "print" | "" | undefined; readonly colorScheme?: "light" | "dark" | "no-preference" | undefined; readonly reducedMotion?: "reduce" | "no-preference" | undefined}
 
@@ -735,6 +790,14 @@ export interface Session {
   setUserAgent(userAgent: string, options?: CommandOptions): Promise<void>;
   clearUserAgent(options?: CommandOptions): Promise<void>;
   sendKeys(keys: string, options?: WindowKeyboardOptions): Promise<void>;
+  /** A real mouse or pen to drive one event at a time; see Pointer. */
+  pointer(options?: PointerHandleOptions): Pointer;
+  /**
+   * Record the frames Chrome draws for this tab until you stop the returned recording.  A tab records
+   * one screencast at a time, and a frame handle refuses with INVALID_ARGUMENT.  prepare() and close()
+   * stop a recording that is still running and discard it: stop it first to keep its frames.
+   */
+  startScreencast(options?: ScreencastOptions): Promise<ScreencastRecording>;
   clearSelection(options?: CancellationOptions): Promise<void>;
   normalizeColor(color: string, options?: CancellationOptions): Promise<string>;
   close(): Promise<void>;

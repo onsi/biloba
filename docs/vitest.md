@@ -185,7 +185,11 @@ await session.setLocale("fr-FR");
 await session.setTimezone("Europe/Paris");
 ```
 
-`touch` makes `navigator.maxTouchPoints` positive and matches `(pointer: coarse)`; `landscape` reports a landscape `screen.orientation`. `setUserAgent()` changes both `navigator.userAgent` and the `User-Agent` request header. `setGeolocation()` and `setPermissions()` cover location and permission prompts.
+`touch` makes `navigator.maxTouchPoints` positive and matches `(pointer: coarse)`; `landscape` reports a landscape `screen.orientation`. `setUserAgent()` changes both `navigator.userAgent` and the `User-Agent` request header. `setGeolocation()` and `setPermissions()` cover location and permission prompts.  Permissions use the names `navigator.permissions.query` takes - `"camera"`, `"microphone"`, `"geolocation"`, `"notifications"`, `"clipboard-read"`, `"clipboard-write"`, and the rest of the `Permission` type - and apply to an origin (`""` for every origin):
+
+```ts
+await session.setPermissions("http://localhost:3000", {camera: "granted", microphone: "denied"});
+```
 
 `frames()` snapshots the cross-origin iframe documents below a session; `waitForFrame()` polls for one by `url`, `title`, and/or a `has` locator. This covers both out-of-process frames (cross-site OOPIF targets) and same-site cross-origin frames such as two local servers on different ports. Biloba asks CDP for Chrome's frame tree and scopes operations directly to the selected frame; it does not read the iframe through parent-page JavaScript or relax the browser's same-origin policy:
 
@@ -304,6 +308,35 @@ const result = await session.locator("#delayed").expectText("ready", {timeoutMs:
 expect(result.attemptCount).toBeGreaterThan(1);
 ```
 
+### Driving the pointer directly
+
+The realistic track measures, scrolls, and waits before every interaction, and `dragTo()` is a single gesture from one element to another.  When you need a gesture of your own - a pen stroke on a drawing canvas, a slider scrubbed at 60Hz while you record the screen - `session.pointer()` gives you a real pointer to drive one event at a time:
+
+```ts
+const pen = session.pointer({type: "pen"});
+await pen.moveTo(100, 200);
+await pen.down();
+for (let i = 1; i <= 14; i++) {
+  await new Promise((resolve) => setTimeout(resolve, 16));
+  await pen.moveTo(100 + i * 10, 200);
+}
+await pen.up();
+```
+
+The pointer has four methods:
+
+- `moveTo(x, y)` moves to a point in CSS pixels from the top-left of the viewport.
+- `moveToElement(target, {position})` moves to the element's center, or to `position` from its top-left corner: `await p.moveToElement("#track", {position: {x: 0, y: 10}})`.  The target is a CSS selector or a locator from the same session.
+- `down()` presses the primary button where the pointer is, and `up()` releases it.  Pressing a pressed pointer, or releasing a released one, is an `INVALID_ARGUMENT` error.
+
+The pointer remembers its position (it starts at `0, 0`) and whether it is pressed.  Moves while it is pressed carry `buttons: 1`, so the page sees a drag.  `session.pointer()` is a mouse; `session.pointer({type: "pen"})` is a pen, and every event it dispatches reaches the page as a `PointerEvent` with `pointerType` `"pen"`, reporting a `pressure` of `0.5` while it touches and `0` while it hovers.  A pen works on a page emulating a tablet (`setDeviceMetrics({width: 820, height: 1180, mobile: true, touch: true})`).
+
+Every call dispatches real CDP input immediately - `moveTo`, `down`, and `up` are one round trip each and take only a `signal`.  Nothing scrolls, nothing waits for the page to settle, and nothing is checked for occlusion, so the timing is yours.  `moveToElement` is the one call that polls: it waits for the element to exist and be visible, honoring `{timeoutMs, intervalMs, signal, mode, immediate}` like any action, then dispatches.  It reads the element where it is, so an element whose point is outside the viewport fails instead of receiving input it could never get: scroll it into view first with `scrollIntoView()`.
+
+On a frame handle from `waitForFrame()`, `frame.pointer()` works in the frame's viewport: Biloba translates each point through the iframe's position (without scrolling the iframe into view), and the frame's page sees the coordinates you passed.
+
+The daemon keeps each pointer's position and button state.  `prepare()` releases a pointer the test left pressed, so the next test does not start with a held button, and returns every pointer to `0, 0`.  Closing a frame handle releases its pressed pointers too.
+
 ### Running JavaScript
 
 `evaluate` reads an expression, or calls a function when you pass an arguments array:
@@ -402,6 +435,31 @@ expect(result.match).toBe(true);
 A mismatch throws, and the message carries the pixel counts, amplitude verdict, and baseline, actual, and diff paths, so a CI log tells you what changed without opening anything. Capture warnings (a baseline that never settled, two color schemes that rendered identically) go to stderr; pass `onScreenshotWarning` to `connect` to route them somewhere else.
 
 When you need to absorb rendering noise, reach for `channelTolerance` before `pixelTolerance`: rasterization differences are a small delta spread over many pixels, while a pixel budget lets a handful of pixels change by any amount - which is exactly the one-pixel border or small glyph worth catching.
+
+### Recording a screencast
+
+`session.startScreencast()` records the frames Chrome draws for a tab until you stop it:
+
+```ts
+const recording = await session.startScreencast({format: "jpeg", quality: 92});
+// ... drive the page ...
+const frames = await recording.stop(); // readonly ScreencastFrame[]
+```
+
+The options are a `format` (`"jpeg"`, the default, or `"png"`), a JPEG `quality` from 0 to 100 (0 leaves it to Chrome), `maxWidth` and `maxHeight` to shrink the frames (Chrome keeps the aspect ratio and never enlarges them), and `everyNthFrame` to keep only one frame in every n.
+
+Each frame carries the encoded image in `data` (a `Uint8Array`) and a `timestamp`: the moment Chrome swapped that frame onto the screen, in milliseconds since the Unix epoch.  It is wall-clock time on the machine running Chrome, so on the same machine you can line frames up against `Date.now()` readings you took while driving the page.  The frame also carries the metadata that maps the image onto the page: `deviceWidth` and `deviceHeight` (the viewport the image shows, in CSS pixels), `pageScaleFactor`, `scrollOffsetX` and `scrollOffsetY`, and `offsetTop`.
+
+`recording.stop()` stops the screencast and waits for Chrome to confirm it, so no frame arrives after it resolves.  It returns the frames in `timestamp` order, and calling it again returns the same frames.  A tab records one screencast at a time - starting a second before stopping the first is an `INVALID_ARGUMENT` error - and a frame handle refuses `startScreencast()` with `INVALID_ARGUMENT`.  `prepare()` and `close()` stop a recording that is still running and discard it, so stop a recording before the test ends to keep its frames; `stop()` afterwards fails with `TARGET_NOT_FOUND`.
+
+The daemon holds the frames until `stop()` collects them, and sends them in several responses when there are more than fit in one, so a long recording reaches the test intact.
+
+Some things to know:
+
+- **Chrome sends frames only when the page changes.**  You get the frame already on screen when the recording starts (so its timestamp can be a little earlier than your call to `startScreencast()`), and then one frame each time the page draws a new one, up to the display's 60 frames a second.  A page that isn't changing yields one frame and then nothing.
+- **Frames are the size of the window, in CSS pixels.**  An emulated device scale factor changes how the page renders but does not enlarge the frames.  Use `captureScreenshot()` for a full-resolution still.
+- **Frames are held in memory** until `stop()` returns them.  At 1024x768 a JPEG frame is roughly 40-60KB, a PNG frame 500KB or more, so ten seconds of a busy page at 60 frames a second is tens of megabytes as JPEG.  Shrink the frames with `maxWidth`/`maxHeight`, or record fewer with `everyNthFrame`, for long recordings.
+- **The two Chrome builds behave differently.**  `chrome-headless-shell` (the default) delivers frames steadily, in order, each timestamped within a few milliseconds of being drawn - even while other workers drive their own tabs.  Full Chrome (`mode: "headless"`) encodes frames on several threads and slows down when other tabs in the same browser are busy: frames can arrive out of order (which is why `stop()` sorts them), a recording can go a few hundred milliseconds without a frame, a frame can be timestamped hundreds of milliseconds after it was drawn, and with an emulated device scale factor the first frame or two can ignore `maxWidth`/`maxHeight`.  For frame timing you intend to rely on, record in `chrome-headless-shell`.
 
 ### When something fails
 
