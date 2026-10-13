@@ -10,6 +10,8 @@
 - Go: `b.Pointer()` returns a real pointer for custom gestures, driven one event at a time with `MoveTo(x, y)`, `MoveToElement(sel, b.At(...))`, `Down()`, and `Up()`. Each call dispatches at once with no scrolling or stability wait, it works on frame handles, and `b.Pointer(b.Pen())` dispatches pen input.
 - TypeScript: `session.setUserAgent(ua)` / `clearUserAgent()` override `navigator.userAgent` and the `User-Agent` header; `prepare()` clears the override.
 - TypeScript: `setDeviceMetrics()` takes `touch` and `landscape`, which emulate a touch screen and a landscape screen orientation; `clearDeviceMetrics()` and `prepare()` turn both off.
+- Go: each `Request` records its outcome in `Status` and `Failure`, and `HaveMadeRequest`/`RequestMatching` refine on it with `WithStatus` and `Failed`. `AllRequests` now returns copies.
+- Go: `b.AllConsoleMessages()` and `b.AllPageErrors()` snapshot the page's console messages and its uncaught exceptions and unhandled rejections. Page errors also stream to the `GinkgoWriter` and are replayed with the console errors when a spec fails.
 
 ### Fixes
 

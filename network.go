@@ -26,6 +26,8 @@ import (
 /*
 Request represents an HTTP request observed by a tab.
 
+Status is the HTTP status of the response: 0 until the response headers arrive, and 0 for a request that failed before it got a response.  A redirect is recorded as one Request per hop, and a hop that was redirected has the redirect's status (a 302, say).  Failure is "" unless the request failed, in which case it is Chrome's error text (net::ERR_CONNECTION_REFUSED, net::ERR_ABORTED, ...), followed by the blocked reason when Chrome gives one.
+
 Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
 */
 type Request struct {
@@ -33,6 +35,8 @@ type Request struct {
 	Method       string
 	Headers      map[string]string
 	ResourceType string
+	Status       int
+	Failure      string
 }
 
 func newRequest(r *network.Request, resourceType network.ResourceType) *Request {
@@ -89,7 +93,7 @@ func (r Requests) Filter(query *RequestQuery) Requests {
 }
 
 /*
-AllRequests() returns all requests observed by this tab since the last call to Prepare().
+AllRequests() returns all requests observed by this tab since the last call to Prepare().  It is a snapshot: each Request is a copy, and its Status and Failure are what Biloba knew at the moment of the call.  To wait for an outcome, poll [Biloba.HaveMadeRequest] with WithStatus or Failed.
 
 Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
 */
@@ -98,7 +102,11 @@ func (b *Biloba) AllRequests() Requests {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	out := make(Requests, len(b.state.requests))
-	copy(out, b.state.requests)
+	for i, req := range b.state.requests {
+		c := *req
+		c.Headers = maps.Clone(req.Headers)
+		out[i] = &c
+	}
 	return out
 }
 
@@ -108,13 +116,15 @@ RequestQuery is a chainable query over observed requests, keyed on the request U
   - a Gomega matcher you assert against a tab - read it as [Biloba.HaveMadeRequest] (does this tab have a matching request?), and
   - a predicate you pass to [Requests.Find] / [Requests.Filter] - read it as [Biloba.RequestMatching] (does this one request match?).
 
-Constrain it further by chaining WithMethod (more dimensions can be added the same way).  Every refinement applies to the same request.
+Constrain it further by chaining WithMethod, WithStatus, and Failed.  Every refinement applies to the same request.
 
 Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
 */
 type RequestQuery struct {
 	urlMatcher    types.GomegaMatcher
 	methodMatcher types.GomegaMatcher
+	statusMatcher types.GomegaMatcher
+	failed        bool
 	observed      Requests
 }
 
@@ -136,6 +146,7 @@ HaveMadeRequest() is an alias for [Biloba.RequestMatching] that reads as an asse
 
 	Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")))
 	Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")).WithMethod("POST"))
+	Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")).WithStatus(200))
 
 Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
 */
@@ -149,10 +160,44 @@ WithMethod() refines the [RequestQuery] to also require the request's HTTP metho
 Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
 */
 func (q *RequestQuery) WithMethod(method any) *RequestQuery {
-	return &RequestQuery{
-		urlMatcher:    q.urlMatcher,
-		methodMatcher: matcherOrEqual(method),
-	}
+	refined := q.refine()
+	refined.methodMatcher = matcherOrEqual(method)
+	return refined
+}
+
+/*
+WithStatus() refines the [RequestQuery] to also require the response's HTTP status to match.  status may be an int (exact match) or a Gomega matcher.  A request that has no response yet, or failed without one, has status 0:
+
+	Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")).WithStatus(404))
+	serverErrors := b.AllRequests().Filter(b.RequestMatching(ContainSubstring("/api/")).WithStatus(BeNumerically(">=", 500)))
+
+Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
+*/
+func (q *RequestQuery) WithStatus(status any) *RequestQuery {
+	refined := q.refine()
+	refined.statusMatcher = matcherOrEqual(status)
+	return refined
+}
+
+/*
+Failed() refines the [RequestQuery] to only match a request that failed - one whose Failure is not empty, such as a refused connection or an aborted request:
+
+	Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")).Failed())
+	failures := b.AllRequests().Filter(b.RequestMatching(Not(BeEmpty())).Failed())
+
+An HTTP error status is not a failure: the request got a response.  Use WithStatus for those.
+
+Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
+*/
+func (q *RequestQuery) Failed() *RequestQuery {
+	refined := q.refine()
+	refined.failed = true
+	return refined
+}
+
+// refine copies the query's constraints into a new query, so a refinement leaves its receiver alone.
+func (q *RequestQuery) refine() *RequestQuery {
+	return &RequestQuery{urlMatcher: q.urlMatcher, methodMatcher: q.methodMatcher, statusMatcher: q.statusMatcher, failed: q.failed}
 }
 
 // matches is the predicate role: does this single request satisfy every constraint?
@@ -165,7 +210,12 @@ func (q *RequestQuery) matches(req *Request) bool {
 			return false
 		}
 	}
-	return true
+	if q.statusMatcher != nil {
+		if match, _ := q.statusMatcher.Match(req.Status); !match {
+			return false
+		}
+	}
+	return !q.failed || req.Failure != ""
 }
 
 // Match is the Gomega matcher role: does the tab have any request that matches?
@@ -190,6 +240,12 @@ func (q *RequestQuery) description() string {
 	if q.methodMatcher != nil {
 		fmt.Fprintf(out, "\nand Method matching %s", q.methodMatcher.FailureMessage(""))
 	}
+	if q.statusMatcher != nil {
+		fmt.Fprintf(out, "\nand Status matching %s", q.statusMatcher.FailureMessage(""))
+	}
+	if q.failed {
+		out.WriteString("\nthat failed")
+	}
 	return normalizeWhitespace(out.String())
 }
 
@@ -201,6 +257,12 @@ func (q *RequestQuery) presentRequests() string {
 	out.WriteString("The requests the tab has made were:")
 	for _, req := range q.observed {
 		fmt.Fprintf(out, "\n%s %s", req.Method, req.URL)
+		switch {
+		case req.Failure != "":
+			fmt.Fprintf(out, " - failed: %s", req.Failure)
+		case req.Status != 0:
+			fmt.Fprintf(out, " - %d", req.Status)
+		}
 	}
 	return out.String()
 }
@@ -1495,8 +1557,25 @@ func (b *Biloba) recordUnreadableResponseBody(handler *ResponseModification, ev 
 func (b *Biloba) handleEventRequestWillBeSent(ev *network.EventRequestWillBeSent) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	b.state.requests = append(b.state.requests, newRequest(ev.Request, ev.Type))
+	// a redirect announces the next hop under the same request ID, carrying the response that sent it
+	if previous := b.state.requestsByID[ev.RequestID]; previous != nil && ev.RedirectResponse != nil {
+		previous.Status = int(ev.RedirectResponse.Status)
+	}
+	req := newRequest(ev.Request, ev.Type)
+	b.state.requests = append(b.state.requests, req)
+	b.state.requestsByID[ev.RequestID] = req
 	b.state.inflightRequests[ev.RequestID] = true
+}
+
+func (b *Biloba) handleEventResponseReceived(ev *network.EventResponseReceived) {
+	if ev.Response == nil {
+		return
+	}
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	if req := b.state.requestsByID[ev.RequestID]; req != nil {
+		req.Status = int(ev.Response.Status)
+	}
 }
 
 func (b *Biloba) handleEventLoadingFinished(ev *network.EventLoadingFinished) {
@@ -1509,4 +1588,7 @@ func (b *Biloba) handleEventLoadingFailed(ev *network.EventLoadingFailed) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	delete(b.state.inflightRequests, ev.RequestID)
+	if req := b.state.requestsByID[ev.RequestID]; req != nil {
+		req.Failure = engine.RequestFailureText(ev)
+	}
 }

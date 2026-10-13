@@ -518,7 +518,7 @@ Here are some of the ways Biloba integrates with Ginkgo and Gomega so you can fo
 
 	(Note that the boolean `BilobaConfig` options take an optional bool — `BilobaConfigFailureScreenshots(false)` and `BilobaConfigProgressReportScreenshots(false)` turn those off, and `BilobaConfigFailureOutlines()` turns outlines on.  See [Failure artifacts](#failure-artifacts-humans-ci-and-agents).)
 
-3. All `console.log/info/warn/etc.` output gets immediately streamed to Ginkgo's GinkgoWriter.
+3. All `console.log/info/warn/etc.` output gets immediately streamed to Ginkgo's GinkgoWriter.  Biloba also records it, along with uncaught page errors, for you to [inspect](#console-messages-and-page-errors).
 
 	That means that output will be visible, but only if a test fails or you are running in verbose mode with `ginkgo -v`
 
@@ -3457,6 +3457,45 @@ b.Navigate("/checkout")
 
 It does not run in the document that is already loaded, so call it before `b.Navigate`.  The script stays installed across navigations until the spec ends, when a `DeferCleanup` removes it.
 
+### Console Messages and Page Errors
+
+Biloba streams the page's console output to the `GinkgoWriter` as it happens.  It also records it: `b.AllConsoleMessages()` returns every console message the tab has logged since the last `Prepare()`, oldest first.  Each `ConsoleMessage` has a `Type` (`"log"`, `"info"`, `"warning"`, `"error"`, `"debug"`, ...), a `Text` that joins the call's arguments with spaces, a `Timestamp`, and a `Stack`.
+
+`b.AllPageErrors()` returns the uncaught exceptions and unhandled promise rejections the tab has seen since the last `Prepare()`.  Each `PageError` has a `Message` that reads the way DevTools prints it (`"Uncaught TypeError: x is not a function"`, `"Uncaught (in promise) Error: boom"`), the `URL`, `Line`, and `Column` it was thrown from, a `Stack`, and a `Timestamp`.  Page errors stream to the `GinkgoWriter` in red, like `console.error`, and when a spec fails they are replayed with the [console errors](#outline) at the top of the failure block.  Line and column numbers are zero-based, as Chrome reports them.
+
+Both are snapshots: they don't poll and take none of the poll-config knobs.  To wait for something to be logged, poll the snapshot:
+
+```go
+Eventually(b.AllPageErrors).Should(BeEmpty())
+Eventually(b.AllConsoleMessages).Should(ContainElement(HaveField("Text", "ready")))
+```
+
+Biloba keeps the most recent 1000 of each.  A [frame handle](#working-with-cross-origin-iframes) records only its own document's messages and errors, from the moment it is found; the tab records its frames' as well.
+
+Together with the request outcomes [recorded for each request](#observing-requests), these make it easy to build an error report after loading a page:
+
+```go
+b.Navigate("/dashboard")
+Eventually("#loaded").Should(b.Exist())
+
+report := []string{}
+for _, pageError := range b.AllPageErrors() {
+	report = append(report, "page error: "+pageError.Message)
+}
+for _, req := range b.AllRequests() {
+	if req.Failure != "" {
+		report = append(report, fmt.Sprintf("failed request: %s (%s)", req.URL, req.Failure))
+	} else if req.Status >= 400 {
+		report = append(report, fmt.Sprintf("HTTP %d: %s", req.Status, req.URL))
+	}
+}
+for _, message := range b.AllConsoleMessages() {
+	if message.Type == "error" || message.Type == "warning" {
+		report = append(report, message.Type+": "+message.Text)
+	}
+}
+```
+
 ## Stubbing and Observing the Network
 
 Real browser tests usually talk to a backend.  This is a good thing as you _really_ want rich and expressive tests that are running against the _actual_ backend.  Such an approach _can_ lead to slow (every spec waits on real network round-trips) and flaky (the backend has to be up, seeded, and deterministic) tests if you aren't disciplined.  In general you should lean into discipline and stick with a real backend; investing effort to make it more performant and stable.
@@ -3692,6 +3731,19 @@ apiCalls := b.AllRequests().Filter(b.RequestMatching(ContainSubstring("/api/")))
 ```
 
 The recorded requests are scoped to a single tab and are reset by `Prepare()`, so each spec starts with a clean slate.
+
+Each request also records its outcome.  `Status` is the HTTP status of the response: it is `0` until the response headers arrive, and stays `0` for a request that failed before it got a response.  `Failure` is empty unless the request failed, in which case it holds Chrome's error text - `net::ERR_CONNECTION_REFUSED`, `net::ERR_BLOCKED_BY_CLIENT` for a request `AbortRequest` failed, and so on.  A redirect is recorded as one request per hop, and the hop that was redirected has the redirect's status (a `302`, say).  Refine a query on the outcome with `WithStatus` (an `int` or a Gomega matcher) and `Failed`:
+
+```go
+Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")).WithStatus(200))
+Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/flaky")).Failed())
+
+serverErrors := b.AllRequests().Filter(b.RequestMatching(ContainSubstring("/api/")).WithStatus(BeNumerically(">=", 500)))
+```
+
+An HTTP error status is not a failure - the request got a response - so a `404` has `Status: 404` and an empty `Failure`.  One wrinkle: Chrome reports `net::ERR_ABORTED` for a request whose body the page abandons, so a `fetch` whose response body is never read (or a download cut short by a navigation) can have both a `Status` and a `Failure`.
+
+`AllRequests` is a snapshot: each `*Request` it returns is a copy, and its `Status` and `Failure` are what Biloba knew when you called it.  To wait for an outcome, poll `HaveMadeRequest` with `WithStatus` or `Failed`.
 
 ### Waiting for the network to settle
 
@@ -4245,7 +4297,7 @@ When you're debugging a failure whose interesting DOM lands past the cap, overri
 
 **Attachment on failure.** Biloba can attach a DOM Outline for every open tab when a spec fails.  This gives you a readable, text-based view of the page state, which is especially useful in environments that cannot render images.  It is **off for an interactive human** (the screenshot is the more useful artifact) but **on automatically under CI or an AI agent**; force it either way with `BilobaConfigFailureOutlines()` / `BilobaConfigFailureOutlines(false)` (see [Failure artifacts](#failure-artifacts-humans-ci-and-agents)).  When enabled, the entry appears under "DOM Outline for: '<title>'" in the Ginkgo report.
 
-**Console errors on failure.** Biloba streams the page's `console` output to the `GinkgoWriter` as it happens, but on a failure the originating `console.error` (say, the exception behind a React error boundary) is easily lost in the timeline.  So whenever a spec fails Biloba *also* replays every `console.error`/`console.assert` the page logged during the spec, gathered across all tabs, under **"Console errors logged before this failure"** at the **top** of the failure block - usually the fastest path to the root cause.  (This requires no configuration and rides along with the failure-artifact hook.)
+**Console errors on failure.** Biloba streams the page's `console` output to the `GinkgoWriter` as it happens, but on a failure the originating `console.error` (say, the exception behind a React error boundary) is easily lost in the timeline.  So whenever a spec fails Biloba *also* replays every `console.error`/`console.assert` the page logged during the spec, and every uncaught exception or unhandled promise rejection ([page errors](#console-messages-and-page-errors)), gathered across all tabs, under **"Console errors logged before this failure"** at the **top** of the failure block - usually the fastest path to the root cause.  (This requires no configuration and rides along with the failure-artifact hook.)
 
 **Poll trajectory on failure.** When an `Eventually(...)` over a *polled read* times out, the message Gomega prints is a snapshot of the final value — `Timed out … Expected <int>: 120` — and that single number hides three completely different root causes:
 

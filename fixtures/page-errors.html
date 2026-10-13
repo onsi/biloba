@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Page Errors</title>
+    <link rel="icon" href="data:,">
+</head>
+<body>
+    <h1 id="hello">Page Errors</h1>
+    <script>
+        console.log("hello", 3)
+        console.info("some info")
+        console.warn("careful")
+        console.error("bad thing")
+
+        // read each body: Chrome reports a response whose body the page never reads as net::ERR_ABORTED
+        fetch("/missing.json").then(r => r.text())
+        fetch("/status/500").then(r => r.text())
+        fetch("/redirect/api/redirected").then(r => r.text())
+        fetch("/api/aborted").then(r => r.text()).catch(() => {})
+
+        Promise.reject(new Error("rejected boom"))
+
+        function explode() {
+            throw new TypeError("load boom")
+        }
+    </script>
+    <script>explode()</script>
+</body>
+</html>

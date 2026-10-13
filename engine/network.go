@@ -229,6 +229,23 @@ func (s *Session) recordRequest(event *network.EventRequestWillBeSent) {
 	s.requestMu.Unlock()
 }
 
+// RequestFailureText renders a Network.loadingFailed event as a request's failure: Chrome's error text
+// (net::ERR_CONNECTION_REFUSED, net::ERR_ABORTED, ...), followed by the blocked or CORS reason when
+// Chrome gives one.
+func RequestFailureText(event *network.EventLoadingFailed) string {
+	text := event.ErrorText
+	if event.BlockedReason != "" {
+		text += fmt.Sprintf(" (blocked: %s)", event.BlockedReason)
+	}
+	if event.CorsErrorStatus != nil && event.CorsErrorStatus.CorsError != "" {
+		text += fmt.Sprintf(" (CORS: %s)", event.CorsErrorStatus.CorsError)
+	}
+	if text == "" {
+		text = "failed"
+	}
+	return text
+}
+
 // Requests returns a snapshot of requests observed by the session.
 func (s *Session) Requests() []Request {
 	s.requestMu.Lock()

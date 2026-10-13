@@ -861,11 +861,19 @@ type tabState struct {
 	// error is usually the root cause and is otherwise buried in the streamed timeline.
 	consoleErrors []string
 
+	// consoleMessages and pageErrors are the bounded histories AllConsoleMessages and AllPageErrors
+	// snapshot.
+	consoleMessages []ConsoleMessage
+	pageErrors      []PageError
+
 	// userAgent is the user-agent override SetUserAgent last applied ("" for none), so the
 	// DeferCleanup of a later call can restore it.
 	userAgent string
 
-	requests         []*Request
+	requests []*Request
+	// requestsByID points at the latest record for each request ID (a redirect reuses the ID for its
+	// next hop), so response and failure events can fill in that record's Status and Failure.
+	requestsByID     map[network.RequestID]*Request
 	inflightRequests map[network.RequestID]bool
 	requestHandlers  []*requestHandler       // ordered, first-match-wins: stub / abort / modify-request
 	responseHandlers []*ResponseModification // ordered, first-match-wins: modify-response (response stage)
@@ -880,6 +888,7 @@ func newTabState() *tabState {
 		downloadHistory:  map[string]time.Time{},
 		dialogHandlers:   []*DialogHandler{},
 		dialogs:          Dialogs{},
+		requestsByID:     map[network.RequestID]*Request{},
 		inflightRequests: map[network.RequestID]bool{},
 	}
 }

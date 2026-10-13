@@ -55,6 +55,15 @@ func ValidateFrameWorldContext(ctx context.Context, frameID cdp.FrameID) error {
 	return nil
 }
 
+// InFrameDocument reports whether a Runtime event raised in executionContextID (a console message, an
+// uncaught exception) belongs to the document a ScopeToFrameContext context is pinned to, and that
+// document is still frameID's current one.  Like ValidateFrameWorldContext it sends no command, so it
+// is safe to call from an event listener.
+func InFrameDocument(ctx context.Context, frameID cdp.FrameID, executionContextID runtime.ExecutionContextID) bool {
+	expected, _ := ctx.Value(executionContextKey{}).(frameWorld)
+	return expected.id != 0 && expected.id == executionContextID && frameWorldCurrent(ctx, frameID, expected)
+}
+
 // FrameContextGone reports whether err is Chrome refusing an evaluation because the document a
 // ScopeToFrameContext context is pinned to no longer exists.
 func FrameContextGone(err error) bool { return frameContextGone(err) }

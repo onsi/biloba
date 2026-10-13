@@ -26,7 +26,7 @@ Biloba is a browser-testing framework for Go, built on [chromedp](https://github
 - **Most methods don't return errors** — errors become Ginkgo test failures for you.
 - **Appearance is assertable too.** `Eventually(sel).Should(b.HaveScreenshot("name"))` compares the element (or the whole tab) against a committed baseline PNG, re-capturing on every poll attempt so the comparison waits out fonts and reflow. A missing baseline fails loudly rather than being written and passed. → `visual-assertions`
 - **Biloba polls by default.** A fully-applied call (`b.Click("#go")`, `b.GetProperty(sel, "href")`) polls until the element is ready, acts/reads once, then stops. The under-applied form returns a Gomega matcher *you* wrap in `Eventually`/`Consistently`. This dual API is the core pattern — learn it in `write-tests`. (`b.Immediate()` opts back into act-once/fail-fast; rarely needed.)
-- `console.log` streams to the `GinkgoWriter`; a failing `console.assert` fails the spec.
+- `console.log` streams to the `GinkgoWriter`; a failing `console.assert` fails the spec. `b.AllConsoleMessages()`/`b.AllPageErrors()` snapshot the console and the page's uncaught exceptions.
 
 ## The one habit that keeps suites non-flaky
 

@@ -96,6 +96,8 @@ func (b *Biloba) setUpListeners() {
 			b.handleEventJavascriptDialogOpening(ev)
 		case *runtime.EventConsoleAPICalled:
 			b.handleEventConsoleAPICalled(ev)
+		case *runtime.EventExceptionThrown:
+			b.handleEventExceptionThrown(ev)
 		case *page.EventFrameNavigated:
 			b.handleEventFrameNavigated(ev)
 		case *browser.EventDownloadWillBegin:
@@ -104,6 +106,8 @@ func (b *Biloba) setUpListeners() {
 			b.handleEventDownloadProgress(ev)
 		case *network.EventRequestWillBeSent:
 			b.handleEventRequestWillBeSent(ev)
+		case *network.EventResponseReceived:
+			b.handleEventResponseReceived(ev)
 		case *network.EventLoadingFinished:
 			b.handleEventLoadingFinished(ev)
 		case *network.EventLoadingFailed:

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -194,6 +195,14 @@ func newFixtureServer() string {
 	s := ghttp.NewServer()
 	s.RouteToHandler("GET", regexp.MustCompile(`^/held$`), func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
+	})
+	// /status/500 answers with that status; /redirect/api/users answers 302 to /api/users
+	s.RouteToHandler("GET", regexp.MustCompile(`^/status/\d+$`), func(w http.ResponseWriter, r *http.Request) {
+		code, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/status/"))
+		w.WriteHeader(code)
+	})
+	s.RouteToHandler("GET", regexp.MustCompile(`^/redirect/.+$`), func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/"+strings.TrimPrefix(r.URL.Path, "/redirect/"), http.StatusFound)
 	})
 	s.RouteToHandler("GET", regexp.MustCompile(`^/[\w.\-]*$`), func(w http.ResponseWriter, r *http.Request) {
 		fname := strings.Trim(r.URL.Path, "/")

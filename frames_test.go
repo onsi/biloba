@@ -135,6 +135,21 @@ var _ = Describe("Cross-origin iframes", func() {
 			Ω(b.AllRequests().Filter(b.RequestMatching(crossOriginFixtureServer+"/api/frame-ready"))).ShouldNot(BeEmpty(), "the tab sees its frames' requests too")
 		})
 
+		It("records the status of the frame's requests, and the frame's own console messages and page errors", func() {
+			checkout.Run(`fetch("/missing.json").then(r => r.text())`)
+			Eventually(checkout).Should(checkout.HaveMadeRequest(crossOriginFixtureServer + "/missing.json").WithStatus(404))
+
+			b.Run(`console.log("from the parent"); setTimeout(() => { throw new Error("parent boom") })`)
+			checkout.Run(`console.log("from the frame"); setTimeout(() => { throw new Error("frame boom") })`)
+			Eventually(checkout.AllPageErrors).Should(ConsistOf(HaveField("Message", "Uncaught Error: frame boom")))
+			Eventually(b.AllPageErrors).Should(ConsistOf(
+				HaveField("Message", "Uncaught Error: parent boom"),
+				HaveField("Message", "Uncaught Error: frame boom"),
+			), "the tab sees its frames' page errors too")
+			Ω(checkout.AllConsoleMessages()).Should(ConsistOf(HaveField("Text", "from the frame")))
+			Eventually(b.AllConsoleMessages).Should(ContainElements(HaveField("Text", "from the parent"), HaveField("Text", "from the frame")))
+		})
+
 		It("outlines the frame's document and accessibility tree", func() {
 			Ω(checkout.Outline()).Should(SatisfyAll(ContainSubstring("email"), Not(ContainSubstring("parent-only"))))
 			Ω(checkout.A11yOutline()).Should(SatisfyAll(ContainSubstring(`button "Pay"`), Not(ContainSubstring(`"Parent"`))))
@@ -425,6 +440,14 @@ var _ = Describe("Out-of-process iframes", func() {
 		tab.StubRequest(ContainSubstring("/api/stubbed"), biloba.StubResponse{Body: "stubbed-body"})
 		Ω(frame.RunAsync(`return await (await fetch("/api/stubbed")).text()`)).ShouldNot(Equal("stubbed-body"))
 		Eventually(frame).Should(frame.HaveMadeRequest(ContainSubstring("/api/stubbed")))
+	})
+
+	It("records the frame's request statuses, console messages, and page errors", func() {
+		frame.Run(`fetch("/missing.json").then(r => r.text()); console.log("from the frame"); setTimeout(() => { throw new Error("frame boom") })`)
+		Eventually(frame).Should(frame.HaveMadeRequest(ContainSubstring("/missing.json")).WithStatus(404))
+		Eventually(frame.AllPageErrors).Should(ConsistOf(HaveField("Message", "Uncaught Error: frame boom")))
+		Ω(frame.AllConsoleMessages()).Should(ConsistOf(HaveField("Text", "from the frame")))
+		Eventually(tab.AllPageErrors).Should(ContainElement(HaveField("Message", "Uncaught Error: frame boom")), "the tab streams and records the frame target's errors")
 	})
 
 	It("has its dialogs handled by the tab", func() {

@@ -515,9 +515,14 @@ func (b *Biloba) frameTargetContext(id target.ID) (context.Context, error) {
 	}
 	root.frameTargets[id] = &frameTarget{ctx: ctx, detach: detach}
 	root.lock.Unlock()
+	// The tab records and streams them, as it does its same-process frames' messages.
+	owner := b.tab()
 	chromedp.ListenTarget(ctx, func(ev any) {
-		if console, ok := ev.(*runtime.EventConsoleAPICalled); ok {
-			b.handleEventConsoleAPICalled(console)
+		switch ev := ev.(type) {
+		case *runtime.EventConsoleAPICalled:
+			owner.handleEventConsoleAPICalled(ev)
+		case *runtime.EventExceptionThrown:
+			owner.handleEventExceptionThrown(ev)
 		}
 	})
 	return ctx, nil
@@ -592,9 +597,10 @@ func (b *Biloba) frameHandle(info engine.FrameInfo) *Biloba {
 	return frame
 }
 
-// listenForFrameRequests records the requests this frame's document makes, so AllRequests,
-// HaveMadeRequest, and BeNetworkIdle on a frame handle are about the frame.  The tab records them
-// too: it sees every request its renderer makes.
+// listenForFrameRequests records the requests, console messages, and page errors of this frame's
+// document, so AllRequests, HaveMadeRequest, BeNetworkIdle, AllConsoleMessages, and AllPageErrors on a
+// frame handle are about the frame.  The tab records them too (and streams the console output): it
+// sees everything its renderer does.
 func (b *Biloba) listenForFrameRequests() {
 	id := b.frame.id
 	loaderID := b.frame.loaderID
@@ -603,6 +609,16 @@ func (b *Biloba) listenForFrameRequests() {
 		case *network.EventRequestWillBeSent:
 			if ev.FrameID == id && ev.LoaderID == loaderID {
 				b.handleEventRequestWillBeSent(ev)
+			}
+		case *network.EventResponseReceived:
+			b.handleEventResponseReceived(ev)
+		case *runtime.EventConsoleAPICalled:
+			if engine.InFrameDocument(b.Context, id, ev.ExecutionContextID) {
+				b.recordConsoleMessage(ev)
+			}
+		case *runtime.EventExceptionThrown:
+			if ev.ExceptionDetails != nil && engine.InFrameDocument(b.Context, id, ev.ExceptionDetails.ExecutionContextID) {
+				b.recordPageError(ev)
 			}
 		case *network.EventLoadingFinished:
 			b.handleEventLoadingFinished(ev)

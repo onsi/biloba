@@ -21,7 +21,7 @@ So an agent or CI run needs nothing: `ginkgo -r -p`, then read the outline and t
 
 ## Read the artifacts in this order
 
-1. **Console errors** — any `console.error`/`console.assert` before the failure, replayed under "Console errors logged before this failure" at the **top** of the failure block. On a JS crash (a React error boundary) this is the root cause.
+1. **Console errors** — any `console.error`/`console.assert` and any uncaught exception or unhandled rejection (`Uncaught …`) before the failure, replayed under "Console errors logged before this failure" at the **top** of the failure block. On a JS crash (a React error boundary) this is the root cause.
 2. **`⚠` diagnostic notes** — they name the cause outright.
 3. **Poll trajectory** — what the read you failed on did over its whole deadline (absent when the failure had no value read behind it).
 4. **Visual diagnosis** — only on a failed `b.HaveScreenshot`: pixel counts plus the *shape* of the change, in words, before you open any image.
@@ -138,7 +138,7 @@ ReportAfterEach(func(report SpecReport) {
 
 Keep the `?? null` so a crashed page doesn't turn the snapshot itself into a failure. (That's a *snapshot*. To **wait** on app state as part of a spec, use `b.GetJSValue` — `flaky-specs` §3.)
 
-**Page `console.*` streams to the `GinkgoWriter`**, each argument rendered space-separated. Objects come from CDP's **shallow** preview, so nested/large objects log lossily. Build the string yourself when you need the whole value: `console.log('state ' + JSON.stringify(obj))`.
+**Page `console.*` streams to the `GinkgoWriter`**, each argument rendered space-separated, and so do uncaught page errors (in red, with their stack). `b.AllConsoleMessages()`/`b.AllPageErrors()` hand you the same as data. Objects come from CDP's **shallow** preview, so nested/large objects log lossily. Build the string yourself when you need the whole value: `console.log('state ' + JSON.stringify(obj))`.
 
 ## Two headless quirks that look like Biloba bugs
 

@@ -111,34 +111,9 @@ func (s *Session) ConsoleSnapshot() ConsoleHistory {
 }
 
 func (s *Session) recordConsoleMessage(event *runtime.EventConsoleAPICalled) {
-	message := ConsoleMessage{Type: string(event.Type), Generation: s.eventGeneration.Load(), Stack: []ConsoleStackFrame{}}
-	if event.Timestamp != nil {
-		message.Timestamp = event.Timestamp.Time()
-	}
-	parts := make([]string, 0, len(event.Args))
-	for index, object := range event.Args {
-		if index >= 64 {
-			message.Args = append(message.Args, "… [arguments truncated]")
-			parts = append(parts, "… [arguments truncated]")
-			break
-		}
-		value := safeConsolePreview(object)
-		message.Args = append(message.Args, value)
-		parts = append(parts, fmt.Sprint(value))
-	}
-	message.Text = strings.Join(parts, " ")
-	if event.StackTrace != nil {
-		for index, frame := range event.StackTrace.CallFrames {
-			if index == defaultConsoleStackFrames {
-				break
-			}
-			message.Stack = append(message.Stack, ConsoleStackFrame{
-				URL:          truncateUTF8(frame.URL, DefaultConsolePreviewBytes),
-				FunctionName: truncateUTF8(frame.FunctionName, DefaultConsolePreviewBytes),
-				Line:         frame.LineNumber, Column: frame.ColumnNumber,
-			})
-		}
-	}
+	generation := s.eventGeneration.Load()
+	message := NewConsoleMessage(event)
+	message.Generation = generation
 
 	s.consoleMu.Lock()
 	defer s.consoleMu.Unlock()
@@ -159,6 +134,49 @@ func (s *Session) recordConsoleMessage(event *runtime.EventConsoleAPICalled) {
 			subscriber.dropped.Add(1)
 		}
 	}
+}
+
+// NewConsoleMessage converts a Runtime.consoleAPICalled event into a bounded ConsoleMessage: Text
+// joins each argument's preview with a space, and Stack keeps at most 64 frames.  It needs no session,
+// so every client renders a console message's text the same way.
+func NewConsoleMessage(event *runtime.EventConsoleAPICalled) ConsoleMessage {
+	message := ConsoleMessage{Type: string(event.Type), Stack: ConsoleStack(event.StackTrace)}
+	if event.Timestamp != nil {
+		message.Timestamp = event.Timestamp.Time()
+	}
+	parts := make([]string, 0, len(event.Args))
+	for index, object := range event.Args {
+		if index >= 64 {
+			message.Args = append(message.Args, "… [arguments truncated]")
+			parts = append(parts, "… [arguments truncated]")
+			break
+		}
+		value := safeConsolePreview(object)
+		message.Args = append(message.Args, value)
+		parts = append(parts, fmt.Sprint(value))
+	}
+	message.Text = strings.Join(parts, " ")
+	return message
+}
+
+// ConsoleStack converts a page stack trace into bounded stack frames.  Line and column are zero-based,
+// as Chrome reports them.  A nil trace gives an empty, non-nil slice.
+func ConsoleStack(trace *runtime.StackTrace) []ConsoleStackFrame {
+	stack := []ConsoleStackFrame{}
+	if trace == nil {
+		return stack
+	}
+	for index, frame := range trace.CallFrames {
+		if index == defaultConsoleStackFrames {
+			break
+		}
+		stack = append(stack, ConsoleStackFrame{
+			URL:          truncateUTF8(frame.URL, DefaultConsolePreviewBytes),
+			FunctionName: truncateUTF8(frame.FunctionName, DefaultConsolePreviewBytes),
+			Line:         frame.LineNumber, Column: frame.ColumnNumber,
+		})
+	}
+	return stack
 }
 
 func safeConsolePreview(object *runtime.RemoteObject) any {
