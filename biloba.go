@@ -870,6 +870,16 @@ type tabState struct {
 	// DeferCleanup of a later call can restore it.
 	userAgent string
 
+	// emulation is the tab's environment emulation (SetGeolocation, SetLocale, SetTimezone,
+	// SetNetworkState, SetCacheEnabled).  Prepare carries it over the reset so it can clear what a
+	// spec leaked.
+	emulation emulationState
+
+	// permissions records SetPermissions by browser context.  Only the root tab's is used: a spawned
+	// tab shares its opener's browser context, so the records live where every tab reaches them.
+	// Prepare carries it over the reset too.
+	permissions map[cdp.BrowserContextID]*permissionRecord
+
 	// screencast is the recording StartScreencast has running on this tab, nil when none is.
 	screencast *ScreencastRecording
 
@@ -1080,9 +1090,11 @@ func (b *Biloba) Prepare() {
 	// Reset through the shared pointer, not by replacing it: every view of this tab holds the same
 	// *tabState, and swapping in a new one would leave the views pointing at the old.  bilobaIsInstalled
 	// is carried over deliberately - it tracks the page, and Prepare does not navigate.
-	installed := b.state.bilobaIsInstalled
+	installed, emulation, permissions := b.state.bilobaIsInstalled, b.state.emulation, b.state.permissions
 	*b.state = *newTabState()
 	b.state.bilobaIsInstalled = installed
+	// carried over so resetBrowsingState can clear whatever emulation the previous spec leaked
+	b.state.emulation, b.state.permissions = emulation, permissions
 	b.lock.Unlock()
 
 	// belt and braces with the DeferCleanup HoldResponse registers: a response held hostage by a

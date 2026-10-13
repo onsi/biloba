@@ -18,6 +18,8 @@
 - TypeScript: `captureScreenshot()` takes `frozen: true` (the `expectScreenshot()` freeze for one capture), `hideCaret: true`, `viewport: true` (what is on screen, never resizing the viewport), and, on a page, `clip: {x, y, width, height}` (a region of the viewport; outside it is `INVALID_ARGUMENT`).
 - TypeScript: each request from `requests()`/`waitForRequest()` carries its outcome in `status` and `failure`, and the request query filters on them with `status` and `failed`.
 - TypeScript: `session.pageErrors()`, `onPageError()`, and `expectPageError()` expose uncaught exceptions and unhandled rejections, and the Vitest hooks replay them with the console errors, located `url:line:column` one-based. `consoleMessages()` includes the messages Chrome logs itself (failed resource loads, interventions, violations), marked with a `source`; the hooks don't replay those.
+- Go: the environment emulation the TypeScript client has: `b.SetGeolocation`/`ClearGeolocation`, `b.SetPermissions`/`ResetPermissions`, `b.SetLocale`, `b.SetTimezone`, `b.SetNetworkState`/`SetOffline`/`NetworkState`, and `b.SetCacheEnabled`. Each applies to a tab and undoes itself when the spec ends, and the docs no longer send Go users to chromedp for them.
+- Go: Chrome's own warnings and errors (`[network] Failed to load resource: ...`) print to the `GinkgoWriter` like the page's `console.warn` and `console.error`. They are not replayed with the console errors when a spec fails.
 
 ### Fixes
 
@@ -31,6 +33,8 @@
 - Realistic single-element interactions (click, hover, tap, type, and the rest) no longer scroll a target that is already entirely on screen and topmost at its center. They used to center every target, which moved the page under the spec (both clients).
 - The visual-assertion freeze no longer turns off CSS animations on a scroll or view timeline, which rendered a scrolled page as if it were at the top (both clients).
 - Go: the cleanup `SetWindowSize` registers restores the tab's original screen orientation instead of forcing portrait.
+- Go: the locations Biloba prints for page errors, in stack traces, and in the failure replay are one-based, as editors and DevTools show them, and stack trace lines include the column. The `Line` and `Column` fields stay zero-based.
+- An emulated offline network makes the tab's requests fail, and emulated latency and throughput apply to them. They used to change only `navigator.onLine` and `navigator.connection` (Go's `SetNetworkState` and TypeScript's `setNetworkState()`).
 
 ## 0.17.0
 

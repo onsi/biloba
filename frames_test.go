@@ -245,6 +245,15 @@ var _ = Describe("Cross-origin iframes", func() {
 			checkout.SetCookie(biloba.Cookie{Name: "frame", Value: "cookie"})
 			checkout.AllDownloads()
 			checkout.StartScreencast(biloba.ScreencastOptions{})
+			checkout.SetGeolocation(biloba.Geolocation{Latitude: 1})
+			checkout.ClearGeolocation()
+			checkout.SetPermissions("", map[biloba.Permission]biloba.PermissionState{biloba.PermissionCamera: biloba.PermissionGranted})
+			checkout.ResetPermissions()
+			checkout.SetLocale("fr-FR")
+			checkout.SetTimezone("Asia/Tokyo")
+			checkout.SetNetworkState(biloba.NetworkState{Offline: true})
+			checkout.SetOffline(true)
+			checkout.SetCacheEnabled(false)
 			ExpectFailures(
 				"Navigate acts on the tab, not a frame: call it on the tab that owns this frame",
 				"SetWindowSize acts on the tab, not a frame: call it on the tab that owns this frame",
@@ -256,7 +265,17 @@ var _ = Describe("Cross-origin iframes", func() {
 				"SetCookie acts on the tab, not a frame: call it on the tab that owns this frame",
 				"AllDownloads acts on the tab, not a frame: call it on the tab that owns this frame",
 				"StartScreencast acts on the tab, not a frame: call it on the tab that owns this frame",
+				"SetGeolocation acts on the tab, not a frame: call it on the tab that owns this frame",
+				"ClearGeolocation acts on the tab, not a frame: call it on the tab that owns this frame",
+				"SetPermissions acts on the tab, not a frame: call it on the tab that owns this frame",
+				"ResetPermissions acts on the tab, not a frame: call it on the tab that owns this frame",
+				"SetLocale acts on the tab, not a frame: call it on the tab that owns this frame",
+				"SetTimezone acts on the tab, not a frame: call it on the tab that owns this frame",
+				"SetNetworkState acts on the tab, not a frame: call it on the tab that owns this frame",
+				"SetOffline acts on the tab, not a frame: call it on the tab that owns this frame",
+				"SetCacheEnabled acts on the tab, not a frame: call it on the tab that owns this frame",
 			)
+			Ω(checkout.NetworkState()).Should(BeZero(), "reading the tab's network state still works")
 			Ω(b.GetTitle()).Should(Equal("Frames Parent"), "the tab must not have navigated")
 		})
 

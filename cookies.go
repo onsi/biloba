@@ -192,4 +192,5 @@ func (b *Biloba) resetBrowsingState() {
 	})
 	b.RunErr(`try { window.localStorage.clear(); window.sessionStorage.clear(); } catch (e) {}`)
 	b.clearEmulatedMedia()
+	b.clearLeakedEmulation()
 }

@@ -565,15 +565,15 @@ This installs a family of `biloba-go:*` skills that activate automatically while
 
 Biloba is only possible because of all the hard work that's gone into the [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/) and the [chromedp](https://github.com/chromedp) [client](https://github.com/chromedp/chromedp) and [Go protocols](https://github.com/chromedp/cdproto).  Biloba wraps all this great stuff to give you a productive testing environment - but it doesn't hide any of it.  You can drop down to `chromedp` and `cdproto` and mix and match Biloba with `chromedp` trivially simply by passing in `b.Context ` to `chromedp`.
 
-For example, Biloba doesn't yet have a first-class wrapper for emulating geolocation.  You can reach for `chromedp` and `cdproto` to do that yourself:
+For example, Biloba doesn't have a first-class wrapper for throttling the CPU.  You can reach for `chromedp` and `cdproto` to do that yourself:
 
 ```go
 chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
-	return emulation.SetGeolocationOverride().WithLatitude(48.8584).WithLongitude(2.2945).WithAccuracy(10).Do(ctx)
+	return emulation.SetCPUThrottlingRate(4).Do(ctx) // run the page four times slower
 }))
 ```
 
-When a capability is common enough Biloba grows native support for it (see, for example, [Cookies and Storage](#cookies-and-storage)).  Until then, `b.Context` is always there as an escape hatch.
+When a capability is common enough Biloba grows native support for it (see, for example, [Cookies and Storage](#cookies-and-storage) and [Emulating Media and Devices](#emulating-media-and-devices)).  Until then, `b.Context` is always there as an escape hatch.  An override you set this way is yours to undo: Biloba doesn't know about it, so `Prepare()` won't clear it for the next spec.
 
 One thing to know when you use it: `b.Context` carries **no deadline**.  Biloba's own commands run under a [backstop deadline](#when-chrome-stops-responding), but a `chromedp.Run(b.Context, ...)` of yours does not — if Chrome stops answering, that call waits forever and takes the suite with it.  Give it one:
 
@@ -584,34 +584,6 @@ chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error { /* ... *
 ```
 
 Derive it from `b.Context` (not `context.Background()`) so chromedp's executor for this tab stays in the chain.
-
-#### Emulation and device conveniences (drop to chromedp)
-
-Biloba wraps the window size, device metrics, user agent, and CSS media natively - see [Window Size](#window-size) and [Emulating Media and Devices](#emulating-media-and-devices).  The rest of device and environment **emulation** - geolocation, permissions, offline, locale/timezone - is not wrapped in Go yet.  Reach through `b.Context` with `cdproto`'s `emulation` and `network` domains.  Here are the common recipes:
-
-```go
-import (
-	"github.com/chromedp/cdproto/emulation"
-	"github.com/chromedp/cdproto/network"
-	"github.com/chromedp/chromedp"
-)
-
-// Geolocation
-chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
-	return emulation.SetGeolocationOverride().WithLatitude(48.8584).WithLongitude(2.2945).WithAccuracy(10).Do(ctx)
-}))
-
-// Locale + timezone
-chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
-	if err := emulation.SetLocaleOverride().WithLocale("fr-FR").Do(ctx); err != nil { return err }
-	return emulation.SetTimezoneOverride("Europe/Paris").Do(ctx)
-}))
-
-// Offline / throttled network
-chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
-	return network.OverrideNetworkState(true, 0, -1, -1).Do(ctx) // offline=true, latency, down, up
-}))
-```
 
 Multi-browser (Firefox/WebKit) is a deliberate non-goal - Biloba is Chrome-only by design.
 
@@ -2402,6 +2374,8 @@ In realistic mode:
 - **`SetValue`** drives form controls with real input: a text input is focused with a real click, cleared, and typed with real key events (then blurred to fire `change`); a checkbox is toggled with a real click (and left alone if it's already in the desired state).  Native pickers - radio groups, `<select>`, and multi-selects - fall back to the fast JS path, because they can't be driven by a real pointer (Playwright's `selectOption` sets them programmatically too).
 - **`Type`** / **`SendKeysToWindowImmediately`** already use real CDP key events; in realistic mode they additionally scroll the element into view before typing.
 
+**What "topmost at its center" means.**  Biloba takes the center of the part of the element that is inside the viewport and asks the page what is there with `document.elementFromPoint`.  The element is topmost when the answer is the element itself or something inside it, shadow DOM included.  When a sticky header, a modal backdrop, a cookie banner, or a tooltip covers that point, it isn't: Biloba scrolls the element to the center of the viewport and checks again.  If it is still covered there, the interaction keeps polling and, at the deadline, fails with "obscured by another element".  Biloba checks that one point, not the whole box, so an element with a covered edge but a clear center is topmost.  An overlay with `pointer-events: none` doesn't count, because `elementFromPoint` sees through it.
+
 All keep Biloba's dual immediate/matcher API (`rb.Click("#go")` vs `Eventually("#go").Should(rb.Click())`).  For a custom gesture - drawing a stroke, scrubbing a slider - [drive the pointer directly](#driving-the-pointer-directly) with `b.Pointer()`.  For anything else you can still [drop down to chromedp](#codechromedpcode-breaking-the-fourth-wall) via `b.Context`.
 
 #### Using realistic mode across a spec or a suite
@@ -3463,9 +3437,9 @@ It does not run in the document that is already loaded, so call it before `b.Nav
 
 Biloba streams the page's console output to the `GinkgoWriter` as it happens.  It also records it: `b.AllConsoleMessages()` returns every console message the tab has logged since the last `Prepare()`, oldest first.  Each `ConsoleMessage` has a `Type` (`"log"`, `"info"`, `"warning"`, `"error"`, `"debug"`, ...), a `Text` that joins the call's arguments with spaces, a `Timestamp`, and a `Stack`.
 
-The list also holds the messages Chrome adds to the console itself, the ones DevTools shows next to the page's own: a resource that failed to load, an intervention, a performance violation, a deprecation warning.  These have a `Source` naming where they came from (`"network"`, `"intervention"`, `"violation"`, `"deprecation"`, ...) and a `Type` that is their level; the page's own console calls have an empty `Source`.  Chrome's messages are recorded on the tab rather than on a frame handle, and are not streamed to the `GinkgoWriter`.
+The list also holds the messages Chrome adds to the console itself, the ones DevTools shows next to the page's own: a resource that failed to load, an intervention, a performance violation, a deprecation warning.  These have a `Source` naming where they came from (`"network"`, `"intervention"`, `"violation"`, `"deprecation"`, ...) and a `Type` that is their level; the page's own console calls have an empty `Source`.  Chrome's messages are recorded on the tab rather than on a frame handle.  Its warnings and errors stream to the `GinkgoWriter` the way `console.warn` and `console.error` do, prefixed with their source (`[network] Failed to load resource: the server responded with a status of 404 (Not Found) (http://localhost:8080/missing.json)`), but they are not replayed at the top of the failure block.  Its lower-level messages are only recorded.
 
-`b.AllPageErrors()` returns the uncaught exceptions and unhandled promise rejections the tab has seen since the last `Prepare()`.  Each `PageError` has a `Message` that reads the way DevTools prints it (`"Uncaught TypeError: x is not a function"`, `"Uncaught (in promise) Error: boom"`), the `URL`, `Line`, and `Column` it was thrown from, a `Stack`, and a `Timestamp`.  Page errors stream to the `GinkgoWriter` in red, like `console.error`, and when a spec fails they are replayed with the [console errors](#outline) at the top of the failure block.  Line and column numbers are zero-based, as Chrome reports them.
+`b.AllPageErrors()` returns the uncaught exceptions and unhandled promise rejections the tab has seen since the last `Prepare()`.  Each `PageError` has a `Message` that reads the way DevTools prints it (`"Uncaught TypeError: x is not a function"`, `"Uncaught (in promise) Error: boom"`), the `URL`, `Line`, and `Column` it was thrown from, a `Stack`, and a `Timestamp`.  Page errors stream to the `GinkgoWriter` in red, like `console.error`, and when a spec fails they are replayed with the [console errors](#outline) at the top of the failure block.  The `Line` and `Column` fields, here and in each `StackFrame`, are zero-based, as Chrome reports them.  The locations Biloba prints (`app.js:12:5`, in the streamed output, stack traces, and the failure replay) are one-based, as your editor and DevTools show them.
 
 Both are snapshots: they don't poll and take none of the poll-config knobs.  To wait for something to be logged, poll the snapshot:
 
@@ -3837,6 +3811,45 @@ b.SetMedia(biloba.Media{Type: "print"})
 Each call replaces the tab's previous media (an empty field leaves that aspect to the browser), and the media holds across navigations.  Like `b.SetWindowSize` and `b.SetUserAgent`, `b.SetMedia` registers a `DeferCleanup` that undoes it when the spec ends.  All three apply to a tab and every frame in it; calling them on a frame handle fails the spec.
 
 [Visual assertions](#visual-assertions) render in the tab's media.  `b.InColorSchemes(...)` overrides only the colour scheme for its own captures and then restores the tab's media, so a spec running in dark mode with reduced motion stays that way after it.
+
+The rest of this section covers the tab's environment: where it is, what it is allowed to do, what language and time zone it runs in, and what network it is on.  Every one of these methods works the same way as `b.SetMedia`: it applies to the tab and every frame in it, holds across navigations, and registers a `DeferCleanup` that restores the previous value when the spec ends.  Calling one on a frame handle fails the spec.  If a cleanup doesn't land (say a cancelled context), the next `Prepare()` clears the override, and a spec that never touches these pays nothing for that.
+
+#### Location and permissions
+
+`b.SetGeolocation` sets the position `navigator.geolocation` reports.  The page also needs the geolocation permission to read it, which `b.SetPermissions` grants without a prompt:
+
+```go
+b.SetPermissions(appURL, map[biloba.Permission]biloba.PermissionState{
+	biloba.PermissionGeolocation: biloba.PermissionGranted,
+})
+b.SetGeolocation(biloba.Geolocation{Latitude: 48.8584, Longitude: 2.2945, Accuracy: 10})
+```
+
+A latitude outside [-90, 90], a longitude outside [-180, 180], or a negative accuracy fails the spec.  `b.ClearGeolocation()` removes the emulated position.
+
+`b.SetPermissions(origin, permissions)` sets each permission to `PermissionGranted`, `PermissionDenied`, or `PermissionPrompt` for one origin (`"http://localhost:8080"`), or for every origin when you pass `""`.  Calls add up, and `b.ResetPermissions()` removes them all.  Biloba provides constants for geolocation, notifications, camera, microphone, and the clipboard; any name `navigator.permissions.query` accepts works.  Permissions belong to the tab's browser context, so a tab the page opens shares them, while a tab from `b.NewTab()` has its own.
+
+#### Locale and time zone
+
+```go
+b.SetLocale("fr-FR")
+b.SetTimezone("Europe/Paris")
+```
+
+`b.SetLocale` sets the default locale of the page's `Intl` APIs and `toLocaleString()`, so dates, numbers, and sorting come out in French.  It does not change `navigator.language` or the `Accept-Language` header.  `b.SetTimezone` takes an IANA time zone name and changes what `Date` and `Intl.DateTimeFormat` report.  Both fail the spec on a name Chrome doesn't recognize, and `""` removes the override.
+
+#### Network conditions and the HTTP cache
+
+`b.SetNetworkState` emulates a network condition:
+
+```go
+b.SetNetworkState(biloba.NetworkState{Latency: 400 * time.Millisecond, DownloadThroughput: 50_000})
+b.SetOffline(true)
+```
+
+`Offline` sets `navigator.onLine` to false and makes the tab's requests fail.  `Latency` delays every request, `DownloadThroughput` and `UploadThroughput` cap throughput in bytes per second (0 leaves it alone), and `ConnectionType` is what the page sees in `navigator.connection`.  Each call replaces the previous state.  `b.SetOffline(true)` takes the tab offline and keeps the rest of its state, and `b.SetOffline(false)` brings it back.  `b.NetworkState()` returns the state the tab is emulating.
+
+`b.SetCacheEnabled(false)` turns off the tab's HTTP cache, so every request goes to the network.  [Network interception](#stubbing-and-observing-the-network) turns the cache off too, because a response served from the cache would skip the stubs: once a spec registers a stub, abort, modification, or hold, the cache stays off until the spec ends, whatever `b.SetCacheEnabled` says.
 
 ### Capturing Screenshots
 

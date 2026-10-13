@@ -939,25 +939,11 @@ func (s *Session) SetNetworkState(ctx context.Context, state NetworkState) error
 	if err := s.tabOnly("set network state"); err != nil {
 		return err
 	}
-	if state.Latency < 0 || state.DownloadThroughput < 0 || state.UploadThroughput < 0 {
-		return &Error{Code: CodeInvalidArgument, Operation: "set network state", Message: "latency and throughput must not be negative"}
-	}
-	if !validNetworkConnectionType(state.ConnectionType) {
-		return &Error{Code: CodeInvalidArgument, Operation: "set network state", Message: "unsupported connection type", Observed: state.ConnectionType}
+	if err := ValidateNetworkState(state); err != nil {
+		return withOperation("set network state", err)
 	}
 	return s.serial(ctx, "set network state", func(op context.Context) error {
-		download, upload := state.DownloadThroughput, state.UploadThroughput
-		if download == 0 {
-			download = -1
-		}
-		if upload == 0 {
-			upload = -1
-		}
-		action := network.OverrideNetworkState(state.Offline, float64(state.Latency.Milliseconds()), download, upload)
-		if state.ConnectionType != "" {
-			action = action.WithConnectionType(network.ConnectionType(state.ConnectionType))
-		}
-		if err := chromedp.Run(op, action); err != nil {
+		if err := SetNetworkStateContext(op, state); err != nil {
 			return err
 		}
 		s.networkMu.Lock()
@@ -965,6 +951,51 @@ func (s *Session) SetNetworkState(ctx context.Context, state NetworkState) error
 		s.networkMu.Unlock()
 		return nil
 	})
+}
+
+// ValidateNetworkState rejects negative latency or throughput and an unknown connection type, which
+// Chrome would otherwise accept.
+func ValidateNetworkState(state NetworkState) error {
+	if state.Latency < 0 || state.DownloadThroughput < 0 || state.UploadThroughput < 0 {
+		return &Error{Code: CodeInvalidArgument, Message: "latency and throughput must not be negative"}
+	}
+	if !validNetworkConnectionType(state.ConnectionType) {
+		return &Error{Code: CodeInvalidArgument, Message: "unsupported connection type", Observed: state.ConnectionType}
+	}
+	return nil
+}
+
+// SetNetworkStateContext emulates a network condition; the zero NetworkState removes the override.
+// A zero throughput means unthrottled.  Chrome splits this in two: overrideNetworkState is what the
+// page reads (navigator.onLine, navigator.connection), and emulateNetworkConditionsByRule is what
+// the tab's requests get (failing offline, delayed, throttled).
+func SetNetworkStateContext(ctx context.Context, state NetworkState) error {
+	download, upload := state.DownloadThroughput, state.UploadThroughput
+	if download == 0 {
+		download = -1
+	}
+	if upload == 0 {
+		upload = -1
+	}
+	latency := float64(state.Latency.Milliseconds())
+	action := network.OverrideNetworkState(state.Offline, latency, download, upload)
+	conditions := []*network.Conditions{} // empty, not nil: Chrome wants a list
+	if state != (NetworkState{}) {
+		conditions = append(conditions, &network.Conditions{Offline: state.Offline, Latency: latency, DownloadThroughput: download, UploadThroughput: upload, ConnectionType: network.ConnectionType(state.ConnectionType)})
+	}
+	if state.ConnectionType != "" {
+		action = action.WithConnectionType(network.ConnectionType(state.ConnectionType))
+	}
+	return chromedp.Run(ctx, action, chromedp.ActionFunc(func(ctx context.Context) error {
+		_, err := network.EmulateNetworkConditionsByRule(conditions).Do(ctx)
+		return err
+	}))
+}
+
+// SetCacheDisabledContext turns the HTTP cache off or back on.  Request interception needs it off
+// (see EnableInterceptionContext), so callers keep it disabled while interception is on.
+func SetCacheDisabledContext(ctx context.Context, disabled bool) error {
+	return chromedp.Run(ctx, network.SetCacheDisabled(disabled))
 }
 
 func validNetworkConnectionType(connectionType NetworkConnectionType) bool {
@@ -998,11 +1029,24 @@ func (s *Session) SetCacheEnabled(ctx context.Context, enabled bool) error {
 		s.holdMu.Lock()
 		intercepting := s.fetchEnabled
 		s.holdMu.Unlock()
-		return chromedp.Run(op, network.SetCacheDisabled(intercepting || !enabled))
+		return SetCacheDisabledContext(op, intercepting || !enabled)
 	})
 }
 func (s *Session) resetNetworkState(ctx context.Context) error {
-	if err := chromedp.Run(ctx, network.OverrideNetworkState(false, 0, -1, -1), network.SetCacheDisabled(false)); err != nil {
+	s.networkMu.Lock()
+	emulating := s.networkState != (NetworkState{})
+	s.networkMu.Unlock()
+	reset := SetNetworkStateContext
+	if !emulating {
+		// the request conditions were never set, so only the navigator state needs the reset it always had
+		reset = func(ctx context.Context, _ NetworkState) error {
+			return chromedp.Run(ctx, network.OverrideNetworkState(false, 0, -1, -1))
+		}
+	}
+	if err := reset(ctx, NetworkState{}); err != nil {
+		return err
+	}
+	if err := SetCacheDisabledContext(ctx, false); err != nil {
 		return err
 	}
 	s.clearNetworkBookkeeping()

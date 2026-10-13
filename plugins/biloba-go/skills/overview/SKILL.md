@@ -53,15 +53,27 @@ Every action/matcher takes:
 
 ## The escape hatch
 
-Biloba deliberately does not hide chromedp. Every tab exposes `b.Context`:
+Device and environment emulation is native — reach for it before CDP:
 
 ```go
-chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
-    return emulation.SetGeolocationOverride().WithLatitude(48.8584).WithLongitude(2.2945).Do(ctx)
+b.SetPermissions(appURL, map[biloba.Permission]biloba.PermissionState{biloba.PermissionGeolocation: biloba.PermissionGranted})
+b.SetGeolocation(biloba.Geolocation{Latitude: 48.8584, Longitude: 2.2945, Accuracy: 10})
+b.SetLocale("fr-FR"); b.SetTimezone("Europe/Paris"); b.SetOffline(true)
+```
+
+Each is per tab, undone at spec end, and refused on a frame handle (`api`).
+
+Biloba deliberately does not hide chromedp. Every tab exposes `b.Context` for a CDP feature without a native wrapper:
+
+```go
+ctx, cancel := context.WithTimeout(b.Context, 30*time.Second)
+defer cancel()
+chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+    return emulation.SetCPUThrottlingRate(4).Do(ctx)
 }))
 ```
 
-Use it for geolocation or any CDP feature without a native wrapper. (Cross-origin iframes have a native wrapper: `b.Frame`.) (For real `:hover`/occlusion/scroll, prefer `b.Realistic()`.)
+An override set this way is yours to undo — `Prepare()` doesn't know about it. (Cross-origin iframes have a native wrapper: `b.Frame`.) (For real `:hover`/occlusion/scroll, prefer `b.Realistic()`.)
 
 ## Where to go next
 

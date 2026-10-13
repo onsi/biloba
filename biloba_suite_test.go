@@ -201,6 +201,11 @@ func newFixtureServer() string {
 		code, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/status/"))
 		w.WriteHeader(code)
 	})
+	// /cached/<anything> answers with a fresh value the browser may cache for an hour
+	s.RouteToHandler("GET", regexp.MustCompile(`^/cached/.+$`), func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Cache-Control", "max-age=3600")
+		fmt.Fprintf(w, "%d", time.Now().UnixNano())
+	})
 	s.RouteToHandler("GET", regexp.MustCompile(`^/redirect/.+$`), func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/"+strings.TrimPrefix(r.URL.Path, "/redirect/"), http.StatusFound)
 	})

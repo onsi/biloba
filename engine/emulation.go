@@ -25,8 +25,10 @@ type Permission string
 const (
 	PermissionGeolocation   Permission = "geolocation"
 	PermissionNotifications Permission = "notifications"
-	PermissionCamera        Permission = "videoCapture"
-	PermissionMicrophone    Permission = "audioCapture"
+	// Chrome's Browser.setPermission takes the names navigator.permissions.query uses, and rejects
+	// its internal PermissionType names ("videoCapture", "audioCapture").
+	PermissionCamera     Permission = "camera"
+	PermissionMicrophone Permission = "microphone"
 )
 
 type PermissionState string
@@ -76,22 +78,35 @@ func (s *Session) SetGeolocation(ctx context.Context, location Geolocation) erro
 	if err := s.tabOnly("set geolocation"); err != nil {
 		return err
 	}
-	if location.Latitude < -90 || location.Latitude > 90 || location.Longitude < -180 || location.Longitude > 180 || location.Accuracy < 0 {
-		return &Error{Code: CodeInvalidArgument, Operation: "set geolocation", Message: "latitude, longitude, or accuracy is outside its valid range"}
+	if err := ValidateGeolocation(location); err != nil {
+		return withOperation("set geolocation", err)
 	}
 	return s.serial(ctx, "set geolocation", func(opCtx context.Context) error {
 		s.emulated.geolocation = true
-		return chromedp.Run(opCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
-			// Pointers preserve valid zero coordinates. The generated CDP params use omitzero and would
-			// otherwise turn latitude/longitude 0 into "position unavailable".
-			params := struct {
-				Latitude  *float64 `json:"latitude"`
-				Longitude *float64 `json:"longitude"`
-				Accuracy  *float64 `json:"accuracy"`
-			}{Latitude: &location.Latitude, Longitude: &location.Longitude, Accuracy: &location.Accuracy}
-			return cdp.Execute(runCtx, emulation.CommandSetGeolocationOverride, &params, nil)
-		}))
+		return SetGeolocationContext(opCtx, location)
 	})
+}
+
+// ValidateGeolocation rejects a location no device could report.  Chrome would accept it.
+func ValidateGeolocation(location Geolocation) error {
+	if location.Latitude < -90 || location.Latitude > 90 || location.Longitude < -180 || location.Longitude > 180 || location.Accuracy < 0 {
+		return &Error{Code: CodeInvalidArgument, Message: "latitude, longitude, or accuracy is outside its valid range", Observed: location}
+	}
+	return nil
+}
+
+// SetGeolocationContext overrides the position navigator.geolocation reports.
+func SetGeolocationContext(ctx context.Context, location Geolocation) error {
+	return chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
+		// Pointers preserve valid zero coordinates. The generated CDP params use omitzero and would
+		// otherwise turn latitude/longitude 0 into "position unavailable".
+		params := struct {
+			Latitude  *float64 `json:"latitude"`
+			Longitude *float64 `json:"longitude"`
+			Accuracy  *float64 `json:"accuracy"`
+		}{Latitude: &location.Latitude, Longitude: &location.Longitude, Accuracy: &location.Accuracy}
+		return cdp.Execute(runCtx, emulation.CommandSetGeolocationOverride, &params, nil)
+	}))
 }
 
 func (s *Session) ClearGeolocation(ctx context.Context) error {
@@ -99,10 +114,10 @@ func (s *Session) ClearGeolocation(ctx context.Context) error {
 		return err
 	}
 	return s.serial(ctx, "clear geolocation", func(opCtx context.Context) error {
-		return s.clearOverride(&s.emulated.geolocation, opCtx, clearGeolocation)
+		return s.clearOverride(&s.emulated.geolocation, opCtx, ClearGeolocationContext)
 	})
 }
-func clearGeolocation(ctx context.Context) error {
+func ClearGeolocationContext(ctx context.Context) error {
 	return chromedp.Run(ctx, emulation.ClearGeolocationOverride())
 }
 
@@ -110,24 +125,56 @@ func (s *Session) SetPermissions(ctx context.Context, origin string, permissions
 	if err := s.tabOnly("set permissions"); err != nil {
 		return err
 	}
+	if err := ValidatePermissions(permissions); err != nil {
+		return withOperation("set permissions", err)
+	}
 	return s.serial(ctx, "set permissions", func(opCtx context.Context) error {
 		// Permissions belong to the browser context, which outlives a spawned tab: the session that
 		// owns the context resets them.
 		s.contextOwner().permissionsSet.Store(true)
-		return s.withBrowserExecutor(opCtx, func(browserCtx context.Context) error {
-			for permission, state := range permissions {
-				setting := cdpbrowser.PermissionSetting(state)
-				if setting != cdpbrowser.PermissionSettingGranted && setting != cdpbrowser.PermissionSettingDenied && setting != cdpbrowser.PermissionSettingPrompt {
-					return &Error{Code: CodeInvalidArgument, Operation: "set permissions", Message: "permission state must be granted, denied, or prompt", Observed: state}
-				}
-				descriptor := &cdpbrowser.PermissionDescriptor{Name: string(permission)}
-				if err := cdpbrowser.SetPermission(descriptor, setting).WithOrigin(origin).WithBrowserContextID(s.browserContextID).Do(browserCtx); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
+		return SetPermissionsContext(opCtx, s.browserContextID, origin, permissions)
 	})
+}
+
+// ValidatePermissions rejects a permission state other than granted, denied, or prompt.
+func ValidatePermissions(permissions map[Permission]PermissionState) error {
+	for _, state := range permissions {
+		switch cdpbrowser.PermissionSetting(state) {
+		case cdpbrowser.PermissionSettingGranted, cdpbrowser.PermissionSettingDenied, cdpbrowser.PermissionSettingPrompt:
+		default:
+			return &Error{Code: CodeInvalidArgument, Message: "permission state must be granted, denied, or prompt", Observed: state}
+		}
+	}
+	return nil
+}
+
+// SetPermissionsContext sets permissions for origin ("" for every origin).  Permissions belong to a
+// browser context, so every tab in browserContextID sees them.
+func SetPermissionsContext(ctx context.Context, browserContextID cdp.BrowserContextID, origin string, permissions map[Permission]PermissionState) error {
+	return withBrowserExecutor(ctx, func(browserCtx context.Context) error {
+		for permission, state := range permissions {
+			descriptor := &cdpbrowser.PermissionDescriptor{Name: string(permission)}
+			if err := cdpbrowser.SetPermission(descriptor, cdpbrowser.PermissionSetting(state)).WithOrigin(origin).WithBrowserContextID(browserContextID).Do(browserCtx); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// ResetPermissionsContext removes every permission override in a browser context.
+func ResetPermissionsContext(ctx context.Context, browserContextID cdp.BrowserContextID) error {
+	return withBrowserExecutor(ctx, func(browserCtx context.Context) error {
+		return cdpbrowser.ResetPermissions().WithBrowserContextID(browserContextID).Do(browserCtx)
+	})
+}
+
+// withOperation names the operation on a validation error built without one.
+func withOperation(operation string, err error) error {
+	if engineErr, ok := err.(*Error); ok && engineErr.Operation == "" {
+		engineErr.Operation = operation
+	}
+	return err
 }
 
 func (s *Session) ResetPermissions(ctx context.Context) error {
@@ -137,9 +184,7 @@ func (s *Session) ResetPermissions(ctx context.Context) error {
 	return s.serial(ctx, "reset permissions", s.resetPermissions)
 }
 func (s *Session) resetPermissions(ctx context.Context) error {
-	err := s.withBrowserExecutor(ctx, func(browserCtx context.Context) error {
-		return cdpbrowser.ResetPermissions().WithBrowserContextID(s.browserContextID).Do(browserCtx)
-	})
+	err := ResetPermissionsContext(ctx, s.browserContextID)
 	if err == nil {
 		s.contextOwner().permissionsSet.Store(false)
 	}
@@ -159,11 +204,11 @@ func (s *Session) SetLocale(ctx context.Context, locale string) error {
 		return err
 	}
 	return s.serial(ctx, "set locale", func(opCtx context.Context) error {
-		return s.override(&s.emulated.locale, locale != "", opCtx, func(c context.Context) error { return setLocale(c, locale) })
+		return s.override(&s.emulated.locale, locale != "", opCtx, func(c context.Context) error { return SetLocaleContext(c, locale) })
 	})
 }
 func (s *Session) ClearLocale(ctx context.Context) error { return s.SetLocale(ctx, "") }
-func setLocale(ctx context.Context, locale string) error {
+func SetLocaleContext(ctx context.Context, locale string) error {
 	return chromedp.Run(ctx, emulation.SetLocaleOverride().WithLocale(locale))
 }
 
@@ -172,11 +217,11 @@ func (s *Session) SetTimezone(ctx context.Context, timezone string) error {
 		return err
 	}
 	return s.serial(ctx, "set timezone", func(opCtx context.Context) error {
-		return s.override(&s.emulated.timezone, timezone != "", opCtx, func(c context.Context) error { return setTimezone(c, timezone) })
+		return s.override(&s.emulated.timezone, timezone != "", opCtx, func(c context.Context) error { return SetTimezoneContext(c, timezone) })
 	})
 }
 func (s *Session) ClearTimezone(ctx context.Context) error { return s.SetTimezone(ctx, "") }
-func setTimezone(ctx context.Context, timezone string) error {
+func SetTimezoneContext(ctx context.Context, timezone string) error {
 	return chromedp.Run(ctx, emulation.SetTimezoneOverride(timezone))
 }
 
@@ -250,10 +295,10 @@ func (s *Session) resetEmulation(ctx context.Context) error {
 		clear func(context.Context) error
 	}{
 		{&s.emulated.deviceMetrics, clearDeviceMetrics},
-		{&s.emulated.geolocation, clearGeolocation},
+		{&s.emulated.geolocation, ClearGeolocationContext},
 		{&s.emulated.userAgent, func(c context.Context) error { return SetUserAgentContext(c, "") }},
-		{&s.emulated.locale, func(c context.Context) error { return setLocale(c, "") }},
-		{&s.emulated.timezone, func(c context.Context) error { return setTimezone(c, "") }},
+		{&s.emulated.locale, func(c context.Context) error { return SetLocaleContext(c, "") }},
+		{&s.emulated.timezone, func(c context.Context) error { return SetTimezoneContext(c, "") }},
 		{&s.emulated.media, func(c context.Context) error { return setMedia(c, Media{}) }},
 	} {
 		if !*reset.flag {

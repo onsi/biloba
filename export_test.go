@@ -236,6 +236,32 @@ func (b *Biloba) EmulateColorSchemeForTest(scheme string) error {
 	return b.emulateColorScheme(scheme)
 }
 
+// LeakEmulationForTest applies a geolocation, a time zone, an offline network, a disabled cache, and
+// a notifications permission for origin without registering their DeferCleanups, so emulation_test.go
+// can simulate teardowns that never landed and assert that the next Prepare() clears them.
+func (b *Biloba) LeakEmulationForTest(timezone, origin string) error {
+	for _, apply := range []func() error{
+		func() error {
+			return applyEmulation(b, "geolocation", geolocationSetting, &Geolocation{Latitude: 1, Longitude: 2, Accuracy: 3}, sendGeolocation)
+		},
+		func() error {
+			return applyEmulation(b, "time zone", timezoneSetting, timezone, engine.SetTimezoneContext)
+		},
+		func() error {
+			return applyEmulation(b, "network state", networkStateSetting, NetworkState{Offline: true}, sendNetworkState)
+		},
+		func() error { return applyEmulation(b, "HTTP cache setting", cacheSetting, true, b.sendCacheDisabled) },
+		func() error {
+			return b.restorePermissions(map[string]map[Permission]PermissionState{origin: {PermissionNotifications: PermissionGranted}})
+		},
+	} {
+		if err := apply(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // TruthyEnvForTest exposes truthyEnv (and its unrecognised-value warning) for visual_test.go,
 // so the spelling table can be exercised without standing up a Biloba per spelling.
 func (b *Biloba) TruthyEnvForTest(name string) bool { return b.truthyEnv(name) }

@@ -32,7 +32,9 @@ Quarantine it to a handful of smoke tests. It costs real round-trips and can rei
 
 To merely *assert* an element isn't occluded, use the cheaper deterministic matcher `Eventually(sel).Should(b.BeClickable())` (visible + enabled + topmost-at-its-center) — no realistic round-trips.
 
-Realistic mode works inside a cross-origin iframe through its frame handle — `b.Frame(...).Realistic().Click(...)` translates the point into the tab and fails (keeps polling) if the embedding page covers the frame there; an out-of-process frame (full Chrome, cross-site) gets real input but no embedding-page occlusion check. For geolocation, drop to chromedp via `b.Context` (`overview`).
+Realistic mode works inside a cross-origin iframe through its frame handle — `b.Frame(...).Realistic().Click(...)` translates the point into the tab and fails (keeps polling) if the embedding page covers the frame there; an out-of-process frame (full Chrome, cross-site) gets real input but no embedding-page occlusion check. Geolocation, locale, permissions, and network conditions are emulation, not interaction: `b.SetGeolocation`, `b.SetLocale`, `b.SetPermissions`, `b.SetOffline` (`api`).
+
+**"Topmost at its center".** Biloba takes the center of the element's visible part (the part inside the viewport) and calls `document.elementFromPoint` there. The element is topmost when the hit is the element or something inside it (shadow DOM included). A sticky header, modal backdrop, banner, or tooltip covering that point means it isn't: Biloba scrolls the element to the viewport center and re-checks, and a target still covered there keeps polling and fails "obscured by another element". It tests one point, not the whole box (a covered edge with a clear center passes), and `pointer-events: none` overlays don't count.
 
 ## Capability matrix
 
