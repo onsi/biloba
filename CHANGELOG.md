@@ -12,6 +12,7 @@
 - TypeScript: `setDeviceMetrics()` takes `touch` and `landscape`, which emulate a touch screen and a landscape screen orientation; `clearDeviceMetrics()` and `prepare()` turn both off.
 - Go: each `Request` records its outcome in `Status` and `Failure`, and `HaveMadeRequest`/`RequestMatching` refine on it with `WithStatus` and `Failed`. `AllRequests` now returns copies.
 - Go: `b.AllConsoleMessages()` and `b.AllPageErrors()` snapshot the page's console messages and its uncaught exceptions and unhandled rejections. Page errors also stream to the `GinkgoWriter` and are replayed with the console errors when a spec fails.
+- Go: `b.StartScreencast(biloba.ScreencastOptions{...})` records a tab's frames as Chrome draws them; `rec.Stop()` returns them as `[]biloba.ScreencastFrame`, each with the encoded image and Chrome's frame-swap timestamp.
 
 ### Fixes
 

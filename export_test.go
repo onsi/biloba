@@ -271,3 +271,15 @@ func ChromeDownloadLimitForTest() int {
 // FrameOutOfProcessForTest reports whether a frame handle drives an out-of-process frame, so
 // frames_test.go can prove its fixture exercises the process model it claims to.
 func (b *Biloba) FrameOutOfProcessForTest() bool { return b.frame != nil && b.frame.outOfProcess }
+
+// FramesSoFarForTest returns what a running screencast has recorded so far, in arrival order, so
+// screencast_test.go can wait for frames instead of sleeping for them.
+func (rec *ScreencastRecording) FramesSoFarForTest() []ScreencastFrame {
+	rec.lock.Lock()
+	defer rec.lock.Unlock()
+	frames := make([]ScreencastFrame, len(rec.recorded))
+	for i, frame := range rec.recorded {
+		frames[i] = ScreencastFrame(frame)
+	}
+	return frames
+}

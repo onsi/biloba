@@ -870,6 +870,9 @@ type tabState struct {
 	// DeferCleanup of a later call can restore it.
 	userAgent string
 
+	// screencast is the recording StartScreencast has running on this tab, nil when none is.
+	screencast *ScreencastRecording
+
 	requests []*Request
 	// requestsByID points at the latest record for each request ID (a redirect reuses the ID for its
 	// next hop), so response and failure events can fill in that record's Status and Failure.

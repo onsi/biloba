@@ -235,6 +235,7 @@ var _ = Describe("Cross-origin iframes", func() {
 			checkout.HandleAlertDialogs()
 			checkout.SetCookie(biloba.Cookie{Name: "frame", Value: "cookie"})
 			checkout.AllDownloads()
+			checkout.StartScreencast(biloba.ScreencastOptions{})
 			ExpectFailures(
 				"Navigate acts on the tab, not a frame: call it on the tab that owns this frame",
 				"SetWindowSize acts on the tab, not a frame: call it on the tab that owns this frame",
@@ -245,6 +246,7 @@ var _ = Describe("Cross-origin iframes", func() {
 				"HandleAlertDialogs acts on the tab, not a frame: call it on the tab that owns this frame",
 				"SetCookie acts on the tab, not a frame: call it on the tab that owns this frame",
 				"AllDownloads acts on the tab, not a frame: call it on the tab that owns this frame",
+				"StartScreencast acts on the tab, not a frame: call it on the tab that owns this frame",
 			)
 			Ω(b.GetTitle()).Should(Equal("Frames Parent"), "the tab must not have navigated")
 		})

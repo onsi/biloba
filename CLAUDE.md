@@ -76,6 +76,7 @@ Repo-specific testing conventions (see `biloba_suite_test.go`):
 | Visual regression (`HaveScreenshot`, baselines, masking, the freeze) | `visual.go` | `visual_test.go` |
 | Image diff + the failure diagnosis it renders | `visual_diff.go` | `visual_diff_internal_test.go` |
 | Screenshots (capture, inline protocols, to-file) | `screenshots.go` | `screenshots_test.go` |
+| Screencasts (`StartScreencast`, frame acks, Stop) | `screencast.go`; engine: `engine/screencast.go` | `screencast_test.go` |
 | Window size | `windows.go` | `windows_test.go` |
 | Emulation (`SetMedia`, `SetUserAgent`; device options live with `SetWindowSize`) | `emulation.go` | `emulation_test.go` |
 | XPath DSL | `xpath.go` | `xpath_test.go` |

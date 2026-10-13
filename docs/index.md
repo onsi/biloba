@@ -3951,6 +3951,29 @@ Riding along with these, and needing no configuration at all, is a set of **diag
 
 For example, a CI user who only wants screenshots in a specific folder sets `BilobaConfigScreenshotsToDir("./artifacts")` (or `BILOBA_SCREENSHOTS_DIR`) and *still* gets the automation default of outlines-on — they only overrode the directory.
 
+### Recording a Screencast
+
+`b.StartScreencast` records the frames Chrome draws for a tab until you stop it:
+
+```go
+rec := b.StartScreencast(biloba.ScreencastOptions{Format: "jpeg", Quality: 92})
+// ... drive the page ...
+frames := rec.Stop() // []biloba.ScreencastFrame
+```
+
+`ScreencastOptions` takes a `Format` (`"jpeg"`, the default, or `"png"`), a JPEG `Quality` from 0 to 100 (0 leaves it to Chrome), `MaxWidth` and `MaxHeight` to shrink the frames (Chrome keeps the aspect ratio and never enlarges them), and `EveryNthFrame` to keep only one frame in every n.
+
+Each `ScreencastFrame` carries the encoded image in `Data` and a `Timestamp`: the moment Chrome swapped that frame onto the screen.  The timestamp is wall-clock time on the machine running Chrome, so on the same machine you can line frames up against `time.Now()` readings you took while driving the page.  The frame also carries the metadata that maps the image onto the page: `DeviceWidth` and `DeviceHeight` (the viewport the image shows, in CSS pixels), `PageScaleFactor`, `ScrollOffsetX` and `ScrollOffsetY`, and `OffsetTop`.
+
+`rec.Stop()` stops the screencast and waits for Chrome to confirm it, so no frame arrives after it returns.  It returns the frames in `Timestamp` order, and calling it again returns the same frames.  If the spec never calls `Stop`, a `DeferCleanup` stops the recording when the spec ends.  A tab records one screencast at a time - starting a second before stopping the first fails the spec - and, like the other tab-level methods, `StartScreencast` fails the spec when called on a frame handle.
+
+Some things to know:
+
+- **Chrome sends frames only when the page changes.**  You get the frame already on screen when the recording starts (so its timestamp can be a little earlier than your call to `StartScreencast`), and then one frame each time the page draws a new one, up to the display's 60 frames a second.  A page that isn't changing yields one frame and then nothing.
+- **Frames are the size of the window, in CSS pixels.**  An emulated device scale factor (`b.DeviceScaleFactor(2)`) changes how the page renders but does not enlarge the frames.  Use `b.CaptureScreenshot` for a full-resolution still.
+- **Frames are held in memory** until `Stop` returns them.  At 1024x768 a JPEG frame is roughly 40-60KB, a PNG frame 500KB or more, so ten seconds of a busy page at 60 frames a second is tens of megabytes as JPEG.  Shrink the frames with `MaxWidth`/`MaxHeight`, or record fewer with `EveryNthFrame`, for long recordings.
+- **The two Chrome builds behave differently.**  `chrome-headless-shell` (the default) delivers frames steadily, in order, each timestamped within a few milliseconds of being drawn - even while other parallel processes drive their own tabs.  Full Chrome (`HighFidelityHeadless`) encodes frames on several threads and slows down when other tabs in the same browser are busy: frames can arrive out of order (which is why `Stop` sorts them), a recording can go a few hundred milliseconds without a frame, a frame can be timestamped hundreds of milliseconds after it was drawn, and with an emulated device scale factor the first frame or two can ignore `MaxWidth`/`MaxHeight`.  For frame timing you intend to rely on, record in `chrome-headless-shell`.
+
 ### Visual Assertions
 
 Sometimes the thing you want to assert is "this still looks the way it looked."  `b.HaveScreenshot(name)` is a Gomega matcher that captures the subject and compares it, pixel by pixel, against a committed baseline image:
