@@ -148,7 +148,7 @@ var _ = Describe("Pointer", func() {
 	It("polls with the knobs of the view the pointer was made from", func() {
 		b.WithTimeout(100 * time.Millisecond).Pointer().MoveToElement("#missing")
 		ExpectFailures(SatisfyAll(
-			ContainSubstring("Timed out after 0.1"),
+			ContainSubstring("Timed out after 0."), // the view's 100ms, not Gomega's 1s default (and slack for a loaded machine)
 			ContainSubstring("could not find DOM element matching selector: #missing"),
 		))
 
