@@ -100,7 +100,7 @@ func (b *Biloba) setUpListeners() {
 		case *runtime.EventExceptionThrown:
 			b.handleEventExceptionThrown(ev)
 		case *cdplog.EventEntryAdded:
-			b.recordLogEntry(ev)
+			b.handleEventLogEntryAdded(ev)
 		case *page.EventFrameNavigated:
 			b.handleEventFrameNavigated(ev)
 		case *browser.EventDownloadWillBegin:

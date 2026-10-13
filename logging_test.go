@@ -61,6 +61,14 @@ var _ = Describe("Console messages and page errors", func() {
 			Ω(b.AllConsoleMessages()[0].Source).Should(BeEmpty(), "the page's own console calls have no source")
 		})
 
+		It("prints Chrome's warnings and errors to the GinkgoWriter, but leaves them out of the failure replay", func() {
+			Eventually(consoleSummary).Should(ContainElement("error: bad thing"))
+			b.Run(`fetch("/status/404").then(r => r.text())`)
+			Eventually(gt.buffer).Should(gbytes.Say(`\[\d\d:\d\d\] .*\[network\] Failed to load resource: .*404.* \(http://.*/status/404\)`))
+			Ω(b.SafeAllTabConsoleErrorsForTest()).Should(ContainElement(`"bad thing"`))
+			Ω(b.SafeAllTabConsoleErrorsForTest()).ShouldNot(ContainElement(ContainSubstring("Failed to load resource")))
+		})
+
 		It("records uncaught exceptions and unhandled promise rejections", func() {
 			Eventually(pageErrorMessages).Should(ConsistOf("Uncaught TypeError: load boom", "Uncaught (in promise) Error: rejected boom"))
 			var thrown biloba.PageError
@@ -70,7 +78,7 @@ var _ = Describe("Console messages and page errors", func() {
 				}
 			}
 			Ω(thrown.URL).Should(HaveSuffix("/page-errors.html"))
-			Ω(thrown.Line).Should(BeNumerically(">", 0))
+			Ω([]int{thrown.Line, thrown.Column}).Should(Equal([]int{23, 18}), "zero-based: the error is constructed on line 24, column 19 of the fixture")
 			Ω(thrown.Timestamp).Should(BeTemporally("~", time.Now(), time.Minute))
 			Ω(thrown.Stack).Should(HaveLen(2))
 			Ω(thrown.Stack[0]).Should(HaveField("FunctionName", "explode"))
@@ -80,11 +88,13 @@ var _ = Describe("Console messages and page errors", func() {
 			Eventually(pageErrorMessages).Should(ContainElement("Uncaught a string"))
 		})
 
-		It("streams page errors to the GinkgoWriter and replays them with the console errors when a spec fails", func() {
-			Eventually(gt.buffer).Should(gbytes.Say(`Uncaught TypeError: load boom \(http://.*/page-errors.html:\d+:\d+\)`))
+		It("streams page errors to the GinkgoWriter and replays them with the console errors when a spec fails, with one-based locations", func() {
+			Eventually(gt.buffer).Should(gbytes.Say(`Uncaught TypeError: load boom \(http://.*/page-errors.html:24:19\)`))
+			Ω(gt.buffer).Should(gbytes.Say(`explode .*http://.*/page-errors.html:24:19`), "the stack trace too")
+			Ω(gt.buffer).Should(gbytes.Say(`http://.*/page-errors.html:27:13`))
 			Eventually(b.SafeAllTabConsoleErrorsForTest).Should(ContainElements(
 				`"bad thing"`,
-				MatchRegexp(`^Uncaught TypeError: load boom \(http://.*/page-errors.html:\d+:\d+\)$`),
+				MatchRegexp(`^Uncaught TypeError: load boom \(http://.*/page-errors.html:24:19\)$`),
 				HavePrefix("Uncaught (in promise) Error: rejected boom"),
 			))
 		})

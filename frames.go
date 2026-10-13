@@ -525,7 +525,7 @@ func (b *Biloba) frameTargetContext(id target.ID) (context.Context, error) {
 		case *runtime.EventExceptionThrown:
 			owner.handleEventExceptionThrown(ev)
 		case *cdplog.EventEntryAdded:
-			owner.recordLogEntry(ev)
+			owner.handleEventLogEntryAdded(ev)
 		}
 	})
 	return ctx, nil

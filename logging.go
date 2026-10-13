@@ -101,13 +101,18 @@ func (b *Biloba) renderRemoteObject(obj *runtime.RemoteObject) string {
 func (b *Biloba) renderStackTrace(stackTrace *runtime.StackTrace) string {
 	out := "{{bold}}Stack Trace{{/}}\n"
 	for _, frame := range stackTrace.CallFrames {
-		out += fmt.Sprintf("%s {{gray}}%s:%d{{/}}\n", frame.FunctionName, frame.URL, frame.LineNumber)
+		out += fmt.Sprintf("%s {{gray}}%s{{/}}\n", frame.FunctionName, printedLocation(frame.URL, frame.LineNumber, frame.ColumnNumber))
 	}
 	return out
 }
 
+// printedLocation renders a zero-based location the way editors and DevTools print it: one-based.
+func printedLocation(url string, line, column int64) string {
+	return fmt.Sprintf("%s:%d:%d", url, line+1, column+1)
+}
+
 /*
-StackFrame is one frame of a page stack trace attached to a [ConsoleMessage] or [PageError].  Line and Column are zero-based, as Chrome reports them.
+StackFrame is one frame of a page stack trace attached to a [ConsoleMessage] or [PageError].  Line and Column are zero-based, as Chrome reports them; the locations Biloba prints to the GinkgoWriter are one-based, as editors and DevTools show them.
 
 Read https://onsi.github.io/biloba/#console-messages-and-page-errors to learn more about console messages and page errors
 */
@@ -129,7 +134,7 @@ func newStack(frames []engine.ConsoleStackFrame) []StackFrame {
 /*
 ConsoleMessage is one message in the page's console.  Most are calls the page made to the console API: Type is the console method ("log", "info", "warning", "error", "debug", "assert", ...), Source is empty, and Text joins the previews of the call's arguments with a space (the TypeScript client renders it the same way).
 
-The rest are messages Chrome generated itself and shows in DevTools' console alongside them - an intervention, a performance violation, a resource that failed to load, a deprecation.  Their Source names the origin ("intervention", "violation", "network", "deprecation", "rendering", ...) and Type is the level ("debug", "info", "warning", "error").  They are recorded on the tab, not on a frame handle, and are not streamed to the GinkgoWriter.
+The rest are messages Chrome generated itself and shows in DevTools' console alongside them - an intervention, a performance violation, a resource that failed to load, a deprecation.  Their Source names the origin ("intervention", "violation", "network", "deprecation", "rendering", ...) and Type is the level ("debug", "info", "warning", "error").  They are recorded on the tab, not on a frame handle.  The warnings and errors print to the GinkgoWriter like the page's own console.warn and console.error, prefixed with their source ("[network] Failed to load resource: ..."), but are not replayed with the console errors when a spec fails.
 
 Read https://onsi.github.io/biloba/#console-messages-and-page-errors to learn more about console messages and page errors
 */
@@ -142,7 +147,7 @@ type ConsoleMessage struct {
 }
 
 /*
-PageError is an uncaught exception or unhandled promise rejection.  Message reads the way DevTools prints it ("Uncaught TypeError: x is not a function", "Uncaught (in promise) Error: boom"); URL, Line, and Column locate where it was thrown (Line and Column are zero-based, as Chrome reports them).
+PageError is an uncaught exception or unhandled promise rejection.  Message reads the way DevTools prints it ("Uncaught TypeError: x is not a function", "Uncaught (in promise) Error: boom"); URL, Line, and Column locate where it was thrown.  Line and Column are zero-based, as Chrome reports them; the location Biloba prints to the GinkgoWriter and replays when a spec fails is one-based, as editors and DevTools show it.
 
 Read https://onsi.github.io/biloba/#console-messages-and-page-errors to learn more about console messages and page errors
 */
@@ -212,17 +217,38 @@ func (b *Biloba) recordConsoleMessage(ev *runtime.EventConsoleAPICalled) {
 	})
 }
 
-// recordLogEntry adds a message Chrome generated itself (Log.entryAdded) to this tab's console history.
-func (b *Biloba) recordLogEntry(ev *cdplog.EventEntryAdded) {
+// handleEventLogEntryAdded records a message Chrome generated itself (Log.entryAdded) in this tab's
+// console history, and prints the warnings and errors to the GinkgoWriter the way console.warn and
+// console.error print, prefixed with their source.  They are left out of the console errors replayed
+// when a spec fails.
+func (b *Biloba) handleEventLogEntryAdded(ev *cdplog.EventEntryAdded) {
 	if ev.Entry == nil {
 		return
 	}
 	message := engine.NewLogEntryMessage(ev.Entry)
 	b.lock.Lock()
-	defer b.lock.Unlock()
 	b.state.consoleMessages = appendBounded(b.state.consoleMessages, ConsoleMessage{
 		Type: message.Type, Source: message.Source, Text: message.Text, Timestamp: message.Timestamp, Stack: newStack(message.Stack),
 	})
+	b.lock.Unlock()
+	var color string
+	switch message.Type {
+	case "warning":
+		color = "{{coral}}"
+	case "error":
+		color = "{{red}}"
+	default:
+		return
+	}
+	text := "[" + message.Source + "] " + message.Text
+	if ev.Entry.URL != "" {
+		text += " (" + ev.Entry.URL + ")"
+	}
+	timestamp := message.Timestamp
+	if timestamp.IsZero() {
+		timestamp = time.Now()
+	}
+	b.gt.Printf(b.gt.F("{{gray}}[%s] "+color+"%s{{/}}\n", timestamp.Format("15:04"), text))
 }
 
 // recordPageError adds an uncaught exception to this tab's (or frame's) history without streaming it.
@@ -244,7 +270,7 @@ func (b *Biloba) handleEventExceptionThrown(ev *runtime.EventExceptionThrown) {
 	pageError := b.recordPageError(ev)
 	message := pageError.Message
 	if pageError.URL != "" {
-		message += fmt.Sprintf(" (%s:%d:%d)", pageError.URL, pageError.Line, pageError.Column)
+		message += " (" + printedLocation(pageError.URL, int64(pageError.Line), int64(pageError.Column)) + ")"
 	}
 	timestamp := pageError.Timestamp
 	if timestamp.IsZero() {
