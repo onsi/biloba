@@ -3783,6 +3783,17 @@ You can use the `ReportEntryVisibilityFailureOrVerbose` decorator to only emit t
 AddReportEntry("some description", b.CaptureImgcatScreenshot(), ReportEntryVisibilityFailureOrVerbose)
 ```
 
+#### Freezing animations for a capture
+
+Every capture method takes `b.Frozen()`, which captures the page the way a [visual assertion](#visual-assertions) does: it waits for web fonts to load and, for the duration of the capture, turns off CSS animations and transitions and hides the text caret.
+
+```go
+b.CaptureScreenshotToFile("home.png", b.Frozen())
+b.CaptureScreenshotOf("#hero", b.Frozen())
+```
+
+Animations on a scroll or view timeline (`animation-timeline: scroll()`) keep running, since they depend only on the scroll position.  Animations started from JavaScript (`element.animate`, `requestAnimationFrame` loops) are not touched.
+
 #### Saving screenshots to files
 
 If you want to save a screenshot to a file (for example, to open it in an image viewer or to share it), use:
@@ -4118,7 +4129,7 @@ Eventually(b).Should(b.HaveScreenshot("dashboard", b.Mask(".relative-timestamp",
 
 A relative timestamp is the case that kills a naive baseline on the first day: "3 minutes ago" becomes "4 minutes ago" and a perfectly healthy dashboard starts failing for no reason at all.  Mask it and the rest of the dashboard is still under assertion.  The same paint is applied before a baseline is written and before every comparison, so both sides are always masked identically, and a selector that matches nothing is a no-op — masking an element that's only sometimes on the page must not fail the assertion.
 
-**Animations, transitions, and the blinking text caret — handled.**  For the duration of each capture Biloba injects a stylesheet that sets `animation: none`, `transition: none`, a transparent `caret-color`, and `scroll-behavior: auto`, and removes it again afterwards.  (It's `animation: none` rather than pausing the animations: pausing freezes each one at whatever frame it happened to reach, which is the nondeterminism we're trying to remove.)  If the animation *is* the thing you're asserting on, and you've made it deterministic yourself, opt out with `b.Animated()`.
+**Animations, transitions, and the blinking text caret — handled.**  For the duration of each capture Biloba injects a stylesheet that sets `animation: none`, `transition: none`, a transparent `caret-color`, and `scroll-behavior: auto`, and removes it again afterwards.  (It's `animation: none` rather than pausing the animations: pausing freezes each one at whatever frame it happened to reach, which is the nondeterminism we're trying to remove.)  CSS animations on a scroll or view timeline are left running: they depend only on the scroll position, and turning them off would render a scrolled page as if it were at the top.  If the animation *is* the thing you're asserting on, and you've made it deterministic yourself, opt out with `b.Animated()`.
 
 That stylesheet goes into **every open shadow root** as well as into the document, and is removed from all of them afterwards.  A `*` rule in a document stylesheet doesn't cross a shadow boundary, so a web component would otherwise keep animating — and keep blinking its caret — right through the capture.  A **closed** shadow root can't be reached from script at all, so a component that uses one is left alone; if a capture of such a component won't settle, that's a likely cause.
 

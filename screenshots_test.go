@@ -126,6 +126,50 @@ var _ = Describe("Screenshots", func() {
 		})
 	})
 
+	Describe("Frozen", func() {
+		// centerOf decodes a capture and reports the colour at the centre of the given CSS-pixel box.
+		centerOf := func(data []byte, x, y float64) color.Color {
+			GinkgoHelper()
+			img, _, err := image.Decode(bytes.NewBuffer(data))
+			Ω(err).ShouldNot(HaveOccurred())
+			return img.At(int(x), int(y))
+		}
+		green, red, blue := color.RGBA{0, 0xaa, 0, 0xff}, color.RGBA{0xaa, 0, 0, 0xff}, color.RGBA{0, 0, 0xaa, 0xff}
+
+		BeforeEach(func() {
+			b.Navigate(fixtureServer + "/visual_scroll_driven.html")
+			Eventually("#scrolled").Should(b.Exist())
+			b.SetWindowSize(400, 300)
+			b.Run(`window.scrollTo(0, 1500)`)
+		})
+
+		It("leaves animations running without the option", func() {
+			Ω(centerOf(b.CaptureScreenshotOf("#timed"), 40, 40)).Should(Equal(red))
+			Ω(centerOf(b.CaptureScreenshotOf("#scrolled"), 40, 40)).Should(Equal(blue))
+		})
+
+		It("turns off time-based CSS animations for the capture, and only for the capture", func() {
+			Ω(centerOf(b.CaptureScreenshotOf("#timed", b.Frozen()), 40, 40)).Should(Equal(green))
+			Ω(b.CaptureScreenshot(b.Frozen())).ShouldNot(BeEmpty())
+			Ω(b.HasElement("#_biloba-freeze")).Should(BeFalse())
+			Ω(b.HasElement("[data-biloba-scroll-driven]")).Should(BeFalse())
+			Ω(centerOf(b.CaptureScreenshotOf("#timed"), 40, 40)).Should(Equal(red))
+		})
+
+		It("leaves animations on a scroll timeline running", func() {
+			Ω(centerOf(b.CaptureScreenshotOf("#scrolled", b.Frozen()), 40, 40)).Should(Equal(blue))
+		})
+
+		It("works with the to-file and imgcat variants", func() {
+			dir := GinkgoT().TempDir()
+			path := b.CaptureScreenshotOfToFile("#timed", filepath.Join(dir, "timed.png"), b.Frozen())
+			data, err := os.ReadFile(path)
+			Ω(err).ShouldNot(HaveOccurred())
+			Ω(centerOf(data, 40, 40)).Should(Equal(green))
+			Ω(b.CaptureImgcatScreenshot(b.Frozen())).ShouldNot(BeEmpty())
+		})
+	})
+
 	Describe("CaptureScreenshotOfToFile", func() {
 		BeforeEach(func() {
 			b.Navigate(fixtureServer + "/element_screenshots.html")

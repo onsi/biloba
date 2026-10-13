@@ -588,10 +588,11 @@ func (b *Biloba) captureForComparison(selector any, cfg screenshotConfig, scheme
 		}()
 	}
 	if !cfg.animated {
-		if r := b.runBilobaFunc("freezeRendering"); r.Error() != nil {
-			return nil, "", r.Error()
+		unfreeze, err := b.frozenRendering(false)
+		defer unfreeze()
+		if err != nil {
+			return nil, "", err
 		}
-		defer func() { b.runBilobaFunc("unfreezeRendering") }()
 	}
 
 	// originX/originY place the captured image in document coordinates - the space the mask boxes are

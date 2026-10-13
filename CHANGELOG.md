@@ -5,10 +5,12 @@
 - Go: `b.SetMedia(biloba.Media{...})` emulates `prefers-color-scheme`, `prefers-reduced-motion`, and the media type for a tab, and undoes itself when the spec ends. `HaveScreenshot` renders in the tab's media, and `InColorSchemes` now restores it after its captures instead of clearing it.
 - Go: `b.SetUserAgent(ua)` overrides `navigator.userAgent` and the `User-Agent` header for a tab until the spec ends.
 - Go: `SetWindowSize` takes Biloba device options, `b.DeviceScaleFactor(f)`, `b.Mobile()`, `b.TouchScreen()`, and `b.Landscape()`, so emulating a device no longer needs chromedp.
+- Go: screenshot captures take `b.Frozen()`, which applies the `HaveScreenshot` freeze (web fonts loaded, CSS animations and transitions off, caret hidden) for that capture: `b.CaptureScreenshotToFile(path, b.Frozen())`.
 - Go: `b.AddInitScript(script)` runs JavaScript at the start of every document the tab loads afterwards, and is removed when the spec ends.
 
 ### Fixes
 
+- The visual-assertion freeze no longer turns off CSS animations on a scroll or view timeline, which rendered a scrolled page as if it were at the top (both clients).
 - Go: the cleanup `SetWindowSize` registers restores the tab's original screen orientation instead of forcing portrait.
 
 ## 0.17.0

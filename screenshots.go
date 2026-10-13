@@ -119,21 +119,82 @@ func inlineImagesSupported() bool {
 }
 
 /*
-CaptureScreenshot() returns a full screenshot of the current tab as a []byte array (you can decode it with the image package)
+CaptureOption configures a screenshot capture ([Biloba.CaptureScreenshot], [Biloba.CaptureScreenshotOf],
+and their imgcat and to-file variants).  The only option is [Biloba.Frozen].
+
+Read https://onsi.github.io/biloba/#capturing-screenshots for details.
+*/
+type CaptureOption func(*captureConfig)
+
+type captureConfig struct {
+	frozen bool
+}
+
+func newCaptureConfig(opts []CaptureOption) captureConfig {
+	cfg := captureConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return cfg
+}
+
+/*
+Frozen() is a [CaptureOption] that captures the page the way [Biloba.HaveScreenshot] does: it waits for
+web fonts to load, and for the duration of the capture turns off CSS animations and transitions and hides
+the text caret.  Animations driven by a scroll or view timeline are left running, since they depend only
+on the scroll position.  Animations started from JavaScript (element.animate, requestAnimationFrame) are
+not touched.
+
+	b.CaptureScreenshotToFile("home.png", b.Frozen())
+
+Read https://onsi.github.io/biloba/#capturing-screenshots for details.
+*/
+func (b *Biloba) Frozen() CaptureOption {
+	return func(c *captureConfig) { c.frozen = true }
+}
+
+// frozenRendering freezes rendering, returning the function that undoes the freeze.  The freeze lives in
+// the page, so the caller must defer the undo: a freeze stylesheet left behind on an error path would
+// stop every later animation the spec relies on.  With fonts it first waits for web fonts to load, which
+// a caller that has already waited for them skips.
+func (b *Biloba) frozenRendering(fonts bool) (func(), error) {
+	if fonts {
+		if r := b.runBilobaFuncAsync("fontsReady"); r.Error() != nil {
+			return func() {}, r.Error()
+		}
+	}
+	if r := b.runBilobaFunc("freezeRendering"); r.Error() != nil {
+		return func() {}, r.Error()
+	}
+	return func() { b.runBilobaFunc("unfreezeRendering") }, nil
+}
+
+/*
+CaptureScreenshot() returns a full screenshot of the current tab as a []byte array (you can decode it with the image package).  Pass [Biloba.Frozen] to freeze animations for the capture.
 
 Like all the screenshot captures it is a waiting command bounded by its own ~5s default deadline; override that with [Biloba.WithTimeout] or abort it with [Biloba.WithContext] (WithPolling and Immediate are not supported).
+
+Read https://onsi.github.io/biloba/#capturing-screenshots for details.
 */
-func (b *Biloba) CaptureScreenshot() []byte {
+func (b *Biloba) CaptureScreenshot(opts ...CaptureOption) []byte {
 	b.gt.Helper()
 	b.guardConfig("CaptureScreenshot", knobTimeout, knobContext)
-	return b.captureScreenshot()
+	return b.captureScreenshot(opts...)
 }
 
 // captureScreenshot is the unguarded substrate behind CaptureScreenshot and its imgcat/to-file
 // wrappers.  It runs under a bounded context (default screenshotCaptureTimeout) that honors the
 // WithTimeout/WithContext knobs a waiting command is allowed.
-func (b *Biloba) captureScreenshot() []byte {
+func (b *Biloba) captureScreenshot(opts ...CaptureOption) []byte {
 	b.gt.Helper()
+	if newCaptureConfig(opts).frozen {
+		unfreeze, err := b.frozenRendering(true)
+		defer unfreeze()
+		if err != nil {
+			b.gt.Fatalf("Failed to freeze rendering for a screenshot:\n%s", err.Error())
+			return nil
+		}
+	}
 	timeout := b.waitingTimeout(screenshotCaptureTimeout)
 	ctx, cancel := b.waitingContext(screenshotCaptureTimeout)
 	defer cancel()
@@ -158,10 +219,10 @@ CaptureImgCatScreenshot() returns a full screenshot of the current tab as an iTe
 
 It is a waiting command: see [Biloba.CaptureScreenshot] for the WithTimeout/WithContext knobs it honors.
 */
-func (b *Biloba) CaptureImgcatScreenshot() string {
+func (b *Biloba) CaptureImgcatScreenshot(opts ...CaptureOption) string {
 	b.gt.Helper()
 	b.guardConfig("CaptureImgcatScreenshot", knobTimeout, knobContext)
-	return b.asImgCat(b.captureScreenshot())
+	return b.asImgCat(b.captureScreenshot(opts...))
 }
 
 /*
@@ -173,10 +234,10 @@ It is a waiting command: see [Biloba.CaptureScreenshot] for the WithTimeout/With
 
 Read https://onsi.github.io/biloba/#capturing-screenshots for details.
 */
-func (b *Biloba) CaptureScreenshotToFile(path string) string {
+func (b *Biloba) CaptureScreenshotToFile(path string, opts ...CaptureOption) string {
 	b.gt.Helper()
 	b.guardConfig("CaptureScreenshotToFile", knobTimeout, knobContext)
-	return b.writeScreenshotToFile(b.captureScreenshot(), path)
+	return b.writeScreenshotToFile(b.captureScreenshot(opts...), path)
 }
 
 // writeScreenshotToFile resolves path to an absolute path, creates any missing intermediate
@@ -203,7 +264,7 @@ func (b *Biloba) writeScreenshotToFile(img []byte, path string) string {
 }
 
 /*
-CaptureScreenshotOf(selector) returns a screenshot of the first element matching selector as a []byte array (you can decode it with the image package).  The screenshot is clipped to the element's bounding box and can capture an element below the document fold without scrolling.  Same-origin >>>-pierced iframe elements are translated to top-level page coordinates.
+CaptureScreenshotOf(selector, opts...) returns a screenshot of the first element matching selector as a []byte array (you can decode it with the image package).  Pass [Biloba.Frozen] to freeze animations for the capture.  The screenshot is clipped to the element's bounding box and can capture an element below the document fold without scrolling.  Same-origin >>>-pierced iframe elements are translated to top-level page coordinates.
 
 A capture can only contain what the browser painted, and the below-the-fold expansion applies to the DOCUMENT scroller: an element scrolled outside an inner overflow:auto container was never painted and comes back as that container's background.  Biloba prints a warning naming the container when it sees this - scroll it in with [Biloba.ScrollIntoView] and [Biloba.WithinScroller] first.  ([Biloba.HaveScreenshot] refuses outright rather than warning, since a blank baseline would pass forever.)
 
@@ -211,17 +272,25 @@ It is a waiting command: see [Biloba.CaptureScreenshot] for the WithTimeout/With
 
 Read https://onsi.github.io/biloba/#capturing-screenshots for details.
 */
-func (b *Biloba) CaptureScreenshotOf(selector any) []byte {
+func (b *Biloba) CaptureScreenshotOf(selector any, opts ...CaptureOption) []byte {
 	b.gt.Helper()
 	b.guardConfig("CaptureScreenshotOf", knobTimeout, knobContext)
-	return b.captureScreenshotOf(selector)
+	return b.captureScreenshotOf(selector, opts...)
 }
 
 // captureScreenshotOf is the unguarded substrate behind CaptureScreenshotOf and its imgcat/to-file
 // wrappers.  The element capture runs under a bounded context (default screenshotCaptureTimeout) that
 // honors the WithTimeout/WithContext knobs a waiting command is allowed.
-func (b *Biloba) captureScreenshotOf(selector any) []byte {
+func (b *Biloba) captureScreenshotOf(selector any, opts ...CaptureOption) []byte {
 	b.gt.Helper()
+	if newCaptureConfig(opts).frozen {
+		unfreeze, err := b.frozenRendering(true)
+		defer unfreeze()
+		if err != nil {
+			b.gt.Fatalf("Failed to freeze rendering for a screenshot:\n%s", err.Error())
+			return nil
+		}
+	}
 	img, _, notes, err := b.elementScreenshot(selector)
 	if err != nil {
 		b.gt.Fatalf("Failed to capture screenshot of element:\n%s", err.Error())
@@ -365,10 +434,10 @@ It is a waiting command: see [Biloba.CaptureScreenshot] for the WithTimeout/With
 
 Read https://onsi.github.io/biloba/#capturing-screenshots for details.
 */
-func (b *Biloba) CaptureImgcatScreenshotOf(selector any) string {
+func (b *Biloba) CaptureImgcatScreenshotOf(selector any, opts ...CaptureOption) string {
 	b.gt.Helper()
 	b.guardConfig("CaptureImgcatScreenshotOf", knobTimeout, knobContext)
-	return b.asImgCat(b.captureScreenshotOf(selector))
+	return b.asImgCat(b.captureScreenshotOf(selector, opts...))
 }
 
 /*
@@ -380,10 +449,10 @@ It is a waiting command: see [Biloba.CaptureScreenshot] for the WithTimeout/With
 
 Read https://onsi.github.io/biloba/#capturing-screenshots for details.
 */
-func (b *Biloba) CaptureScreenshotOfToFile(selector any, path string) string {
+func (b *Biloba) CaptureScreenshotOfToFile(selector any, path string, opts ...CaptureOption) string {
 	b.gt.Helper()
 	b.guardConfig("CaptureScreenshotOfToFile", knobTimeout, knobContext)
-	return b.writeScreenshotToFile(b.captureScreenshotOf(selector), path)
+	return b.writeScreenshotToFile(b.captureScreenshotOf(selector, opts...), path)
 }
 
 func (b *Biloba) asImgCat(img []byte) string {

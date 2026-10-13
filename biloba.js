@@ -697,13 +697,28 @@ if (!window["_biloba"]) {
     // shadow root, so without this a web component would keep animating - and keep blinking its caret -
     // right through the capture.  Closed shadow roots cannot be reached and are left alone by design.
     // Idempotent, as is unfreezeRendering.
-    let freezeCSS = "*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; scroll-behavior: auto !important; }"
+    //
+    // A CSS animation on a scroll or view timeline (animation-timeline: scroll()/view()) is left running:
+    // it depends only on the scroll position, so it is already deterministic, and `animation: none` would
+    // render a scrolled page as if it were at the top.  CSS cannot select an element by its animation's
+    // timeline, so the freeze marks those elements with an attribute and exempts the marked ones.
+    let scrollDrivenAttr = "data-biloba-scroll-driven"
+    let freezeCSS = "*, *::before, *::after { transition: none !important; caret-color: transparent !important; scroll-behavior: auto !important; } " +
+        `:not([${scrollDrivenAttr}]), :not([${scrollDrivenAttr}])::before, :not([${scrollDrivenAttr}])::after { animation: none !important; }`
+    let markScrollDriven = () => {
+        if (!document.getAnimations || typeof CSSAnimation === "undefined") return
+        for (let a of document.getAnimations()) {
+            let target = a.effect && a.effect.target
+            if (target && a instanceof CSSAnimation && a.timeline && !(a.timeline instanceof DocumentTimeline)) target.setAttribute(scrollDrivenAttr, "")
+        }
+    }
     // freezeRoots is the document plus every open shadow root under it (collectElements already
     // descends open roots, so nested components are included).  ShadowRoot inherits getElementById from
     // DocumentFragment, so the idempotence check below reads the same on either kind of root; only the
     // append target differs.
     let freezeRoots = () => [document, ...collectElements(document).filter(el => el.shadowRoot).map(el => el.shadowRoot)]
     b.freezeRendering = () => {
+        markScrollDriven()
         for (let root of freezeRoots()) {
             if (root.getElementById("_biloba-freeze")) continue
             let s = document.createElement("style")
@@ -718,6 +733,7 @@ if (!window["_biloba"]) {
         for (let root of freezeRoots()) {
             let s = root.getElementById("_biloba-freeze")
             if (s) s.remove()
+            for (let el of root.querySelectorAll(`[${scrollDrivenAttr}]`)) el.removeAttribute(scrollDrivenAttr)
         }
         return rRes(true)
     }
