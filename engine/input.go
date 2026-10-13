@@ -131,6 +131,29 @@ func MouseMoveContext(ctx context.Context, x, y float64) error {
 	return chromedp.Run(ctx, chromedp.MouseEvent(input.MouseMoved, x, y))
 }
 
+// DispatchPointerContext dispatches one real pointer event - a move, a press, or a release of the
+// primary button - at a point, as pointerType ("mouse" or "pen").  held reports whether the primary
+// button is down once the event is over: a move while held carries buttons=1 so the page sees a drag,
+// a press is always held, and a release never is.  A pen reports pressure 0.5 while it touches and 0
+// otherwise, the way a mouse does; Chrome derives a pen's pressure from force, which defaults to 0.
+func DispatchPointerContext(ctx context.Context, kind input.MouseType, x, y float64, held bool, pointerType input.DispatchMouseEventPointerType) error {
+	held = kind == input.MousePressed || (kind == input.MouseMoved && held)
+	event := input.DispatchMouseEvent(kind, x, y).WithPointerType(pointerType)
+	if kind != input.MouseMoved || held {
+		event = event.WithButton(input.Left)
+	}
+	if kind != input.MouseMoved {
+		event = event.WithClickCount(1)
+	}
+	if held {
+		event = event.WithButtons(1)
+		if pointerType == input.Pen {
+			event = event.WithForce(0.5)
+		}
+	}
+	return chromedp.Run(ctx, event)
+}
+
 // ClickXYContext moves to a point and clicks it - the simple case, no modifiers or repeat counts.
 func ClickXYContext(ctx context.Context, x, y float64) error {
 	return chromedp.Run(ctx,

@@ -190,6 +190,10 @@ Each produces a genuine `window.getSelection()` range and dispatches `mouseup` (
 
 `b.Realistic()` → `*Biloba` — a view of the **same tab** routed through real CDP input: scrolls into view, waits for stability, refuses to click through an occluding overlay, moves the real pointer (CSS `:hover` activates), dispatches genuine mouse/touch/key input. The whole interaction vocabulary works on it; it composes with the poll-config clones (`b.Realistic().WithTimeout(d).Click(sel)`). No per-call decorator. Per-spec opt-in — real round-trips, can reintroduce flake.
 
+- `b.Pointer(opts...)` → `*Pointer` — a real CDP pointer driven one event at a time (drawing, slider scrubbing, mid-drag asserts); a mouse unless `b.Pen()` (`pointerType: "pen"`). No scroll, no stability wait, dispatches at once — the caller paces it. Works on a frame handle (frame-viewport coords). Released at spec end if left pressed.
+  - `p.MoveTo(x, y)` — viewport CSS px. `p.Down()` / `p.Up()` — press/release the primary button at the current point (moves while down carry `buttons: 1`).
+  - `p.MoveToElement(sel, b.At(dx, dy)?)` — center or top-left offset; **polls** for exists + visible with the knobs of the view it came from (`b.WithTimeout(d).Pointer()`); fails if the point is outside the viewport.
+
 ## Keyboard  (real key events, via chromedp)
 
 - `b.Type(...)` (dual) — **the** element-targeted keyboard method: focuses (which scrolls into view), then genuine keystrokes (text **and** named `Keys.*`); **appends**. Arg disambiguation (after stripping modifiers):

@@ -2206,6 +2206,8 @@ Eventually("#menu").ShouldNot(b.BeVisible())
 
 **A fidelity note.**  A plain `b.Click(sel)` calls `element.click()` - the most faithful path, because it fires the browser's native default actions (form submit, `<label>` association, and the like).  But `element.click()` carries no coordinates and no modifier state, so the moment you add *any* option the fast path switches to dispatching a synthetic `mousedown`/`mouseup`/`click` sequence carrying the real `clientX`/`clientY` and the modifier flags - so an app reading `e.clientX`/`e.shiftKey` (a `<canvas>` painter, a map, a custom slider) sees exactly what you targeted.  That's a deliberate fidelity-for-control trade: if you need a maximally-faithful click, pass no options (or use [realistic mode](#realistic-interactions), which always uses real CDP input and honors the options natively).  `Tap` ignores keyboard modifiers - they don't apply to touch - but honors `b.At`.
 
+`b.At` also positions a [low-level pointer](#driving-the-pointer-directly): `p.MoveToElement("#canvas", b.At(30, 40))`.
+
 #### Double-Clicking and Right-Clicking
 
 Alongside `Click`, Biloba provides `b.DblClick` and `b.RightClick`, following the same dual immediate/matcher convention, the same visible+enabled checks, and the same [pointer options](#pointer-options-offsets-and-modifiers):
@@ -2236,23 +2238,18 @@ b.DragTo("#card", "#column")             // drags #card's center onto #column's 
 Eventually("#card").Should(b.DragTo("#column"))
 ```
 
-**`DragTo` is the whole gesture.**  The press, the moves, and the release all happen inside the one call, so there is no seam to assert in.  That's fine when the thing you're testing is the *drop* - but a spec whose subject is the **mid-drag** state needs the legs by hand: a tree row that auto-expands after a hover dwell, a drop-target highlight, a spring-loaded folder.  Drive those through [chromedp](#codechromedpcode-breaking-the-fourth-wall) on `b.Context`.  `b.GetBoundingBox` already reports in the space CDP mouse events use - viewport CSS pixels - so `CenterX`/`CenterY` are the coordinates to send:
+**`DragTo` is the whole gesture.**  The press, the moves, and the release all happen inside the one call, so there is no seam to assert in.  That's fine when the thing you're testing is the *drop* - but a spec whose subject is the **mid-drag** state needs the legs by hand: a tree row that auto-expands after a hover dwell, a drop-target highlight, a spring-loaded folder.  Drive those with a [low-level pointer](#driving-the-pointer-directly).  `b.GetBoundingBox` reports in viewport CSS pixels, the space `Pointer.MoveTo` takes, so `CenterX`/`CenterY` are the coordinates to send:
 
 ```go
 src, tgt := b.GetBoundingBox("#row"), b.GetBoundingBox("#folder")   // measure BOTH before pressing
-ctx, cancel := context.WithTimeout(b.Context, 10*time.Second)      // b.Context carries no deadline
-defer cancel()
-
-Expect(chromedp.Run(ctx,
-    chromedp.MouseEvent(input.MousePressed, src.CenterX, src.CenterY, chromedp.ButtonType(input.Left), chromedp.ClickCount(1)),
-    chromedp.MouseEvent(input.MouseMoved, tgt.CenterX, tgt.CenterY, chromedp.ButtonType(input.Left)),
-)).To(Succeed())
+p := b.Pointer()
+p.MoveTo(src.CenterX, src.CenterY)
+p.Down()
+p.MoveTo(tgt.CenterX, tgt.CenterY)
 
 Eventually("#folder").Should(b.HaveAttribute("aria-expanded", "true"))   // asserted with the button still down
 
-Expect(chromedp.Run(ctx,
-    chromedp.MouseEvent(input.MouseReleased, tgt.CenterX, tgt.CenterY, chromedp.ButtonType(input.Left), chromedp.ClickCount(1)),
-)).To(Succeed())
+p.Up()
 ```
 
 Measure both endpoints *before* the press, the way `DragTo` does, and for the same reason: a measurement taken between the legs can be taken after something moved.
@@ -2403,7 +2400,7 @@ In realistic mode:
 - **`SetValue`** drives form controls with real input: a text input is focused with a real click, cleared, and typed with real key events (then blurred to fire `change`); a checkbox is toggled with a real click (and left alone if it's already in the desired state).  Native pickers - radio groups, `<select>`, and multi-selects - fall back to the fast JS path, because they can't be driven by a real pointer (Playwright's `selectOption` sets them programmatically too).
 - **`Type`** / **`SendKeysToWindowImmediately`** already use real CDP key events; in realistic mode they additionally scroll the element into view before typing.
 
-All keep Biloba's dual immediate/matcher API (`rb.Click("#go")` vs `Eventually("#go").Should(rb.Click())`).  For anything else you can still [drop down to chromedp](#codechromedpcode-breaking-the-fourth-wall) via `b.Context`.
+All keep Biloba's dual immediate/matcher API (`rb.Click("#go")` vs `Eventually("#go").Should(rb.Click())`).  For a custom gesture - drawing a stroke, scrubbing a slider - [drive the pointer directly](#driving-the-pointer-directly) with `b.Pointer()`.  For anything else you can still [drop down to chromedp](#codechromedpcode-breaking-the-fourth-wall) via `b.Context`.
 
 #### Using realistic mode across a spec or a suite
 
@@ -2455,6 +2452,35 @@ A couple of deliberate gaps are worth calling out, both reachable via [chromedp]
 - **Native HTML5 drag-and-drop and native `<select>` realism** are not driven by either track by design - drop to chromedp for those.  Device emulation is separate from both tracks: see [Emulating Media and Devices](#emulating-media-and-devices).  Both tracks work inside a cross-origin iframe through a [frame handle](#working-with-cross-origin-iframes): `checkout.Realistic().Click(...)` translates the point into the tab and checks that nothing in the embedding page covers it.
 
 And one asymmetry to expect when you move a spec from one track to the other: **a `position: fixed` footer or banner is invisible to the fast track and perfectly solid to the realistic one.**  `element.click()` does no hit-testing, so the fast track reaches an element the footer is sitting on top of; real pointer input lands on the footer.  A spec that has passed for months can fail the moment it switches to `b.Realistic()`, because a row near the bottom of a short list is genuinely underneath the footer.  Both tracks are right - the realistic one is telling you a user could not reach that element either.  Scroll it clear of the footer (`b.ScrollIntoView(sel, b.AtTopOffset(px))`) rather than assuming your interaction code is wrong.
+
+#### Driving the pointer directly
+
+The realistic track measures, scrolls, and waits before every interaction, and `DragTo` is a single gesture from one element to another.  When you need a gesture of your own - a pen stroke on a drawing canvas, a slider scrubbed at 60Hz while you record the screen - `b.Pointer()` gives you a real pointer to drive one event at a time:
+
+```go
+pen := b.Pointer(b.Pen())
+pen.MoveTo(100, 200)
+pen.Down()
+for i := 1; i <= 14; i++ {
+    time.Sleep(16 * time.Millisecond)
+    pen.MoveTo(100+float64(i)*10, 200)
+}
+pen.Up()
+```
+
+The pointer has four methods:
+
+- `MoveTo(x, y)` moves to a point in CSS pixels from the top-left of the viewport.
+- `MoveToElement(selector)` moves to the element's center, or to `b.At(x, y)` from its top-left corner: `p.MoveToElement("#track", b.At(0, 10))`.
+- `Down()` presses the primary button where the pointer is, and `Up()` releases it.  Pressing a pressed pointer, or releasing a released one, fails the spec.
+
+The handle remembers its position (it starts at `0, 0`) and whether it is pressed.  Moves while it is pressed carry `buttons: 1`, so the page sees a drag.  `b.Pointer()` is a mouse; `b.Pointer(b.Pen())` is a pen, and every event it dispatches reaches the page as a `PointerEvent` with `pointerType` `"pen"`, reporting a `pressure` of `0.5` while it touches and `0` while it hovers.  A pen works on a page emulating a tablet (`b.SetWindowSize(820, 1180, b.Mobile(), b.TouchScreen())`).
+
+Every call dispatches real CDP input immediately - `MoveTo`, `Down`, and `Up` are one round trip each on a tab.  Nothing scrolls, nothing waits for the page to settle, and nothing is checked for occlusion, so the timing is yours: pace the calls with `time.Sleep` or a `time.Ticker`.  `MoveToElement` is the one call that polls - it waits for the element to exist and be visible, honoring the knobs of the view you made the pointer from (`b.WithTimeout(5 * time.Second).Pointer()`), then dispatches.  It reads the element where it is, so an element whose point is outside the viewport fails the spec instead of receiving input it could never get: scroll it into view first with `b.ScrollIntoView`.  `MoveTo`, `Down`, and `Up` have no wait to tune, so they ignore those knobs.
+
+On a [frame handle](#working-with-cross-origin-iframes), `frame.Pointer()` works in the frame's viewport: Biloba translates each point through the iframe's position (without scrolling the iframe into view), and the frame's page sees the coordinates you passed.
+
+If a spec ends with the pointer still pressed, Biloba releases it, so the next spec does not start with a held button.
 
 ### Uploading Files
 

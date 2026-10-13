@@ -7,6 +7,7 @@
 - Go: `SetWindowSize` takes Biloba device options, `b.DeviceScaleFactor(f)`, `b.Mobile()`, `b.TouchScreen()`, and `b.Landscape()`, so emulating a device no longer needs chromedp.
 - Go: screenshot captures take `b.Frozen()`, which applies the `HaveScreenshot` freeze (web fonts loaded, CSS animations and transitions off, caret hidden) for that capture: `b.CaptureScreenshotToFile(path, b.Frozen())`.
 - Go: `b.AddInitScript(script)` runs JavaScript at the start of every document the tab loads afterwards, and is removed when the spec ends.
+- Go: `b.Pointer()` returns a real pointer for custom gestures, driven one event at a time with `MoveTo(x, y)`, `MoveToElement(sel, b.At(...))`, `Down()`, and `Up()`. Each call dispatches at once with no scrolling or stability wait, it works on frame handles, and `b.Pointer(b.Pen())` dispatches pen input.
 
 ### Fixes
 

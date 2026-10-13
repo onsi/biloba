@@ -482,4 +482,26 @@ var _ = Describe("Out-of-process iframes", func() {
 		Ω(replacement.AllFrames()).Should(BeEmpty())
 		ExpectFailures(ContainSubstring("frame_detached"))
 	})
+
+	It("drives a low-level pointer in the frame's own viewport", func() {
+		pointerURL := strings.Replace(frameURL, "frame-form.html", "pointer.html", 1)
+		tab.Navigate(fixtureServer + "/frames.html?child=" + url.QueryEscape(pointerURL))
+		pointerFrame := tab.Frame(tab.FrameMatching().WithURL(pointerURL).WithDOMElement("#track"))
+		Ω(pointerFrame.FrameOutOfProcessForTest()).Should(BeTrue())
+
+		pen := pointerFrame.Pointer(tab.Pen())
+		pen.MoveToElement("#track", tab.At(0, 10))
+		pen.Down()
+		pen.MoveTo(70, 170)
+		pen.MoveTo(170, 170)
+		pen.Up()
+		Ω(pointerFrame.GetAttribute("#track", "data-value")).Should(Equal("75"))
+		Ω(pointerLog(pointerFrame)).Should(HaveExactElements(
+			pointerEventMatching("pointermove", "pen", 0, 20, 170),
+			pointerEventMatching("pointerdown", "pen", 1, 20, 170),
+			pointerEventMatching("pointermove", "pen", 1, 70, 170),
+			pointerEventMatching("pointermove", "pen", 1, 170, 170),
+			pointerEventMatching("pointerup", "pen", 0, 170, 170),
+		))
+	})
 })

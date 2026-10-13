@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+<head>
+<title>Pointer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { margin: 0; }
+  #pad { position: absolute; left: 20px; top: 20px; width: 200px; height: 80px; background: rgb(220, 220, 220); touch-action: none; }
+  #range { position: absolute; left: 20px; top: 120px; width: 200px; margin: 0; }
+  #track { position: absolute; left: 20px; top: 160px; width: 200px; height: 20px; background: rgb(180, 180, 180); touch-action: none; }
+  #far { position: absolute; left: 20px; top: 3000px; width: 50px; height: 50px; }
+</style>
+</head>
+<body>
+<div id="pad"></div>
+<input id="range" type="range" min="0" max="100" value="0">
+<div id="track" data-value="0"></div>
+<div id="far">far away</div>
+<script>
+  // every pointer event the page sees, in order; specs read window.pointerLog
+  window.pointerLog = []
+  for (const type of ["pointerdown", "pointermove", "pointerup"]) {
+    document.addEventListener(type, (e) => {
+      window.pointerLog.push({ type: e.type, pointerType: e.pointerType, buttons: e.buttons, x: e.clientX, y: e.clientY, pressure: e.pressure, target: e.target.id })
+    }, true)
+  }
+  // a hand-rolled slider: its value follows a pointer dragged along the track
+  const track = document.querySelector("#track")
+  const follow = (e) => {
+    const rect = track.getBoundingClientRect()
+    track.dataset.value = Math.round(Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * 100)
+  }
+  track.addEventListener("pointerdown", (e) => { track.setPointerCapture(e.pointerId); follow(e) })
+  track.addEventListener("pointermove", (e) => { if (track.hasPointerCapture(e.pointerId)) follow(e) })
+</script>
+</body>
+</html>

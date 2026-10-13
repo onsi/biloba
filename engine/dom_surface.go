@@ -654,7 +654,7 @@ func (s *Session) translateFramePoints(ctx context.Context, points []actionPoint
 	if s.frameOOPIF || s.frameID == "" {
 		return points, nil
 	}
-	return translateFramePoints(ctx, s.frameID, points)
+	return translateFramePoints(ctx, s.frameID, points, true)
 }
 
 func pointerPayload(offset *Point, modifiers Modifier) map[string]any {

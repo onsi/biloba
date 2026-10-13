@@ -872,6 +872,17 @@ if (!window["_biloba"]) {
         centerIn(n)
         return rRes(measurePoint(n))
     })
+    // pointerTarget backs Pointer.MoveToElement: the element's center, or (o.ox, o.oy) from its top-left
+    // corner, in this session's viewport, read where the element is now - no scroll, no stability wait,
+    // since the caller owns the timeline.  A point outside the viewport is an error rather than a move
+    // the page could never receive.
+    b.pointerTarget = one(b.isVisible, (n, o) => {
+        let c = measureCorner(n), rect = n.getBoundingClientRect()
+        if (!c.translatable) return rErr("cannot locate the DOM element through a cross-origin frame")
+        let x = c.left + (o.hasOffset ? o.ox : rect.width / 2), y = c.top + (o.hasOffset ? o.oy : rect.height / 2)
+        if (x < 0 || y < 0 || x > c.innerWidth || y > c.innerHeight) return rErr("the point (" + x + ", " + y + ") is outside the " + c.innerWidth + "x" + c.innerHeight + " viewport, and the pointer does not scroll - scroll the element into view first (b.ScrollIntoView)")
+        return rRes({ x: x, y: y })
+    })
     // inputKind classifies a form control so the realistic track can decide how to drive it.
     b.inputKind = one(n => {
         let t = n.type
