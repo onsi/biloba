@@ -1133,6 +1133,13 @@ func (b *Biloba) Prepare() {
 	// otherwise show up as the new spec's first recorded dialog and print "you should add an explicit
 	// dialog handler" against a spec that never opened a dialog.  Flag the reset so Prepare's own
 	// dialog is accepted silently; see handleEventJavascriptDialogOpening.
+	//
+	// A side effect worth knowing when a spec misbehaves only on Linux: because of this navigation,
+	// every spec's first page is a new site, and on Linux chrome-headless-shell a new site's first
+	// rendered frame comes with a trusted mouse move to (0, 0) - so whatever sits in the top-left
+	// corner gets :hover and its pointerover/mouseover handlers fire.  macOS and full Chrome don't do
+	// it, and parking the mouse elsewhere beforehand doesn't stop it.  Left alone deliberately; the
+	// pointer specs clear their event log after the first frames for this reason.
 	b.lock.Lock()
 	b.state.resetting = true
 	b.lock.Unlock()
