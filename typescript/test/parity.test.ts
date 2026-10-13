@@ -271,7 +271,10 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     expect(path.startsWith(artifactDir)).toBe(true);
     expect((await readFile(path)).subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
 
-    const updater = await connect({daemonExecutable: daemonExecutable, chromeWsUrl: sharedBrowser.wsURL, artifactDir, screenshotBaselinesDir: baselineDir, updateScreenshots: true});
+    // chromeConnection, not chromeWsUrl: a bare URL carries no launch metadata, so against full
+    // headless Chrome the updater would skip the viewport emulation `session` gets and write
+    // baselines at Chrome's un-emulated 1024x732 instead of 1024x768.
+    const updater = await connect({daemonExecutable: daemonExecutable, chromeConnection: sharedBrowser.connection, artifactDir, screenshotBaselinesDir: baselineDir, updateScreenshots: true});
     const updateSession = await updater.openSession();
     await updateSession.navigate(baseUrl);
     const created = await updateSession.getByRole("heading", {name: "Biloba parity"}).expectScreenshot("visual/heading");
