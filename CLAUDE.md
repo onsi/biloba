@@ -66,6 +66,7 @@ Repo-specific testing conventions (see `biloba_suite_test.go`):
 | Clicking, pointer interactions (buttons, modifiers, `At`), keyboard input, uploads | `clicks.go`, `keyboard.go`, `upload.go` | `interactions_test.go`, `keyboard_test.go` |
 | Element/selector locators (`ByCSS`/`ByRole`/`ByText`/...) | `locator.go` | `locator_test.go` |
 | Realistic interaction track (`Realistic`, scroll-into-view, real pointer/wheel events) | `realistic.go` | `realistic_test.go` |
+| Low-level pointer handle (`Pointer`, `Pen`, `MoveTo`/`MoveToElement`/`Down`/`Up`) | `pointer.go`; engine: `DispatchPointerContext` in `engine/input.go` | `pointer_test.go` |
 | Property get/set/match | `properties.go` | `properties_test.go` |
 | Geometry getters/matchers (GetBoundingBox/GetScrollOffset/GetOffsetTopWithin, pairwise/viewport/document-order, GetComputedStyle) | `geometry.go` | `geometry_test.go` |
 | Capturing a matcher's observed value (`*ValueMatcher`/`.Capture`) | `capture.go` | (exercised from each matcher's `*_test.go`) |
