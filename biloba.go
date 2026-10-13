@@ -861,6 +861,10 @@ type tabState struct {
 	// error is usually the root cause and is otherwise buried in the streamed timeline.
 	consoleErrors []string
 
+	// userAgent is the user-agent override SetUserAgent last applied ("" for none), so the
+	// DeferCleanup of a later call can restore it.
+	userAgent string
+
 	requests         []*Request
 	inflightRequests map[network.RequestID]bool
 	requestHandlers  []*requestHandler       // ordered, first-match-wins: stub / abort / modify-request

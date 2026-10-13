@@ -80,4 +80,36 @@ var _ = Describe("Emulation", func() {
 			ExpectFailures(ContainSubstring("SetMedia does not support Immediate"))
 		})
 	})
+
+	Describe("SetUserAgent", func() {
+		const agent = "Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) BilobaTest/1.0"
+
+		Describe("overriding and restoring", Ordered, func() {
+			It("overrides navigator.userAgent and the User-Agent header for the documents the tab loads", func() {
+				b.SetUserAgent(agent)
+				b.Navigate(fixtureServer + "/dom.html?ua")
+				Eventually("#hello").Should(b.Exist())
+				Ω(`navigator.userAgent`).Should(b.EvaluateTo(agent))
+				request := b.AllRequests().Find(b.RequestMatching(fixtureServer + "/dom.html?ua"))
+				Ω(request).ShouldNot(BeNil())
+				Ω(request.Headers).Should(HaveKeyWithValue("User-Agent", agent))
+			})
+
+			It("restores the browser's own user agent for the next spec", func() {
+				Ω(`navigator.userAgent`).ShouldNot(b.EvaluateTo(agent))
+				Ω(`navigator.userAgent`).Should(b.EvaluateTo(ContainSubstring("Chrome")))
+			})
+		})
+
+		It("unwinds nested overrides in order", func() {
+			b.SetUserAgent("first")
+			DeferCleanup(func() {
+				b.Navigate(fixtureServer + "/dom.html")
+				Ω(`navigator.userAgent`).Should(b.EvaluateTo("first"), "the second override's cleanup restores the first")
+			})
+			b.SetUserAgent("second")
+			b.Navigate(fixtureServer + "/dom.html")
+			Ω(`navigator.userAgent`).Should(b.EvaluateTo("second"))
+		})
+	})
 })

@@ -102,7 +102,7 @@ Eventually(".figure-frame").Should(b.HaveAttribute("data-block-id", Not(BeEmpty(
 - `b.FrameMatching()` / `b.HaveFrame()` → `FrameQuery` — chain `.WithURL/.WithTitle/.WithDOMElement(selector)`; `Eventually(b).Should(b.HaveFrame()...)` polls it.
 - `b.AllFrames()` → `Frames` snapshot (`Find`/`Filter`); includes frames nested behind a boundary. `frame.Frame(...)` / `frame.AllFrames()` search inside a frame.
 - `frame.IsFrame()`; `frame.Close()` detaches the handle (`Prepare()` discards all of them).
-- On a frame handle, tab-level methods fail the spec: `Navigate`, `Prepare`, `NewTab`, `SetWindowSize`, `SetMedia`, `AddInitScript`, `SetCookie`/`ClearCookies`, `StubRequest`/`AbortRequest`/`ModifyRequest`/`ModifyResponse`/`HoldResponse`, dialog handlers/`Dialogs`, downloads. Call them on the tab — its stubs cover the frame's requests and its dialog handling covers the frame's dialogs.
+- On a frame handle, tab-level methods fail the spec: `Navigate`, `Prepare`, `NewTab`, `SetWindowSize`, `SetMedia`, `SetUserAgent`, `AddInitScript`, `SetCookie`/`ClearCookies`, `StubRequest`/`AbortRequest`/`ModifyRequest`/`ModifyResponse`/`HoldResponse`, dialog handlers/`Dialogs`, downloads. Call them on the tab — its stubs cover the frame's requests and its dialog handling covers the frame's dialogs.
 - A handle belongs to one document: after the iframe is removed/navigated or the tab navigates, calls fail with `frame_detached` — call `b.Frame(...)` again.
 - An **out-of-process** frame (full Chrome runs cross-site frames in their own renderer; chrome-headless-shell doesn't) is driven the same way, except: no screenshots of it (capture the `iframe` element from the tab), the tab's network stubs don't reach its requests, and realistic mode can't see what the embedding page draws over it.
 
@@ -264,8 +264,9 @@ Intercepts the **real** response and holds it in flight until you release it (th
 - `b.Outline()` → string (indented DOM) · `b.A11yOutline()` → string (accessibility tree: role + name).
 - `b.CaptureScreenshot()` → []byte (PNG) · `b.CaptureImgcatScreenshot()` → string · `b.CaptureScreenshotToFile(path)` → abs path.
 - `b.CaptureScreenshotOf(selector)` · `b.CaptureImgcatScreenshotOf(selector)` · `b.CaptureScreenshotOfToFile(selector, path)` — clipped to the first match (any selector; works below the fold and across `>>>`).
-- `b.SetWindowSize(w, h, ...opt)` · `b.WindowSize()`. `SetWindowSize` registers its own `DeferCleanup` to restore the prior size — don't restore manually, and don't call it from inside another `DeferCleanup` (Ginkgo forbids nesting). Call it bare in `BeforeEach`/`BeforeAll`.
+- `b.SetWindowSize(w, h, ...opt)` · `b.WindowSize()`. Device options: `b.DeviceScaleFactor(f)` · `b.Mobile()` (honours `<meta viewport>`; no meta → 980px layout) · `b.TouchScreen()` (`maxTouchPoints`, `pointer: coarse`) · `b.Landscape()` — all reset with the size. `SetWindowSize` registers its own `DeferCleanup` to restore the prior size — don't restore manually, and don't call it from inside another `DeferCleanup` (Ginkgo forbids nesting). Call it bare in `BeforeEach`/`BeforeAll`.
 - `b.SetMedia(biloba.Media{ColorScheme: "dark", ReducedMotion: "reduce", Type: "print"})` — emulated CSS media for the tab (and its frames), held across navigations, replaced wholesale by the next call, undone by its own `DeferCleanup`. `HaveScreenshot` renders in it; `InColorSchemes` overrides only the scheme and restores it.
+- `b.SetUserAgent(ua)` — `navigator.userAgent` + `User-Agent` header for documents loaded afterwards (call before `Navigate`); restored by its own `DeferCleanup`.
 
 ## Visual regression → `visual-assertions`
 

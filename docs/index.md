@@ -587,7 +587,7 @@ Derive it from `b.Context` (not `context.Background()`) so chromedp's executor f
 
 #### Emulation and device conveniences (drop to chromedp)
 
-Biloba wraps the window size and CSS media natively - see [Window Size](#window-size) and [Emulating Media and Devices](#emulating-media-and-devices).  The rest of device and environment **emulation** - geolocation, permissions, offline, locale/timezone - is not wrapped in Go yet.  Reach through `b.Context` with `cdproto`'s `emulation` and `network` domains.  Here are the common recipes:
+Biloba wraps the window size, device metrics, user agent, and CSS media natively - see [Window Size](#window-size) and [Emulating Media and Devices](#emulating-media-and-devices).  The rest of device and environment **emulation** - geolocation, permissions, offline, locale/timezone - is not wrapped in Go yet.  Reach through `b.Context` with `cdproto`'s `emulation` and `network` domains.  Here are the common recipes:
 
 ```go
 import (
@@ -595,11 +595,6 @@ import (
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 )
-
-// Viewport / device metrics (mobile)
-chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
-	return emulation.SetDeviceMetricsOverride(390, 844, 3, true).Do(ctx) // iPhone-ish: w, h, scale, mobile
-}))
 
 // Geolocation
 chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
@@ -2457,7 +2452,7 @@ Biloba's interactions run on two tracks: the fast default (`b`) is an atomic Jav
 A couple of deliberate gaps are worth calling out, both reachable via [chromedp](#codechromedpcode-breaking-the-fourth-wall) on `b.Context`:
 
 - **Occlusion on the fast track.** Plain `Click` intentionally clicks through overlays (the atomic, no-scroll default).  When you want to *assert* an element is genuinely clickable without paying for full realistic mode, use the deterministic [`b.BeClickable()`](#existence-counting-visibility-and-interactibility) matcher (visible + enabled + topmost-at-its-center); it stays opt-in rather than changing `Click`'s default, so existing click-through behavior is never silently broken.
-- **Native HTML5 drag-and-drop, native `<select>` realism, and device/mobile emulation** are not driven by either track by design - drop to chromedp for those (see the [emulation recipes](#emulation-and-device-conveniences-drop-to-chromedp)).  Both tracks work inside a cross-origin iframe through a [frame handle](#working-with-cross-origin-iframes): `checkout.Realistic().Click(...)` translates the point into the tab and checks that nothing in the embedding page covers it.
+- **Native HTML5 drag-and-drop and native `<select>` realism** are not driven by either track by design - drop to chromedp for those.  Device emulation is separate from both tracks: see [Emulating Media and Devices](#emulating-media-and-devices).  Both tracks work inside a cross-origin iframe through a [frame handle](#working-with-cross-origin-iframes): `checkout.Realistic().Click(...)` translates the point into the tab and checks that nothing in the embedding page covers it.
 
 And one asymmetry to expect when you move a spec from one track to the other: **a `position: fixed` footer or banner is invisible to the fast track and perfectly solid to the realistic one.**  `element.click()` does no hit-testing, so the fast track reaches an element the footer is sitting on top of; real pointer input lands on the footer.  A spec that has passed for months can fail the moment it switches to `b.Realistic()`, because a row near the bottom of a short list is genuinely underneath the footer.  Both tracks are right - the realistic one is telling you a user could not reach that element either.  Scroll it clear of the footer (`b.ScrollIntoView(sel, b.AtTopOffset(px))`) rather than assuming your interaction code is wrong.
 
@@ -3721,11 +3716,33 @@ Once you have a tab, you can resize it using:
 b.SetWindowSize(width, height)
 ```
 
-this also accepts any [`chromedp.EmulateViewportOption`](https://pkg.go.dev/github.com/chromedp/chromedp#EmulateViewportOption) after `height`.  `b.SetWindowSize` automatically sets up a Ginkgo `DeferCleanup` to reset the window size when the spec ends.  You can query the window size of a tab at any time using `b.WindowSize()`.
+this also accepts device options after `height` - see [Emulating Media and Devices](#emulating-media-and-devices).  `b.SetWindowSize` automatically sets up a Ginkgo `DeferCleanup` to reset the window size when the spec ends.  You can query the window size of a tab at any time using `b.WindowSize()`.
 
 One quick hack to speed up a test suite is to use the _smallest_ viable window size to run the tests.  You can then pass `BilobaConfigFailureScreenshotsSize(width, height)` to `ConnectToChrome(...)` to configure the size of Biloba's automatically generated screenshots.  Biloba will scale the window up on failure, take a screenshot, then scale it back down to proceed with other tests.  As an anecdotal data-point a 30% speed-up was observed for a Biloba test suite against a complex web-app running in parallel when the screen-size was minimized in this way.
 
 ### Emulating Media and Devices
+
+`b.SetWindowSize` takes options that turn the tab into an emulated device:
+
+```go
+b.SetWindowSize(1194, 834, b.DeviceScaleFactor(2), b.Mobile(), b.TouchScreen(), b.Landscape())
+```
+
+- `b.DeviceScaleFactor(f)` sets `window.devicePixelRatio`, and screenshots come back at `f` times their CSS size.
+- `b.Mobile()` emulates a mobile browser: the page's `<meta name="viewport">` is honoured, and a page without one lays out 980 CSS pixels wide, as on a phone.
+- `b.TouchScreen()` makes `navigator.maxTouchPoints` positive and the `(pointer: coarse)` and `(hover: none)` media queries match.
+- `b.Landscape()` reports a landscape `screen.orientation`.
+
+These are chromedp's `EmulateViewportOption`s, so chromedp's own options work here too.  When the spec ends the window size and every option are reset together.
+
+`b.SetUserAgent` overrides the user agent a tab reports, both `navigator.userAgent` and the `User-Agent` request header.  A document reads its user agent when it loads, so call it before `b.Navigate`:
+
+```go
+b.SetUserAgent("Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1")
+b.Navigate("/draw")
+```
+
+It is restored when the spec ends.
 
 `b.SetMedia` emulates CSS media for a tab - `prefers-color-scheme`, `prefers-reduced-motion`, and the media type:
 
@@ -3734,7 +3751,7 @@ b.SetMedia(biloba.Media{ColorScheme: "dark", ReducedMotion: "reduce"})
 b.SetMedia(biloba.Media{Type: "print"})
 ```
 
-Each call replaces the tab's previous media (an empty field leaves that aspect to the browser), and the media holds across navigations.  Like `b.SetWindowSize`, `b.SetMedia` registers a `DeferCleanup` that undoes it when the spec ends.  It applies to a tab and every frame in it; calling it on a frame handle fails the spec.
+Each call replaces the tab's previous media (an empty field leaves that aspect to the browser), and the media holds across navigations.  Like `b.SetWindowSize` and `b.SetUserAgent`, `b.SetMedia` registers a `DeferCleanup` that undoes it when the spec ends.  All three apply to a tab and every frame in it; calling them on a frame handle fails the spec.
 
 [Visual assertions](#visual-assertions) render in the tab's media.  `b.InColorSchemes(...)` overrides only the colour scheme for its own captures and then restores the tab's media, so a spec running in dark mode with reduced motion stays that way after it.
 

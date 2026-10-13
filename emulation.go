@@ -128,3 +128,48 @@ func (b *Biloba) clearEmulatedMedia() {
 		b.gt.Printf("Failed to clear leaked media emulation during Prepare():\n  %s\n", err.Error())
 	}
 }
+
+/*
+SetUserAgent() overrides the user agent this tab reports - navigator.userAgent and the User-Agent
+request header - until the spec ends and a DeferCleanup restores the previous one:
+
+	b.SetUserAgent("Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) ...")
+	b.Navigate(url)
+
+Call it before Navigate: a document reads its user agent when it loads.  It applies to a tab, not a
+frame handle.  Combine it with [Biloba.SetWindowSize] and [Biloba.DeviceScaleFactor], [Biloba.Mobile],
+and [Biloba.TouchScreen] to emulate a device.
+
+Read https://onsi.github.io/biloba/#emulating-media-and-devices to learn more about emulation
+*/
+func (b *Biloba) SetUserAgent(userAgent string) {
+	b.gt.Helper()
+	if b.refusedOnFrame("SetUserAgent") {
+		return
+	}
+	b.guardConfig("SetUserAgent")
+	b.lock.Lock()
+	previous := b.state.userAgent
+	b.lock.Unlock()
+	if err := b.setUserAgent(userAgent); err != nil {
+		b.gt.Fatalf("failed to set the user agent: %s", err.Error())
+		return
+	}
+	b.gt.DeferCleanup(func() {
+		if err := b.setUserAgent(previous); err != nil {
+			b.gt.Fatalf("failed to reset the user agent: %s", err.Error())
+		}
+	})
+}
+
+func (b *Biloba) setUserAgent(userAgent string) error {
+	err := b.runEngine("set the user agent", func(ctx context.Context) error {
+		return engine.SetUserAgentContext(ctx, userAgent)
+	})
+	if err == nil {
+		b.lock.Lock()
+		b.state.userAgent = userAgent
+		b.lock.Unlock()
+	}
+	return err
+}

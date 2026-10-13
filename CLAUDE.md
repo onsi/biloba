@@ -76,7 +76,7 @@ Repo-specific testing conventions (see `biloba_suite_test.go`):
 | Image diff + the failure diagnosis it renders | `visual_diff.go` | `visual_diff_internal_test.go` |
 | Screenshots (capture, inline protocols, to-file) | `screenshots.go` | `screenshots_test.go` |
 | Window size | `windows.go` | `windows_test.go` |
-| Emulation (`SetMedia`) | `emulation.go` | `emulation_test.go` |
+| Emulation (`SetMedia`, `SetUserAgent`; device options live with `SetWindowSize`) | `emulation.go` | `emulation_test.go` |
 | XPath DSL | `xpath.go` | `xpath_test.go` |
 | Tabs / spawned tabs, per-tab listener setup | `tabs.go`, `listeners.go` | `tabs_test.go` |
 | Cross-origin iframes (`Frame`/`HaveFrame`/`AllFrames`, frame handles, tab-only refusals) | `frames.go`; engine: `engine/frame.go`, `engine/frame_context.go`, `engine/frame_geometry.go` | `frames_test.go`; `engine/frame*_test.go` |

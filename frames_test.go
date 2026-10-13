@@ -215,6 +215,7 @@ var _ = Describe("Cross-origin iframes", func() {
 			checkout.SetWindowSize(400, 300)
 			checkout.SetMedia(biloba.Media{ColorScheme: "dark"})
 			checkout.AddInitScript(`window.__seed = 42`)
+			checkout.SetUserAgent("frame")
 			checkout.StubRequest("/api/anything", biloba.StubResponse{Body: "stubbed"})
 			checkout.HandleAlertDialogs()
 			checkout.SetCookie(biloba.Cookie{Name: "frame", Value: "cookie"})
@@ -224,6 +225,7 @@ var _ = Describe("Cross-origin iframes", func() {
 				"SetWindowSize acts on the tab, not a frame: call it on the tab that owns this frame",
 				"SetMedia acts on the tab, not a frame: call it on the tab that owns this frame",
 				"AddInitScript acts on the tab, not a frame: call it on the tab that owns this frame",
+				"SetUserAgent acts on the tab, not a frame: call it on the tab that owns this frame",
 				"StubRequest acts on the tab, not a frame: call it on the tab that owns this frame",
 				"HandleAlertDialogs acts on the tab, not a frame: call it on the tab that owns this frame",
 				"SetCookie acts on the tab, not a frame: call it on the tab that owns this frame",

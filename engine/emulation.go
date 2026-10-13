@@ -182,3 +182,9 @@ func (s *Session) resetEmulation(ctx context.Context) error {
 	s.media = Media{}
 	return nil
 }
+
+// SetUserAgentContext overrides the user agent the page reports (navigator.userAgent and the
+// User-Agent request header); the empty string removes the override.
+func SetUserAgentContext(ctx context.Context, userAgent string) error {
+	return chromedp.Run(ctx, emulation.SetUserAgentOverride(userAgent))
+}
