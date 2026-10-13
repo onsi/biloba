@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Features
+
+### Fixes
+
+## 0.18.0
+
 This release brings the Go and TypeScript clients to parity and adds, in both:
 
 - **Emulation**: media, user agent, device metrics, geolocation, permissions, locale, time zone, network conditions, and the HTTP cache, each per tab and undone when a test ends.
