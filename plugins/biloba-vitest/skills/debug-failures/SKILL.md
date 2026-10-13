@@ -46,10 +46,13 @@ These happen before any test runs, so look at the error text, not `BilobaError.c
 
 ## Runner-level diagnostics
 
-Install `installBilobaVitestHooks` from `biloba/vitest` in a Vitest setup file. It captures live tabs after failures, can capture slow-test progress, replays browser errors, and reports `console.assert` at the test boundary.
+Install `installBilobaVitestHooks` from `biloba/vitest` in a Vitest setup file. It captures live tabs after failures, can capture slow-test progress, replays the page's console errors and page errors (`[browser pageerror] Uncaught Error: boom (url:line:column)`, one-based), and reports `console.assert` at the test boundary.
 
 - Call `session.captureDiagnostics()` for an explicit context-wide snapshot.
-- Use `consoleMessages()`/`onConsoleMessage()` and `warnings()`/`onWarning()` for history and live events.
+- Use `consoleMessages()`/`onConsoleMessage()`, `pageErrors()`/`onPageError()`, and `warnings()`/`onWarning()` for history and live events; `expectPageError(expected)` waits for an uncaught exception or unhandled rejection.
+- `consoleMessages()` also holds the messages Chrome logs itself (a failed resource load, an intervention, a violation), marked by a non-empty `source`. They are not replayed by the hooks; look there when a resource failed to load. The `line`/`column` fields of page errors and stack frames are zero-based, as Chrome reports them.
+- A request's `status` and `failure` (`net::ERR_...`) say how it ended; `requests({failed: true})` lists the ones that failed.
+- A timed-out `expectNetworkIdle()` names each request still in flight (method, URL, resource type, age). The one that never finishes is usually a long poll, a stream, or a request the app abandoned.
 - Pass `debugLog` to `connect` for bounded structured daemon/CDP records.
 - Configure screenshots, outlines, artifact paths, inline output, viewport, byte limits, and trajectories under `diagnostics`.
 

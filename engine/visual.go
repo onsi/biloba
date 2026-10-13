@@ -24,11 +24,24 @@ const DefaultMaxScreenshotPixels = 64 << 20
 
 var visualFilenameRE = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
+// ScreenshotCaptureOptions configures a plain capture.  The zero value captures the page as it is,
+// animations and all, the way the Go client's CaptureScreenshot does.  Frozen captures it the way a
+// visual assertion does: it waits for web fonts, then turns off CSS animations and transitions and
+// hides the caret for the duration of the capture.  HideCaret hides only the caret.  Viewport captures
+// exactly what is on screen and never expands the viewport (an element capture refuses an element that
+// is not entirely in view); Clip, in viewport CSS pixels, captures one region of it and applies only
+// to page captures.
 type ScreenshotCaptureOptions struct {
 	Masks       []Selector
-	Animated    bool
+	Frozen      bool
+	HideCaret   bool
+	Viewport    bool
+	Clip        *page.Viewport
 	ColorScheme string
 	MaxBytes    int
+	// comparison marks a visual assertion's capture, which always waits for web fonts: see
+	// compareScreenshot.
+	comparison bool
 }
 
 type Screenshot struct {
@@ -117,8 +130,13 @@ func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, opt
 	if options.ColorScheme != "" && options.ColorScheme != "light" && options.ColorScheme != "dark" {
 		return shot, fmt.Errorf("unsupported color scheme %q: use light or dark", options.ColorScheme)
 	}
-	if response, callErr := RunHandlerAsyncContext(ctx, "fontsReady", ""); callErr != nil || response.Err != "" {
-		return shot, handlerCallError("wait for fonts", response, callErr)
+	if options.Clip != nil && selector != nil {
+		return shot, &Error{Code: CodeInvalidArgument, Operation: "capture screenshot", Message: "clip selects a region of the viewport, so it applies to page captures: an element capture is already clipped to its element"}
+	}
+	if options.Frozen || options.comparison {
+		if response, callErr := RunHandlerAsyncContext(ctx, "fontsReady", ""); callErr != nil || response.Err != "" {
+			return shot, handlerCallError("wait for fonts", response, callErr)
+		}
 	}
 	if options.ColorScheme != "" {
 		defer func() {
@@ -132,7 +150,7 @@ func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, opt
 			return shot, err
 		}
 	}
-	if !options.Animated {
+	if options.Frozen {
 		defer func() {
 			cleanupCtx, cancel := s.visualCleanupContext()
 			defer cancel()
@@ -143,16 +161,47 @@ func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, opt
 		if err = s.applyVisualFreeze(ctx); err != nil {
 			return shot, err
 		}
+	} else if options.HideCaret {
+		defer func() {
+			cleanupCtx, cancel := s.visualCleanupContext()
+			defer cancel()
+			if response, restoreErr := s.runVisualHandler(cleanupCtx, "showCaret", ""); restoreErr != nil || response.Err != "" || !response.Success {
+				err = errors.Join(err, handlerCallError("show caret", response, restoreErr))
+			}
+		}()
+		if response, caretErr := s.runVisualHandler(ctx, "hideCaret", ""); caretErr != nil || response.Err != "" || !response.Success {
+			return shot, handlerCallError("hide caret", response, caretErr)
+		}
 	}
 
 	var pngBytes []byte
 	var originX, originY, cssWidth float64
 	if selector == nil && s.frameID != "" {
+		// A frame's capture is its viewport, clipped out of the tab; a region is a smaller clip at an
+		// offset into it.
 		var clip *page.Viewport
 		clip, err = s.frameViewportClip(ctx)
+		if err == nil && options.Clip != nil {
+			clip, err = ViewportRegionClip(options.Clip, clip.X, clip.Y, clip.Width, clip.Height)
+		}
 		if err == nil {
 			originX, originY, cssWidth = clip.X, clip.Y, clip.Width
 			pngBytes, err = CaptureClipContext(ctx, clip, false)
+		}
+	} else if selector == nil && (options.Viewport || options.Clip != nil) {
+		var viewport *page.Viewport
+		viewport, err = VisualViewportContext(ctx)
+		if err == nil {
+			originX, originY, cssWidth = viewport.X, viewport.Y, viewport.Width
+			if options.Clip == nil {
+				pngBytes, err = CaptureViewportContext(ctx, nil)
+			} else {
+				var clip *page.Viewport
+				if clip, err = ViewportRegionClip(options.Clip, viewport.X, viewport.Y, viewport.Width, viewport.Height); err == nil {
+					originX, originY, cssWidth = clip.X, clip.Y, clip.Width
+					pngBytes, err = CaptureClipContext(ctx, clip, false)
+				}
+			}
 		}
 	} else if selector == nil {
 		pngBytes, err = CapturePageContext(ctx, &cssWidth)
@@ -184,6 +233,9 @@ func (s *Session) captureScreenshot(ctx context.Context, selector *Selector, opt
 		clip := EnclosingClip(&page.Viewport{X: x, Y: y, Width: width, Height: height, Scale: 1})
 		originX, originY, cssWidth = clip.X, clip.Y, clip.Width
 		inViewport, _ := box["inViewport"].(bool)
+		if options.Viewport && !inViewport {
+			return shot, &Error{Code: CodeActionFailed, Operation: "capture screenshot", Message: fmt.Sprintf("element %s is not entirely in the viewport, and a viewport capture never resizes the viewport to reach the rest of it: scroll it into view first", selector.Description())}
+		}
 		pngBytes, err = CaptureClipContext(ctx, clip, !inViewport)
 		if err == nil && !inViewport {
 			stillThere, existsErr := RunHandlerContext(ctx, "exists", selector.Encoded())
@@ -295,7 +347,7 @@ func (s *Session) compareScreenshot(ctx context.Context, name string, target Scr
 		}
 		baselinePath := filepath.Join(options.BaselineDir, relative)
 		entry := VisualSchemeResult{Scheme: scheme, BaselinePath: absolutePath(baselinePath)}
-		captureOptions := ScreenshotCaptureOptions{Masks: options.Masks, Animated: options.Animated, ColorScheme: scheme, MaxBytes: options.MaxBytes}
+		captureOptions := ScreenshotCaptureOptions{Masks: options.Masks, Frozen: !options.Animated, ColorScheme: scheme, MaxBytes: options.MaxBytes, comparison: true}
 		var shot Screenshot
 		settled := true
 		if options.Update {

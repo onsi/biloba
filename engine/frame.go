@@ -446,9 +446,21 @@ func (s *Session) acceptsDocumentEvent(id cdp.FrameID, loader cdp.LoaderID) bool
 		(id == s.frameID && loader == s.frameLoaderID && s.frameWorldCurrent()))
 }
 
+// acceptsConsoleEvent scopes a console call or an exception to the session's document: a frame
+// handle's own world, or for a tab anything but the document the last Prepare left behind (see
+// documentBoundary).
 func (s *Session) acceptsConsoleEvent(id runtime.ExecutionContextID) bool {
-	return s.eventsEnabled.Load() && (s.frameID == "" ||
+	return s.eventsEnabled.Load() && ((s.frameID == "" && !s.boundary.staleContext(id)) ||
 		(id == s.frameWorld.id && s.frameWorldCurrent()))
+}
+
+// acceptsPageError scopes an uncaught exception the way acceptsConsoleEvent scopes a console call: by
+// the execution context it was thrown in.
+func (s *Session) acceptsPageError(event *runtime.EventExceptionThrown) bool {
+	if event.ExceptionDetails == nil {
+		return s.eventsEnabled.Load() && s.frameID == ""
+	}
+	return s.acceptsConsoleEvent(event.ExceptionDetails.ExecutionContextID)
 }
 
 func (s *Session) frameWorldCurrent() bool {

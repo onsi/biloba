@@ -30,6 +30,7 @@ import {
   type TabQuery,
   type WindowSize,
   type ConsoleMessage,
+  type PageError,
   type DeviceMetrics,
   type Geolocation,
   type Permission,
@@ -64,6 +65,8 @@ import {
   type XPathExpression,
   type ScreenshotBytesOptions,
   type ScreenshotPathOptions,
+  type PageScreenshotBytesOptions,
+  type PageScreenshotPathOptions,
   type ScreenshotWarning,
   type VisualResult,
   type VisualScreenshotOptions,
@@ -252,10 +255,9 @@ class ClientSession implements Session {
   readonly #diagnostics: ResolvedDiagnosticsPolicy;
   #warningCount = 0;
   readonly #callbackIDs = new Set<string>();
-  readonly #consoleListeners = new Set<(message: ConsoleMessage) => void>();
-  readonly #warningListeners = new Set<(warning: BilobaWarning) => void>();
-  readonly #liveSubscriptions = new Map<"console" | "warning", Promise<string>>();
-  readonly #liveTeardown = new Map<"console" | "warning", Promise<void>>();
+  readonly #liveListeners: {readonly [K in LiveEventKind]: Set<(value: LiveEventPayload[K]) => void>} = {console: new Set(), pageError: new Set(), warning: new Set()};
+  readonly #liveSubscriptions = new Map<LiveEventKind, Promise<string>>();
+  readonly #liveTeardown = new Map<LiveEventKind, Promise<void>>();
   #warningFlush: Promise<void> | undefined;
   #eventGeneration = 0;
   closed = false;
@@ -295,9 +297,9 @@ class ClientSession implements Session {
     return this.#registerSibling(response);
   }
 
-  async captureScreenshot(options?: ScreenshotBytesOptions): Promise<Uint8Array>;
-  async captureScreenshot(options: ScreenshotPathOptions): Promise<string>;
-  async captureScreenshot(options: ScreenshotBytesOptions | ScreenshotPathOptions = {}): Promise<Uint8Array | string> {
+  async captureScreenshot(options?: PageScreenshotBytesOptions): Promise<Uint8Array>;
+  async captureScreenshot(options: PageScreenshotPathOptions): Promise<string>;
+  async captureScreenshot(options: PageScreenshotBytesOptions | PageScreenshotPathOptions = {}): Promise<Uint8Array | string> {
     return await this.captureScreenshotTarget(undefined, options);
   }
 
@@ -321,9 +323,11 @@ class ClientSession implements Session {
     return await this.expectScreenshotTarget(undefined, name, options);
   }
 
-  async captureScreenshotTarget(locator: WireLocator | undefined, options: ScreenshotBytesOptions | ScreenshotPathOptions): Promise<Uint8Array | string> {
+  async captureScreenshotTarget(locator: WireLocator | undefined, options: PageScreenshotBytesOptions | PageScreenshotPathOptions): Promise<Uint8Array | string> {
     this.#assertOpen();
-    assertOptionKeys(options, "captureScreenshot", new Set(["signal", "timeoutMs", "output", "name", "mask", "animated", "colorScheme", "maxBytes"]));
+    if ("animated" in options) throw new BilobaError({code: "INVALID_ARGUMENT", message: "captureScreenshot no longer takes animated: a capture is not frozen unless you pass frozen: true"});
+    if (locator !== undefined && "clip" in options) throw new BilobaError({code: "INVALID_ARGUMENT", message: "captureScreenshot clip selects a region of the viewport, so it applies to page captures: a locator capture is already clipped to its element"});
+    assertOptionKeys(options, "captureScreenshot", new Set(["signal", "timeoutMs", "output", "name", "mask", "frozen", "hideCaret", "viewport", "clip", "colorScheme", "maxBytes"]));
     const limit = this.#screenshotLimit(options.maxBytes);
     const output = options.output === "path" ? "PATH" : "BYTES";
     const response = await this.#transport.screenshot({
@@ -334,7 +338,10 @@ class ClientSession implements Session {
         output,
         ...(options.name !== undefined && {name: options.name}),
         ...(options.mask !== undefined && {masks: options.mask.map((mask) => wireScreenshotSubject(this, mask))}),
-        ...(options.animated !== undefined && {animated: options.animated}),
+        ...(options.frozen && {frozen: true}),
+        ...(options.hideCaret && {hideCaret: true}),
+        ...(options.viewport && {viewport: true}),
+        ...(options.clip !== undefined && {clip: {x: options.clip.x, y: options.clip.y, width: options.clip.width, height: options.clip.height}}),
         ...(options.colorScheme !== undefined && {colorScheme: options.colorScheme}),
         ...(options.maxBytes !== undefined && {maxBytes: limit}),
       },
@@ -594,6 +601,13 @@ class ClientSession implements Session {
   async accessibilityOutline(options: CommandOptions = {}): Promise<string> { return await this.#lifecycleValue<string>({kind: "ACCESSIBILITY_OUTLINE"}, options); }
   async consoleMessages(options: CommandOptions = {}): Promise<readonly ConsoleMessage[]> { return await this.#lifecycleValue<readonly ConsoleMessage[]>({kind: "CONSOLE_MESSAGES"}, options); }
   onConsoleMessage(listener: (message: ConsoleMessage) => void): () => void { return this.#addLiveListener("console", listener); }
+  async pageErrors(options: CommandOptions = {}): Promise<readonly PageError[]> { return await this.#lifecycleValue<readonly PageError[]>({kind: "PAGE_ERRORS"}, options); }
+  onPageError(listener: (pageError: PageError) => void): () => void { return this.#addLiveListener("pageError", listener); }
+  async expectPageError(expected: ExpectedValue, options: PollOptions = {}): Promise<PageError> {
+    const response = await this.lifecycleOperation({kind: "PAGE_ERRORS"}, options, wireExpectation(expected));
+    operationResult(response, "page error assertion", new Error().stack);
+    return parseJson(response.observedJson) as PageError;
+  }
   onWarning(listener: (warning: BilobaWarning) => void): () => void { return this.#addLiveListener("warning", listener); }
   async expectConsoleMessage(expected: ExpectedValue, options: PollOptions & {type?: string} = {}): Promise<ConsoleMessage> {
     const {type, ...poll} = options;
@@ -836,24 +850,21 @@ class ClientSession implements Session {
   }
   #clearCallbacks(): void { for (const id of this.#callbackIDs) this.#transport.removeResponseCallback(id); this.#callbackIDs.clear(); }
 
-  #addLiveListener(kind: "console", listener: (message: ConsoleMessage) => void): () => void;
-  #addLiveListener(kind: "warning", listener: (warning: BilobaWarning) => void): () => void;
-  #addLiveListener(kind: "console" | "warning", listener: ((message: ConsoleMessage) => void) | ((warning: BilobaWarning) => void)): () => void {
+  #addLiveListener<K extends LiveEventKind>(kind: K, listener: (value: LiveEventPayload[K]) => void): () => void {
     this.#assertOpen();
-    const listeners = kind === "console" ? this.#consoleListeners : this.#warningListeners;
-    (listeners as Set<typeof listener>).add(listener);
+    const listeners = this.#liveListeners[kind] as Set<(value: LiveEventPayload[K]) => void>;
+    listeners.add(listener);
     if (!this.#liveSubscriptions.has(kind)) {
       const pending = (this.#liveTeardown.get(kind) ?? Promise.resolve()).then(async () => await this.#transport.subscribeEvents({sessionId: this.id, types: [kind]})).then(({subscriptionId}) => {
         this.#transport.registerEventListener(subscriptionId, (event, envelope) => {
           if ((envelope.generation ?? 0) < this.#eventGeneration) return;
           this.#eventGeneration = Math.max(this.#eventGeneration, envelope.generation ?? 0);
-          const current = kind === "console" ? this.#consoleListeners : this.#warningListeners;
           if (event === "eventsDropped") {
             const warning = envelope.payload as BilobaWarning;
-            for (const callback of this.#warningListeners) { try { callback(warning); } catch { /* listeners are isolated */ } }
+            for (const callback of this.#liveListeners.warning) { try { callback(warning); } catch { /* listeners are isolated */ } }
             return;
           }
-          for (const callback of current as Set<(value: unknown) => void>) { try { callback(envelope.payload); } catch { /* listeners are isolated */ } }
+          for (const callback of this.#liveListeners[kind] as Set<(value: unknown) => void>) { try { callback(envelope.payload); } catch { /* listeners are isolated */ } }
         });
         return subscriptionId;
       });
@@ -861,12 +872,12 @@ class ClientSession implements Session {
     }
     let removed = false;
     return () => {
-      if (removed) return; removed = true; (listeners as Set<typeof listener>).delete(listener);
+      if (removed) return; removed = true; listeners.delete(listener);
       if (listeners.size === 0) void this.#removeLiveSubscription(kind);
     };
   }
 
-  async #removeLiveSubscription(kind: "console" | "warning"): Promise<void> {
+  async #removeLiveSubscription(kind: LiveEventKind): Promise<void> {
     const pending = this.#liveSubscriptions.get(kind); if (!pending) return; this.#liveSubscriptions.delete(kind);
     const teardown = (async () => { try { const id = await pending; this.#transport.removeEventListener(id); await this.#transport.unsubscribeEvents({subscriptionId: id}); } catch { /* teardown is best effort */ } })();
     this.#liveTeardown.set(kind, teardown);
@@ -874,7 +885,7 @@ class ClientSession implements Session {
     if (this.#liveTeardown.get(kind) === teardown) this.#liveTeardown.delete(kind);
   }
 
-  #clearLiveListeners(): void { this.#consoleListeners.clear(); this.#warningListeners.clear(); void this.#removeLiveSubscription("console"); void this.#removeLiveSubscription("warning"); }
+  #clearLiveListeners(): void { for (const kind of liveEventKinds) { this.#liveListeners[kind].clear(); void this.#removeLiveSubscription(kind); } }
 
   async url(options: CommandOptions = {}): Promise<string> { return await this.#lifecycleValue<string>({kind: "URL"}, options); }
 
@@ -1050,10 +1061,15 @@ class ClientNetworkHandler implements NetworkHandler {
   async remove(options: CommandOptions = {}): Promise<void> { await this.transport.eventful({sessionId: this.sessionId, operation: {kind: "REMOVE_NETWORK_HANDLER", id: this.id}}, options); if (this.callbackId) { this.transport.removeResponseCallback(this.callbackId); this.onCallbackRemoved?.(this.callbackId); } }
 }
 
+type LiveEventPayload = {console: ConsoleMessage; pageError: PageError; warning: BilobaWarning};
+type LiveEventKind = keyof LiveEventPayload;
+const liveEventKinds: readonly LiveEventKind[] = ["console", "pageError", "warning"];
+
 function eventfulQuery(query: DialogQuery | DownloadQuery | RequestQuery | ResponseQuery): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(query)) {
     if (value === undefined) continue;
+    if (name === "failed") { if (value === true) result.failed = true; continue; }
     if (name === "content" && value instanceof Uint8Array) { result.contentBase64 = encodeBinaryBody(value); continue; }
     result[name] = typeof value === "string" && name === "type" ? value : wireExpectation(value as ExpectedValue);
   }
@@ -1129,9 +1145,9 @@ function visualFailureMessage(name: string, visual: VisualResult): string {
 
 function visualArtifactPaths(visual: VisualResult): readonly string[] { return [...new Set(visual.schemes.flatMap((scheme) => [scheme.baselinePath, scheme.actualPath, scheme.diffPath].filter((path): path is string => Boolean(path))))]; }
 function decodeBytes(value: string): Uint8Array { return decodeBinaryBody(value); }
-type WireNetworkRecord = {url: string; method?: string; status?: number; headers: readonly HeaderEntry[]; resourceType: string};
+type WireNetworkRecord = {url: string; method?: string; status?: number; failure?: string; headers: readonly HeaderEntry[]; resourceType: string};
 function headerMap(headers: readonly HeaderEntry[]): Readonly<Record<string, string>> { return Object.fromEntries(headers.map(({name, value}) => [name, value])); }
-function networkRequest(value: WireNetworkRecord): NetworkRequest { return {url: value.url, method: value.method ?? "", headers: value.headers, headerMap: headerMap(value.headers), resourceType: value.resourceType}; }
+function networkRequest(value: WireNetworkRecord): NetworkRequest { return {url: value.url, method: value.method ?? "", headers: value.headers, headerMap: headerMap(value.headers), resourceType: value.resourceType, status: value.status ?? 0, failure: value.failure ?? ""}; }
 function networkResponse(value: WireNetworkRecord): NetworkResponse { return {url: value.url, status: value.status ?? 0, headers: value.headers, headerMap: headerMap(value.headers), resourceType: value.resourceType}; }
 function interceptedResponse(value: unknown): InterceptedResponse { const response = value as {url: string; status: number; headers: readonly HeaderEntry[]; bodyBase64: string}; return {url: response.url, status: response.status, headers: response.headers, headerMap: headerMap(response.headers), body: decodeBytes(response.bodyBase64)}; }
 function definedEntries<T extends object>(value: T): {[K in keyof T]?: Exclude<T[K], undefined>} { return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as {[K in keyof T]?: Exclude<T[K], undefined>}; }

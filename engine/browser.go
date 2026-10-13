@@ -15,6 +15,7 @@ import (
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/inspector"
+	cdplog "github.com/chromedp/cdproto/log"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
@@ -455,27 +456,30 @@ func (b *Browser) listenToSession(session *Session) {
 	// calls neither succeed nor fail, they simply never answer.  Catching the announcement is the
 	// only way to tell a crashed page from a slow one.
 	chromedp.ListenTarget(session.ctx, func(event any) {
+		session.boundary.observe(event)
 		if _, ok := event.(*inspector.EventTargetCrashed); ok {
 			session.markCrashed()
 		}
 		if request, ok := event.(*network.EventRequestWillBeSent); ok {
-			if session.acceptsDocumentEvent(request.FrameID, request.LoaderID) {
+			if session.acceptsDocumentEvent(request.FrameID, request.LoaderID) && !session.boundary.staleRequest(request.LoaderID, request.RequestID) {
 				session.recordRequest(request)
 				if request.Type != network.ResourceTypeWebSocket {
-					session.trackRequest(request.RequestID)
+					session.trackRequest(request)
 				}
 			}
 		}
 		if response, ok := event.(*network.EventResponseReceived); ok {
-			if session.acceptsDocumentEvent(response.FrameID, response.LoaderID) {
+			if session.acceptsDocumentEvent(response.FrameID, response.LoaderID) && !session.boundary.staleRequest(response.LoaderID, response.RequestID) {
 				session.recordResponse(response)
 			}
+			session.recordResponseStatus(response)
 		}
 		if finished, ok := event.(*network.EventLoadingFinished); ok {
 			session.finishRequest(finished.RequestID)
 		}
 		if failed, ok := event.(*network.EventLoadingFailed); ok {
 			session.finishRequest(failed.RequestID)
+			session.recordRequestOutcome(failed.RequestID, 0, RequestFailureText(failed))
 		}
 		if paused, ok := event.(*fetch.EventRequestPaused); ok {
 			session.handlePausedEvent(paused)
@@ -484,6 +488,17 @@ func (b *Browser) listenToSession(session *Session) {
 			if session.acceptsConsoleEvent(console.ExecutionContextID) {
 				session.recordConsoleMessage(console)
 			}
+		}
+		if thrown, ok := event.(*runtime.EventExceptionThrown); ok {
+			if session.acceptsPageError(thrown) {
+				session.recordPageError(thrown)
+			}
+		}
+		// Chrome's own messages carry no execution context to scope them to a frame document, so, as in
+		// the Go client, they belong to the tab.  An out-of-process frame's session listens to its own
+		// target here, and that target's messages are not recorded.
+		if entry, ok := event.(*cdplog.EventEntryAdded); ok && entry.Entry != nil && session.frameID == "" && session.eventsEnabled.Load() && !session.boundary.staleLogEntry(entry.Entry) {
+			session.recordLogEntry(entry)
 		}
 		if dialog, ok := event.(*page.EventJavascriptDialogOpening); ok {
 			session.handleDialog(dialog)
@@ -497,7 +512,7 @@ func (b *Browser) listenToSession(session *Session) {
 	})
 }
 
-// listenToFrameDocument records a same-process frame's own console messages and requests, so a frame
+// listenToFrameDocument records a same-process frame's own console messages, page errors, and requests, so a frame
 // handle observes its document whichever process the frame lives in (an out-of-process frame gets
 // listenToSession on its own target). The tab shares the renderer attachment and records these events
 // too; the handle keeps only its document's. Dialogs and downloads stay with the tab, as does
@@ -509,21 +524,27 @@ func (b *Browser) listenToFrameDocument(session *Session) {
 			if session.acceptsConsoleEvent(event.ExecutionContextID) {
 				session.recordConsoleMessage(event)
 			}
+		case *runtime.EventExceptionThrown:
+			if session.acceptsPageError(event) {
+				session.recordPageError(event)
+			}
 		case *network.EventRequestWillBeSent:
 			if session.acceptsDocumentEvent(event.FrameID, event.LoaderID) {
 				session.recordRequest(event)
 				if event.Type != network.ResourceTypeWebSocket {
-					session.trackRequest(event.RequestID)
+					session.trackRequest(event)
 				}
 			}
 		case *network.EventResponseReceived:
 			if session.acceptsDocumentEvent(event.FrameID, event.LoaderID) {
 				session.recordResponse(event)
 			}
+			session.recordResponseStatus(event)
 		case *network.EventLoadingFinished:
 			session.finishRequest(event.RequestID)
 		case *network.EventLoadingFailed:
 			session.finishRequest(event.RequestID)
+			session.recordRequestOutcome(event.RequestID, 0, RequestFailureText(event))
 		}
 	})
 }

@@ -192,9 +192,30 @@ export type ScreenshotColorScheme = "light" | "dark";
 export type ScreenshotSubject = Locator | string;
 export interface ScreenshotRenderingOptions {
   mask?: readonly ScreenshotSubject[] | undefined;
-  animated?: boolean | undefined;
+  /**
+   * Capture the page the way expectScreenshot does: wait for web fonts, then turn off CSS animations
+   * and transitions and hide the text caret for the duration of the capture.  A capture is not frozen
+   * unless you ask.
+   */
+  frozen?: boolean | undefined;
+  /** Hide the blinking text caret for the capture and leave everything else running. */
+  hideCaret?: boolean | undefined;
+  /**
+   * Capture exactly what is on screen, never expanding the viewport.  On a locator, refuses an element
+   * that is not entirely in view.
+   */
+  viewport?: boolean | undefined;
   colorScheme?: ScreenshotColorScheme | undefined;
   maxBytes?: number | undefined;
+}
+/** A region of the viewport, in CSS pixels from its top-left corner (the frame's viewport, on a frame handle). */
+export interface ScreenshotClip {readonly x: number; readonly y: number; readonly width: number; readonly height: number}
+export interface PageScreenshotOptions {
+  /**
+   * Capture one region of the viewport.  Like viewport it never resizes the viewport; a region that
+   * reaches outside it is an INVALID_ARGUMENT error.
+   */
+  clip?: ScreenshotClip | undefined;
 }
 export interface ScreenshotBytesOptions extends ScreenshotRenderingOptions, WaitingCommandOptions {
   output?: "bytes" | undefined;
@@ -204,6 +225,8 @@ export interface ScreenshotPathOptions extends ScreenshotRenderingOptions, Waiti
   output: "path";
   name?: string | undefined;
 }
+export interface PageScreenshotBytesOptions extends ScreenshotBytesOptions, PageScreenshotOptions {}
+export interface PageScreenshotPathOptions extends ScreenshotPathOptions, PageScreenshotOptions {}
 export interface VisualScreenshotOptions extends PollOptions {
   mask?: readonly ScreenshotSubject[] | undefined;
   animated?: boolean | undefined;
@@ -358,8 +381,20 @@ export type DiagnosticsArtifactErrorCode = BilobaErrorCode | "IO_ERROR" | "ACTIO
 export interface DiagnosticsArtifactError {readonly artifact: DiagnosticsArtifact; readonly code: DiagnosticsArtifactErrorCode; readonly message: string}
 export interface TabDiagnostics {readonly sessionId?: string; readonly targetId: string; readonly title: string; readonly screenshotPath?: string; readonly screenshot?: Uint8Array; readonly outlinePath?: string; readonly domOutline?: string; readonly errors: readonly DiagnosticsArtifactError[]}
 export interface ContextDiagnostics {readonly purpose: DiagnosticsPurpose; readonly artifactDir?: string; readonly tabs: readonly TabDiagnostics[]}
+/** One frame of a page stack trace.  line and column are zero-based, as Chrome reports them. */
 export interface ConsoleStackFrame {readonly url: string; readonly functionName: string; readonly line: number; readonly column: number}
-export interface ConsoleMessage {readonly type: string; readonly text: string; readonly args: readonly unknown[]; readonly timestamp: string; readonly stack: readonly ConsoleStackFrame[]}
+/**
+ * A console message.  source is "" for the page's own console calls; for a message Chrome logged
+ * itself (an intervention, a violation, a failed resource load, a deprecation) it names the origin
+ * ("network", "intervention", ...) and type is the level ("debug", "info", "warning", "error").
+ */
+export interface ConsoleMessage {readonly type: string; readonly source: string; readonly text: string; readonly args: readonly unknown[]; readonly timestamp: string; readonly stack: readonly ConsoleStackFrame[]}
+/**
+ * An uncaught exception or unhandled promise rejection.  message reads the way DevTools prints it
+ * ("Uncaught TypeError: x is not a function"); url, line, and column locate where it was thrown, and
+ * line and column are zero-based, as Chrome reports them.
+ */
+export interface PageError {readonly message: string; readonly url: string; readonly line: number; readonly column: number; readonly stack: readonly ConsoleStackFrame[]; readonly timestamp: string}
 export type DialogType = "alert" | "beforeunload" | "confirm" | "prompt";
 export interface Dialog {readonly type: DialogType; readonly message: string; readonly defaultPrompt: string; readonly accepted: boolean; readonly promptText: string; readonly autoHandled: boolean}
 export interface DialogQuery {readonly type?: DialogType | undefined; readonly message?: ExpectedValue | undefined}
@@ -371,9 +406,16 @@ export type WarningSink = (warning: Warning) => void;
 export type DownloadState = "active" | "complete" | "cancelled";
 export interface Download {readonly id: string; readonly url: string; readonly filename: string; readonly state: DownloadState; readonly receivedBytes: number; readonly totalBytes: number; readonly startedAt: number; readonly completedAt?: number; content(options?: CommandOptions & {maxBytes?: number | undefined}): Promise<Uint8Array>; cancel(options?: CommandOptions): Promise<void>}
 export interface DownloadQuery {readonly state?: DownloadState | undefined; readonly filename?: ExpectedValue | undefined; readonly url?: ExpectedValue | undefined; readonly content?: Uint8Array | undefined; readonly contentText?: ExpectedValue | undefined}
-export interface RequestQuery {readonly url?: ExpectedValue | undefined; readonly method?: ExpectedValue | undefined; readonly resourceType?: ExpectedValue | undefined}
+/** status matches the response status (0 while there is none); failed keeps only requests that failed. */
+export interface RequestQuery {readonly url?: ExpectedValue | undefined; readonly method?: ExpectedValue | undefined; readonly resourceType?: ExpectedValue | undefined; readonly status?: ExpectedValue | undefined; readonly failed?: boolean | undefined}
 export interface HeaderEntry {readonly name: string; readonly value: string}
-export interface NetworkRequest {readonly url: string; readonly method: string; readonly headers: readonly HeaderEntry[]; readonly headerMap: Readonly<Record<string, string>>; readonly resourceType: string}
+/**
+ * A request the session observed.  status is the response's HTTP status: 0 until the headers arrive,
+ * and 0 for a request that failed without one.  A redirect is one request per hop, and a hop that was
+ * redirected has the redirect's status.  failure is "" unless the request failed, when it is Chrome's
+ * error text (net::ERR_CONNECTION_REFUSED, ...).  An HTTP error status is not a failure.
+ */
+export interface NetworkRequest {readonly url: string; readonly method: string; readonly headers: readonly HeaderEntry[]; readonly headerMap: Readonly<Record<string, string>>; readonly resourceType: string; readonly status: number; readonly failure: string}
 export interface ResponseQuery {readonly url?: ExpectedValue | undefined; readonly status?: ExpectedValue | undefined}
 export interface NetworkResponse {readonly url: string; readonly status: number; readonly headers: readonly HeaderEntry[]; readonly headerMap: Readonly<Record<string, string>>; readonly resourceType: string}
 export interface RequestOverride {readonly url?: string | undefined; readonly method?: string | undefined; readonly headers?: readonly HeaderEntry[] | undefined; readonly body?: Uint8Array | undefined}
@@ -649,8 +691,8 @@ export interface Session {
   prepare(options?: WaitingCommandOptions): Promise<{readonly invalidatedSessionIds: readonly string[]}>;
   navigate(url: string, options?: WaitingCommandOptions): Promise<void>;
   navigateWithStatus(url: string, expectedStatus: number, options?: WaitingCommandOptions): Promise<void>;
-  captureScreenshot(options?: ScreenshotBytesOptions): Promise<Uint8Array>;
-  captureScreenshot(options: ScreenshotPathOptions): Promise<string>;
+  captureScreenshot(options?: PageScreenshotBytesOptions): Promise<Uint8Array>;
+  captureScreenshot(options: PageScreenshotPathOptions): Promise<string>;
   expectScreenshot(name: string, options?: VisualScreenshotOptions): Promise<VisualResult>;
   captureDiagnostics(options?: CaptureDiagnosticsOptions): Promise<ContextDiagnostics>;
   setCookies(cookies: readonly Cookie[], options?: CommandOptions): Promise<void>;
@@ -675,6 +717,9 @@ export interface Session {
   warnings(options?: CommandOptions): Promise<readonly BilobaWarning[]>;
   onWarning(listener: (warning: BilobaWarning) => void): () => void;
   expectConsoleMessage(expected: ExpectedValue, options?: PollOptions & {type?: string | undefined}): Promise<ConsoleMessage>;
+  pageErrors(options?: CommandOptions): Promise<readonly PageError[]>;
+  onPageError(listener: (pageError: PageError) => void): () => void;
+  expectPageError(expected: ExpectedValue, options?: PollOptions): Promise<PageError>;
   setDeviceMetrics(metrics: DeviceMetrics, options?: CommandOptions): Promise<void>;
   clearDeviceMetrics(options?: CommandOptions): Promise<void>;
   setGeolocation(location: Geolocation, options?: CommandOptions): Promise<void>;

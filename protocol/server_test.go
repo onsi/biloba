@@ -118,6 +118,32 @@ var _ = Describe("driver protocol", func() {
 			Operation: &protocol.WireEventfulOperation{Kind: "DIALOGS"},
 		}, nil)).To(Succeed())
 		Expect(recorder.operation.Kind).To(Equal(protocol.EventfulDialogs))
+
+		Expect(client.call("eventful", protocol.EventfulRequest{
+			SessionID: opened.SessionID,
+			Operation: &protocol.WireEventfulOperation{Kind: "REQUESTS", Status: &protocol.WireExpectation{Kind: "EQUAL", ExpectedJSON: "404"}, Failed: true},
+		}, nil)).To(Succeed())
+		Expect(recorder.operation.Kind).To(Equal(protocol.EventfulRequests))
+		Expect(recorder.operation.Status).NotTo(BeNil())
+		Expect(recorder.operation.Status.Kind).To(Equal(protocol.ExpectEqual))
+		Expect(recorder.operation.Failed).To(BeTrue())
+	})
+
+	It("carries page-error lifecycle reads and accepts pageError event subscriptions", func() {
+		recorder := &recordingSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+		Expect(client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "PAGE_ERRORS"}}, nil)).To(Succeed())
+		Expect(recorder.lastOperation().Lifecycle.Kind).To(Equal(protocol.LifecyclePageErrors))
+
+		events := &eventSession{events: make(chan protocol.SessionEvent, 1)}
+		server := protocol.NewServer(&fakeBackend{custom: events})
+		openedValue, openErr := server.Dispatch(context.Background(), "openSession", json.RawMessage(`{}`))
+		Expect(openErr).To(BeNil())
+		_, subscribeErr := server.Dispatch(context.Background(), "subscribeEvents", mustJSON(protocol.SubscribeEventsRequest{SessionID: openedValue.(protocol.OpenSessionResponse).SessionID, Types: []string{"pageError"}}))
+		Expect(subscribeErr).To(BeNil())
 	})
 
 	It("validates and carries screenshot capture and comparison operations", func() {
@@ -139,6 +165,14 @@ var _ = Describe("driver protocol", func() {
 		Expect(capture.Target.Locator.Kind).To(Equal(protocol.LocatorTestID))
 		Expect(capture.Masks).To(HaveLen(1))
 		Expect(capture.MaxBytes).To(Equal(1024))
+
+		Expect(client.call("screenshot", protocol.ScreenshotRequest{SessionID: opened.SessionID, Operation: &protocol.WireScreenshotOperation{
+			Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Frozen: true, HideCaret: true, Viewport: true,
+			Clip: &protocol.WireScreenshotClip{X: 1, Y: 2, Width: 30, Height: 40},
+		}}, nil)).To(Succeed())
+		options := recorder.lastOperation().Screenshot
+		Expect([]bool{options.Frozen, options.HideCaret, options.Viewport}).To(Equal([]bool{true, true, true}))
+		Expect(options.Clip).To(Equal(&protocol.ScreenshotClip{X: 1, Y: 2, Width: 30, Height: 40}))
 
 		Expect(client.call("screenshot", protocol.ScreenshotRequest{SessionID: opened.SessionID, Operation: &protocol.WireScreenshotOperation{
 			Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "checkout/receipt", Masks: []protocol.WireLocator{{Kind: "CSS", Value: ".clock"}},
@@ -268,6 +302,13 @@ var _ = Describe("driver protocol", func() {
 		Entry("capture pixel tolerance", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, PixelTolerance: &pixelNegative}, protocol.PollOptions{}),
 		Entry("capture channel tolerance", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, ChannelTolerance: &channelNegative}, protocol.PollOptions{}),
 		Entry("expect capture scheme", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x", ColorScheme: "dark"}, protocol.PollOptions{}),
+		Entry("capture animated", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Animated: true}, protocol.PollOptions{}),
+		Entry("element clip", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "ELEMENT", Locator: &protocol.WireLocator{Kind: "CSS", Value: "body"}}, Clip: &protocol.WireScreenshotClip{Width: 1, Height: 1}}, protocol.PollOptions{}),
+		Entry("empty clip", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Clip: &protocol.WireScreenshotClip{Width: 0, Height: 1}}, protocol.PollOptions{}),
+		Entry("negative clip origin", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Clip: &protocol.WireScreenshotClip{X: -1, Width: 1, Height: 1}}, protocol.PollOptions{}),
+		Entry("expect frozen", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x", Frozen: true}, protocol.PollOptions{}),
+		Entry("expect viewport", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x", Viewport: true}, protocol.PollOptions{}),
+		Entry("expect clip", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x", Clip: &protocol.WireScreenshotClip{Width: 1, Height: 1}}, protocol.PollOptions{}),
 		Entry("raw poll mode", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}}, protocol.PollOptions{Mode: "EVENTUALLY"}),
 		Entry("visual consistently", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x"}, protocol.PollOptions{Mode: "CONSISTENTLY"}),
 	)

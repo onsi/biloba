@@ -91,11 +91,11 @@ func CaptureViewportContext(ctx context.Context, region *page.Viewport) ([]byte,
 	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
 		capture := page.CaptureScreenshot().WithFromSurface(true).WithCaptureBeyondViewport(false).WithFormat(page.CaptureScreenshotFormatPng)
 		if region != nil {
-			_, _, _, _, cssVisualViewport, _, err := page.GetLayoutMetrics().Do(runCtx)
+			viewport, err := visualViewport(runCtx)
 			if err != nil {
 				return err
 			}
-			clip, err := ViewportRegionClip(region, cssVisualViewport.PageX, cssVisualViewport.PageY, cssVisualViewport.ClientWidth, cssVisualViewport.ClientHeight)
+			clip, err := ViewportRegionClip(region, viewport.X, viewport.Y, viewport.Width, viewport.Height)
 			if err != nil {
 				return err
 			}
@@ -106,6 +106,26 @@ func CaptureViewportContext(ctx context.Context, region *page.Viewport) ([]byte,
 		return err
 	}))
 	return img, err
+}
+
+// VisualViewportContext reports the visual viewport: where its top-left corner sits in page
+// coordinates (X, Y) and its size, all in CSS pixels.
+func VisualViewportContext(ctx context.Context) (*page.Viewport, error) {
+	var viewport *page.Viewport
+	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
+		var err error
+		viewport, err = visualViewport(runCtx)
+		return err
+	}))
+	return viewport, err
+}
+
+func visualViewport(ctx context.Context) (*page.Viewport, error) {
+	_, _, _, _, cssVisualViewport, _, err := page.GetLayoutMetrics().Do(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &page.Viewport{X: cssVisualViewport.PageX, Y: cssVisualViewport.PageY, Width: cssVisualViewport.ClientWidth, Height: cssVisualViewport.ClientHeight, Scale: 1}, nil
 }
 
 // ViewportRegionClip turns region, in the CSS pixels of a viewport whose top-left sits at (originX,

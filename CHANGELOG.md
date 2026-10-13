@@ -15,9 +15,16 @@
 - Go: each `Request` records its outcome in `Status` and `Failure`, and `HaveMadeRequest`/`RequestMatching` refine on it with `WithStatus` and `Failed`. `AllRequests` now returns copies.
 - Go: `b.AllConsoleMessages()` and `b.AllPageErrors()` snapshot the page's console messages and its uncaught exceptions and unhandled rejections. Page errors also stream to the `GinkgoWriter` and are replayed with the console errors when a spec fails.
 - Go: `b.StartScreencast(biloba.ScreencastOptions{...})` records a tab's frames as Chrome draws them; `rec.Stop()` returns them as `[]biloba.ScreencastFrame`, each with the encoded image and Chrome's frame-swap timestamp.
+- TypeScript: `captureScreenshot()` takes `frozen: true` (the `expectScreenshot()` freeze for one capture), `hideCaret: true`, `viewport: true` (what is on screen, never resizing the viewport), and, on a page, `clip: {x, y, width, height}` (a region of the viewport; outside it is `INVALID_ARGUMENT`).
+- TypeScript: each request from `requests()`/`waitForRequest()` carries its outcome in `status` and `failure`, and the request query filters on them with `status` and `failed`.
+- TypeScript: `session.pageErrors()`, `onPageError()`, and `expectPageError()` expose uncaught exceptions and unhandled rejections, and the Vitest hooks replay them with the console errors, located `url:line:column` one-based. `consoleMessages()` includes the messages Chrome logs itself (failed resource loads, interventions, violations), marked with a `source`; the hooks don't replay those.
 
 ### Fixes
 
+- **TypeScript behaviour change:** `captureScreenshot()` no longer freezes the page by default, matching Go's `CaptureScreenshot`: it captures animations as they are and doesn't wait for web fonts. Its `animated` option is gone (passing it is an `INVALID_ARGUMENT` error); pass `frozen: true` to get the old capture. `expectScreenshot()` still freezes by default.
+- TypeScript: `expectNetworkIdle()`'s timeout names each request still in flight (method, URL, resource type, and how long it has been in flight), as of its last attempt.
+- TypeScript: `responses({status})` filters on the status; the filter used to be ignored.
+- TypeScript: what the previous test's document reports while `prepare()` navigates it away (a fetch it still had open rejecting, its failed loads, Chrome's messages about them) is dropped instead of being recorded in the next test's page errors, console messages, requests, or in-flight requests.
 - TypeScript: `prepare()` only clears the emulation the test set, so a test that emulated nothing no longer pays eight round trips to Chrome for it.
 - **Baseline-affecting:** element captures round the element's box outward to whole CSS pixels, as Playwright does, so a fractional box no longer loses its last row or column (both clients). An element `HaveScreenshot` baseline whose element has a fractional width, height, or position comes out a pixel larger and fails until it is regenerated once with `BILOBA_UPDATE_SCREENSHOTS=1`.
 - Go: `BeNetworkIdle`'s failure message names each request still in flight (method, URL, resource type, and how long it has been in flight), and reports what its last attempt saw. It used to report only a count, and that count was taken when the matcher was built rather than when it failed.

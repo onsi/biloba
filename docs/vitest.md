@@ -204,9 +204,9 @@ Frame handles expose the normal locator, action, assertion, JavaScript, upload, 
 
 A frame handle is a document, not a tab. Tab and browser-context controls fail on it with `INVALID_ARGUMENT`: `navigate()`, `prepare()`, `addInitScript()`, `activate()`, `newTab()`, `setWindowSize()`, the emulation setters (device metrics, geolocation, permissions, locale, timezone, media, user agent), `setCookies()`/`clearCookies()`, request stubbing, aborting, modifying, routing and holding, network state and cache, and `handleDialogs()`. Call them on the session that owns the frame. Reads that don't change the tab, such as `getCookies()` and `windowSize()`, still work.
 
-A frame handle records its own document's console messages and requests from the moment it is found, so `frame.expectConsoleMessage()` and `frame.waitForRequest()` work for either kind of frame. After navigation, request history keeps only the original document's requests; `waitForRequest()` and `expectNetworkIdle()` reject the stale handle. The owning tab also sees the console output and requests of its same-process frames, but not those of out-of-process frames. Dialogs from any frame are reported and handled on the owning tab. Network interception registered on the tab applies to its same-process frames' requests, not to an out-of-process frame's.
+A frame handle records its own document's console messages, page errors, and requests from the moment it is found, so `frame.expectConsoleMessage()` and `frame.waitForRequest()` work for either kind of frame. After navigation, request history keeps only the original document's requests; `waitForRequest()` and `expectNetworkIdle()` reject the stale handle. The owning tab also sees the console output and requests of its same-process frames, but not those of out-of-process frames. Dialogs from any frame are reported and handled on the owning tab. Network interception registered on the tab applies to its same-process frames' requests, not to an out-of-process frame's.
 
-`frame.captureScreenshot()` and a page-level `frame.expectScreenshot()` capture the frame's viewport; element screenshots and masks work inside the frame. Chrome can only capture top-level targets, so screenshots on an out-of-process frame's handle fail with `INVALID_ARGUMENT`; capture the iframe element from the owning session instead.
+`frame.captureScreenshot()` and a page-level `frame.expectScreenshot()` capture the frame's viewport, and a `clip` is a region of the frame's viewport; element screenshots and masks work inside the frame. Chrome can only capture top-level targets, so screenshots on an out-of-process frame's handle fail with `INVALID_ARGUMENT`; capture the iframe element from the owning session instead.
 
 An iframe with no `src`, or with a `srcdoc`, shares the page's origin, so it is not listed here: reach into it with `>>>`.
 
@@ -347,6 +347,16 @@ try {
 }
 ```
 
+Each request in `requests()` carries its outcome: `status` is the response's HTTP status (0 until the headers arrive, and 0 for a request that failed without a response), and `failure` is Chrome's error text (`net::ERR_CONNECTION_REFUSED`, `net::ERR_ABORTED`, ...) or `""`.  A redirect is one request per hop, and a hop that was redirected has the redirect's status.  An HTTP error status is not a failure.  `requests()` and `waitForRequest()` filter on both, and each request is a snapshot of what Biloba knew when you asked:
+
+```ts
+await session.waitForRequest({url: endsWith("/orders"), status: 201});
+const broken = await session.requests({failed: true});
+const serverErrors = await session.requests({url: contains("/api/"), status: numeric(">=", 500)});
+```
+
+`expectNetworkIdle()` waits for the session's in-flight requests to finish.  When it times out, its message names each request still in flight as of its last attempt - method, URL, resource type, and how long it had been in flight - oldest first.
+
 Import `endsWith` (or another Biloba expectation) from the package.  Always release a hold.  Network handlers are first-match-wins; use each handler's `count()` or `stats()` and `networkShadowDiagnostics()` to prove that the intended handler claimed the request.
 
 `routeResponse()` starts its callback timeout after reading the response body. Body reads have a separate timeout of five seconds, or `timeoutMs` if it is longer. For example, `{timeoutMs: 30_000}` allows up to 30 seconds to read the body, then another 30 seconds for the callback. If Chrome refuses to provide a body, as it does for redirects, Biloba continues the response without calling the callback and records the error in the handler's `stats()`.
@@ -367,6 +377,15 @@ Capture a page or locator as bounded bytes, or ask the daemon to write a sanitiz
 ```ts
 const png = await session.captureScreenshot();
 const path = await session.getByTestId("chart").captureScreenshot({output: "path", name: "chart"});
+```
+
+A capture takes the page as it is, animations and all.  Pass `frozen: true` to capture it the way `expectScreenshot()` does: Biloba waits for web fonts, then turns off CSS animations and transitions and hides the text caret for the duration of the capture (animations on a scroll or view timeline keep running).  `hideCaret: true` hides only the caret.
+
+A page capture takes the whole document, and when the document is bigger than the viewport Chrome lays the page out again at the full document size to do that, which a responsive page can notice.  `viewport: true` captures exactly what is on screen and never resizes the viewport; on a locator it refuses an element that is not entirely in view.  `clip` captures one region of the viewport, in CSS pixels from its top-left corner, and also never resizes it: a region that reaches outside the viewport is an `INVALID_ARGUMENT` error.  `clip` applies to page captures only (a locator capture is already clipped to its element).
+
+```ts
+const aboveTheFold = await session.captureScreenshot({viewport: true});
+const header = await session.captureScreenshot({clip: {x: 0, y: 0, width: 800, height: 120}, frozen: true});
 ```
 
 `expectScreenshot()` supports page and element baselines (an element's box is rounded outward to whole CSS pixels, so a fractionally sized element is captured with every pixel it touches), masks, exact or tolerant pixel comparison, animation freezing with an opt-out, light and dark color schemes, update mode, diff artifacts, and structured diagnosis.
@@ -409,7 +428,11 @@ That trajectory records every polling attempt as structured data instead of redu
 
 For runner-level capture, load `installBilobaVitestHooks` from `biloba/vitest` in a Vitest setup file.  The hook captures every live tab after any failed test, can capture a slow test after `progressAfterMs`, replays browser errors, and turns `console.assert` into a test-boundary failure.  `session.captureDiagnostics()` provides the same context-wide capture on demand.  Configure screenshots, outlines, artifact paths, inline output, viewport, byte limits, and poll trajectories under `connect({diagnostics: {...}})`; explicit members override CI and interactive defaults independently.
 
-Use `consoleMessages()` for bounded history and `onConsoleMessage()` for live delivery.  `warnings()` and `onWarning()` expose auto-handled dialog and dropped-event warnings.  Pass `debugLog` to `connect` for bounded structured daemon/CDP diagnostics; Biloba never mixes them into framed stdout.
+Use `consoleMessages()` for bounded history, `onConsoleMessage()` for live delivery, and `expectConsoleMessage()` to wait for one.  Alongside the page's own console calls, the history holds the messages Chrome logs itself and DevTools shows in its console - a failed resource load, an intervention, a performance violation, a deprecation.  Their `source` names the origin (`"network"`, `"intervention"`, ...) and `type` is the level; the page's own messages have `source: ""`.  Chrome's messages are recorded on the tab, not on a frame handle.
+
+Uncaught exceptions and unhandled promise rejections are page errors: `pageErrors()` returns them, `onPageError()` delivers them live, and `expectPageError(expected)` waits for one whose message matches.  A page error's `message` reads the way DevTools prints it (`"Uncaught TypeError: x is not a function"`), and `url`, `line`, and `column` locate where it was thrown.  The `line` and `column` fields of a page error and of a stack frame are zero-based, as Chrome reports them; when Biloba prints a location it prints `url:line:column` one-based, the way editors and DevTools show it.  `prepare()` clears both histories, and what the previous test's document reports while `prepare()` navigates it away (a fetch it still had open rejecting, say) is dropped rather than landing in the next test.
+
+The Vitest hooks replay the test's console errors and page errors after it finishes (`[browser error] ...`, `[browser pageerror] Uncaught Error: boom (http://localhost:3000/app.js:12:5)`).  Chrome's own messages are not replayed, warnings and errors included: they stay in `consoleMessages()`.  `warnings()` and `onWarning()` expose auto-handled dialog and dropped-event warnings.  Pass `debugLog` to `connect` for bounded structured daemon/CDP diagnostics; Biloba never mixes them into framed stdout.
 
 `failure.code` is worth narrowing on, because a few of the codes mean something quite specific:
 

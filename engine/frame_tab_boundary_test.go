@@ -162,7 +162,27 @@ var _ = Describe("frame handles and their tab", func() {
 		Expect(texts(root)).To(ContainElements("from-parent", "from-frame api"), "the tab still sees its same-process frames")
 		requests := frame.RequestsMatching(engine.RequestQuery{URL: &engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/api"}})
 		Expect(requests).To(HaveLen(1))
+		Expect(requests[0].Status).To(Equal(200))
 		Expect(frame.RequestsMatching(engine.RequestQuery{URL: &engine.Expectation{Kind: engine.ExpectEqual, Expected: server.URL + "/"}})).To(BeEmpty())
+	})
+
+	It("records the frame's own page errors, and the tab records its frames' too", func(ctx SpecContext) {
+		_, err := root.Evaluate(ctx, `setTimeout(() => { throw new Error('parent-boom') })`)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = frame.Evaluate(ctx, `setTimeout(() => { throw new Error('frame-boom') })`)
+		Expect(err).NotTo(HaveOccurred())
+
+		messages := func(session *engine.Session) func() []string {
+			return func() []string {
+				out := []string{}
+				for _, pageError := range session.PageErrors() {
+					out = append(out, pageError.Message)
+				}
+				return out
+			}
+		}
+		Eventually(messages(root)).Should(ContainElements("Uncaught Error: parent-boom", "Uncaught Error: frame-boom"))
+		Expect(messages(frame.Session)()).To(Equal([]string{"Uncaught Error: frame-boom"}))
 	})
 })
 

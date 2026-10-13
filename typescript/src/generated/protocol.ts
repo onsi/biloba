@@ -281,7 +281,7 @@ export interface Media {
 }
 
 export interface LifecycleOperation {
-  kind: "GET_COOKIES" | "CLEAR_COOKIES" | "COOKIE_QUERY" | "STORAGE_SET" | "STORAGE_GET" | "STORAGE_GET_ALL" | "STORAGE_REMOVE" | "STORAGE_CLEAR" | "STORAGE_LENGTH" | "WAIT_FOR_DEFINED" | "URL" | "TITLE" | "WINDOW_SIZE" | "OUTLINE" | "ACCESSIBILITY_OUTLINE" | "CONSOLE_MESSAGES" | "SET_DEVICE_METRICS" | "CLEAR_DEVICE_METRICS" | "SET_GEOLOCATION" | "CLEAR_GEOLOCATION" | "SET_PERMISSIONS" | "RESET_PERMISSIONS" | "SET_LOCALE" | "CLEAR_LOCALE" | "SET_TIMEZONE" | "CLEAR_TIMEZONE" | "SET_MEDIA" | "CLEAR_MEDIA" | "SET_USER_AGENT" | "CLEAR_USER_AGENT";
+  kind: "GET_COOKIES" | "CLEAR_COOKIES" | "COOKIE_QUERY" | "STORAGE_SET" | "STORAGE_GET" | "STORAGE_GET_ALL" | "STORAGE_REMOVE" | "STORAGE_CLEAR" | "STORAGE_LENGTH" | "WAIT_FOR_DEFINED" | "URL" | "TITLE" | "WINDOW_SIZE" | "OUTLINE" | "ACCESSIBILITY_OUTLINE" | "CONSOLE_MESSAGES" | "PAGE_ERRORS" | "SET_DEVICE_METRICS" | "CLEAR_DEVICE_METRICS" | "SET_GEOLOCATION" | "CLEAR_GEOLOCATION" | "SET_PERMISSIONS" | "RESET_PERMISSIONS" | "SET_LOCALE" | "CLEAR_LOCALE" | "SET_TIMEZONE" | "CLEAR_TIMEZONE" | "SET_MEDIA" | "CLEAR_MEDIA" | "SET_USER_AGENT" | "CLEAR_USER_AGENT";
   area?: string;
   key?: string;
   valueJson?: string;
@@ -341,6 +341,8 @@ export interface EventfulOperation {
   resourceType?: Expectation;
   filename?: Expectation;
   state?: Expectation;
+  status?: Expectation;
+  failed?: boolean;
   contentText?: Expectation;
   contentBase64?: string;
   accept?: boolean;
@@ -501,6 +503,13 @@ export interface ScreenshotTarget {
   locator?: Locator;
 }
 
+export interface ScreenshotClip {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface ScreenshotOperation {
   kind: "CAPTURE" | "EXPECT";
   target: ScreenshotTarget;
@@ -508,6 +517,10 @@ export interface ScreenshotOperation {
   name?: string;
   masks?: Locator[];
   animated?: boolean;
+  frozen?: boolean;
+  hideCaret?: boolean;
+  viewport?: boolean;
+  clip?: ScreenshotClip;
   colorScheme?: "light" | "dark";
   colorSchemes?: ("light" | "dark")[];
   maxBytes?: number;

@@ -18,6 +18,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/chromedp/cdproto/page"
 	"github.com/onsi/biloba/engine"
 )
 
@@ -104,19 +105,83 @@ var _ = Describe("runner-neutral screenshots", func() {
 		Expect(err).To(MatchError(ContainSubstring("exceeds the 16-byte limit")))
 	})
 
-	It("freezes rendering by default and permits animated capture only when requested", func(ctx SpecContext) {
+	It("captures the page as it is by default and freezes rendering only when asked", func(ctx SpecContext) {
 		session, err := browser.OpenSession(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(session.Close)
 		Expect(session.Navigate(ctx, "data:text/html,"+`<style>body{margin:0}.box{width:20px;height:20px;background:red;animation:shade 100000s linear infinite;animation-delay:-50000s}@keyframes shade{from{background:red}to{background:blue}}</style><div class=box></div>`)).To(Succeed())
 
-		frozen, err := session.CaptureElementScreenshot(ctx, engine.CSS(".box"), engine.ScreenshotCaptureOptions{})
+		plain, err := session.CaptureElementScreenshot(ctx, engine.CSS(".box"), engine.ScreenshotCaptureOptions{})
 		Expect(err).NotTo(HaveOccurred())
-		animated, err := session.CaptureElementScreenshot(ctx, engine.CSS(".box"), engine.ScreenshotCaptureOptions{Animated: true})
+		frozen, err := session.CaptureElementScreenshot(ctx, engine.CSS(".box"), engine.ScreenshotCaptureOptions{Frozen: true})
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(pixelAt(frozen.PNG, 10, 10)).To(Equal(color.NRGBA{R: 255, A: 255}))
-		Expect(pixelAt(animated.PNG, 10, 10)).NotTo(Equal(pixelAt(frozen.PNG, 10, 10)))
+		Expect(pixelAt(plain.PNG, 10, 10)).NotTo(Equal(pixelAt(frozen.PNG, 10, 10)))
+		left, err := session.Evaluate(ctx, `document.querySelectorAll('#_biloba-freeze').length`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(left).To(Equal(float64(0)))
+	})
+
+	It("hides only the caret for the capture when asked", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, "data:text/html,<input id=field style='width:80px;height:30px;font-size:24px;caret-color:rgb(255,0,0)' autofocus>")).To(Succeed())
+		Expect(session.Evaluate(ctx, `document.querySelector('#field').focus(); document.activeElement.id`)).To(Equal("field"))
+		var observed []any
+		restore := engine.SetVisualOperationHooksForTest(session, engine.VisualOperationHooksForTest{
+			RunHandler: func(hookCtx context.Context, name, arg string) (engine.HandlerResponse, error) {
+				response, runErr := engine.RunHandlerContext(hookCtx, name, arg)
+				if name == "hideCaret" {
+					var caret any
+					_ = engine.EvaluateContext(hookCtx, `[document.querySelectorAll('#_biloba-caret').length, document.querySelectorAll('#_biloba-freeze').length]`, false, &caret)
+					observed = append(observed, caret)
+				}
+				return response, runErr
+			},
+		})
+		DeferCleanup(restore)
+
+		_, err = session.CaptureElementScreenshot(ctx, engine.CSS("#field"), engine.ScreenshotCaptureOptions{HideCaret: true})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(observed).To(Equal([]any{[]any{float64(1), float64(0)}}))
+		left, err := session.Evaluate(ctx, `document.querySelectorAll('#_biloba-caret').length`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(left).To(Equal(float64(0)))
+	})
+
+	It("captures only the viewport, or a region of it, without expanding the viewport", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, "data:text/html,<style>body{margin:0}.tall{height:3000px;background:red}</style><div class=tall></div><div class=below style='width:20px;height:20px'></div><script>window.resizes=0;addEventListener('resize',()=>window.resizes++)</script>")).To(Succeed())
+		size, err := session.Evaluate(ctx, `[innerWidth, innerHeight]`)
+		Expect(err).NotTo(HaveOccurred())
+		width, height := int(size.([]any)[0].(float64)), int(size.([]any)[1].(float64))
+
+		viewport, err := session.CapturePageScreenshot(ctx, engine.ScreenshotCaptureOptions{Viewport: true})
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]int{viewport.Width, viewport.Height}).To(Equal([]int{width, height}))
+
+		region, err := session.CapturePageScreenshot(ctx, engine.ScreenshotCaptureOptions{Clip: &page.Viewport{X: 10, Y: 20, Width: 30, Height: 40}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]int{region.Width, region.Height}).To(Equal([]int{30, 40}))
+		Expect(pixelAt(region.PNG, 5, 5)).To(Equal(color.NRGBA{R: 255, A: 255}))
+		Expect(session.Evaluate(ctx, `window.resizes`)).To(Equal(float64(0)))
+
+		_, err = session.CapturePageScreenshot(ctx, engine.ScreenshotCaptureOptions{Clip: &page.Viewport{X: 0, Y: float64(height) - 10, Width: 10, Height: 20}})
+		var engineErr *engine.Error
+		Expect(errors.As(err, &engineErr)).To(BeTrue())
+		Expect(engineErr.Code).To(Equal(engine.CodeInvalidArgument))
+		Expect(err).To(MatchError(ContainSubstring("reaches outside")))
+
+		_, err = session.CaptureElementScreenshot(ctx, engine.CSS(".below"), engine.ScreenshotCaptureOptions{Viewport: true})
+		Expect(err).To(MatchError(ContainSubstring("not entirely in the viewport")))
+		_, err = session.CaptureElementScreenshot(ctx, engine.CSS(".below"), engine.ScreenshotCaptureOptions{Clip: &page.Viewport{Width: 1, Height: 1}})
+		Expect(errors.As(err, &engineErr)).To(BeTrue())
+		Expect(engineErr.Code).To(Equal(engine.CodeInvalidArgument))
+		Expect(session.Evaluate(ctx, `window.resizes`)).To(Equal(float64(0)))
 	})
 
 	It("warns for a raw fully clipped element capture but refuses it as a visual baseline", func(ctx SpecContext) {
@@ -375,7 +440,7 @@ var _ = Describe("runner-neutral visual comparison", func() {
 		Expect(session.SetMedia(ctx, engine.Media{Type: "screen", ColorScheme: "dark", ReducedMotion: "reduce"})).To(Succeed())
 
 		_, err = session.CaptureElementScreenshot(ctx, engine.CSS(".box"), engine.ScreenshotCaptureOptions{
-			Animated: true, ColorScheme: "light",
+			ColorScheme: "light",
 		})
 		Expect(err).NotTo(HaveOccurred())
 		state, err := session.Evaluate(ctx, `[
@@ -538,7 +603,7 @@ var _ = Describe("runner-neutral visual comparison", func() {
 		})
 		DeferCleanup(restore)
 
-		_, err = first.CaptureElementScreenshot(ctx, engine.CSS(".box"), engine.ScreenshotCaptureOptions{ColorScheme: "dark"})
+		_, err = first.CaptureElementScreenshot(ctx, engine.CSS(".box"), engine.ScreenshotCaptureOptions{ColorScheme: "dark", Frozen: true})
 		Expect(err).To(MatchError(And(
 			ContainSubstring("injected color cleanup failure"),
 			ContainSubstring("injected freeze cleanup failure"),
@@ -586,7 +651,7 @@ var _ = Describe("runner-neutral visual comparison", func() {
 		})
 		DeferCleanup(restore)
 
-		_, err = session.CaptureElementScreenshot(captureCtx, engine.CSS(".box"), engine.ScreenshotCaptureOptions{ColorScheme: "dark", Animated: true})
+		_, err = session.CaptureElementScreenshot(captureCtx, engine.CSS(".box"), engine.ScreenshotCaptureOptions{ColorScheme: "dark"})
 		Expect(err).To(HaveOccurred())
 		active, err := session.Evaluate(ctx, `matchMedia('(prefers-color-scheme: dark)').matches`)
 		Expect(err).NotTo(HaveOccurred())
@@ -640,7 +705,7 @@ var _ = Describe("runner-neutral visual comparison", func() {
 		})
 		DeferCleanup(restore)
 
-		_, err = session.CaptureElementScreenshot(ctx, engine.CSS(".box"), engine.ScreenshotCaptureOptions{ColorScheme: "dark"})
+		_, err = session.CaptureElementScreenshot(ctx, engine.CSS(".box"), engine.ScreenshotCaptureOptions{ColorScheme: "dark", Frozen: true})
 		Expect(err).To(MatchError(And(
 			ContainSubstring("setup acknowledgment failure"),
 			ContainSubstring("freeze recovery failure"),
@@ -688,7 +753,7 @@ var _ = Describe("runner-neutral visual comparison", func() {
 		})
 		DeferCleanup(restore)
 
-		_, err = session.CaptureElementScreenshot(ctx, engine.CSS(".box"), engine.ScreenshotCaptureOptions{})
+		_, err = session.CaptureElementScreenshot(ctx, engine.CSS(".box"), engine.ScreenshotCaptureOptions{Frozen: true})
 		Expect(err).To(HaveOccurred())
 		Expect(session.Navigate(ctx, page+"#next")).To(Succeed())
 		Expect(freezeClears).To(Equal(2))

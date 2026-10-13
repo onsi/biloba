@@ -326,6 +326,28 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     expect(rendered).toMatch(/^baseline: .*\.png$/m);
   });
 
+  it("records page errors and Chrome's own console messages", async () => {
+    await session.prepare();
+    await session.navigate(baseUrl);
+    const live: string[] = [];
+    const stop = session.onPageError((pageError) => live.push(pageError.message));
+    await session.evaluate(`setTimeout(function explode() { throw new TypeError("parity boom") })`);
+    const pageError = await session.expectPageError(contains("parity boom"), {timeoutMs: 2_000});
+    expect(pageError.message).toBe("Uncaught TypeError: parity boom");
+    expect(pageError.stack[0]).toMatchObject({functionName: "explode"});
+    expect(pageError.line).toBeGreaterThanOrEqual(0);
+    expect((await session.pageErrors()).map(({message}) => message)).toEqual(["Uncaught TypeError: parity boom"]);
+    await expect.poll(() => live, {timeout: 2_000}).toEqual(["Uncaught TypeError: parity boom"]);
+    stop();
+
+    await session.evaluateAsync(`fetch("/not-found").then(response => response.text())`);
+    await session.evaluate(`console.error("page's own error")`);
+    await expect.poll(async () => (await session.consoleMessages()).map(({source, type}) => `${source}:${type}`), {timeout: 2_000}).toEqual(expect.arrayContaining(["network:error", ":error"]));
+
+    await session.prepare();
+    expect(await session.pageErrors()).toEqual([]);
+  });
+
   it("preserves capture warnings and visual lifecycle state across cancellation", async () => {
     screenshotWarnings.length = 0;
     await session.prepare();
@@ -336,9 +358,21 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     expect(screenshotWarnings.some((warning) => warning.includes("clipped"))).toBe(true);
 
     await session.evaluate(`document.body.insertAdjacentHTML("beforeend", '<style>@keyframes visual-red {from{background:#a00}to{background:#a00}} #animated-visual{width:40px;height:30px;background:#0a0;animation:visual-red 100000s linear forwards}</style><div id="animated-visual"></div>')`);
-    const frozen = await session.locator("#animated-visual").captureScreenshot();
-    const animated = await session.locator("#animated-visual").captureScreenshot({animated: true});
-    expect(animated).not.toEqual(frozen);
+    // A plain capture leaves the page running, as Go's does; frozen is expectScreenshot's freeze.
+    const plain = await session.locator("#animated-visual").captureScreenshot();
+    const frozen = await session.locator("#animated-visual").captureScreenshot({frozen: true});
+    expect(plain).not.toEqual(frozen);
+    expect(await session.evaluate(`document.querySelectorAll("#_biloba-freeze").length`)).toBe(0);
+    expect(await session.locator("#animated-visual").captureScreenshot({hideCaret: true})).toEqual(plain);
+    expect(await session.evaluate(`document.querySelectorAll("#_biloba-caret").length`)).toBe(0);
+
+    const {width, height} = await session.evaluate<{width: number; height: number}>(`({width: Math.round(visualViewport.width), height: Math.round(visualViewport.height)})`);
+    expect(pngSize(await session.captureScreenshot({viewport: true}))).toEqual({width, height});
+    expect(pngSize(await session.captureScreenshot({clip: {x: 2, y: 3, width: 30, height: 20}}))).toEqual({width: 30, height: 20});
+    await expect(session.captureScreenshot({clip: {x: 0, y: height - 5, width: 10, height: 10}})).rejects.toMatchObject({code: "INVALID_ARGUMENT", message: expect.stringContaining("reaches outside")});
+    await session.evaluate(`document.body.insertAdjacentHTML("beforeend", '<div id="below-fold" style="margin-top:3000px;width:10px;height:10px"></div>')`);
+    await expect(session.locator("#below-fold").captureScreenshot({viewport: true})).rejects.toMatchObject({message: expect.stringContaining("not entirely in the viewport")});
+    await session.evaluate(`document.querySelector("#below-fold").remove()`);
 
     await session.setMedia({colorScheme: "dark", reducedMotion: "reduce"});
     const before = await session.evaluate(`[matchMedia("(prefers-color-scheme: dark)").matches, matchMedia("(prefers-reduced-motion: reduce)").matches]`);
@@ -576,6 +610,27 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     expect((await session.waitForRequest({url: endsWith("/observed"), method: "POST"}, {timeoutMs: 1_000})).method).toBe("POST");
     expect((await session.requests({url: endsWith("/observed")})).length).toBeGreaterThan(0);
     expect((await session.responses({url: endsWith("/observed")})).length).toBeGreaterThan(0);
+    const observed = await session.requests({url: endsWith("/observed")});
+    expect(observed[0]).toMatchObject({status: 200, failure: ""});
+    await session.evaluateAsync(`Promise.all([fetch("/not-found").then(response => response.text()), fetch("http://127.0.0.1:1/unreachable").catch(() => null)])`);
+    const failed = await session.waitForRequest({url: endsWith("/unreachable"), failed: true}, {timeoutMs: 1_000});
+    expect(failed.url).toContain("/unreachable");
+    expect(failed.failure).toMatch(/^net::ERR_/);
+    expect(failed.status).toBe(0);
+    expect((await session.requests({status: 404})).map(({url}) => new URL(url).pathname)).toContain("/not-found");
+    expect((await session.responses({status: 404})).map(({url}) => new URL(url).pathname)).toContain("/not-found");
+    expect((await session.responses({status: 404})).every(({status}) => status === 404)).toBe(true);
+    expect(await session.requests({url: endsWith("/not-found"), failed: true})).toEqual([]);
+
+    const idleHold = await session.holdResponse(contains("/network-json?idle"));
+    await session.evaluate(`void fetch("/network-json?idle")`);
+    await idleHold.await({timeoutMs: 2_000});
+    const busy = await session.expectNetworkIdle({timeoutMs: 150}).catch((error: unknown) => error);
+    expect(busy).toBeInstanceOf(BilobaError);
+    expect((busy as BilobaError).code).toBe("TIMEOUT");
+    expect((busy as BilobaError).message).toMatch(/1 in-flight request\(s\)\n {2}GET http:\/\/\S+\/network-json\?idle \(Fetch, in flight for \d+ms\)/);
+    await idleHold.releaseAll();
+
     const idle = await session.expectNetworkIdle({timeoutMs: 1_000});
     expect(idle.attemptCount).toBeGreaterThan(0);
     // The trajectory is the poll's own attempts. Reporting it empty made this a typed result whose
@@ -1004,3 +1059,8 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     }
   });
 });
+
+function pngSize(png: Uint8Array): {width: number; height: number} {
+  const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
+  return {width: view.getUint32(16), height: view.getUint32(20)};
+}

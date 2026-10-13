@@ -354,6 +354,10 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 			_ = connection.Close()
 			return
 		}
+		if request.URL.Path == "/hang" {
+			<-request.Context().Done()
+			return
+		}
 		if request.URL.Path == "/redirect" {
 			http.Redirect(response, request, "/slow", http.StatusFound)
 			return

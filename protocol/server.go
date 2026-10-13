@@ -27,11 +27,11 @@ var Capabilities = []string{
 	"action.set_upload", "viewport.set", "evaluate", "evaluate.async", "assert.visible", "assert.text", "assert.count", "assert.attribute",
 	"assert.value", "assert.url", "assert.evaluate", "assert.exists", "assert.enabled", "assert.clickable", "assert.property", "assert.all_text", "assert.request", "poll.server_side", "diagnostics.structured",
 	"dom.typed", "dom.collections", "dom.geometry", "dom.style", "dom.selection", "action.pointer_options", "action.scroll", "action.element_javascript", "keyboard.modifiers",
-	"lifecycle.tabs", "lifecycle.context_identity", "lifecycle.cookies", "lifecycle.storage", "lifecycle.javascript", "lifecycle.page_state", "lifecycle.console", "lifecycle.emulation", "lifecycle.frames",
+	"lifecycle.tabs", "lifecycle.context_identity", "lifecycle.cookies", "lifecycle.storage", "lifecycle.javascript", "lifecycle.page_state", "lifecycle.console", "lifecycle.page_errors", "lifecycle.emulation", "lifecycle.frames",
 	"dialogs.handlers", "dialogs.history", "dialogs.warnings", "downloads.history", "downloads.content", "downloads.cancel",
-	"network.history", "network.idle.http", "network.handlers", "network.response_callbacks", "network.holds", "network.emulation", "network.cache",
-	"screenshot.capture", "visual.compare",
-	"browser.launch_metadata", "session.context_diagnostics", "session.console_events", "session.warning_events", "browser.debug_events",
+	"network.history", "network.request_outcomes", "network.idle.http", "network.handlers", "network.response_callbacks", "network.holds", "network.emulation", "network.cache",
+	"screenshot.capture", "screenshot.capture_options", "visual.compare",
+	"browser.launch_metadata", "session.context_diagnostics", "session.console_events", "session.page_error_events", "session.warning_events", "browser.debug_events",
 }
 
 type ErrorCode string
@@ -202,6 +202,10 @@ type ScreenshotOperation struct {
 	Name                string
 	Masks               []Locator
 	Animated            bool
+	Frozen              bool
+	HideCaret           bool
+	Viewport            bool
+	Clip                *ScreenshotClip
 	ColorScheme         string
 	ColorSchemes        []string
 	MaxBytes            int
@@ -209,6 +213,11 @@ type ScreenshotOperation struct {
 	PixelToleranceSet   bool
 	ChannelTolerance    int
 	ChannelToleranceSet bool
+}
+
+// ScreenshotClip is a capture region in viewport CSS pixels.
+type ScreenshotClip struct {
+	X, Y, Width, Height float64
 }
 
 type LifecycleOperationKind uint8
@@ -244,6 +253,7 @@ const (
 	LifecycleClearMedia
 	LifecycleSetUserAgent
 	LifecycleClearUserAgent
+	LifecyclePageErrors
 )
 
 type Operation struct {
@@ -980,11 +990,23 @@ type WireScreenshotOperation struct {
 	Name             string               `json:"name,omitempty"`
 	Masks            []WireLocator        `json:"masks,omitempty"`
 	Animated         bool                 `json:"animated,omitempty"`
+	Frozen           bool                 `json:"frozen,omitempty"`
+	HideCaret        bool                 `json:"hideCaret,omitempty"`
+	Viewport         bool                 `json:"viewport,omitempty"`
+	Clip             *WireScreenshotClip  `json:"clip,omitempty"`
 	ColorScheme      string               `json:"colorScheme,omitempty"`
 	ColorSchemes     []string             `json:"colorSchemes,omitempty"`
 	MaxBytes         *int                 `json:"maxBytes,omitempty"`
 	PixelTolerance   *float64             `json:"pixelTolerance,omitempty"`
 	ChannelTolerance *int                 `json:"channelTolerance,omitempty"`
+}
+
+// WireScreenshotClip is a capture region in viewport CSS pixels.
+type WireScreenshotClip struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
 }
 
 type ScreenshotRequest struct {
@@ -1164,7 +1186,7 @@ func (s *Server) Dispatch(ctx context.Context, method string, params json.RawMes
 				return nil, NewError(CodeInvalidArgument, fmt.Sprintf("duplicate event type %q", kind))
 			}
 			seenTypes[kind] = true
-			if kind != "console" && kind != "warning" && kind != "debug" {
+			if kind != "console" && kind != "pageError" && kind != "warning" && kind != "debug" {
 				return nil, NewError(CodeInvalidArgument, fmt.Sprintf("unsupported event type %q", kind))
 			}
 		}
@@ -1181,7 +1203,7 @@ func (s *Server) Dispatch(ctx context.Context, method string, params json.RawMes
 			subscription, subscribeErr = source.SubscribeDebug()
 		} else {
 			if request.SessionID == "" {
-				return nil, NewError(CodeInvalidArgument, "sessionId is required for console and warning events")
+				return nil, NewError(CodeInvalidArgument, "sessionId is required for console, pageError, and warning events")
 			}
 			entry, sessionErr := s.session(request.SessionID)
 			if sessionErr != nil {
@@ -2096,6 +2118,25 @@ func screenshotOperationFromWire(wire *WireScreenshotOperation, pollWire PollOpt
 		if pollWire != (PollOptions{}) {
 			return ScreenshotOperation{}, NewError(CodeInvalidArgument, "raw screenshot capture does not support poll options")
 		}
+		if wire.Animated {
+			return ScreenshotOperation{}, NewError(CodeInvalidArgument, "raw screenshot capture does not support animated: a capture is not frozen unless frozen is set")
+		}
+		operation.Frozen, operation.HideCaret, operation.Viewport = wire.Frozen, wire.HideCaret, wire.Viewport
+		if wire.Clip != nil {
+			clip := *wire.Clip
+			for _, value := range []float64{clip.X, clip.Y, clip.Width, clip.Height} {
+				if math.IsNaN(value) || math.IsInf(value, 0) {
+					return ScreenshotOperation{}, NewError(CodeInvalidArgument, "clip must be finite")
+				}
+			}
+			if clip.Width <= 0 || clip.Height <= 0 || clip.X < 0 || clip.Y < 0 {
+				return ScreenshotOperation{}, NewError(CodeInvalidArgument, "clip must have a non-negative origin and a positive width and height")
+			}
+			if targetKind == ScreenshotElement {
+				return ScreenshotOperation{}, NewError(CodeInvalidArgument, "clip selects a region of the viewport, so it applies to page captures: an element capture is already clipped to its element")
+			}
+			operation.Clip = &ScreenshotClip{X: clip.X, Y: clip.Y, Width: clip.Width, Height: clip.Height}
+		}
 		outputs := map[string]ScreenshotOutput{"": ScreenshotBytes, "BYTES": ScreenshotBytes, "PATH": ScreenshotPath}
 		output, exists := outputs[wire.Output]
 		if !exists {
@@ -2120,6 +2161,9 @@ func screenshotOperationFromWire(wire *WireScreenshotOperation, pollWire PollOpt
 	}
 	if wire.Output != "" || wire.ColorScheme != "" {
 		return ScreenshotOperation{}, NewError(CodeInvalidArgument, "visual screenshot comparison does not support output or colorScheme")
+	}
+	if wire.Frozen || wire.HideCaret || wire.Viewport || wire.Clip != nil {
+		return ScreenshotOperation{}, NewError(CodeInvalidArgument, "visual screenshot comparison does not support frozen, hideCaret, viewport, or clip: it freezes unless animated is set")
 	}
 	if err := validateScreenshotName(wire.Name); err != nil {
 		return ScreenshotOperation{}, err
@@ -2207,12 +2251,12 @@ func eventfulOperationFromWire(wire *WireEventfulOperation, pollWire PollOptions
 	operation := EventfulOperation{Kind: kind, ID: wire.ID, ResponseID: wire.ResponseID, DialogType: wire.DialogType,
 		Accept: wire.Accept, PromptText: wire.PromptText, Limit: wire.Limit, MaxBodyBytes: wire.MaxBodyBytes,
 		Callsite: wire.Callsite, Action: wire.Action, CallbackID: wire.CallbackID, TransformTimeoutMS: wire.TransformTimeoutMS,
-		CacheEnabled: wire.CacheEnabled != nil && *wire.CacheEnabled, Poll: poll, ContentBase64: wire.ContentBase64}
+		CacheEnabled: wire.CacheEnabled != nil && *wire.CacheEnabled, Poll: poll, ContentBase64: wire.ContentBase64, Failed: wire.Failed}
 	if operation.MaxBodyBytes < 0 || operation.MaxBodyBytes > MaxDecodedBodySize {
 		return EventfulOperation{}, NewError(CodeInvalidArgument, fmt.Sprintf("maxBodyBytes must be between 0 and %d", MaxDecodedBodySize))
 	}
 	for source, destination := range map[*WireExpectation]**Expectation{wire.Message: &operation.Message, wire.URL: &operation.URL,
-		wire.Method: &operation.Method, wire.ResourceType: &operation.ResourceType, wire.Filename: &operation.Filename, wire.State: &operation.State, wire.ContentText: &operation.ContentText} {
+		wire.Method: &operation.Method, wire.ResourceType: &operation.ResourceType, wire.Filename: &operation.Filename, wire.State: &operation.State, wire.Status: &operation.Status, wire.ContentText: &operation.ContentText} {
 		if source == nil {
 			continue
 		}
@@ -2274,7 +2318,7 @@ func lifecycleOperationFromWire(operation *WireLifecycleOperation, expected *Wir
 	kinds := map[string]LifecycleOperationKind{
 		"GET_COOKIES": LifecycleGetCookies, "CLEAR_COOKIES": LifecycleClearCookies, "COOKIE_QUERY": LifecycleCookieQuery,
 		"STORAGE_SET": LifecycleStorageSet, "STORAGE_GET": LifecycleStorageGet, "STORAGE_GET_ALL": LifecycleStorageGetAll, "STORAGE_REMOVE": LifecycleStorageRemove, "STORAGE_CLEAR": LifecycleStorageClear, "STORAGE_LENGTH": LifecycleStorageLength,
-		"WAIT_FOR_DEFINED": LifecycleWaitForDefined, "URL": LifecycleURL, "TITLE": LifecycleTitle, "WINDOW_SIZE": LifecycleWindowSize, "OUTLINE": LifecycleOutline, "ACCESSIBILITY_OUTLINE": LifecycleAccessibilityOutline, "CONSOLE_MESSAGES": LifecycleConsoleMessages,
+		"WAIT_FOR_DEFINED": LifecycleWaitForDefined, "URL": LifecycleURL, "TITLE": LifecycleTitle, "WINDOW_SIZE": LifecycleWindowSize, "OUTLINE": LifecycleOutline, "ACCESSIBILITY_OUTLINE": LifecycleAccessibilityOutline, "CONSOLE_MESSAGES": LifecycleConsoleMessages, "PAGE_ERRORS": LifecyclePageErrors,
 		"SET_DEVICE_METRICS": LifecycleSetDeviceMetrics, "CLEAR_DEVICE_METRICS": LifecycleClearDeviceMetrics, "SET_GEOLOCATION": LifecycleSetGeolocation, "CLEAR_GEOLOCATION": LifecycleClearGeolocation,
 		"SET_PERMISSIONS": LifecycleSetPermissions, "RESET_PERMISSIONS": LifecycleResetPermissions, "SET_LOCALE": LifecycleSetLocale, "CLEAR_LOCALE": LifecycleClearLocale, "SET_TIMEZONE": LifecycleSetTimezone, "CLEAR_TIMEZONE": LifecycleClearTimezone, "SET_MEDIA": LifecycleSetMedia, "CLEAR_MEDIA": LifecycleClearMedia,
 		"SET_USER_AGENT": LifecycleSetUserAgent, "CLEAR_USER_AGENT": LifecycleClearUserAgent,

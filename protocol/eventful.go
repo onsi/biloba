@@ -41,20 +41,23 @@ type EventfulOperation struct {
 	Kind                                                             EventfulOperationKind
 	ID, ResponseID, DialogType                                       string
 	Message, URL, Method, ResourceType, Filename, State, ContentText *Expectation
-	ContentBase64                                                    *string
-	Accept                                                           bool
-	PromptText                                                       *string
-	Limit                                                            int
-	MaxBodyBytes                                                     int64
-	Callsite                                                         string
-	Action                                                           string
-	Override                                                         WireNetworkOverride
-	CallbackID                                                       string
-	TransformTimeoutMS                                               int64
-	Network                                                          WireNetworkState
-	CacheEnabled                                                     bool
-	Poll                                                             PollPolicy
-	InvokeCallback                                                   func(context.Context, CallbackInvocation) (WireNetworkOverride, error)
+	// Status filters requests and responses by HTTP status; Failed keeps only failed requests.
+	Status             *Expectation
+	Failed             bool
+	ContentBase64      *string
+	Accept             bool
+	PromptText         *string
+	Limit              int
+	MaxBodyBytes       int64
+	Callsite           string
+	Action             string
+	Override           WireNetworkOverride
+	CallbackID         string
+	TransformTimeoutMS int64
+	Network            WireNetworkState
+	CacheEnabled       bool
+	Poll               PollPolicy
+	InvokeCallback     func(context.Context, CallbackInvocation) (WireNetworkOverride, error)
 }
 
 type EventfulSession interface {
@@ -73,6 +76,8 @@ type WireEventfulOperation struct {
 	ResourceType       *WireExpectation     `json:"resourceType,omitempty"`
 	Filename           *WireExpectation     `json:"filename,omitempty"`
 	State              *WireExpectation     `json:"state,omitempty"`
+	Status             *WireExpectation     `json:"status,omitempty"`
+	Failed             bool                 `json:"failed,omitempty"`
 	ContentText        *WireExpectation     `json:"contentText,omitempty"`
 	ContentBase64      *string              `json:"contentBase64,omitempty"`
 	Accept             bool                 `json:"accept,omitempty"`

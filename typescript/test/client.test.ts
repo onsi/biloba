@@ -133,7 +133,8 @@ describe("Biloba TypeScript client", () => {
           STORAGE_GET: {found: true, value: 3}, STORAGE_GET_ALL: {count: 3}, STORAGE_LENGTH: 1,
           WAIT_FOR_DEFINED: 42, URL: "https://app.test/ready", TITLE: "Ready", WINDOW_SIZE: {width: 800, height: 600},
           OUTLINE: "<body>Ready</body>", ACCESSIBILITY_OUTLINE: "document\n  button \"Save\"",
-          CONSOLE_MESSAGES: [{type: "log", text: "ready", args: ["ready"], timestamp: "2026-01-01T00:00:00Z"}],
+          CONSOLE_MESSAGES: [{type: "log", source: "", text: "ready", args: ["ready"], timestamp: "2026-01-01T00:00:00Z"}],
+          PAGE_ERRORS: [{message: "Uncaught Error: boom", url: "https://app.test/app.js", line: 4, column: 7, stack: [], timestamp: "2026-01-01T00:00:00Z"}],
           COOKIE_QUERY: {name: "auth", value: "abc", path: "/", session: true},
         };
         respond(operationResult({observedJson: JSON.stringify(values[operation.kind ?? ""])}));
@@ -144,7 +145,7 @@ describe("Biloba TypeScript client", () => {
         const values: Record<string, unknown> = {
           REGISTER_DIALOG_HANDLER: {id: "dialog-1"}, DIALOGS: [{type: "alert", message: "hi", defaultPrompt: "", accepted: false, promptText: "", autoHandled: true}], WARNINGS: warningHistory,
           DOWNLOADS: [{id: "download-1", url: "/file", filename: "file.txt", state: "complete", receivedBytes: 3, totalBytes: 3, startedAt: 1}], WAIT_FOR_DOWNLOAD: {id: "download-1", url: "/file", filename: "file.txt", state: "complete", receivedBytes: 3, totalBytes: 3, startedAt: 1}, DOWNLOAD_CONTENT: {bodyBase64: Buffer.from("abc").toString("base64")},
-          REQUESTS: [{url: "/api", method: "POST", headers: [], resourceType: "Fetch"}], WAIT_FOR_REQUEST: {url: "/api", method: "POST", headers: [], resourceType: "Fetch"}, RESPONSES: [{url: "/api", status: 201, headers: [], resourceType: "Fetch"}],
+          REQUESTS: [{url: "/api", method: "POST", headers: [], resourceType: "Fetch", status: 404, failure: ""}, {url: "/down", method: "GET", headers: [], resourceType: "Fetch", status: 0, failure: "net::ERR_CONNECTION_REFUSED"}], WAIT_FOR_REQUEST: {url: "/api", method: "POST", headers: [], resourceType: "Fetch"}, RESPONSES: [{url: "/api", status: 201, headers: [], resourceType: "Fetch"}],
           REGISTER_NETWORK_HANDLER: {id: "network-1"}, NETWORK_HANDLER_STATS: {id: "network-1", callsite: "test", count: 1, shadowed: 0, lastError: ""}, NETWORK_SHADOWS: [],
           HOLD_RESPONSE: {id: "hold-2"}, AWAIT_RESPONSE_HOLD: {id: "response-1", url: "/api", status: 200, headers: [], bodyBase64: Buffer.from("held").toString("base64")}, RESPONSE_HOLD_STATS: {count: 1, held: 1, passedThrough: 0, holding: 1, lastError: ""}, NETWORK_STATE: {offline: false, latencyMs: 0, downloadThroughput: 0, uploadThroughput: 0, connectionType: "wifi"},
         };
@@ -182,6 +183,49 @@ describe("Biloba TypeScript client", () => {
       {kind: "CAPTURE", target: {kind: "PAGE"}, output: "BYTES"},
       {kind: "CAPTURE", target: {kind: "ELEMENT", locator: {kind: "TEST_ID", value: "card", match: "EXACT", first: false}}, output: "PATH", name: "checkout/card", masks: [{kind: "CSS", value: ".clock", match: "EXACT", first: false}]},
     ]);
+  });
+
+  it("sends capture options only when asked, and refuses animated and a locator clip", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    await session.captureScreenshot({frozen: true, hideCaret: true, clip: {x: 1, y: 2, width: 30, height: 40}});
+    await session.locator("#card").captureScreenshot({viewport: true, frozen: false});
+    expect(requests.filter(({method}) => method === "Screenshot").map(({request}) => request.operation)).toEqual([
+      {kind: "CAPTURE", target: {kind: "PAGE"}, output: "BYTES", frozen: true, hideCaret: true, clip: {x: 1, y: 2, width: 30, height: 40}},
+      {kind: "CAPTURE", target: {kind: "ELEMENT", locator: {kind: "CSS", value: "#card", match: "EXACT", first: false}}, output: "BYTES", viewport: true},
+    ]);
+    await expect(session.captureScreenshot({animated: true} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT", message: expect.stringContaining("frozen: true")});
+    await expect(session.locator("#card").captureScreenshot({clip: {x: 0, y: 0, width: 1, height: 1}} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT", message: expect.stringContaining("page captures")});
+    expect(requests.filter(({method}) => method === "Screenshot")).toHaveLength(2);
+  });
+
+  it("returns request outcomes and sends the status and failed filters", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    const observed = await session.requests({status: 404, failed: false});
+    expect(observed.map(({url, status, failure}) => ({url, status, failure}))).toEqual([
+      {url: "/api", status: 404, failure: ""},
+      {url: "/down", status: 0, failure: "net::ERR_CONNECTION_REFUSED"},
+    ]);
+    await session.requests({failed: true});
+    const sent = requests.filter(({method}) => method === "Eventful").map(({request}) => request.operation);
+    expect(sent.at(-2)).toEqual({kind: "REQUESTS", status: {kind: "EQUAL", expectedJson: "404"}});
+    expect(sent.at(-1)).toEqual({kind: "REQUESTS", failed: true});
+  });
+
+  it("reads, expects, and streams page errors", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    expect(await session.pageErrors()).toEqual([{message: "Uncaught Error: boom", url: "https://app.test/app.js", line: 4, column: 7, stack: [], timestamp: "2026-01-01T00:00:00Z"}]);
+    expect(requests.at(-1)).toMatchObject({method: "Lifecycle", request: {operation: {kind: "PAGE_ERRORS"}}});
+    const seen: unknown[] = [];
+    const remove = session.onPageError((pageError) => seen.push(pageError));
+    await expect.poll(() => requests.some(({method}) => method === "SubscribeEvents")).toBe(true);
+    expect(requests.find(({method}) => method === "SubscribeEvents")!.request).toEqual({sessionId: session.id, types: ["pageError"]});
+    toClient.write(encodeFrame({event: "pageError", params: {subscriptionId: "subscription-1", sessionId: session.id, generation: 0, sequence: 1, payload: {message: "Uncaught Error: live", url: "", line: 0, column: 0, stack: [], timestamp: ""}}}));
+    await expect.poll(() => seen.length).toBe(1);
+    expect(seen[0]).toMatchObject({message: "Uncaught Error: live"});
+    remove();
   });
 
   it("returns launch metadata and bounded all-tab diagnostics", async () => {

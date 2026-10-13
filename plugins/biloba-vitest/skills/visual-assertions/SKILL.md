@@ -25,7 +25,7 @@ The first run must fail when the baseline is missing. Review the actual image, e
 - Use `pixelTolerance` only when evidence supports allowing a bounded changed area.
 - Keep per-assertion overrides rare; a tolerance that keeps growing is evidence that the subject is nondeterministic.
 - Element captures round the element's box outward to whole CSS pixels; a baseline written before that rounding may be a pixel smaller and needs one update run.
-- Animations, transitions, and the caret freeze automatically. CSS animations on a scroll or view timeline keep running, since they depend only on the scroll position. Opt into animated capture only when motion is the subject.
+- In `expectScreenshot()`, animations, transitions, and the caret freeze automatically. CSS animations on a scroll or view timeline keep running, since they depend only on the scroll position. Opt into animated capture only when motion is the subject. A plain `captureScreenshot()` is not frozen unless you pass `frozen: true`.
 - When capturing both color schemes, ensure the app still follows `prefers-color-scheme`; a stored/manual override can make both baselines identical.
 
 A mismatch throws `BilobaError`. Read its `visual` diagnosis and `artifactPaths` before opening the PNGs: the pixel count and amplitude verdict distinguish rendering noise from a real content or color change. The baseline is committed evidence; `.actual.png` and `.diff.png` are disposable failure artifacts.

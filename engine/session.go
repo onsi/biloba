@@ -62,11 +62,15 @@ type Session struct {
 	mu                    sync.Mutex
 	requestMu             sync.Mutex
 	requests              []Request
+	requestIndex          map[network.RequestID]int
 	consoleMu             sync.Mutex
 	consoleMessages       []ConsoleMessage
 	consoleDropped        uint64
 	consoleSubs           map[uint64]*consoleSubscriber
 	consoleSubSeq         uint64
+	pageErrors            []PageError
+	pageErrorsDropped     uint64
+	pageErrorSubs         map[uint64]*pageErrorSubscriber
 	dialogMu              sync.Mutex
 	dialogHandlers        []dialogHandlerEntry
 	dialogHistory         []Dialog
@@ -86,7 +90,7 @@ type Session struct {
 	interceptionMu        sync.Mutex
 	interceptionSeq       uint64
 	responses             []Response
-	inflight              map[network.RequestID]struct{}
+	inflight              map[network.RequestID]InflightRequest
 	cacheEnabled          bool
 	networkState          NetworkState
 	networkShadows        []NetworkShadowDiagnostic
@@ -108,6 +112,7 @@ type Session struct {
 	visual                visualLifecycle
 	media                 Media
 	emulated              emulationOverrides
+	boundary              documentBoundary
 	// permissionsSet is raised on the context owner when any session in its context sets a
 	// permission, so the owner's Prepare knows to reset them.  Atomic because a spawned tab raises it
 	// under its own lock, not the owner's.
@@ -342,6 +347,7 @@ func (s *Session) Prepare(ctx context.Context) error {
 		}
 		s.eventsEnabled.Store(false)
 		s.eventGeneration.Add(1)
+		s.boundary.reset()
 		defer s.eventsEnabled.Store(true)
 		wasCrashed := s.hasCrashed()
 		if err := s.cleanupVisualState(opCtx, !wasCrashed); err != nil && !wasCrashed {
@@ -355,6 +361,7 @@ func (s *Session) Prepare(ctx context.Context) error {
 		}
 		s.clearRequests()
 		s.clearConsoleMessages()
+		s.clearPageErrors()
 		s.clearDialogs()
 		if err := s.resetDownloads(opCtx); err != nil {
 			return err

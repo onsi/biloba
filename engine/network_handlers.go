@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -859,12 +860,25 @@ func (s *Session) Responses(q ResponseQuery) []Response {
 	}
 	return out
 }
-func (s *Session) trackRequest(id network.RequestID) {
+
+// InflightRequest is a request Chrome announced and has not yet finished or failed: what
+// WaitForNetworkIdle names when it times out.  A redirect replaces it with the next hop and keeps the
+// original Started.
+type InflightRequest struct {
+	Method, URL, ResourceType string
+	Started                   time.Time
+}
+
+func (s *Session) trackRequest(event *network.EventRequestWillBeSent) {
 	s.networkMu.Lock()
 	if s.inflight == nil {
-		s.inflight = map[network.RequestID]struct{}{}
+		s.inflight = map[network.RequestID]InflightRequest{}
 	}
-	s.inflight[id] = struct{}{}
+	started := time.Now()
+	if hop, ok := s.inflight[event.RequestID]; ok {
+		started = hop.Started
+	}
+	s.inflight[event.RequestID] = InflightRequest{Method: event.Request.Method, URL: event.Request.URL, ResourceType: event.Type.String(), Started: started}
 	s.networkMu.Unlock()
 }
 func (s *Session) finishRequest(id network.RequestID) {
@@ -877,14 +891,49 @@ func (s *Session) InflightRequestCount() int {
 	defer s.networkMu.Unlock()
 	return len(s.inflight)
 }
+
+// InflightRequests returns the requests in flight, oldest first.
+func (s *Session) InflightRequests() []InflightRequest {
+	s.networkMu.Lock()
+	out := make([]InflightRequest, 0, len(s.inflight))
+	for _, request := range s.inflight {
+		out = append(out, request)
+	}
+	s.networkMu.Unlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].Started.Before(out[j].Started) })
+	return out
+}
+
+// WaitForNetworkIdle polls until no request is in flight.  When the poll times out, its error names
+// each request its last attempt saw in flight (method, URL, resource type, and how long it had been
+// in flight), oldest first.
 func (s *Session) WaitForNetworkIdle(ctx context.Context, p PollPolicy) (PollResult, error) {
-	return Poll(ctx, p, func(context.Context) (Observation, bool, error) {
+	var last []InflightRequest
+	var at time.Time
+	result, err := Poll(ctx, p, func(context.Context) (Observation, bool, error) {
 		if err := s.frameObservationError("wait for network idle"); err != nil {
 			return Observation{}, false, err
 		}
-		n := s.InflightRequestCount()
-		return Observation{Value: n}, n == 0, nil
+		last, at = s.InflightRequests(), time.Now()
+		return Observation{Value: len(last)}, len(last) == 0, nil
 	})
+	var pollErr *Error
+	if errors.As(err, &pollErr) && pollErr.Code == CodeTimeout && len(last) > 0 {
+		pollErr.Operation = "wait for network idle"
+		pollErr.Message = NetworkIdleFailureMessage(last, at)
+	}
+	return result, err
+}
+
+// NetworkIdleFailureMessage describes the requests still in flight at time at, the way both clients
+// report a network-idle assertion that timed out.
+func NetworkIdleFailureMessage(inflight []InflightRequest, at time.Time) string {
+	out := &strings.Builder{}
+	fmt.Fprintf(out, "expected the session to be network idle, but it has %d in-flight request(s)", len(inflight))
+	for _, request := range inflight {
+		fmt.Fprintf(out, "\n  %s %s (%s, in flight for %s)", request.Method, request.URL, request.ResourceType, at.Sub(request.Started).Round(time.Millisecond))
+	}
+	return out.String()
 }
 func (s *Session) SetNetworkState(ctx context.Context, state NetworkState) error {
 	if err := s.tabOnly("set network state"); err != nil {

@@ -48,6 +48,28 @@ describe("Vitest diagnostics lifecycle", () => {
     await expect(adapter.finish("already failed", true)).resolves.toBeUndefined();
   });
 
+  it("replays page errors with the console errors, one-based, and leaves Chrome's own messages out", async () => {
+    const output: string[] = [];
+    const fake = {...fakeSession("a", []),
+      consoleMessages: async () => [
+        {type: "error", source: "", text: "first", args: [], timestamp: "2026-01-01T00:00:01Z", stack: []},
+        {type: "error", source: "network", text: "Failed to load resource: 404", args: [], timestamp: "2026-01-01T00:00:02Z", stack: []},
+        {type: "error", source: "", text: "third", args: [], timestamp: "2026-01-01T00:00:04Z", stack: []},
+      ],
+      pageErrors: async () => [
+        {message: "Uncaught Error: boom", url: "https://app.test/app.js", line: 4, column: 7, stack: [], timestamp: "2026-01-01T00:00:03Z"},
+        {message: "Uncaught (in promise) 42", url: "", line: 0, column: 0, stack: [], timestamp: "2026-01-01T00:00:05Z"},
+      ],
+    } as unknown as Session;
+    await adapterFor([fake], output).finish("page errors", false);
+    expect(output).toEqual([
+      "[browser error] first\n",
+      "[browser pageerror] Uncaught Error: boom (https://app.test/app.js:5:8)\n",
+      "[browser error] third\n",
+      "[browser pageerror] Uncaught (in promise) 42\n",
+    ]);
+  });
+
   it("deduplicates contexts and awaits a fired progress capture before finish", async () => {
     vi.useFakeTimers();
     const requested: unknown[] = [];

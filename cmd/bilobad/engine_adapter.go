@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/chromedp/cdproto/page"
 	"github.com/onsi/biloba/engine"
 	"github.com/onsi/biloba/protocol"
 )
@@ -184,14 +185,18 @@ func requestQueryFromProtocol(o protocol.EventfulOperation) (engine.RequestQuery
 		return engine.RequestQuery{}, err
 	}
 	resource, err := protocolExpectation(o.ResourceType)
-	return engine.RequestQuery{URL: url, Method: method, ResourceType: resource}, err
+	if err != nil {
+		return engine.RequestQuery{}, err
+	}
+	status, err := protocolExpectation(o.Status)
+	return engine.RequestQuery{URL: url, Method: method, ResourceType: resource, Status: status, Failed: o.Failed}, err
 }
 func responseQueryFromProtocol(o protocol.EventfulOperation) (engine.ResponseQuery, error) {
 	url, err := protocolExpectation(o.URL)
 	if err != nil {
 		return engine.ResponseQuery{}, err
 	}
-	status, err := protocolExpectation(o.State)
+	status, err := protocolExpectation(o.Status)
 	return engine.ResponseQuery{URL: url, Status: status}, err
 }
 
@@ -304,7 +309,7 @@ func downloadsToWire(values []engine.Download) []map[string]any {
 	return result
 }
 func requestToWire(v engine.Request) map[string]any {
-	return map[string]any{"url": v.URL, "method": v.Method, "headers": headerEntriesToWire(v.Headers), "resourceType": v.ResourceType}
+	return map[string]any{"url": v.URL, "method": v.Method, "headers": headerEntriesToWire(v.Headers), "resourceType": v.ResourceType, "status": v.Status, "failure": v.Failure}
 }
 func requestsToWire(values []engine.Request) []map[string]any {
 	result := make([]map[string]any, len(values))
@@ -585,6 +590,17 @@ func (s *engineSession) SubscribeEvents(types []string) (protocol.EventSubscript
 				message, ok := <-subscription.Events()
 				return consoleMessageToWire(message), message.Generation, ok
 			}, subscription.Dropped)
+		case "pageError":
+			subscription, err := s.session.SubscribePageErrors(256)
+			if err != nil {
+				_ = result.Close()
+				return nil, engineRPCError(err)
+			}
+			result.closers = append(result.closers, subscription.Close)
+			forward("pageError", func() (any, uint64, bool) {
+				pageError, ok := <-subscription.Events()
+				return pageErrorToWire(pageError), pageError.Generation, ok
+			}, subscription.Dropped)
 		case "warning":
 			subscription, err := s.session.SubscribeWarnings(256)
 			if err != nil {
@@ -598,7 +614,7 @@ func (s *engineSession) SubscribeEvents(types []string) (protocol.EventSubscript
 			}, subscription.Dropped)
 		default:
 			_ = result.Close()
-			return nil, protocol.NewError(protocol.CodeInvalidArgument, "session subscriptions support console and warning events")
+			return nil, protocol.NewError(protocol.CodeInvalidArgument, "session subscriptions support console, pageError, and warning events")
 		}
 	}
 	go func() {
@@ -893,7 +909,10 @@ func (s *engineSession) screenshot(ctx context.Context, operation protocol.Opera
 		target = engine.PageScreenshotTarget()
 	}
 	if request.Kind == protocol.ScreenshotCapture {
-		captureOptions := engine.ScreenshotCaptureOptions{Masks: masks, Animated: request.Animated, ColorScheme: request.ColorScheme, MaxBytes: maxBytes}
+		captureOptions := engine.ScreenshotCaptureOptions{Masks: masks, Frozen: request.Frozen, HideCaret: request.HideCaret, Viewport: request.Viewport, ColorScheme: request.ColorScheme, MaxBytes: maxBytes}
+		if request.Clip != nil {
+			captureOptions.Clip = &page.Viewport{X: request.Clip.X, Y: request.Clip.Y, Width: request.Clip.Width, Height: request.Clip.Height, Scale: 1}
+		}
 		var shot engine.Screenshot
 		var err error
 		if request.Target.Kind == protocol.ScreenshotElement {
@@ -1152,6 +1171,26 @@ func (s *engineSession) lifecycle(ctx context.Context, operation protocol.Operat
 			})
 		}
 		return observedResult(started, consoleMessagesToWire(s.session.ConsoleMessages())), nil
+	case protocol.LifecyclePageErrors:
+		if lifecycle.Expectation.Kind != 0 {
+			return s.poll(ctx, operation, func(context.Context) (engine.Observation, bool, error) {
+				expected, convertErr := expectationFromProtocol(lifecycle.Expectation)
+				if convertErr != nil {
+					return engine.Observation{}, false, engine.Fatal(convertErr)
+				}
+				for _, pageError := range s.session.PageErrors() {
+					matched, matchErr := engine.MatchExpectation(pageError.Message, expected)
+					if matchErr != nil {
+						return engine.Observation{}, false, engine.Fatal(matchErr)
+					}
+					if matched {
+						return engine.Observation{Value: pageErrorToWire(pageError)}, true, nil
+					}
+				}
+				return engine.Observation{Value: nil}, false, nil
+			})
+		}
+		return observedResult(started, pageErrorsToWire(s.session.PageErrors())), nil
 	case protocol.LifecycleSetDeviceMetrics:
 		return oneAttempt(started, s.session.SetDeviceMetrics(ctx, engine.DeviceMetrics{Width: lifecycle.Width, Height: lifecycle.Height, DeviceScaleFactor: lifecycle.DeviceScaleFactor, Mobile: lifecycle.Mobile, Touch: lifecycle.Touch, Landscape: lifecycle.Landscape}))
 	case protocol.LifecycleClearDeviceMetrics:
@@ -1190,11 +1229,31 @@ func (s *engineSession) lifecycle(ctx context.Context, operation protocol.Operat
 }
 
 func consoleMessageToWire(message engine.ConsoleMessage) map[string]any {
-	stack := make([]map[string]any, len(message.Stack))
-	for index, frame := range message.Stack {
+	args := message.Args
+	if args == nil {
+		args = []any{}
+	}
+	return map[string]any{"type": message.Type, "source": message.Source, "text": message.Text, "args": args, "timestamp": message.Timestamp, "stack": stackToWire(message.Stack), "generation": message.Generation}
+}
+
+func stackToWire(frames []engine.ConsoleStackFrame) []map[string]any {
+	stack := make([]map[string]any, len(frames))
+	for index, frame := range frames {
 		stack[index] = map[string]any{"url": frame.URL, "functionName": frame.FunctionName, "line": frame.Line, "column": frame.Column}
 	}
-	return map[string]any{"type": message.Type, "text": message.Text, "args": message.Args, "timestamp": message.Timestamp, "stack": stack, "generation": message.Generation}
+	return stack
+}
+
+func pageErrorToWire(pageError engine.PageError) map[string]any {
+	return map[string]any{"message": pageError.Message, "url": pageError.URL, "line": pageError.Line, "column": pageError.Column, "timestamp": pageError.Timestamp, "stack": stackToWire(pageError.Stack), "generation": pageError.Generation}
+}
+
+func pageErrorsToWire(pageErrors []engine.PageError) []map[string]any {
+	result := make([]map[string]any, len(pageErrors))
+	for index, pageError := range pageErrors {
+		result[index] = pageErrorToWire(pageError)
+	}
+	return result
 }
 
 func consoleMessagesToWire(messages []engine.ConsoleMessage) []map[string]any {

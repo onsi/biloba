@@ -115,10 +115,22 @@ func (s *Session) ConsoleSnapshot() ConsoleHistory {
 }
 
 func (s *Session) recordConsoleMessage(event *runtime.EventConsoleAPICalled) {
-	generation := s.eventGeneration.Load()
-	message := NewConsoleMessage(event)
-	message.Generation = generation
+	s.appendConsoleMessage(s.eventGeneration.Load(), NewConsoleMessage(event))
+}
 
+// recordLogEntry keeps a message Chrome generated itself (Log.entryAdded) in the console history.  It
+// runs on the event listener and makes no CDP calls.
+func (s *Session) recordLogEntry(event *cdplog.EventEntryAdded) {
+	if event.Entry == nil {
+		return
+	}
+	s.appendConsoleMessage(s.eventGeneration.Load(), NewLogEntryMessage(event.Entry))
+}
+
+// appendConsoleMessage records message and delivers it to subscribers, unless the session moved on to
+// a new event generation (a Prepare) after generation was read.
+func (s *Session) appendConsoleMessage(generation uint64, message ConsoleMessage) {
+	message.Generation = generation
 	s.consoleMu.Lock()
 	defer s.consoleMu.Unlock()
 	if !s.eventsEnabled.Load() || message.Generation != s.eventGeneration.Load() {
@@ -241,6 +253,10 @@ func (s *Session) closeConsoleSubscriptions() {
 	s.consoleMu.Lock()
 	for id, subscriber := range s.consoleSubs {
 		delete(s.consoleSubs, id)
+		close(subscriber.events)
+	}
+	for id, subscriber := range s.pageErrorSubs {
+		delete(s.pageErrorSubs, id)
 		close(subscriber.events)
 	}
 	s.consoleMu.Unlock()

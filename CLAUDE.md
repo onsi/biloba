@@ -88,7 +88,7 @@ Repo-specific testing conventions (see `biloba_suite_test.go`):
 | Local/session storage | `storage.go` | `storage_test.go` |
 | Network requests/stubbing/matchers | `network.go` | `network_test.go` |
 | Arbitrary JS (`Run`, `JSFunc`, `JSVar`, `EvaluateTo`) | `javascript.go` | `javascript_test.go` |
-| Navigation, console/stack-trace logging, console and page-error snapshots (`AllConsoleMessages`/`AllPageErrors`) | `navigation.go`, `logging.go`; engine: `engine/console.go`, `engine/page_errors.go` | `navigation_test.go`, `logging_test.go` |
+| Navigation, console/stack-trace logging, console and page-error snapshots (`AllConsoleMessages`/`AllPageErrors`); the engine's Prepare boundary for the previous document's late events | `navigation.go`, `logging.go`; engine: `engine/console.go`, `engine/page_errors.go`, `engine/boundary.go` | `navigation_test.go`, `logging_test.go`; `engine/observations_test.go` |
 | chrome-headless-shell resolution (`BILOBA_CHROME_HEADLESS_SHELL`) | `headless_shell.go` | `headless_shell_test.go` |
 | Browser-side primitives | `biloba.js` (copied to `engine/biloba.js` by `go generate ./engine`) | (exercised via Go tests) |
 | TypeScript client, daemon, engine, wire protocol | `typescript/`, `cmd/bilobad/`, `engine/`, `protocol/` | `typescript/test/`, each package's `*_test.go` (`make driver-test`) |
