@@ -74,6 +74,7 @@ var declarations = []reflect.Type{
 	reflect.TypeFor[protocol.WireDeviceMetrics](),
 	reflect.TypeFor[protocol.WireGeolocation](),
 	reflect.TypeFor[protocol.WireMedia](),
+	reflect.TypeFor[protocol.WireClockOperation](),
 	reflect.TypeFor[protocol.WireLifecycleOperation](),
 	reflect.TypeFor[protocol.LifecycleRequest](),
 	reflect.TypeFor[protocol.CookieListResponse](),
@@ -81,6 +82,9 @@ var declarations = []reflect.Type{
 	reflect.TypeFor[protocol.WireHeaderEntry](),
 	reflect.TypeFor[protocol.WireNetworkState](),
 	reflect.TypeFor[protocol.WireEventfulOperation](),
+	reflect.TypeFor[protocol.WireScreencastOptions](),
+	reflect.TypeFor[protocol.WireScreencastFrame](),
+	reflect.TypeFor[protocol.ScreencastFramesResponse](),
 	reflect.TypeFor[protocol.EventfulRequest](),
 	reflect.TypeFor[protocol.CallbackResultRequest](),
 	reflect.TypeFor[protocol.EventFrame](),
@@ -103,6 +107,7 @@ var declarations = []reflect.Type{
 	reflect.TypeFor[protocol.WireAssertion](),
 	reflect.TypeFor[protocol.AssertRequest](),
 	reflect.TypeFor[protocol.WireScreenshotTarget](),
+	reflect.TypeFor[protocol.WireScreenshotClip](),
 	reflect.TypeFor[protocol.WireScreenshotOperation](),
 	reflect.TypeFor[protocol.ScreenshotRequest](),
 	reflect.TypeFor[protocol.ScreenshotCaptureResult](),
@@ -124,6 +129,11 @@ func typeScript() string {
 	output.WriteString("export type ErrorCode =\n")
 	for _, code := range []protocol.ErrorCode{protocol.CodeInvalidArgument, protocol.CodeTimeout, protocol.CodeTargetNotFound, protocol.CodeTargetNotReady, protocol.CodeNavigation, protocol.CodeJavaScript, protocol.CodeProtocolMismatch, protocol.CodeDriverClosed, protocol.CodeDriver, protocol.CodeCancelled, protocol.CodeBrowserGone, protocol.CodePageCrashed, protocol.CodeVisualBaseline} {
 		fmt.Fprintf(&output, "  | %q\n", code)
+	}
+	output.WriteString(";\n\n")
+	output.WriteString("export type PermissionName =\n")
+	for _, name := range protocol.PermissionNames {
+		fmt.Fprintf(&output, "  | %q\n", name)
 	}
 	output.WriteString(";\n\n")
 	for _, declaration := range declarations {
@@ -172,7 +182,7 @@ func tsType(owner reflect.Type, field reflect.StructField) string {
 	if owner == reflect.TypeFor[protocol.WireDOMOperation]() {
 		switch field.Name {
 		case "Kind":
-			return `"TEXT" | "TEXTS" | "CLASSES" | "CLASSES_FOR_EACH" | "DISTINCT_ATTRIBUTE_COUNT" | "ATTRIBUTES" | "ATTRIBUTES_FOR_EACH" | "JSON_ATTRIBUTE" | "PROPERTIES" | "PROPERTIES_FOR_EACH" | "PROPERTY_FOR_EACH" | "VALUES" | "STATE" | "ALL_STATE" | "SET_PROPERTY" | "FOCUS" | "BLUR" | "HOVER" | "TYPE" | "SEND_KEYS" | "CLICK" | "CLICK_EACH" | "TAP" | "DRAG" | "SCROLL_INTO_VIEW" | "SCROLL_WHEEL" | "SELECT" | "CLEAR_SELECTION" | "INVOKE_METHOD" | "INVOKE_FUNCTION" | "INVOKE_METHOD_FOR_EACH" | "INVOKE_FUNCTION_FOR_EACH" | "BOUNDING_BOX" | "SCROLL_OFFSET" | "OFFSET_WITHIN" | "RELATIVE_BOXES" | "GEOMETRY_RELATION" | "GAP_BETWEEN" | "IN_VIEWPORT" | "DOCUMENT_ORDER" | "COMPUTED_STYLE" | "COMPUTED_STYLE_NUMBER" | "NORMALIZE_COLOR"`
+			return `"TEXT" | "TEXTS" | "CLASSES" | "CLASSES_FOR_EACH" | "DISTINCT_ATTRIBUTE_COUNT" | "ATTRIBUTES" | "ATTRIBUTES_FOR_EACH" | "JSON_ATTRIBUTE" | "PROPERTIES" | "PROPERTIES_FOR_EACH" | "PROPERTY_FOR_EACH" | "VALUES" | "STATE" | "ALL_STATE" | "SET_PROPERTY" | "FOCUS" | "BLUR" | "HOVER" | "TYPE" | "SEND_KEYS" | "CLICK" | "CLICK_EACH" | "TAP" | "DRAG" | "SCROLL_INTO_VIEW" | "SCROLL_WHEEL" | "SELECT" | "CLEAR_SELECTION" | "INVOKE_METHOD" | "INVOKE_FUNCTION" | "INVOKE_METHOD_FOR_EACH" | "INVOKE_FUNCTION_FOR_EACH" | "BOUNDING_BOX" | "SCROLL_OFFSET" | "OFFSET_WITHIN" | "RELATIVE_BOXES" | "GEOMETRY_RELATION" | "GAP_BETWEEN" | "IN_VIEWPORT" | "DOCUMENT_ORDER" | "COMPUTED_STYLE" | "COMPUTED_STYLE_NUMBER" | "NORMALIZE_COLOR" | "POINTER_MOVE" | "POINTER_MOVE_TO_ELEMENT" | "POINTER_DOWN" | "POINTER_UP"`
 		case "TextMode":
 			return `"INNER_TEXT" | "TEXT_CONTENT" | "NORMALIZED_TEXT"`
 		case "Button":
@@ -183,7 +193,12 @@ func tsType(owner reflect.Type, field reflect.StructField) string {
 			return `"visible" | "enabled" | "clickable" | "checked" | "focused"`
 		case "Relation":
 			return `"above" | "below" | "leftOf" | "rightOf" | "encloses" | "overlaps"`
+		case "PointerType":
+			return `"mouse" | "pen"`
 		}
+	}
+	if owner == reflect.TypeFor[protocol.WireScreencastOptions]() && field.Name == "Format" {
+		return `"jpeg" | "png"`
 	}
 	if owner == reflect.TypeFor[protocol.WireAssertion]() {
 		switch field.Name {
@@ -217,7 +232,7 @@ func tsType(owner reflect.Type, field reflect.StructField) string {
 		}
 	}
 	if owner == reflect.TypeFor[protocol.WireLifecycleOperation]() && field.Name == "Kind" {
-		return `"GET_COOKIES" | "CLEAR_COOKIES" | "COOKIE_QUERY" | "STORAGE_SET" | "STORAGE_GET" | "STORAGE_GET_ALL" | "STORAGE_REMOVE" | "STORAGE_CLEAR" | "STORAGE_LENGTH" | "WAIT_FOR_DEFINED" | "URL" | "TITLE" | "WINDOW_SIZE" | "OUTLINE" | "ACCESSIBILITY_OUTLINE" | "CONSOLE_MESSAGES" | "SET_DEVICE_METRICS" | "CLEAR_DEVICE_METRICS" | "SET_GEOLOCATION" | "CLEAR_GEOLOCATION" | "SET_PERMISSIONS" | "RESET_PERMISSIONS" | "SET_LOCALE" | "CLEAR_LOCALE" | "SET_TIMEZONE" | "CLEAR_TIMEZONE" | "SET_MEDIA" | "CLEAR_MEDIA"`
+		return `"GET_COOKIES" | "CLEAR_COOKIES" | "COOKIE_QUERY" | "STORAGE_SET" | "STORAGE_GET" | "STORAGE_GET_ALL" | "STORAGE_REMOVE" | "STORAGE_CLEAR" | "STORAGE_LENGTH" | "WAIT_FOR_DEFINED" | "URL" | "TITLE" | "WINDOW_SIZE" | "OUTLINE" | "ACCESSIBILITY_OUTLINE" | "CONSOLE_MESSAGES" | "PAGE_ERRORS" | "SET_DEVICE_METRICS" | "CLEAR_DEVICE_METRICS" | "SET_GEOLOCATION" | "CLEAR_GEOLOCATION" | "SET_PERMISSIONS" | "RESET_PERMISSIONS" | "SET_LOCALE" | "CLEAR_LOCALE" | "SET_TIMEZONE" | "CLEAR_TIMEZONE" | "SET_MEDIA" | "CLEAR_MEDIA" | "SET_USER_AGENT" | "CLEAR_USER_AGENT" | "INSTALL_CLOCK" | "PAUSE_CLOCK_AT" | "RESUME_CLOCK" | "RUN_CLOCK_FOR" | "FAST_FORWARD_CLOCK" | "SET_CLOCK_FIXED_TIME" | "SET_CLOCK_SYSTEM_TIME"`
 	}
 	if owner == reflect.TypeFor[protocol.PollOptions]() && field.Name == "Mode" {
 		return `"EVENTUALLY" | "IMMEDIATE" | "CONSISTENTLY"`

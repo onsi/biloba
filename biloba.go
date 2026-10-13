@@ -861,8 +861,37 @@ type tabState struct {
 	// error is usually the root cause and is otherwise buried in the streamed timeline.
 	consoleErrors []string
 
-	requests         []*Request
-	inflightRequests map[network.RequestID]bool
+	// consoleMessages and pageErrors are the bounded histories AllConsoleMessages and AllPageErrors
+	// snapshot.
+	consoleMessages []ConsoleMessage
+	pageErrors      []PageError
+
+	// userAgent is the user-agent override SetUserAgent last applied ("" for none), so the
+	// DeferCleanup of a later call can restore it.
+	userAgent string
+
+	// emulation is the tab's environment emulation (SetGeolocation, SetLocale, SetTimezone,
+	// SetNetworkState, SetCacheEnabled).  Prepare carries it over the reset so it can clear what a
+	// spec leaked.
+	emulation emulationState
+
+	// permissions records SetPermissions by browser context.  Only the root tab's is used: a spawned
+	// tab shares its opener's browser context, so the records live where every tab reaches them.
+	// Prepare carries it over the reset too.
+	permissions map[cdp.BrowserContextID]*permissionRecord
+
+	// screencast is the recording StartScreencast has running on this tab, nil when none is.
+	screencast *ScreencastRecording
+
+	// clock is the page clock InstallClock installed on this tab, nil when none is.  Prepare reads it
+	// before the reset to remove a clock whose spec-end cleanup did not land.
+	clock *tabClock
+
+	requests []*Request
+	// requestsByID points at the latest record for each request ID (a redirect reuses the ID for its
+	// next hop), so response and failure events can fill in that record's Status and Failure.
+	requestsByID     map[network.RequestID]*Request
+	inflightRequests map[network.RequestID]engine.InflightRequest
 	requestHandlers  []*requestHandler       // ordered, first-match-wins: stub / abort / modify-request
 	responseHandlers []*ResponseModification // ordered, first-match-wins: modify-response (response stage)
 	fetchEnabled     bool
@@ -876,7 +905,8 @@ func newTabState() *tabState {
 		downloadHistory:  map[string]time.Time{},
 		dialogHandlers:   []*DialogHandler{},
 		dialogs:          Dialogs{},
-		inflightRequests: map[network.RequestID]bool{},
+		requestsByID:     map[network.RequestID]*Request{},
+		inflightRequests: map[network.RequestID]engine.InflightRequest{},
 	}
 }
 
@@ -942,14 +972,17 @@ type Biloba struct {
 	screenshotTolerance screenshotTolerance
 	updateScreenshots   bool
 
-	// colorSchemeEmulated records whether this TARGET currently carries an emulated
-	// prefers-color-scheme (see InColorSchemes).  Unlike the freeze stylesheet, which lives in the
-	// page and dies with a navigation, emulation.SetEmulatedMedia is a target-level override that
-	// outlives Navigate - so Prepare() clears it, but only when this flag says there is something to
-	// clear (Prepare runs before every spec and an unconditional CDP round trip there is not free).
-	// It is a pointer so the shallow clone-with-a-flag views (Realistic() and friends) share the
-	// tab's one flag instead of each getting a copy that the tab never sees.
-	colorSchemeEmulated *bool
+	// media is this TARGET's emulated CSS media (see SetMedia and InColorSchemes).  Unlike the freeze
+	// stylesheet, which lives in the page and dies with a navigation, emulation.SetEmulatedMedia is a
+	// target-level override that outlives Navigate - so Prepare() clears it, but only when there is
+	// something to clear (Prepare runs before every spec and an unconditional CDP round trip there is
+	// not free).  It is a pointer so the shallow clone-with-a-flag views (Realistic() and friends) and
+	// the tab's frame handles share the tab's one record instead of each getting a copy.
+	media *mediaEmulation
+
+	// boundary tells this tab's listener which events come from the page the last Prepare left behind
+	// (see setUpListeners).  Only the root tab's is ever reset: Prepare closes every other tab.
+	boundary *engine.DocumentBoundary
 
 	// pollTrajectory opts a suite into recording the (elapsed, value) trajectory of polled reads and
 	// attaching the failing read's series on failure (see BilobaConfigPollTrajectory).  On by default.
@@ -1008,7 +1041,8 @@ func newBiloba(ginkgoT GinkgoTInterface) *Biloba {
 		probes:                    &probeRecorder{},
 		occlusions:                &occlusionRecorder{},
 		unreadableResponseBodies:  &unreadableResponseBodyRecorder{},
-		colorSchemeEmulated:       new(bool),
+		media:                     &mediaEmulation{},
+		boundary:                  &engine.DocumentBoundary{},
 	}
 	return b
 }
@@ -1038,6 +1072,10 @@ func (b *Biloba) Prepare() {
 	if !b.isRootTab() {
 		return
 	}
+	// From here on, whatever the previous spec's page does - a fetch the about:blank navigation below
+	// aborts, the console output and request failures that follow - belongs to the previous spec, and
+	// the listener drops it instead of attributing it to the next one.  See engine.DocumentBoundary.
+	b.boundary.Reset()
 	b.detachFrames()
 	//close all tabs
 	closedTargetIDs := []target.ID{}
@@ -1065,15 +1103,20 @@ func (b *Biloba) Prepare() {
 	// Reset through the shared pointer, not by replacing it: every view of this tab holds the same
 	// *tabState, and swapping in a new one would leave the views pointing at the old.  bilobaIsInstalled
 	// is carried over deliberately - it tracks the page, and Prepare does not navigate.
-	installed := b.state.bilobaIsInstalled
+	installed, emulation, permissions, clock := b.state.bilobaIsInstalled, b.state.emulation, b.state.permissions, b.state.clock
 	*b.state = *newTabState()
 	b.state.bilobaIsInstalled = installed
+	// carried over so resetBrowsingState can clear whatever emulation the previous spec leaked
+	b.state.emulation, b.state.permissions = emulation, permissions
 	b.lock.Unlock()
 
 	// belt and braces with the DeferCleanup HoldResponse registers: a response held hostage by a
 	// previous spec is a real Chrome Fetch pause, and disabling Fetch underneath one would wedge
 	// the tab.  Force-release before we tear interception down.
 	releaseHeldResponses(discardedResponseHandlers)
+
+	// belt and braces with the DeferCleanup InstallClock registers
+	b.removeLeakedClock(clock)
 
 	// disable request interception if a previous spec stubbed requests, so the catch-all
 	// pause doesn't carry into specs that don't stub - and restore the HTTP cache that
@@ -1118,6 +1161,13 @@ func (b *Biloba) Prepare() {
 	// otherwise show up as the new spec's first recorded dialog and print "you should add an explicit
 	// dialog handler" against a spec that never opened a dialog.  Flag the reset so Prepare's own
 	// dialog is accepted silently; see handleEventJavascriptDialogOpening.
+	//
+	// A side effect worth knowing when a spec misbehaves only on Linux: because of this navigation,
+	// every spec's first page is a new site, and on Linux chrome-headless-shell a new site's first
+	// rendered frame comes with a trusted mouse move to (0, 0) - so whatever sits in the top-left
+	// corner gets :hover and its pointerover/mouseover handlers fire.  macOS and full Chrome don't do
+	// it, and parking the mouse elsewhere beforehand doesn't stop it.  Left alone deliberately; the
+	// pointer specs clear their event log after the first frames for this reason.
 	b.lock.Lock()
 	b.state.resetting = true
 	b.lock.Unlock()

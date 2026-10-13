@@ -30,6 +30,7 @@ import {
   type TabQuery,
   type WindowSize,
   type ConsoleMessage,
+  type PageError,
   type DeviceMetrics,
   type Geolocation,
   type Permission,
@@ -64,6 +65,8 @@ import {
   type XPathExpression,
   type ScreenshotBytesOptions,
   type ScreenshotPathOptions,
+  type PageScreenshotBytesOptions,
+  type PageScreenshotPathOptions,
   type ScreenshotWarning,
   type VisualResult,
   type VisualScreenshotOptions,
@@ -72,6 +75,15 @@ import {
   type ContextDiagnostics,
   type DriverDebugEvent,
   type BilobaWarning,
+  type Pointer,
+  type PointerHandleOptions,
+  type PointerType,
+  type MoveToElementOptions,
+  type ScreencastOptions,
+  type ScreencastFrame,
+  type ScreencastRecording,
+  type Clock,
+  type ClockTime,
 } from "../index.js";
 import {packageVersion} from "./package-version.js";
 import {StdioTransport} from "./stdio-transport.js";
@@ -252,12 +264,12 @@ class ClientSession implements Session {
   readonly #diagnostics: ResolvedDiagnosticsPolicy;
   #warningCount = 0;
   readonly #callbackIDs = new Set<string>();
-  readonly #consoleListeners = new Set<(message: ConsoleMessage) => void>();
-  readonly #warningListeners = new Set<(warning: BilobaWarning) => void>();
-  readonly #liveSubscriptions = new Map<"console" | "warning", Promise<string>>();
-  readonly #liveTeardown = new Map<"console" | "warning", Promise<void>>();
+  readonly #liveListeners: {readonly [K in LiveEventKind]: Set<(value: LiveEventPayload[K]) => void>} = {console: new Set(), pageError: new Set(), warning: new Set()};
+  readonly #liveSubscriptions = new Map<LiveEventKind, Promise<string>>();
+  readonly #liveTeardown = new Map<LiveEventKind, Promise<void>>();
   #warningFlush: Promise<void> | undefined;
   #eventGeneration = 0;
+  #pointerSequence = 0;
   closed = false;
 
   constructor(
@@ -295,9 +307,9 @@ class ClientSession implements Session {
     return this.#registerSibling(response);
   }
 
-  async captureScreenshot(options?: ScreenshotBytesOptions): Promise<Uint8Array>;
-  async captureScreenshot(options: ScreenshotPathOptions): Promise<string>;
-  async captureScreenshot(options: ScreenshotBytesOptions | ScreenshotPathOptions = {}): Promise<Uint8Array | string> {
+  async captureScreenshot(options?: PageScreenshotBytesOptions): Promise<Uint8Array>;
+  async captureScreenshot(options: PageScreenshotPathOptions): Promise<string>;
+  async captureScreenshot(options: PageScreenshotBytesOptions | PageScreenshotPathOptions = {}): Promise<Uint8Array | string> {
     return await this.captureScreenshotTarget(undefined, options);
   }
 
@@ -321,9 +333,11 @@ class ClientSession implements Session {
     return await this.expectScreenshotTarget(undefined, name, options);
   }
 
-  async captureScreenshotTarget(locator: WireLocator | undefined, options: ScreenshotBytesOptions | ScreenshotPathOptions): Promise<Uint8Array | string> {
+  async captureScreenshotTarget(locator: WireLocator | undefined, options: PageScreenshotBytesOptions | PageScreenshotPathOptions): Promise<Uint8Array | string> {
     this.#assertOpen();
-    assertOptionKeys(options, "captureScreenshot", new Set(["signal", "timeoutMs", "output", "name", "mask", "animated", "colorScheme", "maxBytes"]));
+    if ("animated" in options) throw new BilobaError({code: "INVALID_ARGUMENT", message: "captureScreenshot no longer takes animated: a capture is not frozen unless you pass frozen: true"});
+    if (locator !== undefined && "clip" in options) throw new BilobaError({code: "INVALID_ARGUMENT", message: "captureScreenshot clip selects a region of the viewport, so it applies to page captures: a locator capture is already clipped to its element"});
+    assertOptionKeys(options, "captureScreenshot", new Set(["signal", "timeoutMs", "output", "name", "mask", "frozen", "hideCaret", "viewport", "clip", "colorScheme", "maxBytes"]));
     const limit = this.#screenshotLimit(options.maxBytes);
     const output = options.output === "path" ? "PATH" : "BYTES";
     const response = await this.#transport.screenshot({
@@ -334,7 +348,10 @@ class ClientSession implements Session {
         output,
         ...(options.name !== undefined && {name: options.name}),
         ...(options.mask !== undefined && {masks: options.mask.map((mask) => wireScreenshotSubject(this, mask))}),
-        ...(options.animated !== undefined && {animated: options.animated}),
+        ...(options.frozen && {frozen: true}),
+        ...(options.hideCaret && {hideCaret: true}),
+        ...(options.viewport && {viewport: true}),
+        ...(options.clip !== undefined && {clip: {x: options.clip.x, y: options.clip.y, width: options.clip.width, height: options.clip.height}}),
         ...(options.colorScheme !== undefined && {colorScheme: options.colorScheme}),
         ...(options.maxBytes !== undefined && {maxBytes: limit}),
       },
@@ -594,6 +611,13 @@ class ClientSession implements Session {
   async accessibilityOutline(options: CommandOptions = {}): Promise<string> { return await this.#lifecycleValue<string>({kind: "ACCESSIBILITY_OUTLINE"}, options); }
   async consoleMessages(options: CommandOptions = {}): Promise<readonly ConsoleMessage[]> { return await this.#lifecycleValue<readonly ConsoleMessage[]>({kind: "CONSOLE_MESSAGES"}, options); }
   onConsoleMessage(listener: (message: ConsoleMessage) => void): () => void { return this.#addLiveListener("console", listener); }
+  async pageErrors(options: CommandOptions = {}): Promise<readonly PageError[]> { return await this.#lifecycleValue<readonly PageError[]>({kind: "PAGE_ERRORS"}, options); }
+  onPageError(listener: (pageError: PageError) => void): () => void { return this.#addLiveListener("pageError", listener); }
+  async expectPageError(expected: ExpectedValue, options: PollOptions = {}): Promise<PageError> {
+    const response = await this.lifecycleOperation({kind: "PAGE_ERRORS"}, options, wireExpectation(expected));
+    operationResult(response, "page error assertion", new Error().stack);
+    return parseJson(response.observedJson) as PageError;
+  }
   onWarning(listener: (warning: BilobaWarning) => void): () => void { return this.#addLiveListener("warning", listener); }
   async expectConsoleMessage(expected: ExpectedValue, options: PollOptions & {type?: string} = {}): Promise<ConsoleMessage> {
     const {type, ...poll} = options;
@@ -601,7 +625,7 @@ class ClientSession implements Session {
     operationResult(response, "console message assertion", new Error().stack);
     return parseJson(response.observedJson) as ConsoleMessage;
   }
-  async setDeviceMetrics(metrics: DeviceMetrics, options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "SET_DEVICE_METRICS", device: {width: metrics.width, height: metrics.height, deviceScaleFactor: metrics.deviceScaleFactor ?? 1, ...(metrics.mobile !== undefined && {mobile: metrics.mobile})}}, options); }
+  async setDeviceMetrics(metrics: DeviceMetrics, options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "SET_DEVICE_METRICS", device: {width: metrics.width, height: metrics.height, deviceScaleFactor: metrics.deviceScaleFactor ?? 1, ...(metrics.mobile !== undefined && {mobile: metrics.mobile}), ...(metrics.touch !== undefined && {touch: metrics.touch}), ...(metrics.landscape !== undefined && {landscape: metrics.landscape})}}, options); }
   async clearDeviceMetrics(options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "CLEAR_DEVICE_METRICS"}, options); }
   async setGeolocation(location: Geolocation, options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "SET_GEOLOCATION", geolocation: {latitude: location.latitude, longitude: location.longitude, ...(location.accuracy !== undefined && {accuracy: location.accuracy})}}, options); }
   async clearGeolocation(options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "CLEAR_GEOLOCATION"}, options); }
@@ -613,6 +637,39 @@ class ClientSession implements Session {
   async clearTimezone(options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "CLEAR_TIMEZONE"}, options); }
   async setMedia(media: MediaEmulation, options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "SET_MEDIA", media: {...(media.type !== undefined && {type: media.type}), ...(media.colorScheme !== undefined && {colorScheme: media.colorScheme}), ...(media.reducedMotion !== undefined && {reducedMotion: media.reducedMotion})}}, options); }
   async clearMedia(options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "CLEAR_MEDIA"}, options); }
+  async setUserAgent(userAgent: string, options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "SET_USER_AGENT", userAgent}, options); }
+  async clearUserAgent(options: CommandOptions = {}): Promise<void> { await this.#lifecycleCommand({kind: "CLEAR_USER_AGENT"}, options); }
+
+  pointer(options: PointerHandleOptions = {}): Pointer {
+    this.#assertOpen();
+    assertOptionKeys(options, "pointer", new Set(["type"]));
+    const type = options.type ?? "mouse";
+    if (type !== "mouse" && type !== "pen") throw new BilobaError({code: "INVALID_ARGUMENT", message: `pointer type must be "mouse" or "pen", got ${JSON.stringify(type)}`});
+    return new ClientPointer(this, ++this.#pointerSequence, type);
+  }
+
+  async startScreencast(options: ScreencastOptions = {}): Promise<ScreencastRecording> {
+    assertOptionKeys(options, "startScreencast", new Set(["signal", "format", "quality", "maxWidth", "maxHeight", "everyNthFrame"]));
+    if (options.format !== undefined && options.format !== "jpeg" && options.format !== "png") throw new BilobaError({code: "INVALID_ARGUMENT", message: `startScreencast format must be "jpeg" or "png", got ${JSON.stringify(options.format)}`});
+    for (const name of ["quality", "maxWidth", "maxHeight", "everyNthFrame"] as const) {
+      const value = options[name];
+      if (value !== undefined && (!Number.isInteger(value) || value < 0 || (name === "quality" && value > 100))) throw new BilobaError({code: "INVALID_ARGUMENT", message: `startScreencast ${name} must be ${name === "quality" ? "an integer from 0 to 100" : "a non-negative integer"}, got ${value}`});
+    }
+    const {signal, ...settings} = options;
+    const result = await this.eventfulValue<{id: string}>({kind: "START_SCREENCAST", screencast: definedEntries(settings)}, signal ? {signal} : {});
+    return new ClientScreencastRecording(this, result.id);
+  }
+
+  async installClock(start: ClockTime, options: CommandOptions = {}): Promise<Clock> {
+    const clock = new ClientClock(this);
+    await clock.command("INSTALL_CLOCK", {timeMs: clockTimeMs(start, "installClock")}, options, "installClock");
+    return clock;
+  }
+
+  clock(): Clock {
+    this.#assertOpen();
+    return new ClientClock(this);
+  }
 
   async #listHandles(kind: "tabs" | "frames", spawnedOnly: boolean, options: CommandOptions): Promise<readonly Session[]> {
     this.#assertOpen();
@@ -834,24 +891,21 @@ class ClientSession implements Session {
   }
   #clearCallbacks(): void { for (const id of this.#callbackIDs) this.#transport.removeResponseCallback(id); this.#callbackIDs.clear(); }
 
-  #addLiveListener(kind: "console", listener: (message: ConsoleMessage) => void): () => void;
-  #addLiveListener(kind: "warning", listener: (warning: BilobaWarning) => void): () => void;
-  #addLiveListener(kind: "console" | "warning", listener: ((message: ConsoleMessage) => void) | ((warning: BilobaWarning) => void)): () => void {
+  #addLiveListener<K extends LiveEventKind>(kind: K, listener: (value: LiveEventPayload[K]) => void): () => void {
     this.#assertOpen();
-    const listeners = kind === "console" ? this.#consoleListeners : this.#warningListeners;
-    (listeners as Set<typeof listener>).add(listener);
+    const listeners = this.#liveListeners[kind] as Set<(value: LiveEventPayload[K]) => void>;
+    listeners.add(listener);
     if (!this.#liveSubscriptions.has(kind)) {
       const pending = (this.#liveTeardown.get(kind) ?? Promise.resolve()).then(async () => await this.#transport.subscribeEvents({sessionId: this.id, types: [kind]})).then(({subscriptionId}) => {
         this.#transport.registerEventListener(subscriptionId, (event, envelope) => {
           if ((envelope.generation ?? 0) < this.#eventGeneration) return;
           this.#eventGeneration = Math.max(this.#eventGeneration, envelope.generation ?? 0);
-          const current = kind === "console" ? this.#consoleListeners : this.#warningListeners;
           if (event === "eventsDropped") {
             const warning = envelope.payload as BilobaWarning;
-            for (const callback of this.#warningListeners) { try { callback(warning); } catch { /* listeners are isolated */ } }
+            for (const callback of this.#liveListeners.warning) { try { callback(warning); } catch { /* listeners are isolated */ } }
             return;
           }
-          for (const callback of current as Set<(value: unknown) => void>) { try { callback(envelope.payload); } catch { /* listeners are isolated */ } }
+          for (const callback of this.#liveListeners[kind] as Set<(value: unknown) => void>) { try { callback(envelope.payload); } catch { /* listeners are isolated */ } }
         });
         return subscriptionId;
       });
@@ -859,12 +913,12 @@ class ClientSession implements Session {
     }
     let removed = false;
     return () => {
-      if (removed) return; removed = true; (listeners as Set<typeof listener>).delete(listener);
+      if (removed) return; removed = true; listeners.delete(listener);
       if (listeners.size === 0) void this.#removeLiveSubscription(kind);
     };
   }
 
-  async #removeLiveSubscription(kind: "console" | "warning"): Promise<void> {
+  async #removeLiveSubscription(kind: LiveEventKind): Promise<void> {
     const pending = this.#liveSubscriptions.get(kind); if (!pending) return; this.#liveSubscriptions.delete(kind);
     const teardown = (async () => { try { const id = await pending; this.#transport.removeEventListener(id); await this.#transport.unsubscribeEvents({subscriptionId: id}); } catch { /* teardown is best effort */ } })();
     this.#liveTeardown.set(kind, teardown);
@@ -872,7 +926,7 @@ class ClientSession implements Session {
     if (this.#liveTeardown.get(kind) === teardown) this.#liveTeardown.delete(kind);
   }
 
-  #clearLiveListeners(): void { this.#consoleListeners.clear(); this.#warningListeners.clear(); void this.#removeLiveSubscription("console"); void this.#removeLiveSubscription("warning"); }
+  #clearLiveListeners(): void { for (const kind of liveEventKinds) { this.#liveListeners[kind].clear(); void this.#removeLiveSubscription(kind); } }
 
   async url(options: CommandOptions = {}): Promise<string> { return await this.#lifecycleValue<string>({kind: "URL"}, options); }
 
@@ -1000,6 +1054,129 @@ class ClientStorage implements BrowserStorage {
   async expectLength(expected: number | Expectation, options: PollOptions = {}): Promise<AssertionResult> { return assertionResult(await this.session.lifecycleOperation({kind: "STORAGE_LENGTH", area: this.area}, options, wireExpectation(expected)), new Error().stack); }
 }
 
+class ClientPointer implements Pointer {
+  readonly #session: ClientSession;
+  readonly #id: number;
+  readonly type: PointerType;
+
+  constructor(session: ClientSession, id: number, type: PointerType) {
+    this.#session = session;
+    this.#id = id;
+    this.type = type;
+  }
+
+  async moveTo(x: number, y: number, options: CancellationOptions = {}): Promise<void> {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new BilobaError({code: "INVALID_ARGUMENT", message: "pointer.moveTo requires finite coordinates"});
+    await this.#dispatch({kind: "POINTER_MOVE", point: {x, y}}, options, "pointer.moveTo");
+  }
+
+  async moveToElement(target: Locator | string, options: MoveToElementOptions = {}): Promise<void> {
+    assertOptionKeys(options, "pointer.moveToElement", new Set(["timeoutMs", "intervalMs", "signal", "mode", "immediate", "position"]));
+    if (options.mode === "consistently") throw new BilobaError({code: "INVALID_ARGUMENT", message: "pointer.moveToElement does not support consistently"});
+    const {position, ...poll} = options;
+    const callsiteStack = new Error().stack;
+    const response = await this.#session.dom({kind: "POINTER_MOVE_TO_ELEMENT", locator: wireSessionLocator(this.#session, target, "pointer.moveToElement"), pointerId: this.#id, pointerType: this.type, ...(position && {offset: {x: position.x, y: position.y}})}, poll);
+    operationResult(response, "pointer.moveToElement", callsiteStack);
+  }
+
+  async down(options: CancellationOptions = {}): Promise<void> { await this.#dispatch({kind: "POINTER_DOWN"}, options, "pointer.down"); }
+  async up(options: CancellationOptions = {}): Promise<void> { await this.#dispatch({kind: "POINTER_UP"}, options, "pointer.up"); }
+
+  // Moves, presses, and releases dispatch once on the daemon whatever the poll says; they take no poll.
+  async #dispatch(operation: Pick<WireDOMOperation, "kind" | "point">, options: CancellationOptions, label: string): Promise<void> {
+    assertCancellationOptions(options, label);
+    const callsiteStack = new Error().stack;
+    const response = await this.#session.dom({...operation, pointerId: this.#id, pointerType: this.type}, options);
+    operationResult(response, label, callsiteStack);
+  }
+}
+
+// The engine's DefaultClockRunTimeout: how long runFor may spend, in real time, unless told otherwise.
+const defaultClockRunTimeoutMs = 10_000;
+
+// A handle on the tab's page clock.  The daemon owns the clock (engine.Session keeps it, and prepare()
+// removes it), so the handle holds no state and every call names the operation and its arguments.
+class ClientClock implements Clock {
+  readonly #session: ClientSession;
+
+  constructor(session: ClientSession) { this.#session = session; }
+
+  async pauseAt(time: ClockTime, options: CommandOptions = {}): Promise<void> { await this.command("PAUSE_CLOCK_AT", {timeMs: clockTimeMs(time, "clock.pauseAt")}, options, "clock.pauseAt"); }
+  async resume(options: CommandOptions = {}): Promise<void> { await this.command("RESUME_CLOCK", undefined, options, "clock.resume"); }
+  async fastForward(ms: number, options: CommandOptions = {}): Promise<void> { await this.command("FAST_FORWARD_CLOCK", {durationMs: clockDurationMs(ms, "clock.fastForward")}, options, "clock.fastForward"); }
+  async setFixedTime(time: ClockTime, options: CommandOptions = {}): Promise<void> { await this.command("SET_CLOCK_FIXED_TIME", {timeMs: clockTimeMs(time, "clock.setFixedTime")}, options, "clock.setFixedTime"); }
+  async setSystemTime(time: ClockTime, options: CommandOptions = {}): Promise<void> { await this.command("SET_CLOCK_SYSTEM_TIME", {timeMs: clockTimeMs(time, "clock.setSystemTime")}, options, "clock.setSystemTime"); }
+
+  // runFor is a waiting command: timeoutMs is its real-time budget, which the daemon enforces in the
+  // page, and the request's own deadline sits on top of it so the daemon reports how far it got.
+  async runFor(ms: number, options: WaitingCommandOptions = {}): Promise<void> {
+    assertWaitingCommandOptions(options, "clock.runFor");
+    const durationMs = clockDurationMs(ms, "clock.runFor");
+    const timeoutMs = options.timeoutMs ?? defaultClockRunTimeoutMs;
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new BilobaError({code: "INVALID_ARGUMENT", message: `clock.runFor timeoutMs must be a positive number of milliseconds, got ${timeoutMs}`});
+    const budget = Math.ceil(timeoutMs);
+    const callsiteStack = new Error().stack;
+    const response = await this.#session.lifecycleOperation({kind: "RUN_CLOCK_FOR", clock: {durationMs, timeoutMs: budget}}, {...(options.signal && {signal: options.signal}), timeoutMs: budget, mode: "immediate"});
+    operationResult(response, "clock.runFor", callsiteStack);
+  }
+
+  async command(kind: WireLifecycleOperation["kind"], clock: WireLifecycleOperation["clock"], options: CommandOptions, label: string): Promise<void> {
+    assertCancellationOptions(options, label);
+    const callsiteStack = new Error().stack;
+    const response = await this.#session.lifecycleOperation({kind, ...(clock && {clock})}, {...options, mode: "immediate"});
+    operationResult(response, label, callsiteStack);
+  }
+}
+
+function clockTimeMs(time: ClockTime, operation: string): number {
+  const ms = time instanceof Date ? time.getTime() : time;
+  if (typeof ms !== "number" || !Number.isFinite(ms)) throw new BilobaError({code: "INVALID_ARGUMENT", message: `${operation} requires a valid Date or a number of milliseconds since the epoch, got ${String(time)}`});
+  return Math.floor(ms);
+}
+
+function clockDurationMs(ms: number, operation: string): number {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) throw new BilobaError({code: "INVALID_ARGUMENT", message: `${operation} requires a non-negative number of milliseconds, got ${String(ms)}`});
+  return Math.floor(ms);
+}
+
+class ClientScreencastRecording implements ScreencastRecording {
+  readonly #session: ClientSession;
+  readonly #id: string;
+  #frames: readonly ScreencastFrame[] | undefined;
+  #stopping: Promise<readonly ScreencastFrame[]> | undefined;
+
+  constructor(session: ClientSession, id: string) {
+    this.#session = session;
+    this.#id = id;
+  }
+
+  async stop(options: CancellationOptions = {}): Promise<readonly ScreencastFrame[]> {
+    assertCancellationOptions(options, "stop");
+    if (this.#frames) return this.#frames;
+    this.#stopping ??= this.#collect(options).finally(() => { this.#stopping = undefined; });
+    this.#frames = await this.#stopping;
+    return this.#frames;
+  }
+
+  // The daemon answers the stop with the first chunk of frames that fits its response budget, and the
+  // rest on request: a long recording would not fit in one protocol frame.
+  async #collect(options: CancellationOptions): Promise<readonly ScreencastFrame[]> {
+    type Chunk = import("../generated/protocol.js").ScreencastFramesResponse;
+    let chunk = await this.#session.eventfulValue<Chunk>({kind: "STOP_SCREENCAST", id: this.#id}, options);
+    const frames = chunk.frames.map(screencastFrame);
+    while (frames.length < chunk.count) {
+      chunk = await this.#session.eventfulValue<Chunk>({kind: "SCREENCAST_FRAMES", id: this.#id, offset: frames.length}, options);
+      if (chunk.offset !== frames.length || chunk.frames.length === 0) throw driverShapeError("screencast frames response did not continue where the last one ended");
+      frames.push(...chunk.frames.map(screencastFrame));
+    }
+    return Object.freeze(frames);
+  }
+}
+
+function screencastFrame(frame: import("../generated/protocol.js").ScreencastFrame): ScreencastFrame {
+  return {data: decodeBytes(frame.dataBase64), timestamp: frame.timestampMs, deviceWidth: frame.deviceWidth, deviceHeight: frame.deviceHeight, pageScaleFactor: frame.pageScaleFactor, scrollOffsetX: frame.scrollOffsetX, scrollOffsetY: frame.scrollOffsetY, offsetTop: frame.offsetTop};
+}
+
 class ClientResponseHold implements ResponseHold {
   constructor(
     private readonly sessionId: string,
@@ -1048,10 +1225,15 @@ class ClientNetworkHandler implements NetworkHandler {
   async remove(options: CommandOptions = {}): Promise<void> { await this.transport.eventful({sessionId: this.sessionId, operation: {kind: "REMOVE_NETWORK_HANDLER", id: this.id}}, options); if (this.callbackId) { this.transport.removeResponseCallback(this.callbackId); this.onCallbackRemoved?.(this.callbackId); } }
 }
 
+type LiveEventPayload = {console: ConsoleMessage; pageError: PageError; warning: BilobaWarning};
+type LiveEventKind = keyof LiveEventPayload;
+const liveEventKinds: readonly LiveEventKind[] = ["console", "pageError", "warning"];
+
 function eventfulQuery(query: DialogQuery | DownloadQuery | RequestQuery | ResponseQuery): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(query)) {
     if (value === undefined) continue;
+    if (name === "failed") { if (value === true) result.failed = true; continue; }
     if (name === "content" && value instanceof Uint8Array) { result.contentBase64 = encodeBinaryBody(value); continue; }
     result[name] = typeof value === "string" && name === "type" ? value : wireExpectation(value as ExpectedValue);
   }
@@ -1127,9 +1309,9 @@ function visualFailureMessage(name: string, visual: VisualResult): string {
 
 function visualArtifactPaths(visual: VisualResult): readonly string[] { return [...new Set(visual.schemes.flatMap((scheme) => [scheme.baselinePath, scheme.actualPath, scheme.diffPath].filter((path): path is string => Boolean(path))))]; }
 function decodeBytes(value: string): Uint8Array { return decodeBinaryBody(value); }
-type WireNetworkRecord = {url: string; method?: string; status?: number; headers: readonly HeaderEntry[]; resourceType: string};
+type WireNetworkRecord = {url: string; method?: string; status?: number; failure?: string; headers: readonly HeaderEntry[]; resourceType: string};
 function headerMap(headers: readonly HeaderEntry[]): Readonly<Record<string, string>> { return Object.fromEntries(headers.map(({name, value}) => [name, value])); }
-function networkRequest(value: WireNetworkRecord): NetworkRequest { return {url: value.url, method: value.method ?? "", headers: value.headers, headerMap: headerMap(value.headers), resourceType: value.resourceType}; }
+function networkRequest(value: WireNetworkRecord): NetworkRequest { return {url: value.url, method: value.method ?? "", headers: value.headers, headerMap: headerMap(value.headers), resourceType: value.resourceType, status: value.status ?? 0, failure: value.failure ?? ""}; }
 function networkResponse(value: WireNetworkRecord): NetworkResponse { return {url: value.url, status: value.status ?? 0, headers: value.headers, headerMap: headerMap(value.headers), resourceType: value.resourceType}; }
 function interceptedResponse(value: unknown): InterceptedResponse { const response = value as {url: string; status: number; headers: readonly HeaderEntry[]; bodyBase64: string}; return {url: response.url, status: response.status, headers: response.headers, headerMap: headerMap(response.headers), body: decodeBytes(response.bodyBase64)}; }
 function definedEntries<T extends object>(value: T): {[K in keyof T]?: Exclude<T[K], undefined>} { return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as {[K in keyof T]?: Exclude<T[K], undefined>}; }
@@ -1633,6 +1815,12 @@ function wireLocator(locator: Locator | string): WireLocator {
   throw new BilobaError({code: "INVALID_ARGUMENT", message: "locator belongs to a different Biloba client"});
 }
 
+function wireSessionLocator(session: ClientSession, locator: Locator | string, operation: string): WireLocator {
+  if (typeof locator === "string") return {kind: "CSS", value: locator, match: "EXACT", first: false};
+  if (locator instanceof ClientLocator && locator.belongsTo(session)) return locator.wireLocator();
+  throw new BilobaError({code: "INVALID_ARGUMENT", message: `${operation} locator belongs to a different session`});
+}
+
 function wireScreenshotSubject(session: ClientSession, locator: Locator | string): WireLocator {
   if (typeof locator === "string") return {kind: "CSS", value: locator, match: "EXACT", first: false};
   if (locator instanceof ClientLocator && locator.belongsTo(session)) return locator.wireLocator();
@@ -1810,6 +1998,7 @@ function assertionResult(response: DriverOperationResult, callsiteStack: string 
       diagnostics.expected ? `expected: ${diagnostics.expected}` : undefined,
       `last observed: ${JSON.stringify(observed)}`,
       `attempts: ${response.attemptCount ?? trajectory.length}`,
+      pausedClockNote(diagnostics.pausedClockAt),
     ].filter((line): line is string => line !== undefined).join("\n");
     throw new BilobaError({
       code: "TIMEOUT",
@@ -1841,6 +2030,12 @@ function diagnosticsFromWire(value: import("../generated/protocol.js").ContextDi
   return {purpose: value.purpose as ContextDiagnostics["purpose"], ...(value.artifactDir && {artifactDir: value.artifactDir}), tabs: value.tabs.map((tab) => ({...(tab.sessionId && {sessionId: tab.sessionId}), targetId: tab.targetId, title: tab.title, ...(tab.screenshotPath && {screenshotPath: tab.screenshotPath}), ...(tab.screenshotBase64 && {screenshot: decodeBinaryBody(tab.screenshotBase64)}), ...(tab.outlinePath && {outlinePath: tab.outlinePath}), ...(tab.domOutline && {domOutline: tab.domOutline}), errors: tab.errors as import("../index.js").DiagnosticsArtifactError[]}))};
 }
 
+// A poll that ran out of time while the tab's page clock was paused most likely waited on a timer that
+// could never run: say so, in the client's own method names.
+function pausedClockNote(pausedAt: string | undefined): string | undefined {
+  return pausedAt ? `This tab's page clock is paused at ${pausedAt}; timers and animation frames won't run until you call runFor, fastForward, or resume.` : undefined;
+}
+
 function operationResult(
   response: DriverOperationResult,
   operation: string,
@@ -1861,6 +2056,7 @@ function operationResult(
       `Biloba ${operation} timed out`,
       diagnostics.locator ? `locator: ${diagnostics.locator}` : undefined,
       `attempts: ${response.attemptCount ?? trajectory.length}`,
+      pausedClockNote(diagnostics.pausedClockAt),
     ].filter((line): line is string => line !== undefined).join("\n"),
     ...(diagnostics.locator && {locator: diagnostics.locator}),
     ...(diagnostics.expected && {expected: diagnostics.expected}),

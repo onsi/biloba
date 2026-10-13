@@ -55,6 +55,46 @@ var _ = Describe("bilobad", func() {
 			Expect(err).To(MatchError(ContainSubstring("valid base64")))
 		})
 	})
+	Describe("screencast chunks", func() {
+		frames := []engine.ScreencastFrame{
+			{Data: make([]byte, 40), Timestamp: time.UnixMilli(1_000).Add(500 * time.Microsecond), DeviceWidth: 800, DeviceHeight: 600, PageScaleFactor: 1, ScrollOffsetY: 12},
+			{Data: make([]byte, 40)},
+			{Data: make([]byte, 100)},
+			{Data: make([]byte, 10)},
+		}
+
+		It("fills each chunk up to the budget and always sends at least one frame", func() {
+			first, err := screencastChunkOf(frames, 0, 90)
+			Expect(err).NotTo(HaveOccurred())
+			Expect([]int{first.Count, first.Offset, len(first.Frames)}).To(Equal([]int{4, 0, 2}))
+			second, err := screencastChunkOf(frames, 2, 90)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(second.Frames).To(HaveLen(1), "a frame over the budget goes out on its own")
+			last, err := screencastChunkOf(frames, 3, 90)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(last.Frames).To(HaveLen(1))
+			empty, err := screencastChunkOf(frames, 4, 90)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(empty.Frames).To(BeEmpty())
+			_, err = screencastChunkOf(frames, 5, 90)
+			Expect(err).To(MatchError(ContainSubstring("offset 5 is past the recording's 4 frames")))
+		})
+
+		It("carries Chrome's timestamp in fractional milliseconds, and 0 when Chrome sent none", func() {
+			chunk, err := screencastChunkOf(frames, 0, 1<<20)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(chunk.Frames[0]).To(Equal(protocol.WireScreencastFrame{DataBase64: base64.StdEncoding.EncodeToString(make([]byte, 40)), TimestampMS: 1_000.5, DeviceWidth: 800, DeviceHeight: 600, PageScaleFactor: 1, ScrollOffsetY: 12}))
+			Expect(chunk.Frames[1].TimestampMS).To(BeZero())
+		})
+	})
+
+	It("says how far an overrunning runFor got in the TypeScript client's names", func() {
+		message := clockRunExceededMessage(&engine.ClockRunExceeded{Duration: time.Hour, Budget: 50 * time.Millisecond, Fired: 7, Reached: time.Date(2024, 2, 2, 8, 0, 0, 120_000_000, time.UTC)})
+		Expect(message).To(HavePrefix("run the page clock: runFor(3600000) did not finish within 50ms: after 7 timer and animation-frame callbacks the page clock had reached 2024-02-02T08:00:00.120Z."))
+		Expect(message).To(ContainSubstring("fastForward skips ahead firing each due timer once, or give runFor a larger timeoutMs."))
+		Expect(message).NotTo(ContainSubstring("RunFor"))
+	})
+
 	It("serializes empty attached Chrome arguments as an array", func() {
 		for _, metadata := range []any{
 			(&engineBackend{launch: protocol.WireLaunchMetadata{Attached: true}}).LaunchMetadata(),

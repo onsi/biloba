@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	cdplog "github.com/chromedp/cdproto/log"
 	"github.com/chromedp/cdproto/runtime"
 )
 
@@ -29,7 +30,10 @@ type ConsoleStackFrame struct {
 }
 
 type ConsoleMessage struct {
-	Type       string
+	Type string
+	// Source is empty for the page's own console API calls; for a message Chrome generated itself
+	// (NewLogEntryMessage) it names the origin: "intervention", "violation", "network", ...
+	Source     string
 	Text       string
 	Args       []any
 	Timestamp  time.Time
@@ -111,35 +115,22 @@ func (s *Session) ConsoleSnapshot() ConsoleHistory {
 }
 
 func (s *Session) recordConsoleMessage(event *runtime.EventConsoleAPICalled) {
-	message := ConsoleMessage{Type: string(event.Type), Generation: s.eventGeneration.Load(), Stack: []ConsoleStackFrame{}}
-	if event.Timestamp != nil {
-		message.Timestamp = event.Timestamp.Time()
-	}
-	parts := make([]string, 0, len(event.Args))
-	for index, object := range event.Args {
-		if index >= 64 {
-			message.Args = append(message.Args, "… [arguments truncated]")
-			parts = append(parts, "… [arguments truncated]")
-			break
-		}
-		value := safeConsolePreview(object)
-		message.Args = append(message.Args, value)
-		parts = append(parts, fmt.Sprint(value))
-	}
-	message.Text = strings.Join(parts, " ")
-	if event.StackTrace != nil {
-		for index, frame := range event.StackTrace.CallFrames {
-			if index == defaultConsoleStackFrames {
-				break
-			}
-			message.Stack = append(message.Stack, ConsoleStackFrame{
-				URL:          truncateUTF8(frame.URL, DefaultConsolePreviewBytes),
-				FunctionName: truncateUTF8(frame.FunctionName, DefaultConsolePreviewBytes),
-				Line:         frame.LineNumber, Column: frame.ColumnNumber,
-			})
-		}
-	}
+	s.appendConsoleMessage(s.eventGeneration.Load(), NewConsoleMessage(event))
+}
 
+// recordLogEntry keeps a message Chrome generated itself (Log.entryAdded) in the console history.  It
+// runs on the event listener and makes no CDP calls.
+func (s *Session) recordLogEntry(event *cdplog.EventEntryAdded) {
+	if event.Entry == nil {
+		return
+	}
+	s.appendConsoleMessage(s.eventGeneration.Load(), NewLogEntryMessage(event.Entry))
+}
+
+// appendConsoleMessage records message and delivers it to subscribers, unless the session moved on to
+// a new event generation (a Prepare) after generation was read.
+func (s *Session) appendConsoleMessage(generation uint64, message ConsoleMessage) {
+	message.Generation = generation
 	s.consoleMu.Lock()
 	defer s.consoleMu.Unlock()
 	if !s.eventsEnabled.Load() || message.Generation != s.eventGeneration.Load() {
@@ -159,6 +150,65 @@ func (s *Session) recordConsoleMessage(event *runtime.EventConsoleAPICalled) {
 			subscriber.dropped.Add(1)
 		}
 	}
+}
+
+// NewConsoleMessage converts a Runtime.consoleAPICalled event into a bounded ConsoleMessage: Text
+// joins each argument's preview with a space, and Stack keeps at most 64 frames.  It needs no session,
+// so every client renders a console message's text the same way.
+func NewConsoleMessage(event *runtime.EventConsoleAPICalled) ConsoleMessage {
+	message := ConsoleMessage{Type: string(event.Type), Stack: ConsoleStack(event.StackTrace)}
+	if event.Timestamp != nil {
+		message.Timestamp = event.Timestamp.Time()
+	}
+	parts := make([]string, 0, len(event.Args))
+	for index, object := range event.Args {
+		if index >= 64 {
+			message.Args = append(message.Args, "… [arguments truncated]")
+			parts = append(parts, "… [arguments truncated]")
+			break
+		}
+		value := safeConsolePreview(object)
+		message.Args = append(message.Args, value)
+		parts = append(parts, fmt.Sprint(value))
+	}
+	message.Text = strings.Join(parts, " ")
+	return message
+}
+
+// NewLogEntryMessage converts a message Chrome generated itself (Log.entryAdded: an intervention, a
+// violation, a failed resource load, a deprecation) into a ConsoleMessage, the way DevTools shows it
+// in the console next to the page's own calls.  Type uses the console vocabulary: Chrome's "verbose"
+// level becomes "debug".
+func NewLogEntryMessage(entry *cdplog.Entry) ConsoleMessage {
+	level := string(entry.Level)
+	if level == "verbose" {
+		level = "debug"
+	}
+	message := ConsoleMessage{Type: level, Source: string(entry.Source), Text: truncateUTF8(entry.Text, DefaultConsolePreviewBytes), Stack: ConsoleStack(entry.StackTrace)}
+	if entry.Timestamp != nil {
+		message.Timestamp = entry.Timestamp.Time()
+	}
+	return message
+}
+
+// ConsoleStack converts a page stack trace into bounded stack frames.  Line and column are zero-based,
+// as Chrome reports them.  A nil trace gives an empty, non-nil slice.
+func ConsoleStack(trace *runtime.StackTrace) []ConsoleStackFrame {
+	stack := []ConsoleStackFrame{}
+	if trace == nil {
+		return stack
+	}
+	for index, frame := range trace.CallFrames {
+		if index == defaultConsoleStackFrames {
+			break
+		}
+		stack = append(stack, ConsoleStackFrame{
+			URL:          truncateUTF8(frame.URL, DefaultConsolePreviewBytes),
+			FunctionName: truncateUTF8(frame.FunctionName, DefaultConsolePreviewBytes),
+			Line:         frame.LineNumber, Column: frame.ColumnNumber,
+		})
+	}
+	return stack
 }
 
 func safeConsolePreview(object *runtime.RemoteObject) any {
@@ -203,6 +253,10 @@ func (s *Session) closeConsoleSubscriptions() {
 	s.consoleMu.Lock()
 	for id, subscriber := range s.consoleSubs {
 		delete(s.consoleSubs, id)
+		close(subscriber.events)
+	}
+	for id, subscriber := range s.pageErrorSubs {
+		delete(s.pageErrorSubs, id)
 		close(subscriber.events)
 	}
 	s.consoleMu.Unlock()

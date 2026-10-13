@@ -28,7 +28,7 @@ This preserves parallelism without launching a browser per test file. Each root 
 | Task | Skill |
 |---|---|
 | Wire the daemon, shared browser, and Vitest lifecycle | `biloba-vitest:setup` |
-| Write locators, actions, assertions, tabs, frames, or network tests | `biloba-vitest:write-tests` |
+| Write locators, actions, assertions, tabs, frames, network, pointer gestures, screencasts, or time-dependent UI (the page clock) | `biloba-vitest:write-tests` |
 | Create or diagnose screenshot baselines | `biloba-vitest:visual-assertions` |
 | Read a failure, console output, artifacts, or crash code | `biloba-vitest:debug-failures` |
 | Remove races, order dependence, or redundant polling | `biloba-vitest:flaky-tests` |

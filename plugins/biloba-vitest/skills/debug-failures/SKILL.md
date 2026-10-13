@@ -19,6 +19,8 @@ try {
 
 The trajectory tells you what the daemon observed on every attempt. A flat trajectory is usually a stable product/test bug; a monotone approach suggests latency; a match followed by failures points to a detached or replaced node. Widen a timeout only when the evidence shows genuine slow progress.
 
+A timeout whose message ends `This tab's page clock is paused at <t>; timers and animation frames won't run until you call runFor, fastForward, or resume.` comes from the test's own `installClock`/`pauseAt`: the page's timers never ran, so the trajectory is flat. Advance the clock before asserting (`biloba-vitest:flaky-tests`).
+
 ## Failure codes
 
 | Code | Meaning |
@@ -46,10 +48,13 @@ These happen before any test runs, so look at the error text, not `BilobaError.c
 
 ## Runner-level diagnostics
 
-Install `installBilobaVitestHooks` from `biloba/vitest` in a Vitest setup file. It captures live tabs after failures, can capture slow-test progress, replays browser errors, and reports `console.assert` at the test boundary.
+Install `installBilobaVitestHooks` from `biloba/vitest` in a Vitest setup file. It captures live tabs after failures, can capture slow-test progress, replays the page's console errors and page errors (`[browser pageerror] Uncaught Error: boom (url:line:column)`, one-based), and reports `console.assert` at the test boundary.
 
 - Call `session.captureDiagnostics()` for an explicit context-wide snapshot.
-- Use `consoleMessages()`/`onConsoleMessage()` and `warnings()`/`onWarning()` for history and live events.
+- Use `consoleMessages()`/`onConsoleMessage()`, `pageErrors()`/`onPageError()`, and `warnings()`/`onWarning()` for history and live events; `expectPageError(expected)` waits for an uncaught exception or unhandled rejection.
+- `consoleMessages()` also holds the messages Chrome logs itself (a failed resource load, an intervention, a violation), marked by a non-empty `source`. They are not replayed by the hooks; look there when a resource failed to load. The `line`/`column` fields of page errors and stack frames are zero-based, as Chrome reports them.
+- A request's `status` and `failure` (`net::ERR_...`) say how it ended; `requests({failed: true})` lists the ones that failed.
+- A timed-out `expectNetworkIdle()` names each request still in flight (method, URL, resource type, age). The one that never finishes is usually a long poll, a stream, or a request the app abandoned.
 - Pass `debugLog` to `connect` for bounded structured daemon/CDP records.
 - Configure screenshots, outlines, artifact paths, inline output, viewport, byte limits, and trajectories under `diagnostics`.
 

@@ -7,6 +7,7 @@ import (
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/inspector"
+	cdplog "github.com/chromedp/cdproto/log"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
@@ -90,12 +91,20 @@ func (b *Biloba) setUpListeners() {
 	b.installBilobaOnEveryDocument()
 	b.listenForCrashOnTheBrowser()
 
+	// the previous spec's page can still raise events after Prepare: drop them, unprinted and unrecorded
 	chromedp.ListenTarget(b.Context, func(ev any) {
+		if b.boundary.Stale(ev) {
+			return
+		}
 		switch ev := ev.(type) {
 		case *page.EventJavascriptDialogOpening:
 			b.handleEventJavascriptDialogOpening(ev)
 		case *runtime.EventConsoleAPICalled:
 			b.handleEventConsoleAPICalled(ev)
+		case *runtime.EventExceptionThrown:
+			b.handleEventExceptionThrown(ev)
+		case *cdplog.EventEntryAdded:
+			b.handleEventLogEntryAdded(ev)
 		case *page.EventFrameNavigated:
 			b.handleEventFrameNavigated(ev)
 		case *browser.EventDownloadWillBegin:
@@ -104,6 +113,8 @@ func (b *Biloba) setUpListeners() {
 			b.handleEventDownloadProgress(ev)
 		case *network.EventRequestWillBeSent:
 			b.handleEventRequestWillBeSent(ev)
+		case *network.EventResponseReceived:
+			b.handleEventResponseReceived(ev)
 		case *network.EventLoadingFinished:
 			b.handleEventLoadingFinished(ev)
 		case *network.EventLoadingFailed:

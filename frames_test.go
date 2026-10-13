@@ -135,6 +135,21 @@ var _ = Describe("Cross-origin iframes", func() {
 			Ω(b.AllRequests().Filter(b.RequestMatching(crossOriginFixtureServer+"/api/frame-ready"))).ShouldNot(BeEmpty(), "the tab sees its frames' requests too")
 		})
 
+		It("records the status of the frame's requests, and the frame's own console messages and page errors", func() {
+			checkout.Run(`fetch("/missing.json").then(r => r.text())`)
+			Eventually(checkout).Should(checkout.HaveMadeRequest(crossOriginFixtureServer + "/missing.json").WithStatus(404))
+
+			b.Run(`console.log("from the parent"); setTimeout(() => { throw new Error("parent boom") })`)
+			checkout.Run(`console.log("from the frame"); setTimeout(() => { throw new Error("frame boom") })`)
+			Eventually(checkout.AllPageErrors).Should(ConsistOf(HaveField("Message", "Uncaught Error: frame boom")))
+			Eventually(b.AllPageErrors).Should(ConsistOf(
+				HaveField("Message", "Uncaught Error: parent boom"),
+				HaveField("Message", "Uncaught Error: frame boom"),
+			), "the tab sees its frames' page errors too")
+			Ω(checkout.AllConsoleMessages()).Should(ConsistOf(HaveField("Text", "from the frame")))
+			Eventually(b.AllConsoleMessages).Should(ContainElements(HaveField("Text", "from the parent"), HaveField("Text", "from the frame")))
+		})
+
 		It("outlines the frame's document and accessibility tree", func() {
 			Ω(checkout.Outline()).Should(SatisfyAll(ContainSubstring("email"), Not(ContainSubstring("parent-only"))))
 			Ω(checkout.A11yOutline()).Should(SatisfyAll(ContainSubstring(`button "Pay"`), Not(ContainSubstring(`"Parent"`))))
@@ -184,6 +199,15 @@ var _ = Describe("Cross-origin iframes", func() {
 			Ω(rgb(img, 2, img.Bounds().Dy()-3)).Should(Equal([]uint32{0, 170, 0}), "the frame's background, not the embedding page's")
 		})
 
+		It("captures a region of the frame's viewport with Clip", func() {
+			img := decode(checkout.CaptureScreenshot(checkout.Clip(0, 200, 50, 40)))
+			Ω(img.Bounds().Dx()).Should(Equal(50))
+			Ω(img.Bounds().Dy()).Should(Equal(40))
+			Ω(rgb(img, 2, 37)).Should(Equal([]uint32{0, 170, 0}), "the frame's background, not the embedding page's")
+			checkout.CaptureScreenshot(checkout.Clip(0, 0, 400, 10))
+			ExpectFailures(ContainSubstring("reaches outside the"))
+		})
+
 		It("captures an element inside the frame at the frame's position in the tab", func() {
 			img := decode(checkout.CaptureScreenshotOf("#pay"))
 			Ω(img.Bounds().Dx()).Should(BeNumerically("~", 120, 1))
@@ -213,18 +237,49 @@ var _ = Describe("Cross-origin iframes", func() {
 		It("refuses tab-level methods on a frame handle", func() {
 			checkout.Navigate(crossOriginFixtureServer + "/dom.html")
 			checkout.SetWindowSize(400, 300)
+			checkout.SetMedia(biloba.Media{ColorScheme: "dark"})
+			checkout.AddInitScript(`window.__seed = 42`)
+			checkout.SetUserAgent("frame")
 			checkout.StubRequest("/api/anything", biloba.StubResponse{Body: "stubbed"})
 			checkout.HandleAlertDialogs()
 			checkout.SetCookie(biloba.Cookie{Name: "frame", Value: "cookie"})
 			checkout.AllDownloads()
+			checkout.StartScreencast(biloba.ScreencastOptions{})
+			checkout.SetGeolocation(biloba.Geolocation{Latitude: 1})
+			checkout.ClearGeolocation()
+			checkout.SetPermissions("", map[biloba.Permission]biloba.PermissionState{biloba.PermissionCamera: biloba.PermissionGranted})
+			checkout.ResetPermissions()
+			checkout.SetLocale("fr-FR")
+			checkout.SetTimezone("Asia/Tokyo")
+			checkout.SetNetworkState(biloba.NetworkState{Offline: true})
+			checkout.SetOffline(true)
+			checkout.SetCacheEnabled(false)
+			checkout.InstallClock(time.Now())
+			checkout.Clock()
 			ExpectFailures(
 				"Navigate acts on the tab, not a frame: call it on the tab that owns this frame",
 				"SetWindowSize acts on the tab, not a frame: call it on the tab that owns this frame",
+				"SetMedia acts on the tab, not a frame: call it on the tab that owns this frame",
+				"AddInitScript acts on the tab, not a frame: call it on the tab that owns this frame",
+				"SetUserAgent acts on the tab, not a frame: call it on the tab that owns this frame",
 				"StubRequest acts on the tab, not a frame: call it on the tab that owns this frame",
 				"HandleAlertDialogs acts on the tab, not a frame: call it on the tab that owns this frame",
 				"SetCookie acts on the tab, not a frame: call it on the tab that owns this frame",
 				"AllDownloads acts on the tab, not a frame: call it on the tab that owns this frame",
+				"StartScreencast acts on the tab, not a frame: call it on the tab that owns this frame",
+				"SetGeolocation acts on the tab, not a frame: call it on the tab that owns this frame",
+				"ClearGeolocation acts on the tab, not a frame: call it on the tab that owns this frame",
+				"SetPermissions acts on the tab, not a frame: call it on the tab that owns this frame",
+				"ResetPermissions acts on the tab, not a frame: call it on the tab that owns this frame",
+				"SetLocale acts on the tab, not a frame: call it on the tab that owns this frame",
+				"SetTimezone acts on the tab, not a frame: call it on the tab that owns this frame",
+				"SetNetworkState acts on the tab, not a frame: call it on the tab that owns this frame",
+				"SetOffline acts on the tab, not a frame: call it on the tab that owns this frame",
+				"SetCacheEnabled acts on the tab, not a frame: call it on the tab that owns this frame",
+				"InstallClock acts on the tab, not a frame: call it on the tab that owns this frame",
+				"Clock acts on the tab, not a frame: call it on the tab that owns this frame",
 			)
+			Ω(checkout.NetworkState()).Should(BeZero(), "reading the tab's network state still works")
 			Ω(b.GetTitle()).Should(Equal("Frames Parent"), "the tab must not have navigated")
 		})
 
@@ -235,6 +290,11 @@ var _ = Describe("Cross-origin iframes", func() {
 			checkout.Run(`setTimeout(() => { document.querySelector("#result").textContent = confirm("Sure?") ? "confirmed" : "declined" }, 0)`)
 			Eventually("#result").Should(checkout.HaveInnerText("confirmed"))
 			Ω(b.Dialogs().MostRecent().Message).Should(Equal("Sure?"))
+		})
+
+		It("renders in its tab's emulated media", func() {
+			b.SetMedia(biloba.Media{ReducedMotion: "reduce"})
+			Ω(`matchMedia("(prefers-reduced-motion: reduce)").matches`).Should(checkout.EvaluateTo(true))
 		})
 
 		It("reports its tab's window", func() {
@@ -416,6 +476,14 @@ var _ = Describe("Out-of-process iframes", func() {
 		Eventually(frame).Should(frame.HaveMadeRequest(ContainSubstring("/api/stubbed")))
 	})
 
+	It("records the frame's request statuses, console messages, and page errors", func() {
+		frame.Run(`fetch("/missing.json").then(r => r.text()); console.log("from the frame"); setTimeout(() => { throw new Error("frame boom") })`)
+		Eventually(frame).Should(frame.HaveMadeRequest(ContainSubstring("/missing.json")).WithStatus(404))
+		Eventually(frame.AllPageErrors).Should(ConsistOf(HaveField("Message", "Uncaught Error: frame boom")))
+		Ω(frame.AllConsoleMessages()).Should(ConsistOf(HaveField("Text", "from the frame")))
+		Eventually(tab.AllPageErrors).Should(ContainElement(HaveField("Message", "Uncaught Error: frame boom")), "the tab streams and records the frame target's errors")
+	})
+
 	It("has its dialogs handled by the tab", func() {
 		tab.HandleConfirmDialogs().WithResponse(true)
 		frame.Run(`setTimeout(() => { document.querySelector("#result").textContent = confirm("Sure?") ? "confirmed" : "declined" }, 0)`)
@@ -470,5 +538,27 @@ var _ = Describe("Out-of-process iframes", func() {
 		replacement.Close()
 		Ω(replacement.AllFrames()).Should(BeEmpty())
 		ExpectFailures(ContainSubstring("frame_detached"))
+	})
+
+	It("drives a low-level pointer in the frame's own viewport", func() {
+		pointerURL := strings.Replace(frameURL, "frame-form.html", "pointer.html", 1)
+		tab.Navigate(fixtureServer + "/frames.html?child=" + url.QueryEscape(pointerURL))
+		pointerFrame := tab.Frame(tab.FrameMatching().WithURL(pointerURL).WithDOMElement("#track"))
+		Ω(pointerFrame.FrameOutOfProcessForTest()).Should(BeTrue())
+
+		pen := pointerFrame.Pointer(tab.Pen())
+		pen.MoveToElement("#track", tab.At(0, 10))
+		pen.Down()
+		pen.MoveTo(70, 170)
+		pen.MoveTo(170, 170)
+		pen.Up()
+		Ω(pointerFrame.GetAttribute("#track", "data-value")).Should(Equal("75"))
+		Ω(pointerLog(pointerFrame)).Should(HaveExactElements(
+			pointerEventMatching("pointermove", "pen", 0, 20, 170),
+			pointerEventMatching("pointerdown", "pen", 1, 20, 170),
+			pointerEventMatching("pointermove", "pen", 1, 70, 170),
+			pointerEventMatching("pointermove", "pen", 1, 170, 170),
+			pointerEventMatching("pointerup", "pen", 0, 170, 170),
+		))
 	})
 })

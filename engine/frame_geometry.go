@@ -55,6 +55,15 @@ func ValidateFrameWorldContext(ctx context.Context, frameID cdp.FrameID) error {
 	return nil
 }
 
+// InFrameDocument reports whether a Runtime event raised in executionContextID (a console message, an
+// uncaught exception) belongs to the document a ScopeToFrameContext context is pinned to, and that
+// document is still frameID's current one.  Like ValidateFrameWorldContext it sends no command, so it
+// is safe to call from an event listener.
+func InFrameDocument(ctx context.Context, frameID cdp.FrameID, executionContextID runtime.ExecutionContextID) bool {
+	expected, _ := ctx.Value(executionContextKey{}).(frameWorld)
+	return expected.id != 0 && expected.id == executionContextID && frameWorldCurrent(ctx, frameID, expected)
+}
+
 // FrameContextGone reports whether err is Chrome refusing an evaluation because the document a
 // ScopeToFrameContext context is pinned to no longer exists.
 func FrameContextGone(err error) bool { return frameContextGone(err) }
@@ -189,11 +198,22 @@ func FrameOriginBoundaryContext(ctx context.Context, frameID cdp.FrameID) (bool,
 // quad captures borders, parent scrolling, and CSS transforms; a projective mapping also handles
 // perspective-transformed iframe elements. It scrolls the iframe element into view first.
 func TranslateFramePointsContext(ctx context.Context, frameID cdp.FrameID, points []Point) ([]Point, error) {
+	return translatePublicFramePoints(ctx, frameID, points, true)
+}
+
+// TranslateFramePointsInPlaceContext is TranslateFramePointsContext without the scroll: it maps the
+// points through the iframe element wherever it is now, for a caller that owns the page's scroll
+// position (the low-level pointer, which dispatches exactly where it is told).
+func TranslateFramePointsInPlaceContext(ctx context.Context, frameID cdp.FrameID, points []Point) ([]Point, error) {
+	return translatePublicFramePoints(ctx, frameID, points, false)
+}
+
+func translatePublicFramePoints(ctx context.Context, frameID cdp.FrameID, points []Point, scroll bool) ([]Point, error) {
 	local := make([]actionPoint, len(points))
 	for i, point := range points {
 		local[i] = actionPoint{x: point.X, y: point.Y}
 	}
-	translated, err := translateFramePoints(ctx, frameID, local)
+	translated, err := translateFramePoints(ctx, frameID, local, scroll)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +224,7 @@ func TranslateFramePointsContext(ctx context.Context, frameID cdp.FrameID, point
 	return out, nil
 }
 
-func translateFramePoints(ctx context.Context, frameID cdp.FrameID, points []actionPoint) ([]actionPoint, error) {
+func translateFramePoints(ctx context.Context, frameID cdp.FrameID, points []actionPoint, scroll bool) ([]actionPoint, error) {
 	type viewport struct {
 		Width  float64 `json:"width"`
 		Height float64 `json:"height"`
@@ -222,8 +242,10 @@ func translateFramePoints(ctx context.Context, frameID cdp.FrameID, points []act
 		if ownerErr != nil {
 			return ownerErr
 		}
-		if scrollErr := dom.ScrollIntoViewIfNeeded().WithBackendNodeID(backendNodeID).Do(runCtx); scrollErr != nil {
-			return scrollErr
+		if scroll {
+			if scrollErr := dom.ScrollIntoViewIfNeeded().WithBackendNodeID(backendNodeID).Do(runCtx); scrollErr != nil {
+				return scrollErr
+			}
 		}
 		model, modelErr := dom.GetBoxModel().WithBackendNodeID(backendNodeID).Do(runCtx)
 		if modelErr != nil {
@@ -293,7 +315,7 @@ func FrameScreenshotRectContext(ctx context.Context, frameID cdp.FrameID, x, y, 
 		{x: left + width, y: top + height},
 		{x: left, y: top + height},
 	}
-	translated, err := translateFramePoints(ctx, frameID, points[:])
+	translated, err := translateFramePoints(ctx, frameID, points[:], true)
 	if err != nil {
 		return 0, 0, 0, 0, err
 	}

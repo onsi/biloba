@@ -175,6 +175,22 @@ await popup.close();
 
 Use `tabs()` and `spawnedTabs()` for snapshots, `findTab()` for an optional match, and `waitForTab()` when a popup is expected.
 
+A session can emulate a device and its environment. Each setter has a matching `clear...()` (`resetPermissions()` for permissions), and `prepare()` clears them all:
+
+```ts
+await session.setDeviceMetrics({width: 390, height: 844, deviceScaleFactor: 3, mobile: true, touch: true, landscape: true});
+await session.setUserAgent("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) ...");
+await session.setMedia({colorScheme: "dark", reducedMotion: "reduce"});
+await session.setLocale("fr-FR");
+await session.setTimezone("Europe/Paris");
+```
+
+`touch` makes `navigator.maxTouchPoints` positive and matches `(pointer: coarse)`; `landscape` reports a landscape `screen.orientation`.  `setTimezone()` changes the time zone, not the time; to control the time itself, see [Controlling time](#controlling-time). `setUserAgent()` changes both `navigator.userAgent` and the `User-Agent` request header. `setGeolocation()` and `setPermissions()` cover location and permission prompts.  Permissions use the names `navigator.permissions.query` takes - `"camera"`, `"microphone"`, `"geolocation"`, `"notifications"`, `"clipboard-read"`, `"clipboard-write"`, and the rest of the `Permission` type - and apply to an origin (`""` for every origin):
+
+```ts
+await session.setPermissions("http://localhost:3000", {camera: "granted", microphone: "denied"});
+```
+
 `frames()` snapshots the cross-origin iframe documents below a session; `waitForFrame()` polls for one by `url`, `title`, and/or a `has` locator. This covers both out-of-process frames (cross-site OOPIF targets) and same-site cross-origin frames such as two local servers on different ports. Biloba asks CDP for Chrome's frame tree and scopes operations directly to the selected frame; it does not read the iframe through parent-page JavaScript or relax the browser's same-origin policy:
 
 ```ts
@@ -190,11 +206,11 @@ await frame.locator("#success").expectVisible();
 
 Frame handles expose the normal locator, action, assertion, JavaScript, upload, and frame-local storage APIs. Trusted pointer input is translated through the iframe owner's content geometry, including parent scrolling, borders, and CSS transforms. For a same-process frame, realistic actions also check the translated point against the whole tab, so an overlay in the embedding page that covers the frame fails the action instead of taking the click. `frame.evaluate()` runs in the selected frame's normal JavaScript environment, just like `session.evaluate()` does for a tab, so it can read and update globals created by the frame's own scripts. Same-origin iframe and open-shadow-root piercing remains `session.locator("outer >>> inner")`; `frames()` is the cross-origin boundary API.
 
-A frame handle is a document, not a tab. Tab and browser-context controls fail on it with `INVALID_ARGUMENT`: `navigate()`, `prepare()`, `addInitScript()`, `activate()`, `newTab()`, `setWindowSize()`, the emulation setters (device metrics, geolocation, permissions, locale, timezone, media), `setCookies()`/`clearCookies()`, request stubbing, aborting, modifying, routing and holding, network state and cache, and `handleDialogs()`. Call them on the session that owns the frame. Reads that don't change the tab, such as `getCookies()` and `windowSize()`, still work.
+A frame handle is a document, not a tab. Tab and browser-context controls fail on it with `INVALID_ARGUMENT`: `navigate()`, `prepare()`, `addInitScript()`, `activate()`, `newTab()`, `setWindowSize()`, the emulation setters (device metrics, geolocation, permissions, locale, timezone, media, user agent), the page clock (`installClock()` and the methods of `clock()`), `setCookies()`/`clearCookies()`, request stubbing, aborting, modifying, routing and holding, network state and cache, and `handleDialogs()`. Call them on the session that owns the frame. Reads that don't change the tab, such as `getCookies()` and `windowSize()`, still work.
 
-A frame handle records its own document's console messages and requests from the moment it is found, so `frame.expectConsoleMessage()` and `frame.waitForRequest()` work for either kind of frame. After navigation, request history keeps only the original document's requests; `waitForRequest()` and `expectNetworkIdle()` reject the stale handle. The owning tab also sees the console output and requests of its same-process frames, but not those of out-of-process frames. Dialogs from any frame are reported and handled on the owning tab. Network interception registered on the tab applies to its same-process frames' requests, not to an out-of-process frame's.
+A frame handle records its own document's console messages, page errors, and requests from the moment it is found, so `frame.expectConsoleMessage()` and `frame.waitForRequest()` work for either kind of frame. After navigation, request history keeps only the original document's requests; `waitForRequest()` and `expectNetworkIdle()` reject the stale handle. The owning tab also sees the console output and requests of its same-process frames, but not those of out-of-process frames. Dialogs from any frame are reported and handled on the owning tab. Network interception registered on the tab applies to its same-process frames' requests, not to an out-of-process frame's.
 
-`frame.captureScreenshot()` and a page-level `frame.expectScreenshot()` capture the frame's viewport; element screenshots and masks work inside the frame. Chrome can only capture top-level targets, so screenshots on an out-of-process frame's handle fail with `INVALID_ARGUMENT`; capture the iframe element from the owning session instead.
+`frame.captureScreenshot()` and a page-level `frame.expectScreenshot()` capture the frame's viewport, and a `clip` is a region of the frame's viewport; element screenshots and masks work inside the frame. Chrome can only capture top-level targets, so screenshots on an out-of-process frame's handle fail with `INVALID_ARGUMENT`; capture the iframe element from the owning session instead.
 
 An iframe with no `src`, or with a `srcdoc`, shares the page's origin, so it is not listed here: reach into it with `>>>`.
 
@@ -283,7 +299,7 @@ await session.getByRole("button", {name: "Pay"}).realistic().click();
 await session.getByTestId("card-number").realistic().setValue("4242 4242 4242 4242");
 ```
 
-The realistic track covers clicks and click variants, tap, hover, typing and value changes, wheel input, and drag.  Biloba scrolls the target into view, checks actionability, and uses real CDP input.  The fast default keeps each action atomic in the page runtime.
+The realistic track covers clicks and click variants, tap, hover, typing and value changes, wheel input, and drag.  Biloba scrolls the target into view when it is not already fully on screen and topmost at its center, checks actionability, and uses real CDP input.  The fast default keeps each action atomic in the page runtime.
 
 An assertion resolves to an `AssertionResult` describing how it got there, which is occasionally useful and always available:
 
@@ -291,6 +307,35 @@ An assertion resolves to an `AssertionResult` describing how it got there, which
 const result = await session.locator("#delayed").expectText("ready", {timeoutMs: 1_000, intervalMs: 5});
 expect(result.attemptCount).toBeGreaterThan(1);
 ```
+
+### Driving the pointer directly
+
+The realistic track measures, scrolls, and waits before every interaction, and `dragTo()` is a single gesture from one element to another.  When you need a gesture of your own - a pen stroke on a drawing canvas, a slider scrubbed at 60Hz while you record the screen - `session.pointer()` gives you a real pointer to drive one event at a time:
+
+```ts
+const pen = session.pointer({type: "pen"});
+await pen.moveTo(100, 200);
+await pen.down();
+for (let i = 1; i <= 14; i++) {
+  await new Promise((resolve) => setTimeout(resolve, 16));
+  await pen.moveTo(100 + i * 10, 200);
+}
+await pen.up();
+```
+
+The pointer has four methods:
+
+- `moveTo(x, y)` moves to a point in CSS pixels from the top-left of the viewport.
+- `moveToElement(target, {position})` moves to the element's center, or to `position` from its top-left corner: `await p.moveToElement("#track", {position: {x: 0, y: 10}})`.  The target is a CSS selector or a locator from the same session.
+- `down()` presses the primary button where the pointer is, and `up()` releases it.  Pressing a pressed pointer, or releasing a released one, is an `INVALID_ARGUMENT` error.
+
+The pointer remembers its position (it starts at `0, 0`) and whether it is pressed.  Moves while it is pressed carry `buttons: 1`, so the page sees a drag.  `session.pointer()` is a mouse; `session.pointer({type: "pen"})` is a pen, and every event it dispatches reaches the page as a `PointerEvent` with `pointerType` `"pen"`, reporting a `pressure` of `0.5` while it touches and `0` while it hovers.  A pen works on a page emulating a tablet (`setDeviceMetrics({width: 820, height: 1180, mobile: true, touch: true})`).
+
+Every call dispatches real CDP input immediately - `moveTo`, `down`, and `up` are one round trip each and take only a `signal`.  Nothing scrolls, nothing waits for the page to settle, and nothing is checked for occlusion, so the timing is yours.  `moveToElement` is the one call that polls: it waits for the element to exist and be visible, honoring `{timeoutMs, intervalMs, signal, mode, immediate}` like any action, then dispatches.  It reads the element where it is, so an element whose point is outside the viewport fails instead of receiving input it could never get: scroll it into view first with `scrollIntoView()`.
+
+On a frame handle from `waitForFrame()`, `frame.pointer()` works in the frame's viewport: Biloba translates each point through the iframe's position (without scrolling the iframe into view), and the frame's page sees the coordinates you passed.
+
+The daemon keeps each pointer's position and button state.  `prepare()` releases a pointer the test left pressed, so the next test does not start with a held button, and returns every pointer to `0, 0`.  Closing a frame handle releases its pressed pointers too.
 
 ### Running JavaScript
 
@@ -335,6 +380,16 @@ try {
 }
 ```
 
+Each request in `requests()` carries its outcome: `status` is the response's HTTP status (0 until the headers arrive, and 0 for a request that failed without a response), and `failure` is Chrome's error text (`net::ERR_CONNECTION_REFUSED`, `net::ERR_ABORTED`, ...) or `""`.  A redirect is one request per hop, and a hop that was redirected has the redirect's status.  An HTTP error status is not a failure.  `requests()` and `waitForRequest()` filter on both, and each request is a snapshot of what Biloba knew when you asked:
+
+```ts
+await session.waitForRequest({url: endsWith("/orders"), status: 201});
+const broken = await session.requests({failed: true});
+const serverErrors = await session.requests({url: contains("/api/"), status: numeric(">=", 500)});
+```
+
+`expectNetworkIdle()` waits for the session's in-flight requests to finish.  When it times out, its message names each request still in flight as of its last attempt - method, URL, resource type, and how long it had been in flight - oldest first.
+
 Import `endsWith` (or another Biloba expectation) from the package.  Always release a hold.  Network handlers are first-match-wins; use each handler's `count()` or `stats()` and `networkShadowDiagnostics()` to prove that the intended handler claimed the request.
 
 `routeResponse()` starts its callback timeout after reading the response body. Body reads have a separate timeout of five seconds, or `timeoutMs` if it is longer. For example, `{timeoutMs: 30_000}` allows up to 30 seconds to read the body, then another 30 seconds for the callback. If Chrome refuses to provide a body, as it does for redirects, Biloba continues the response without calling the callback and records the error in the handler's `stats()`.
@@ -357,7 +412,16 @@ const png = await session.captureScreenshot();
 const path = await session.getByTestId("chart").captureScreenshot({output: "path", name: "chart"});
 ```
 
-`expectScreenshot()` supports page and element baselines, masks, exact or tolerant pixel comparison, animation freezing with an opt-out, light and dark color schemes, update mode, diff artifacts, and structured diagnosis.
+A capture takes the page as it is, animations and all.  Pass `frozen: true` to capture it the way `expectScreenshot()` does: Biloba waits for web fonts, then turns off CSS animations and transitions and hides the text caret for the duration of the capture (animations on a scroll or view timeline keep running).  `hideCaret: true` hides only the caret.
+
+A page capture takes the whole document, and when the document is bigger than the viewport Chrome lays the page out again at the full document size to do that, which a responsive page can notice.  `viewport: true` captures exactly what is on screen and never resizes the viewport; on a locator it refuses an element that is not entirely in view.  `clip` captures one region of the viewport, in CSS pixels from its top-left corner, and also never resizes it: a region that reaches outside the viewport is an `INVALID_ARGUMENT` error.  `clip` applies to page captures only (a locator capture is already clipped to its element).
+
+```ts
+const aboveTheFold = await session.captureScreenshot({viewport: true});
+const header = await session.captureScreenshot({clip: {x: 0, y: 0, width: 800, height: 120}, frozen: true});
+```
+
+`expectScreenshot()` supports page and element baselines (an element's box is rounded outward to whole CSS pixels, so a fractionally sized element is captured with every pixel it touches), masks, exact or tolerant pixel comparison, animation freezing with an opt-out, light and dark color schemes, update mode, diff artifacts, and structured diagnosis.
 
 ```ts
 const result = await session.getByTestId("chart").expectScreenshot("revenue-chart", {
@@ -371,6 +435,87 @@ expect(result.match).toBe(true);
 A mismatch throws, and the message carries the pixel counts, amplitude verdict, and baseline, actual, and diff paths, so a CI log tells you what changed without opening anything. Capture warnings (a baseline that never settled, two color schemes that rendered identically) go to stderr; pass `onScreenshotWarning` to `connect` to route them somewhere else.
 
 When you need to absorb rendering noise, reach for `channelTolerance` before `pixelTolerance`: rasterization differences are a small delta spread over many pixels, while a pixel budget lets a handful of pixels change by any amount - which is exactly the one-pixel border or small glyph worth catching.
+
+### Recording a screencast
+
+`session.startScreencast()` records the frames Chrome draws for a tab until you stop it:
+
+```ts
+const recording = await session.startScreencast({format: "jpeg", quality: 92});
+// ... drive the page ...
+const frames = await recording.stop(); // readonly ScreencastFrame[]
+```
+
+The options are a `format` (`"jpeg"`, the default, or `"png"`), a JPEG `quality` from 0 to 100 (0 leaves it to Chrome), `maxWidth` and `maxHeight` to shrink the frames (Chrome keeps the aspect ratio and never enlarges them), and `everyNthFrame` to keep only one frame in every n.
+
+Each frame carries the encoded image in `data` (a `Uint8Array`) and a `timestamp`: the moment Chrome swapped that frame onto the screen, in milliseconds since the Unix epoch.  It is wall-clock time on the machine running Chrome, so on the same machine you can line frames up against `Date.now()` readings you took while driving the page.  The frame also carries the metadata that maps the image onto the page: `deviceWidth` and `deviceHeight` (the viewport the image shows, in CSS pixels), `pageScaleFactor`, `scrollOffsetX` and `scrollOffsetY`, and `offsetTop`.
+
+`recording.stop()` stops the screencast and waits for Chrome to confirm it, so no frame arrives after it resolves.  It returns the frames in `timestamp` order, and calling it again returns the same frames.  A tab records one screencast at a time - starting a second before stopping the first is an `INVALID_ARGUMENT` error - and a frame handle refuses `startScreencast()` with `INVALID_ARGUMENT`.  `prepare()` and `close()` stop a recording that is still running and discard it, so stop a recording before the test ends to keep its frames; `stop()` afterwards fails with `TARGET_NOT_FOUND`.
+
+The daemon holds the frames until `stop()` collects them, and sends them in several responses when there are more than fit in one, so a long recording reaches the test intact.
+
+Some things to know:
+
+- **Chrome sends frames only when the page changes.**  You get the frame already on screen when the recording starts (so its timestamp can be a little earlier than your call to `startScreencast()`), and then one frame each time the page draws a new one, up to the display's 60 frames a second.  A page that isn't changing yields one frame and then nothing.
+- **Frames are the size of the window, in CSS pixels.**  An emulated device scale factor changes how the page renders but does not enlarge the frames.  Use `captureScreenshot()` for a full-resolution still.
+- **Frames are held in memory** until `stop()` returns them.  At 1024x768 a JPEG frame is roughly 40-60KB, a PNG frame 500KB or more, so ten seconds of a busy page at 60 frames a second is tens of megabytes as JPEG.  Shrink the frames with `maxWidth`/`maxHeight`, or record fewer with `everyNthFrame`, for long recordings.
+- **The two Chrome builds behave differently.**  `chrome-headless-shell` (the default) delivers frames steadily, in order, each timestamped within a few milliseconds of being drawn - even while other workers drive their own tabs.  Full Chrome (`mode: "headless"`) encodes frames on several threads and slows down when other tabs in the same browser are busy: frames can arrive out of order (which is why `stop()` sorts them), a recording can go a few hundred milliseconds without a frame, a frame can be timestamped hundreds of milliseconds after it was drawn, and with an emulated device scale factor the first frame or two can ignore `maxWidth`/`maxHeight`.  For frame timing you intend to rely on, record in `chrome-headless-shell`.
+
+### Controlling time
+
+Time-dependent UI is slow and flaky to test on real time: a countdown, a "5 minutes ago" label, a debounced save, a session that expires after half an hour.  `session.installClock()` gives the tab a page clock - fake timers for the page's own code - so a test can move time forward instead of waiting for it:
+
+```ts
+it("expires the session after 30 minutes", async () => {
+  const t0 = new Date("2024-02-02T08:00:00Z");
+  const clock = await session.installClock(t0);
+  await clock.pauseAt(t0);
+  await session.navigate("http://localhost:3000/dashboard");
+  await session.locator("#welcome").expectVisible();
+
+  await clock.runFor(29 * 60_000);
+  await session.locator("#session-warning").expectCount(0);
+  await clock.runFor(60_000);
+  await session.locator("#session-expired").expectVisible();
+});
+```
+
+The page clock replaces the page's `Date` (every constructor form, and `Date.now`; `Date.parse` and `Date.UTC` behave as usual), `performance.now`, `setTimeout`/`clearTimeout`, `setInterval`/`clearInterval`, `requestAnimationFrame`/`cancelAnimationFrame`, and `requestIdleCallback`/`cancelIdleCallback`.  It does not touch CSS animations and transitions or the Web Animations API (`element.animate`), which run on the compositor's timeline - `expectScreenshot` and `captureScreenshot({frozen: true})` turn those off for a capture.  Nothing changes until a test installs the clock, and `prepare()` removes it.
+
+Once installed, time flows from the start time at the real rate.  The clock's methods move it.  Times are a `Date` or milliseconds since the epoch, and durations are milliseconds:
+
+- `clock.pauseAt(time)` stops time at `time`: no timer or animation frame runs until you call `runFor`, `fastForward`, or `resume`.  When `time` is ahead of the clock it gets there the way `fastForward` does.  When it is behind - time flows after `installClock`, so pausing at the start time usually goes back a few milliseconds - the clock moves back without firing anything.
+- `clock.runFor(ms)` advances the clock by `ms` and runs every timer and animation frame that falls due, in order.  Each runs in its own task, so the page's promise callbacks run in between, as they would on real time.  `runFor` resolves once they have all run.
+- `clock.fastForward(ms)` jumps ahead by `ms` and fires each timer that fell due along the way once, at the new time - the way a laptop's timers catch up when it wakes from sleep.  An interval that should have fired ten times fires once.
+- `clock.resume()` lets time flow again at the real rate.
+- `clock.setFixedTime(time)` pins what `Date` reports to `time`, while timers and animation frames keep running on the clock's own time.
+- `clock.setSystemTime(time)` moves the clock's time to `time`, forwards or backwards, without firing anything: a pending timer keeps the delay it had left.  It also unpins `setFixedTime`.
+
+Times have millisecond resolution.  `runFor`, `fastForward`, and `pauseAt` work the same whether time is flowing or paused, and leave it the way it was (except `pauseAt`, which pauses).
+
+`session.clock()` returns the tab's clock, so a helper doesn't have to be handed it.  Its methods fail with `INVALID_ARGUMENT` when the tab has no clock installed.  `runFor` gives up after 10 seconds of real time by default and fails with `TIMEOUT`, saying how far it got.  A page that keeps scheduling work (a 1ms interval, a busy animation loop) makes a long `runFor` slow; `clock.runFor(3_600_000, {timeoutMs: 60_000})` allows it longer, and `fastForward` skips ahead without running every callback.  Every clock method takes a `signal`.
+
+#### Installing before or after navigate
+
+Install the clock before `navigate()` to cover everything the page does.  It also works on a page that has already loaded: the clock replaces the timers in the current document, and `performance.now` carries on from where it was rather than starting again at zero.  But timers the page scheduled before `installClock` keep running on real time, and code that kept a reference to the real `Date` or `setTimeout` keeps using it.
+
+Every document the tab loads after `installClock` - a navigation, a reload, an iframe - gets the clock in the state it is in, so a page that loads while the clock is paused at noon starts paused at noon.
+
+#### Frames and tabs
+
+The clock covers the tab and its frames: each document has its own fake timers, and every clock method advances all of them, the tab's own document first and then its frames.  Out-of-process frames - in full Chrome (`mode: "headless"`), a cross-site iframe runs in its own process - are not covered and keep running on real time.  The clock belongs to the tab, so `installClock()` and the methods of `clock()` fail with `INVALID_ARGUMENT` on a frame handle.  A tab from `newTab()` or one the page opens doesn't share the clock; install one on that tab if it needs it.  A second `installClock()` on the same tab fails with `INVALID_ARGUMENT`.
+
+#### Biloba keeps running on real time
+
+The clock controls the page's code, not Biloba's.  Polling, realistic interactions, and screenshot captures run on real time whether the clock is flowing or paused.  That means polling does not move a paused clock: `await session.locator("#countdown").expectText("9")` against a page whose clock is paused will time out, because the page's interval never runs.  Call `runFor` (or `fastForward`, or `resume`) first.  When an action or assertion times out while the tab's clock is paused, the failure says so:
+
+```
+This tab's page clock is paused at 2024-02-02T08:00:00.000Z; timers and animation frames won't run until you call runFor, fastForward, or resume.
+```
+
+Vitest's own `expect.poll` doesn't know about the clock, so a poll of your own gets no such line.
+
+While time flows, the page's clock advances in steps of up to a frame (about 16ms), so code that spins in a loop waiting for `Date.now()` to change does not see it change.  An exception thrown by a callback the clock runs is reported as a page error, as it would be on real time.
 
 ### When something fails
 
@@ -397,7 +542,11 @@ That trajectory records every polling attempt as structured data instead of redu
 
 For runner-level capture, load `installBilobaVitestHooks` from `biloba/vitest` in a Vitest setup file.  The hook captures every live tab after any failed test, can capture a slow test after `progressAfterMs`, replays browser errors, and turns `console.assert` into a test-boundary failure.  `session.captureDiagnostics()` provides the same context-wide capture on demand.  Configure screenshots, outlines, artifact paths, inline output, viewport, byte limits, and poll trajectories under `connect({diagnostics: {...}})`; explicit members override CI and interactive defaults independently.
 
-Use `consoleMessages()` for bounded history and `onConsoleMessage()` for live delivery.  `warnings()` and `onWarning()` expose auto-handled dialog and dropped-event warnings.  Pass `debugLog` to `connect` for bounded structured daemon/CDP diagnostics; Biloba never mixes them into framed stdout.
+Use `consoleMessages()` for bounded history, `onConsoleMessage()` for live delivery, and `expectConsoleMessage()` to wait for one.  Alongside the page's own console calls, the history holds the messages Chrome logs itself and DevTools shows in its console - a failed resource load, an intervention, a performance violation, a deprecation.  Their `source` names the origin (`"network"`, `"intervention"`, ...) and `type` is the level; the page's own messages have `source: ""`.  Chrome's messages are recorded on the tab, not on a frame handle.
+
+Uncaught exceptions and unhandled promise rejections are page errors: `pageErrors()` returns them, `onPageError()` delivers them live, and `expectPageError(expected)` waits for one whose message matches.  A page error's `message` reads the way DevTools prints it (`"Uncaught TypeError: x is not a function"`), and `url`, `line`, and `column` locate where it was thrown.  The `line` and `column` fields of a page error and of a stack frame are zero-based, as Chrome reports them; when Biloba prints a location it prints `url:line:column` one-based, the way editors and DevTools show it.  `prepare()` clears both histories, and what the previous test's document reports while `prepare()` navigates it away (a fetch it still had open rejecting, say) is dropped rather than landing in the next test.
+
+The Vitest hooks replay the test's console errors and page errors after it finishes (`[browser error] ...`, `[browser pageerror] Uncaught Error: boom (http://localhost:3000/app.js:12:5)`).  Chrome's own messages are not replayed, warnings and errors included: they stay in `consoleMessages()`.  `warnings()` and `onWarning()` expose auto-handled dialog and dropped-event warnings.  Pass `debugLog` to `connect` for bounded structured daemon/CDP diagnostics; Biloba never mixes them into framed stdout.
 
 `failure.code` is worth narrowing on, because a few of the codes mean something quite specific:
 

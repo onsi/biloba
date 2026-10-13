@@ -1,5 +1,16 @@
 if (!window["_biloba"]) {
     let b = {}
+    // Biloba runs on real time.  A spec's page clock (clock.js) replaces the page's timers, Date, and
+    // performance.now, but biloba.js is installed in every document before clock.js and before the page's
+    // own scripts, so these are the browser's.  Anything in here that waits on a timer or a frame, or reads
+    // the time, goes through real - never the globals.
+    let real = {
+        requestAnimationFrame: window.requestAnimationFrame.bind(window),
+        setTimeout: window.setTimeout.bind(window),
+        clearTimeout: window.clearTimeout.bind(window),
+        now: performance.now.bind(performance),
+        Date: window.Date,
+    }
     let r = (s, guard) => (s === undefined || s === null) ? { success: true } : { success: s, guard: guard }
     let rErr = (err) => { return { error: err } }
     let rRes = (res) => { return { success: true, result: res } }
@@ -697,13 +708,28 @@ if (!window["_biloba"]) {
     // shadow root, so without this a web component would keep animating - and keep blinking its caret -
     // right through the capture.  Closed shadow roots cannot be reached and are left alone by design.
     // Idempotent, as is unfreezeRendering.
-    let freezeCSS = "*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; scroll-behavior: auto !important; }"
+    //
+    // A CSS animation on a scroll or view timeline (animation-timeline: scroll()/view()) is left running:
+    // it depends only on the scroll position, so it is already deterministic, and `animation: none` would
+    // render a scrolled page as if it were at the top.  CSS cannot select an element by its animation's
+    // timeline, so the freeze marks those elements with an attribute and exempts the marked ones.
+    let scrollDrivenAttr = "data-biloba-scroll-driven"
+    let freezeCSS = "*, *::before, *::after { transition: none !important; caret-color: transparent !important; scroll-behavior: auto !important; } " +
+        `:not([${scrollDrivenAttr}]), :not([${scrollDrivenAttr}])::before, :not([${scrollDrivenAttr}])::after { animation: none !important; }`
+    let markScrollDriven = () => {
+        if (!document.getAnimations || typeof CSSAnimation === "undefined") return
+        for (let a of document.getAnimations()) {
+            let target = a.effect && a.effect.target
+            if (target && a instanceof CSSAnimation && a.timeline && !(a.timeline instanceof DocumentTimeline)) target.setAttribute(scrollDrivenAttr, "")
+        }
+    }
     // freezeRoots is the document plus every open shadow root under it (collectElements already
     // descends open roots, so nested components are included).  ShadowRoot inherits getElementById from
     // DocumentFragment, so the idempotence check below reads the same on either kind of root; only the
     // append target differs.
     let freezeRoots = () => [document, ...collectElements(document).filter(el => el.shadowRoot).map(el => el.shadowRoot)]
     b.freezeRendering = () => {
+        markScrollDriven()
         for (let root of freezeRoots()) {
             if (root.getElementById("_biloba-freeze")) continue
             let s = document.createElement("style")
@@ -718,6 +744,28 @@ if (!window["_biloba"]) {
         for (let root of freezeRoots()) {
             let s = root.getElementById("_biloba-freeze")
             if (s) s.remove()
+            for (let el of root.querySelectorAll(`[${scrollDrivenAttr}]`)) el.removeAttribute(scrollDrivenAttr)
+        }
+        return rRes(true)
+    }
+    // hideCaret/showCaret back the HideCaret capture option: the caret half of the freeze on its own, for
+    // a capture that should keep its animations.  Same roots, same idempotence.
+    let caretCSS = "*, *::before, *::after { caret-color: transparent !important; }"
+    b.hideCaret = () => {
+        for (let root of freezeRoots()) {
+            if (root.getElementById("_biloba-caret")) continue
+            let s = document.createElement("style")
+            s.id = "_biloba-caret"
+            s.textContent = caretCSS
+            let host = (root === document) ? document.head : root
+            host.appendChild(s)
+        }
+        return rRes(true)
+    }
+    b.showCaret = () => {
+        for (let root of freezeRoots()) {
+            let s = root.getElementById("_biloba-caret")
+            if (s) s.remove()
         }
         return rRes(true)
     }
@@ -731,12 +779,21 @@ if (!window["_biloba"]) {
         let check = () => {
             let k = key()
             if (k === prev || frames++ > 30) resolve()
-            else { prev = k; requestAnimationFrame(check) }
+            else { prev = k; real.requestAnimationFrame(check) }
         }
-        requestAnimationFrame(check)
+        real.requestAnimationFrame(check)
     })
     // centerIn scrolls an element to the middle of every scrollable ancestor and of the viewport.
     let centerIn = (n) => n.scrollIntoView({ block: "center", inline: "center" })
+    // bringIntoView is centerIn for a single realistic interaction, but it leaves alone an element that
+    // is already entirely on screen (in the viewport, cut off by no ancestor) and topmost at its center:
+    // scrolling that one would only move the page under the user for nothing, and would re-frame a
+    // spec's later screenshots.  Anything less than that - partly off screen, clipped by a pane, under
+    // a sticky header - is centered, which is what clears those.
+    let bringIntoView = (n) => {
+        if (fullyInViewport(n) && !clipperOf(n) && measurePoint(n).hittable) return
+        centerIn(n)
+    }
     // scrollableAncestors lists the INNER ancestors that can actually scroll n, nearest first.  Only
     // ones with somewhere to scroll count: an overflow:auto box whose content fits cannot move
     // anything, and treating it as the scroller a pair shares would frame them by scrolling nothing.
@@ -770,13 +827,14 @@ if (!window["_biloba"]) {
         }
     }
     // scrollToStablePoint backs single-element realistic interactions: it scrolls the element to the
-    // viewport center, waits for its box to stop moving, then returns measurePoint.  Async (returns a
+    // viewport center unless it is already on screen and clickable (bringIntoView), waits for its box to
+    // stop moving, then returns measurePoint.  Async (returns a
     // Promise); invoked with awaitPromise on the Go side.
     b.scrollToStablePoint = (s) => {
         let n = sel(s)
         if (!n) return Promise.resolve(notFound(s))
         if (!b.isVisible(n).success) return Promise.resolve(rErr("DOM element is not visible" + ann(s)))
-        centerIn(n)
+        bringIntoView(n)
         return whenStable([n]).then(() => rRes(measurePoint(n)))
     }
     // scrollToStableDragPoints measures BOTH endpoints of a realistic drag at a single scroll position.
@@ -837,15 +895,15 @@ if (!window["_biloba"]) {
         } catch (e) { translatable = false } // cross-origin frame: cannot translate
         return { left: left, top: top, translatable: translatable, enabled: !n.disabled, innerWidth: window.innerWidth, innerHeight: window.innerHeight }
     }
-    // scrollToStableCorner backs ClickAt in realistic mode: it scrolls the element to the viewport
-    // center, waits for its box to stop moving (same stability wait as scrollToStablePoint), then
+    // scrollToStableCorner backs ClickAt in realistic mode: it brings the element into view the way
+    // scrollToStablePoint does, waits for its box to stop moving (same stability wait as scrollToStablePoint), then
     // returns its top-left corner in top-level viewport coordinates.  One element, one scroll, so it
     // has nothing of scrollToStableDragPoints' two-endpoint problem.  Async (returns a Promise).
     b.scrollToStableCorner = (s) => {
         let n = sel(s)
         if (!n) return Promise.resolve(notFound(s))
         if (!b.isVisible(n).success) return Promise.resolve(rErr("DOM element is not visible" + ann(s)))
-        centerIn(n)
+        bringIntoView(n)
         return whenStable([n]).then(() => rRes(measureCorner(n)))
     }
     // scrollToAndPointAt backs realistic ClickEach: scroll+measure the index-th match (no stability
@@ -853,8 +911,19 @@ if (!window["_biloba"]) {
     b.scrollToAndPointAt = each((ns, i) => {
         let n = ns[i]
         if (!n || !b.isVisible(n).success) return rRes(null)
-        centerIn(n)
+        bringIntoView(n)
         return rRes(measurePoint(n))
+    })
+    // pointerTarget backs Pointer.MoveToElement: the element's center, or (o.ox, o.oy) from its top-left
+    // corner, in this session's viewport, read where the element is now - no scroll, no stability wait,
+    // since the caller owns the timeline.  A point outside the viewport is an error rather than a move
+    // the page could never receive.
+    b.pointerTarget = one(b.isVisible, (n, o) => {
+        let c = measureCorner(n), rect = n.getBoundingClientRect()
+        if (!c.translatable) return rErr("cannot locate the DOM element through a cross-origin frame")
+        let x = c.left + (o.hasOffset ? o.ox : rect.width / 2), y = c.top + (o.hasOffset ? o.oy : rect.height / 2)
+        if (x < 0 || y < 0 || x > c.innerWidth || y > c.innerHeight) return rErr("the point (" + x + ", " + y + ") is outside the " + c.innerWidth + "x" + c.innerHeight + " viewport, and the pointer does not scroll - scroll the element into view first")
+        return rRes({ x: x, y: y })
     })
     // inputKind classifies a form control so the realistic track can decide how to drive it.
     b.inputKind = one(n => {

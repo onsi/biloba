@@ -122,3 +122,12 @@ func AccessibilityTreeDuringNavigationForTest(ctx context.Context, frameID cdp.F
 		return accessibilityTreeContext(readCtx, id)
 	})
 }
+
+// ScreencastFramesSoFarForTest reports how many frames a session's recording has received, while it
+// runs and after Prepare or Close has discarded it.
+func ScreencastFramesSoFarForTest(session *Session, id string) func() int {
+	session.screencastMu.Lock()
+	defer session.screencastMu.Unlock()
+	rec := session.screencasts[id]
+	return rec.framesSoFar
+}

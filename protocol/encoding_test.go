@@ -57,6 +57,8 @@ var _ = Describe("the generated protocol declarations", func() {
 		Entry("OperationResult", "OperationResult", protocol.OperationResult{}),
 		Entry("PollObservation", "PollObservation", protocol.PollObservation{}),
 		Entry("Timings", "Timings", protocol.Timings{}),
+		Entry("ScreencastFramesResponse", "ScreencastFramesResponse", protocol.ScreencastFramesResponse{}),
+		Entry("ScreencastFrame", "ScreencastFrame", protocol.WireScreencastFrame{}),
 	)
 
 	It("keeps a fully-populated operation result inside its declaration", func() {
@@ -64,7 +66,7 @@ var _ = Describe("the generated protocol declarations", func() {
 		// mistake - a field that only shows up once something is set, under a name nobody generated.
 		visual := &protocol.WireVisualResult{Schemes: []protocol.WireVisualSchemeResult{}, Warnings: []string{}}
 		contextDiagnostics := &protocol.ContextDiagnosticsResponse{Purpose: "failure", Tabs: []protocol.TabDiagnosticsResponse{}}
-		diagnostics := protocol.Diagnostics{Locator: `locator("#save")`, Expected: "visible", DOMOutline: "body", ScreenshotPath: "/tmp/x.png", DaemonDetail: "timed out", Visual: visual, Context: contextDiagnostics}
+		diagnostics := protocol.Diagnostics{Locator: `locator("#save")`, Expected: "visible", DOMOutline: "body", ScreenshotPath: "/tmp/x.png", DaemonDetail: "timed out", PausedClockAt: "2024-02-02T08:00:00.000Z", Visual: visual, Context: contextDiagnostics}
 		populated := protocol.OperationResult{
 			Matched: true, ObservedJSON: `"Saved"`, AttemptCount: 2,
 			Trajectory:  []protocol.PollObservation{{Attempt: 1, ElapsedMS: 5, ObservedJSON: `"Saving"`, RetryReason: "text mismatch"}},

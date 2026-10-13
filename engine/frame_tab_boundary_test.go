@@ -75,6 +75,8 @@ var _ = Describe("frame handles and their tab", func() {
 			"locale":      func() error { return frame.SetLocale(ctx, "fr-FR") },
 			"timezone":    func() error { return frame.SetTimezone(ctx, "Asia/Tokyo") },
 			"media":       func() error { return frame.SetMedia(ctx, engine.Media{ColorScheme: "dark"}) },
+			"user agent":  func() error { return frame.SetUserAgent(ctx, "BilobaFrame/1.0") },
+			"clear agent": func() error { return frame.ClearUserAgent(ctx) },
 			"offline":     func() error { return frame.SetNetworkState(ctx, engine.NetworkState{Offline: true}) },
 			"cache":       func() error { return frame.SetCacheEnabled(ctx, false) },
 			"hold": func() error {
@@ -90,7 +92,18 @@ var _ = Describe("frame handles and their tab", func() {
 				_, err := frame.RegisterNetworkHandler(ctx, engine.NetworkHandlerOptions{URL: engine.Expectation{Kind: engine.ExpectContains, Expected: "/api"}, Fulfill: &engine.ResponseOverride{Body: &body}})
 				return err
 			},
-			"new tab": func() error { _, err := frame.NewTab(ctx); return err },
+			"new tab":    func() error { _, err := frame.NewTab(ctx); return err },
+			"clock":      func() error { return frame.InstallClock(ctx, time.Now()) },
+			"pause":      func() error { return frame.PauseClockAt(ctx, time.Now()) },
+			"resume":     func() error { return frame.ResumeClock(ctx) },
+			"run clock":  func() error { return frame.RunClockFor(ctx, time.Second, 0) },
+			"jump clock": func() error { return frame.FastForwardClock(ctx, time.Second) },
+			"fix clock":  func() error { return frame.SetClockFixedTime(ctx, time.Now()) },
+			"set clock":  func() error { return frame.SetClockSystemTime(ctx, time.Now()) },
+			"screencast": func() error {
+				_, err := frame.StartScreencast(ctx, engine.ScreencastParams{})
+				return err
+			},
 		}
 		for name, control := range controls {
 			Expect(engineCode(control())).To(Equal(engine.CodeInvalidArgument), name)
@@ -160,7 +173,27 @@ var _ = Describe("frame handles and their tab", func() {
 		Expect(texts(root)).To(ContainElements("from-parent", "from-frame api"), "the tab still sees its same-process frames")
 		requests := frame.RequestsMatching(engine.RequestQuery{URL: &engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/api"}})
 		Expect(requests).To(HaveLen(1))
+		Expect(requests[0].Status).To(Equal(200))
 		Expect(frame.RequestsMatching(engine.RequestQuery{URL: &engine.Expectation{Kind: engine.ExpectEqual, Expected: server.URL + "/"}})).To(BeEmpty())
+	})
+
+	It("records the frame's own page errors, and the tab records its frames' too", func(ctx SpecContext) {
+		_, err := root.Evaluate(ctx, `setTimeout(() => { throw new Error('parent-boom') })`)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = frame.Evaluate(ctx, `setTimeout(() => { throw new Error('frame-boom') })`)
+		Expect(err).NotTo(HaveOccurred())
+
+		messages := func(session *engine.Session) func() []string {
+			return func() []string {
+				out := []string{}
+				for _, pageError := range session.PageErrors() {
+					out = append(out, pageError.Message)
+				}
+				return out
+			}
+		}
+		Eventually(messages(root)).Should(ContainElements("Uncaught Error: parent-boom", "Uncaught Error: frame-boom"))
+		Expect(messages(frame.Session)()).To(Equal([]string{"Uncaught Error: frame-boom"}))
 	})
 })
 

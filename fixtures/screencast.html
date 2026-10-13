@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Screencast</title>
+    <style>
+        body { margin: 0; }
+        #spinner { width: 40px; height: 40px; background: #c33; animation: spin 0.5s linear infinite; }
+        #spinner.paused { animation: none; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        #swatch { width: 100px; height: 100px; background: #33c; }
+    </style>
+</head>
+<body>
+    <div id="spinner"></div>
+    <div id="swatch"></div>
+    <button id="repaint" onclick="document.querySelector('#swatch').style.background = document.querySelector('#swatch').style.background === 'green' ? 'orange' : 'green'">Repaint</button>
+</body>
+</html>

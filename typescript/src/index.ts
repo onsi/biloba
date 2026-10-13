@@ -192,9 +192,30 @@ export type ScreenshotColorScheme = "light" | "dark";
 export type ScreenshotSubject = Locator | string;
 export interface ScreenshotRenderingOptions {
   mask?: readonly ScreenshotSubject[] | undefined;
-  animated?: boolean | undefined;
+  /**
+   * Capture the page the way expectScreenshot does: wait for web fonts, then turn off CSS animations
+   * and transitions and hide the text caret for the duration of the capture.  A capture is not frozen
+   * unless you ask.
+   */
+  frozen?: boolean | undefined;
+  /** Hide the blinking text caret for the capture and leave everything else running. */
+  hideCaret?: boolean | undefined;
+  /**
+   * Capture exactly what is on screen, never expanding the viewport.  On a locator, refuses an element
+   * that is not entirely in view.
+   */
+  viewport?: boolean | undefined;
   colorScheme?: ScreenshotColorScheme | undefined;
   maxBytes?: number | undefined;
+}
+/** A region of the viewport, in CSS pixels from its top-left corner (the frame's viewport, on a frame handle). */
+export interface ScreenshotClip {readonly x: number; readonly y: number; readonly width: number; readonly height: number}
+export interface PageScreenshotOptions {
+  /**
+   * Capture one region of the viewport.  Like viewport it never resizes the viewport; a region that
+   * reaches outside it is an INVALID_ARGUMENT error.
+   */
+  clip?: ScreenshotClip | undefined;
 }
 export interface ScreenshotBytesOptions extends ScreenshotRenderingOptions, WaitingCommandOptions {
   output?: "bytes" | undefined;
@@ -204,6 +225,8 @@ export interface ScreenshotPathOptions extends ScreenshotRenderingOptions, Waiti
   output: "path";
   name?: string | undefined;
 }
+export interface PageScreenshotBytesOptions extends ScreenshotBytesOptions, PageScreenshotOptions {}
+export interface PageScreenshotPathOptions extends ScreenshotPathOptions, PageScreenshotOptions {}
 export interface VisualScreenshotOptions extends PollOptions {
   mask?: readonly ScreenshotSubject[] | undefined;
   animated?: boolean | undefined;
@@ -249,6 +272,99 @@ export interface PointerOptions extends WaitOptions {
 export interface ClickOptions extends PointerOptions {
   button?: "left" | "right" | "middle" | undefined;
   clickCount?: 1 | 2 | undefined;
+}
+export type PointerType = "mouse" | "pen";
+export interface PointerHandleOptions {
+  /** "mouse" (the default) or "pen": every event the pointer dispatches reaches the page with this pointerType. */
+  type?: PointerType | undefined;
+}
+export interface MoveToElementOptions extends WaitOptions {
+  /** A point measured from the element's top-left corner, in CSS pixels.  The default is the element's center. */
+  position?: Point | undefined;
+}
+/**
+ * A real pointer you drive one event at a time, from session.pointer().  It remembers where it is
+ * (starting at 0, 0) and whether its primary button is pressed; moves while it is pressed carry
+ * buttons: 1, so the page sees a drag.  A pen reports a pressure of 0.5 while it touches and 0 while
+ * it hovers.
+ *
+ * moveTo, down, and up dispatch real CDP input at once - one round trip each - with no scroll, no
+ * stability wait, and no polling.  moveToElement polls until the element exists and is visible, then
+ * dispatches; it does not scroll, so an element whose point is outside the viewport fails.  prepare()
+ * releases a pointer left pressed and returns every pointer to (0, 0).
+ */
+export interface Pointer {
+  readonly type: PointerType;
+  /** Move to (x, y), in CSS pixels from the top-left of the viewport (the frame's viewport, on a frame handle). */
+  moveTo(x: number, y: number, options?: CancellationOptions): Promise<void>;
+  /** Move to the element's center, or to options.position from its top-left corner. */
+  moveToElement(target: Locator | string, options?: MoveToElementOptions): Promise<void>;
+  /** Press the primary button where the pointer is.  Pressing a pressed pointer is an INVALID_ARGUMENT error. */
+  down(options?: CancellationOptions): Promise<void>;
+  /** Release the primary button where the pointer is.  Releasing a released pointer is an INVALID_ARGUMENT error. */
+  up(options?: CancellationOptions): Promise<void>;
+}
+/** A page-clock time: a Date, or milliseconds since the Unix epoch.  The clock has millisecond resolution. */
+export type ClockTime = Date | number;
+/**
+ * A tab's page clock: fake timers for the page's own code, so a test can move time instead of waiting
+ * for it.  session.installClock() installs it and returns one; session.clock() returns one for the
+ * tab.  Every method fails with INVALID_ARGUMENT when the tab has no clock installed, or on a frame
+ * handle.  Biloba itself keeps running on real time, so polling never advances a paused clock.
+ */
+export interface Clock {
+  /**
+   * Stop the page's time at `time`: no timer or animation frame runs until runFor, fastForward, or
+   * resume.  A time ahead of the clock gets there the way fastForward does; a time behind it (time
+   * flows after installClock, so pausing at the start time usually goes back a little) moves the clock
+   * back without firing anything.
+   */
+  pauseAt(time: ClockTime, options?: CommandOptions): Promise<void>;
+  /** Let the page's time flow again at the real rate, from wherever the clock is. */
+  resume(options?: CommandOptions): Promise<void>;
+  /**
+   * Advance the clock by `ms`, running every timer and animation frame that falls due, in order, each
+   * in its own task so promise callbacks run in between.  It gives up after `timeoutMs` of real time
+   * (10 seconds by default) with a TIMEOUT that says how far it got.
+   */
+  runFor(ms: number, options?: WaitingCommandOptions): Promise<void>;
+  /** Jump the clock ahead by `ms`, firing each timer that fell due along the way once, at the new time. */
+  fastForward(ms: number, options?: CommandOptions): Promise<void>;
+  /** Pin what the page's Date reports to `time`.  Timers and animation frames keep running on the clock's own time. */
+  setFixedTime(time: ClockTime, options?: CommandOptions): Promise<void>;
+  /** Move the clock to `time`, forwards or backwards, without firing any timer; unpins setFixedTime. */
+  setSystemTime(time: ClockTime, options?: CommandOptions): Promise<void>;
+}
+export interface ScreencastOptions extends CancellationOptions {
+  /** "jpeg" (the default) or "png". */
+  format?: "jpeg" | "png" | undefined;
+  /** JPEG quality, 0-100; 0 or omitted leaves it to Chrome.  PNG ignores it. */
+  quality?: number | undefined;
+  /** Shrink frames to fit, in pixels; Chrome keeps the aspect ratio and never enlarges a frame. */
+  maxWidth?: number | undefined;
+  maxHeight?: number | undefined;
+  /** Keep one frame in every n. */
+  everyNthFrame?: number | undefined;
+}
+/**
+ * One screencast frame.  timestamp is when Chrome swapped the frame onto the screen, in milliseconds
+ * since the Unix epoch (fractional), so on the machine running Chrome it compares directly with
+ * Date.now(); it is 0 if Chrome sent none.  deviceWidth and deviceHeight are the viewport size the
+ * image shows, in CSS pixels; scrollOffsetX and scrollOffsetY are the page's scroll position; offsetTop
+ * is how far down the image the page starts.
+ */
+export interface ScreencastFrame {
+  readonly data: Uint8Array; readonly timestamp: number;
+  readonly deviceWidth: number; readonly deviceHeight: number; readonly pageScaleFactor: number;
+  readonly scrollOffsetX: number; readonly scrollOffsetY: number; readonly offsetTop: number;
+}
+/** A screencast in progress, from session.startScreencast(). */
+export interface ScreencastRecording {
+  /**
+   * Stop the screencast and return its frames in timestamp order.  It waits for Chrome to confirm, so
+   * no frame arrives after it resolves; calling it again returns the same frames.
+   */
+  stop(options?: CancellationOptions): Promise<readonly ScreencastFrame[]>;
 }
 export interface KeyboardOptions extends WaitOptions {modifiers?: readonly Modifier[] | undefined}
 export interface WindowKeyboardOptions extends CancellationOptions {modifiers?: readonly Modifier[] | undefined}
@@ -358,8 +474,20 @@ export type DiagnosticsArtifactErrorCode = BilobaErrorCode | "IO_ERROR" | "ACTIO
 export interface DiagnosticsArtifactError {readonly artifact: DiagnosticsArtifact; readonly code: DiagnosticsArtifactErrorCode; readonly message: string}
 export interface TabDiagnostics {readonly sessionId?: string; readonly targetId: string; readonly title: string; readonly screenshotPath?: string; readonly screenshot?: Uint8Array; readonly outlinePath?: string; readonly domOutline?: string; readonly errors: readonly DiagnosticsArtifactError[]}
 export interface ContextDiagnostics {readonly purpose: DiagnosticsPurpose; readonly artifactDir?: string; readonly tabs: readonly TabDiagnostics[]}
+/** One frame of a page stack trace.  line and column are zero-based, as Chrome reports them. */
 export interface ConsoleStackFrame {readonly url: string; readonly functionName: string; readonly line: number; readonly column: number}
-export interface ConsoleMessage {readonly type: string; readonly text: string; readonly args: readonly unknown[]; readonly timestamp: string; readonly stack: readonly ConsoleStackFrame[]}
+/**
+ * A console message.  source is "" for the page's own console calls; for a message Chrome logged
+ * itself (an intervention, a violation, a failed resource load, a deprecation) it names the origin
+ * ("network", "intervention", ...) and type is the level ("debug", "info", "warning", "error").
+ */
+export interface ConsoleMessage {readonly type: string; readonly source: string; readonly text: string; readonly args: readonly unknown[]; readonly timestamp: string; readonly stack: readonly ConsoleStackFrame[]}
+/**
+ * An uncaught exception or unhandled promise rejection.  message reads the way DevTools prints it
+ * ("Uncaught TypeError: x is not a function"); url, line, and column locate where it was thrown, and
+ * line and column are zero-based, as Chrome reports them.
+ */
+export interface PageError {readonly message: string; readonly url: string; readonly line: number; readonly column: number; readonly stack: readonly ConsoleStackFrame[]; readonly timestamp: string}
 export type DialogType = "alert" | "beforeunload" | "confirm" | "prompt";
 export interface Dialog {readonly type: DialogType; readonly message: string; readonly defaultPrompt: string; readonly accepted: boolean; readonly promptText: string; readonly autoHandled: boolean}
 export interface DialogQuery {readonly type?: DialogType | undefined; readonly message?: ExpectedValue | undefined}
@@ -371,9 +499,16 @@ export type WarningSink = (warning: Warning) => void;
 export type DownloadState = "active" | "complete" | "cancelled";
 export interface Download {readonly id: string; readonly url: string; readonly filename: string; readonly state: DownloadState; readonly receivedBytes: number; readonly totalBytes: number; readonly startedAt: number; readonly completedAt?: number; content(options?: CommandOptions & {maxBytes?: number | undefined}): Promise<Uint8Array>; cancel(options?: CommandOptions): Promise<void>}
 export interface DownloadQuery {readonly state?: DownloadState | undefined; readonly filename?: ExpectedValue | undefined; readonly url?: ExpectedValue | undefined; readonly content?: Uint8Array | undefined; readonly contentText?: ExpectedValue | undefined}
-export interface RequestQuery {readonly url?: ExpectedValue | undefined; readonly method?: ExpectedValue | undefined; readonly resourceType?: ExpectedValue | undefined}
+/** status matches the response status (0 while there is none); failed keeps only requests that failed. */
+export interface RequestQuery {readonly url?: ExpectedValue | undefined; readonly method?: ExpectedValue | undefined; readonly resourceType?: ExpectedValue | undefined; readonly status?: ExpectedValue | undefined; readonly failed?: boolean | undefined}
 export interface HeaderEntry {readonly name: string; readonly value: string}
-export interface NetworkRequest {readonly url: string; readonly method: string; readonly headers: readonly HeaderEntry[]; readonly headerMap: Readonly<Record<string, string>>; readonly resourceType: string}
+/**
+ * A request the session observed.  status is the response's HTTP status: 0 until the headers arrive,
+ * and 0 for a request that failed without one.  A redirect is one request per hop, and a hop that was
+ * redirected has the redirect's status.  failure is "" unless the request failed, when it is Chrome's
+ * error text (net::ERR_CONNECTION_REFUSED, ...).  An HTTP error status is not a failure.
+ */
+export interface NetworkRequest {readonly url: string; readonly method: string; readonly headers: readonly HeaderEntry[]; readonly headerMap: Readonly<Record<string, string>>; readonly resourceType: string; readonly status: number; readonly failure: string}
 export interface ResponseQuery {readonly url?: ExpectedValue | undefined; readonly status?: ExpectedValue | undefined}
 export interface NetworkResponse {readonly url: string; readonly status: number; readonly headers: readonly HeaderEntry[]; readonly headerMap: Readonly<Record<string, string>>; readonly resourceType: string}
 export interface RequestOverride {readonly url?: string | undefined; readonly method?: string | undefined; readonly headers?: readonly HeaderEntry[] | undefined; readonly body?: Uint8Array | undefined}
@@ -387,17 +522,10 @@ export interface NetworkShadowDiagnostic {readonly url: string; readonly stage: 
 export interface NetworkHandler {readonly id: string; count(options?: CommandOptions): Promise<number>; stats(options?: CommandOptions): Promise<NetworkHandlerStats>; remove(options?: CommandOptions): Promise<void>}
 export type ConnectionType = "none" | "cellular2g" | "cellular3g" | "cellular4g" | "bluetooth" | "ethernet" | "wifi" | "wimax" | "other";
 export interface NetworkState {readonly offline?: boolean | undefined; readonly latencyMs?: number | undefined; readonly downloadThroughput?: number | undefined; readonly uploadThroughput?: number | undefined; readonly connectionType?: ConnectionType | undefined}
-export interface DeviceMetrics {readonly width: number; readonly height: number; readonly deviceScaleFactor?: number | undefined; readonly mobile?: boolean | undefined}
+export interface DeviceMetrics {readonly width: number; readonly height: number; readonly deviceScaleFactor?: number | undefined; readonly mobile?: boolean | undefined; readonly touch?: boolean | undefined; readonly landscape?: boolean | undefined}
 export interface Geolocation {readonly latitude: number; readonly longitude: number; readonly accuracy?: number | undefined}
-export type Permission =
-  | "ar" | "audioCapture" | "automaticFullscreen" | "backgroundFetch" | "backgroundSync"
-  | "cameraPanTiltZoom" | "capturedSurfaceControl" | "clipboardReadWrite" | "clipboardSanitizedWrite"
-  | "displayCapture" | "durableStorage" | "geolocation" | "handTracking" | "idleDetection"
-  | "keyboardLock" | "localFonts" | "localNetwork" | "localNetworkAccess" | "loopbackNetwork"
-  | "midi" | "midiSysex" | "nfc" | "notifications" | "paymentHandler" | "periodicBackgroundSync"
-  | "pointerLock" | "protectedMediaIdentifier" | "sensors" | "smartCard" | "speakerSelection"
-  | "storageAccess" | "topLevelStorageAccess" | "videoCapture" | "vr" | "wakeLockScreen"
-  | "wakeLockSystem" | "webAppInstallation" | "webPrinting" | "windowManagement";
+/** A permission name, as navigator.permissions.query takes it ("camera", "clipboard-read", ...). */
+export type Permission = import("./generated/protocol.js").PermissionName;
 export type PermissionState = "granted" | "denied" | "prompt";
 export interface MediaEmulation {readonly type?: "screen" | "print" | "" | undefined; readonly colorScheme?: "light" | "dark" | "no-preference" | undefined; readonly reducedMotion?: "reduce" | "no-preference" | undefined}
 
@@ -649,8 +777,8 @@ export interface Session {
   prepare(options?: WaitingCommandOptions): Promise<{readonly invalidatedSessionIds: readonly string[]}>;
   navigate(url: string, options?: WaitingCommandOptions): Promise<void>;
   navigateWithStatus(url: string, expectedStatus: number, options?: WaitingCommandOptions): Promise<void>;
-  captureScreenshot(options?: ScreenshotBytesOptions): Promise<Uint8Array>;
-  captureScreenshot(options: ScreenshotPathOptions): Promise<string>;
+  captureScreenshot(options?: PageScreenshotBytesOptions): Promise<Uint8Array>;
+  captureScreenshot(options: PageScreenshotPathOptions): Promise<string>;
   expectScreenshot(name: string, options?: VisualScreenshotOptions): Promise<VisualResult>;
   captureDiagnostics(options?: CaptureDiagnosticsOptions): Promise<ContextDiagnostics>;
   setCookies(cookies: readonly Cookie[], options?: CommandOptions): Promise<void>;
@@ -675,6 +803,9 @@ export interface Session {
   warnings(options?: CommandOptions): Promise<readonly BilobaWarning[]>;
   onWarning(listener: (warning: BilobaWarning) => void): () => void;
   expectConsoleMessage(expected: ExpectedValue, options?: PollOptions & {type?: string | undefined}): Promise<ConsoleMessage>;
+  pageErrors(options?: CommandOptions): Promise<readonly PageError[]>;
+  onPageError(listener: (pageError: PageError) => void): () => void;
+  expectPageError(expected: ExpectedValue, options?: PollOptions): Promise<PageError>;
   setDeviceMetrics(metrics: DeviceMetrics, options?: CommandOptions): Promise<void>;
   clearDeviceMetrics(options?: CommandOptions): Promise<void>;
   setGeolocation(location: Geolocation, options?: CommandOptions): Promise<void>;
@@ -687,7 +818,26 @@ export interface Session {
   clearTimezone(options?: CommandOptions): Promise<void>;
   setMedia(media: MediaEmulation, options?: CommandOptions): Promise<void>;
   clearMedia(options?: CommandOptions): Promise<void>;
+  setUserAgent(userAgent: string, options?: CommandOptions): Promise<void>;
+  clearUserAgent(options?: CommandOptions): Promise<void>;
   sendKeys(keys: string, options?: WindowKeyboardOptions): Promise<void>;
+  /** A real mouse or pen to drive one event at a time; see Pointer. */
+  pointer(options?: PointerHandleOptions): Pointer;
+  /**
+   * Record the frames Chrome draws for this tab until you stop the returned recording.  A tab records
+   * one screencast at a time, and a frame handle refuses with INVALID_ARGUMENT.  prepare() and close()
+   * stop a recording that is still running and discard it: stop it first to keep its frames.
+   */
+  startScreencast(options?: ScreencastOptions): Promise<ScreencastRecording>;
+  /**
+   * Install the page clock on this tab and its same-process frames, starting at `start` with time
+   * flowing at the real rate, and return the Clock that controls it.  Install before navigate() to
+   * cover every timer the page creates.  A second installClock() before prepare() fails with
+   * INVALID_ARGUMENT, as does installClock() on a frame handle.  prepare() and close() remove it.
+   */
+  installClock(start: ClockTime, options?: CommandOptions): Promise<Clock>;
+  /** This tab's page clock, installed earlier with installClock(), for code that wasn't handed it. */
+  clock(): Clock;
   clearSelection(options?: CancellationOptions): Promise<void>;
   normalizeColor(color: string, options?: CancellationOptions): Promise<string>;
   close(): Promise<void>;

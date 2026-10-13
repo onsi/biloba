@@ -1,4 +1,4 @@
-import type {ContextDiagnostics, Session} from "../index.js";
+import type {ContextDiagnostics, PageError, Session} from "../index.js";
 
 export interface VitestAdapterOptions {
   sessions: () => Session | readonly Session[] | undefined;
@@ -33,10 +33,18 @@ export class VitestAdapter {
     await this.#awaitProgress();
     if (this.#disposed) return;
     const current = this.#sessions();
-    const consoleMessages = (await Promise.all(current.map(async (session) => await session.consoleMessages().catch(() => [])))).flat();
-    const consoleErrors = consoleMessages.filter((message) => message.type === "error" || message.type === "assert");
+    const consoleMessages = (await Promise.all(current.map(async (session) => await settled(() => session.consoleMessages())))).flat();
+    const pageErrors = (await Promise.all(current.map(async (session) => await settled(() => session.pageErrors())))).flat();
+    // Chrome's own messages (a non-empty source) stay in consoleMessages() but are not replayed: the
+    // replay is for what the page itself reported, as in the Go client's failure summary.
+    const consoleErrors = consoleMessages.filter((message) => !message.source && (message.type === "error" || message.type === "assert"));
     if (this.#options.replayConsoleErrors ?? true) {
-      for (const message of consoleErrors) this.#options.output(`[browser ${message.type}] ${message.text}\n`);
+      const replay = [
+        ...consoleErrors.map((message) => ({timestamp: message.timestamp, text: `[browser ${message.type}] ${message.text}\n`})),
+        ...pageErrors.map((pageError) => ({timestamp: pageError.timestamp, text: `[browser pageerror] ${describePageError(pageError)}\n`})),
+      ];
+      replay.sort((a, b) => replayTime(a.timestamp) - replayTime(b.timestamp));
+      for (const entry of replay) this.#options.output(entry.text);
     }
     const asserted = (this.#options.failOnConsoleAssert ?? true) && consoleErrors.some((message) => message.type === "assert");
     if (failed || asserted) {
@@ -79,6 +87,21 @@ export class VitestAdapter {
     await this.#progressCapture;
     this.#progressCapture = undefined;
   }
+}
+
+async function settled<T>(read: () => Promise<readonly T[]>): Promise<readonly T[]> {
+  try { return await read(); } catch { return []; }
+}
+
+function replayTime(timestamp: string): number {
+  const parsed = Date.parse(timestamp);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+// describePageError prints where the error was thrown as url:line:column, one-based the way editors
+// and DevTools show it; PageError's own line and column stay zero-based, as Chrome reports them.
+export function describePageError(pageError: PageError): string {
+  return pageError.url ? `${pageError.message} (${pageError.url}:${pageError.line + 1}:${pageError.column + 1})` : pageError.message;
 }
 
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }

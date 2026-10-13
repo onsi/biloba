@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Init Script</title>
+    <script>
+        // runs before the body exists, so it can only see what an init script left behind
+        window.__seenAtLoad = String(window.__seed)
+    </script>
+</head>
+<body>
+    <div id="seed"></div>
+    <script>document.getElementById("seed").textContent = window.__seenAtLoad</script>
+</body>
+</html>

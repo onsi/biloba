@@ -20,8 +20,8 @@ Every design decision traces back to one of these. When in doubt, weigh changes 
 - **Selectors.** A `selector any` is either a CSS string, or an `XPath` (a `string` type built by the `b.XPath()` DSL in `xpath.go`). The bridge prefixes `s` for CSS and `x` for XPath. Never fetch-then-act on an element handle — always pass a selector into the action so the find-and-act happens atomically in one JS snippet.
 - **Frames.** `>>>` reaches same-origin iframes. A cross-origin iframe gets a *frame handle* — `b.Frame(query)` in Go, `session.waitForFrame()` in TypeScript — scoped to one frame document: evaluation is pinned to that document's JavaScript context (`engine.ScopeToFrameContext`), and a handle whose document is gone fails as stale rather than acting on its replacement. Same-process frames share their tab's renderer attachment, so pointer points and screenshot clips are translated into the tab (`engine/frame_geometry.go`, used by both clients) and tab-level commands are refused on a frame (`refusedOnFrame` in Go, `tabOnly` in the engine) — otherwise they would act on the embedding page. Out-of-process frames (full Chrome runs cross-site frames in their own target) are reached through an attachment to that target (`engine.AttachFrameTargetContext`). A frame feature lands in both clients together.
 - **Tabs.** `b` is the reusable root tab (never closed). `b.NewTab()` makes an isolated tab (its own `BrowserContextID`, i.e. incognito-like). Spawned tabs inherit their opener's context. `b.Prepare()` closes everything but the root and resets state.
-- **TypeScript client.** `typescript/` (the `biloba` npm package) spawns one `bilobad` (`cmd/bilobad/`) per Vitest worker and speaks the framed JSON protocol in `protocol/`, whose TypeScript types are generated from the Go wire structs (`go generate ./protocol`). `bilobad` drives Chrome through `engine/`, the runner-neutral core. `engine/biloba.js` is a generated copy of `biloba.js`: run `go generate ./engine` after editing `biloba.js`, so a DOM change reaches both clients.
-- **chromedp escape hatch.** Every tab exposes `b.Context`; Biloba deliberately does not hide chromedp/cdproto. Missing Go features (e.g. geolocation, which the engine and TypeScript client support but the Go API does not expose yet) are expected to be done through `b.Context` until/unless Biloba grows native support.
+- **TypeScript client.** `typescript/` (the `biloba` npm package) spawns one `bilobad` (`cmd/bilobad/`) per Vitest worker and speaks the framed JSON protocol in `protocol/`, whose TypeScript types are generated from the Go wire structs (`go generate ./protocol`). `bilobad` drives Chrome through `engine/`, the runner-neutral core. `engine/biloba.js` is a generated copy of `biloba.js` (and `engine/clock.js` of `clock.js`, the page clock): run `go generate ./engine` after editing either, so a change reaches both clients.
+- **chromedp escape hatch.** Every tab exposes `b.Context`; Biloba deliberately does not hide chromedp/cdproto. CDP features Biloba doesn't wrap (e.g. CPU throttling) are expected to be done through `b.Context` until/unless Biloba grows native support. A feature one client has and the other lacks is a parity gap to close through a shared engine helper, not an escape-hatch recipe.
 
 ## The dual immediate/matcher API convention
 
@@ -66,6 +66,7 @@ Repo-specific testing conventions (see `biloba_suite_test.go`):
 | Clicking, pointer interactions (buttons, modifiers, `At`), keyboard input, uploads | `clicks.go`, `keyboard.go`, `upload.go` | `interactions_test.go`, `keyboard_test.go` |
 | Element/selector locators (`ByCSS`/`ByRole`/`ByText`/...) | `locator.go` | `locator_test.go` |
 | Realistic interaction track (`Realistic`, scroll-into-view, real pointer/wheel events) | `realistic.go` | `realistic_test.go` |
+| Low-level pointer handle (`Pointer`, `Pen`, `MoveTo`/`MoveToElement`/`Down`/`Up`) | `pointer.go`; engine: `DispatchPointerContext` in `engine/input.go`, `Session.Pointer` (TypeScript's state, held by the daemon) in `engine/pointer.go` | `pointer_test.go`; `engine/pointer_test.go` |
 | Property get/set/match | `properties.go` | `properties_test.go` |
 | Geometry getters/matchers (GetBoundingBox/GetScrollOffset/GetOffsetTopWithin, pairwise/viewport/document-order, GetComputedStyle) | `geometry.go` | `geometry_test.go` |
 | Capturing a matcher's observed value (`*ValueMatcher`/`.Capture`) | `capture.go` | (exercised from each matcher's `*_test.go`) |
@@ -75,9 +76,12 @@ Repo-specific testing conventions (see `biloba_suite_test.go`):
 | Visual regression (`HaveScreenshot`, baselines, masking, the freeze) | `visual.go` | `visual_test.go` |
 | Image diff + the failure diagnosis it renders | `visual_diff.go` | `visual_diff_internal_test.go` |
 | Screenshots (capture, inline protocols, to-file) | `screenshots.go` | `screenshots_test.go` |
+| Screencasts (`StartScreencast`, frame acks, Stop) | `screencast.go`; engine: `engine/screencast.go`, `Session.StartScreencast`/`StopScreencast` in `engine/screencast_session.go` (TypeScript collects frames in chunks; `screencastChunkOf` in `cmd/bilobad`) | `screencast_test.go`; `engine/screencast_session_test.go` |
 | Window size | `windows.go` | `windows_test.go` |
+| Emulation (`SetMedia`, `SetUserAgent`, geolocation, permissions, locale, time zone, network state, cache; device options live with `SetWindowSize`) | `emulation.go`; engine: `engine/emulation.go`, `engine/network_handlers.go` | `emulation_test.go` |
+| Page clock (`InstallClock`, `*Clock`; fake timers for the page's code, vendored @sinonjs/fake-timers) | `clock.go`, `clock.js` (copied to `engine/clock.js` by `go generate ./engine`); engine: `engine/clock.go`; TypeScript: `installClock`/`clock()` in `typescript/src/internal/client.ts`, the `*_CLOCK*` lifecycle operations in `protocol/` and `cmd/bilobad/` | `clock_test.go`; `engine/clock_test.go`; `typescript/test/parity.test.ts` |
 | XPath DSL | `xpath.go` | `xpath_test.go` |
-| Tabs / spawned tabs, per-tab listener setup | `tabs.go`, `listeners.go` | `tabs_test.go` |
+| Tabs / spawned tabs, per-tab listener setup; dropping events from the page a Prepare left behind | `tabs.go`, `listeners.go`; engine: `engine/boundary.go` (`DocumentBoundary`) | `tabs_test.go`, `prepare_test.go`; `engine/boundary_internal_test.go` |
 | Cross-origin iframes (`Frame`/`HaveFrame`/`AllFrames`, frame handles, tab-only refusals) | `frames.go`; engine: `engine/frame.go`, `engine/frame_context.go`, `engine/frame_geometry.go` | `frames_test.go`; `engine/frame*_test.go` |
 | Dialogs | `dialog_handling.go` | `dialog_handling_test.go` |
 | Downloads | `downloads.go` | `downloads_test.go` |
@@ -85,9 +89,9 @@ Repo-specific testing conventions (see `biloba_suite_test.go`):
 | Local/session storage | `storage.go` | `storage_test.go` |
 | Network requests/stubbing/matchers | `network.go` | `network_test.go` |
 | Arbitrary JS (`Run`, `JSFunc`, `JSVar`, `EvaluateTo`) | `javascript.go` | `javascript_test.go` |
-| Navigation, console/stack-trace logging | `navigation.go`, `logging.go` | `navigation_test.go`, `logging_test.go` |
+| Navigation, console/stack-trace logging, console and page-error snapshots (`AllConsoleMessages`/`AllPageErrors`); the engine's Prepare boundary for the previous document's late events | `navigation.go`, `logging.go`; engine: `engine/console.go`, `engine/page_errors.go`, `engine/boundary.go` | `navigation_test.go`, `logging_test.go`; `engine/observations_test.go` |
 | chrome-headless-shell resolution (`BILOBA_CHROME_HEADLESS_SHELL`) | `headless_shell.go` | `headless_shell_test.go` |
-| Browser-side primitives | `biloba.js` (copied to `engine/biloba.js` by `go generate ./engine`) | (exercised via Go tests) |
+| Browser-side primitives | `biloba.js` (copied to `engine/biloba.js` by `go generate ./engine`; captures the real timers so Biloba stays on real time under the page clock) | (exercised via Go tests) |
 | TypeScript client, daemon, engine, wire protocol | `typescript/`, `cmd/bilobad/`, `engine/`, `protocol/` | `typescript/test/`, each package's `*_test.go` (`make driver-test`) |
 
 The backlog is GitHub issues on `onsi/biloba`; the `TODO` file predates them and is historical.

@@ -151,14 +151,16 @@ var _ = Describe("serving requests over framed stdio", func() {
 		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
 
 		// Eventually rather than a bare receive: a regression here does not answer at all, and that
-		// has to fail this spec rather than hang the suite waiting on a daemon that has gone away.
+		// has to fail this spec rather than hang the suite waiting on a daemon that has gone away.  The
+		// bound is generous: encoding a 32MB result under -race, on a runner busy installing Chrome for
+		// the other suites, has taken longer than 5s.
 		_, responses := client.begin("assert", protocol.AssertRequest{
 			SessionID: opened.SessionID,
 			Assertion: &protocol.WireAssertion{Kind: "TEXT", Locator: &protocol.WireLocator{Kind: "CSS", Value: "#status"}, ExpectedString: "ready"},
 		}, 0)
 
 		var response protocol.Response
-		Eventually(responses, 5*time.Second).Should(Receive(&response))
+		Eventually(responses, 30*time.Second).Should(Receive(&response))
 		Expect(response.Error.Code).To(Equal(protocol.CodeDriver))
 		Expect(response.Error.Message).To(ContainSubstring("the protocol caps a single response"))
 		stillServing()

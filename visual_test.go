@@ -699,6 +699,17 @@ var _ = Describe("Visual assertions", func() {
 			Ω("#scheme").Should(b.HaveScreenshot("ambient"))
 		})
 
+		It("captures in the tab's own media without the option, and restores that media after it", func() {
+			generate("#scheme", "scheme", b.InColorSchemes("light", "dark"))
+			b.SetMedia(biloba.Media{ColorScheme: "dark", ReducedMotion: "reduce"})
+			Eventually("#scheme").Should(b.HaveScreenshot("scheme-dark"), "the tab's media is the ambient rendering")
+			Ω("#scheme").ShouldNot(b.HaveScreenshot("scheme-light"))
+
+			Ω("#scheme").Should(b.HaveScreenshot("scheme", b.InColorSchemes("light")))
+			Ω(`matchMedia("(prefers-color-scheme: dark)").matches`).Should(b.EvaluateTo(true), "the tab's scheme comes back, rather than being cleared")
+			Ω(`matchMedia("(prefers-reduced-motion: reduce)").matches`).Should(b.EvaluateTo(true), "and the rest of its media was never touched")
+		})
+
 		It("clears an override that leaked past its teardown on the next Prepare", func() {
 			generate("#scheme", "ambient")
 

@@ -67,6 +67,85 @@ var _ = Describe("Observing the network", func() {
 		})
 	})
 
+	Describe("request outcomes", func() {
+		// each fetch reads its body: Chrome reports a response whose body the page never reads as net::ERR_ABORTED
+		It("records each response's status, and refines on it with WithStatus", func() {
+			b.Run(`fetch("/missing.json").then(r => r.text()); fetch("/status/500").then(r => r.text()); fetch("/api/users").then(r => r.text())`)
+			Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/missing.json")).WithStatus(404))
+			Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/status/500")).WithStatus(BeNumerically(">=", 500)))
+			Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")).WithStatus(200).WithMethod("GET"))
+			Expect(b).NotTo(b.HaveMadeRequest(ContainSubstring("/api/users")).WithStatus(200).WithMethod("POST"), "every refinement applies")
+			Expect(b).NotTo(b.HaveMadeRequest(ContainSubstring("/missing.json")).Failed(), "an HTTP error status is not a failure")
+
+			req := b.AllRequests().Find(b.RequestMatching(ContainSubstring("/missing.json")))
+			Expect(req.Status).To(Equal(404))
+			Expect(req.Failure).To(BeEmpty())
+			// not every request: full Chrome also asks for /favicon.ico, which 404s
+			Expect(b.AllRequests().Filter(b.RequestMatching(MatchRegexp(`/(missing.json|status/500|api/users)$`)).WithStatus(BeNumerically(">=", 400)))).To(HaveLen(2))
+		})
+
+		It("records a redirect as one request per hop, each with the status it got", func() {
+			b.Run(`fetch("/redirect/api/users").then(r => r.text())`)
+			Eventually(b).Should(b.HaveMadeRequest(fixtureServer + "/api/users").WithStatus(200))
+			Expect(b.AllRequests().Find(b.RequestMatching(fixtureServer + "/redirect/api/users"))).To(HaveField("Status", 302))
+		})
+
+		It("records why a request failed, and refines on it with Failed", func() {
+			closed := ghttp.NewServer()
+			unreachable := closed.URL() + "/gone"
+			closed.Close()
+			b.Run(`fetch("` + unreachable + `").catch(() => {})`)
+			Eventually(b).Should(b.HaveMadeRequest(unreachable).Failed())
+
+			req := b.AllRequests().Find(b.RequestMatching(unreachable).Failed())
+			Expect(req.Status).To(BeZero())
+			Expect(req.Failure).To(HavePrefix("net::ERR_"))
+			Expect(b.AllRequests().Filter(b.RequestMatching(Not(BeEmpty())).Failed())).To(ConsistOf(HaveField("URL", unreachable)))
+			Expect(b).NotTo(b.HaveMadeRequest(ContainSubstring("/network.html")).Failed())
+		})
+
+		It("records an aborted request's failure", func() {
+			b.AbortRequest(ContainSubstring("/api/users"))
+			b.Click("#fetch-users")
+			Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")).Failed())
+			Expect(b.AllRequests().Find(b.RequestMatching(ContainSubstring("/api/users")))).To(HaveField("Failure", ContainSubstring("net::ERR_BLOCKED_BY_CLIENT")))
+		})
+
+		It("snapshots each request's outcome at the moment AllRequests is called", func() {
+			b.Navigate(fixtureServer + "/network-interception.html")
+			Eventually("#hello").Should(b.Exist())
+			hold := b.HoldResponse(ContainSubstring("/api/echo"))
+			b.Click("#fetch")
+			hold.Await()
+
+			before := b.AllRequests().Find(b.RequestMatching(ContainSubstring("/api/echo")))
+			Expect(before.Status).To(BeZero(), "the response has not reached the page yet")
+			before.Headers["mutated"] = "by the spec"
+
+			hold.Release()
+			Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/echo")).WithStatus(200))
+			Expect(before.Status).To(BeZero(), "an earlier snapshot is a copy")
+			Expect(b.AllRequests().Find(b.RequestMatching(ContainSubstring("/api/echo"))).Headers).NotTo(HaveKey("mutated"))
+		})
+
+		It("names the status and failure refinements in its failure message, and lists each request's outcome", func() {
+			b.Run(`fetch("/missing.json").then(r => r.text())`)
+			Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/missing.json")).WithStatus(404))
+
+			m := b.HaveMadeRequest(ContainSubstring("/missing.json")).WithStatus(200)
+			Expect(b).NotTo(m)
+			Expect(m.FailureMessage(b)).To(SatisfyAll(
+				ContainSubstring("and Status matching"),
+				ContainSubstring("<int>: 200"),
+				MatchRegexp(`GET http://.*/missing.json - 404`),
+			))
+
+			f := b.HaveMadeRequest(ContainSubstring("/missing.json")).WithMethod("GET").Failed()
+			Expect(b).NotTo(f)
+			Expect(f.FailureMessage(b)).To(SatisfyAll(ContainSubstring("and Method matching"), ContainSubstring("that failed")))
+		})
+	})
+
 	Describe("StubRequest", func() {
 		It("fulfills matching requests with the stubbed response instead of hitting the network", func() {
 			b.StubRequest(ContainSubstring("/api/users"), biloba.StubResponse{
@@ -1078,6 +1157,21 @@ var _ = Describe("Observing the network", func() {
 			// the slow endpoint sleeps ~300ms, so the request is briefly in-flight then settles
 			Eventually(b).Should(b.BeNetworkIdle())
 			Eventually("#result").Should(b.HaveInnerText("slow done"))
+		})
+
+		It("names the requests still in flight when it fails, as of its last attempt", func() {
+			b.Navigate(fixtureServer + "/network-interception.html")
+			Eventually("#hello").Should(b.Exist())
+			idle := b.BeNetworkIdle() // built before the request exists: the message must not be frozen here
+			hold := b.HoldResponse(ContainSubstring("/api/echo"))
+			b.Click("#fetch")
+			hold.Await()
+
+			Ω(idle.Match(b)).Should(BeFalse())
+			Ω(idle.FailureMessage(b)).Should(MatchRegexp(`(?s)Expected the tab to be network idle, but it has 1 in-flight request\(s\)\n  GET http://\S+/api/echo\S* \(Fetch, in flight for \d+ms\)$`))
+
+			hold.Release()
+			Eventually(b).Should(b.BeNetworkIdle())
 		})
 	})
 })

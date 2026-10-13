@@ -43,7 +43,7 @@ CI runs every one of these (`.github/workflows/test.yml`). Two rules keep them h
   binary through the same search the Go suite and `bilobad` use (explicit path →
   `BILOBA_CHROME_HEADLESS_SHELL` → `$PATH` → the newest build in the puppeteer/Biloba caches) and
   installs Chrome for Testing's stable shell when none is found. It is the only guard that
-  `engine/biloba.js` still matches the canonical `biloba.js`, so a quiet skip there would let the
+  `engine/biloba.js` and `engine/clock.js` still match the canonical `biloba.js` and `clock.js`, so a quiet skip there would let the
   copy drift unnoticed. If the install fails, run `make update-chrome`.
 - **`typescript/test/parity.test.ts` fails rather than skips when `BILOBA_DAEMON_EXECUTABLE` is
   unset.** It is the only test that exercises the real daemon end to end; "4 skipped, exit 0" is
@@ -54,7 +54,13 @@ CI runs every one of these (`.github/workflows/test.yml`). Two rules keep them h
 
 `make driver-test` deliberately does *not* run `go generate ./engine` — regenerating
 `engine/biloba.js` there would silently repair the drift the engine suite exists to catch. Run
-`go generate ./engine` yourself after editing `biloba.js`.
+`go generate ./engine` yourself after editing `biloba.js` or `clock.js`.
+
+**Page-clock specs** (`clock_test.go`, `engine/clock_test.go`, and the "page clock" block of
+`typescript/test/parity.test.ts`, which serves the same `fixtures/clock.html`) install the clock and `PauseAt` *before*
+`Navigate`, so the fixture's timers are fake from the first line of the page and every assertion
+is on exact fake times (`RunFor(300ms)` → exactly 18 animation frames).  A spec that lets time
+flow waits on real time, so give its `Eventually` a few seconds rather than Gomega's 1s default.
 
 ### The e2e suite tests the real topology
 
@@ -251,6 +257,7 @@ Inline protocol is env-selected via `BILOBA_INLINE_SCREENSHOTS=iterm|kitty|sixel
 - **Internal tests are Ginkgo specs too.** Specs in package `biloba` (the ones that reflect over unexported fields or exercise a pure function) import Ginkgo and Gomega under their **package names** rather than dot-importing, which is all it takes to avoid colliding with biloba's own exported names: `ginkgo "github.com/onsi/ginkgo/v2"` / `gomega "github.com/onsi/gomega"`, then `ginkgo.Describe`/`ginkgo.It`/`gomega.Expect`. Both test packages compile into one binary, so these run under the same `RunSpecs`. Label them `no-browser` if they don't need a tab. `tab_state_internal_test.go` is the model.
 - Label a spec `no-browser` to skip the `b.Prepare()` in `BeforeEach` (used for specs that don't drive the browser).
 - Put new specs in the `*_test.go` file matching the source file (`dom.go` → `dom_test.go`, etc.).
-- `console.log`/`console.assert` from the page stream to the `GinkgoWriter`; a failing `console.assert` counts as a spec failure.
+- `console.log`/`console.assert` from the page stream to the `GinkgoWriter`; a failing `console.assert` counts as a spec failure.  Uncaught page exceptions stream there too, and land in the replayed console errors (`SafeAllTabConsoleErrorsForTest` reads that list); Chrome's own warning/error log entries stream but stay out of that list.  The fixture server answers `/status/<code>` with that status, `/redirect/<path>` with a 302 to `/<path>`, `/cached/<anything>` with a fresh value and `Cache-Control: max-age=3600` (use a unique path per spec), and `/hang` never answers (it holds the request until the browser gives up).  `fixtures/stragglers.html` logs, throws, and fetches from inside Prepare's `localStorage.clear()`, which is how `prepare_test.go` exercises events from the page a Prepare leaves behind; a spec that needs to know Chrome really sent an event can register its own `chromedp.ListenTarget` after Biloba's (listeners run in order).  `LeakEmulationForTest` applies environment overrides without their `DeferCleanup`s, to exercise Prepare's leak clearing.
 - **Source-level guard specs** live in `*_internal_test.go` (package `biloba`, labelled `no-browser`) and grep Biloba's own `*.go` for a class the compiler and `go vet` can't see: `format_verbs_internal_test.go` (a `%w` outside `fmt.Errorf`), `tab_state_internal_test.go` (a `Biloba` field a view copies rather than shares), `cdp_internal_test.go` (a `chromedp.Run(b.Context, ...)` with no deadline). When one fires, fix the code — reaching for the regex is only right if the exempt form is genuinely correct, and then say why in the failure message.
+- **Count round trips, don't guess them.** Prepare runs before every spec, so a command added to it is paid by the whole suite. `engine/prepare_cost_test.go` shows how to count: attach a second engine `Browser` to the suite's Chrome with a `DebugSink`, bracket the operation with marker evaluations (the sink is asynchronous), and match the `"method"` of each sent message. Assert `DebugDropped()` is zero so a full queue can't hide a command.
 - **Simulating a fault beats reproducing one** when the real thing is slow or unrecoverable. The seams live in `export_test.go` and follow one shape — set, return a restore func, `DeferCleanup` it: `SetNavigationTimeoutForTest`, `SetTransientReadErrorForTest`, `SetCDPTimeoutsForTest` (shrinks the CDP backstop so a wedge spec runs in milliseconds), `SetWedgedCDPForTest` (a Chrome that accepts a command and never answers — a real wedged renderer would peg a CPU for the rest of the run). Reach for real Chrome when the fault is recoverable: `cdp_test.go` crashes a spawned tab with `page.Crash()` and navigates it back.

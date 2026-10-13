@@ -4,7 +4,7 @@ import {createServer, type Server} from "node:http";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {fileURLToPath} from "node:url";
-import {afterAll, beforeAll, describe, expect, it} from "vitest";
+import {afterAll, beforeAll, beforeEach, describe, expect, it} from "vitest";
 
 import {
   allOf,
@@ -29,6 +29,9 @@ import {expectTimedOutAction, expectTimedOutAssertion} from "./support/assertion
 const fixturePath = fileURLToPath(new URL("../../fixtures/graft-parity.html", import.meta.url));
 const expectedPath = fileURLToPath(new URL("../../fixtures/graft-parity-expected.json", import.meta.url));
 const daemonExecutable = process.env.BILOBA_DAEMON_EXECUTABLE;
+// The Go suite's own fixtures, so the pointer, screencast, and clock specs here drive the pages Go's
+// pointer_test.go, screencast_test.go, and clock_test.go do.
+const goFixture = (name: string) => fileURLToPath(new URL(`../../fixtures/${name}`, import.meta.url));
 
 // This is the only test that drives the real daemon against a real Chrome, so it fails loudly when
 // it is not configured rather than skipping.  A suite that silently reports 4 skipped, exit 0 looks
@@ -44,6 +47,7 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
   let artifactDir: string;
   let baselineDir: string;
   const screenshotWarnings: string[] = [];
+  let pointerReleases = 0;
 
   beforeAll(async () => {
     if (!daemonExecutable) {
@@ -59,6 +63,9 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
       if (request.url === "/slow-download") { response.setHeader("content-disposition", "attachment; filename=slow.bin"); response.write(Buffer.alloc(1024)); const timer = setInterval(() => { if (response.destroyed) { clearInterval(timer); return; } response.write(Buffer.alloc(1024)); }, 50); setTimeout(() => { clearInterval(timer); response.end(); }, 1_000); return; }
       if (request.url === "/echo-request") { const chunks: Buffer[] = []; request.on("data", (chunk: Buffer) => chunks.push(chunk)); request.on("end", () => { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({method: request.method, header: request.headers["x-modified"], body: Buffer.concat(chunks).toString("utf8")})); }); return; }
       if (request.url?.startsWith("/network-json") || request.url?.startsWith("/callback")) { response.setHeader("content-type", "text/plain"); response.setHeader("x-duplicate", ["first", "second"]); response.end(request.url.startsWith("/callback") ? "callback" : "network"); return; }
+      if (request.url === "/pointer.html" || request.url === "/screencast.html" || request.url === "/clock.html") { response.setHeader("content-type", "text/html"); createReadStream(goFixture(request.url.slice(1))).pipe(response); return; }
+      if (request.url === "/released") { pointerReleases++; response.end(); return; }
+      if (request.url === "/user-agent") { response.setHeader("content-type", "text/plain"); response.end(request.headers["user-agent"] ?? ""); return; }
       if (request.url === "/slow") { setTimeout(() => response.end("slow"), 100); return; }
       if (request.url === "/slow-callback") {
         response.setHeader("content-type", "text/plain");
@@ -88,6 +95,7 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     baseUrl = `http://127.0.0.1:${address.port}`;
 
     childServer = createServer((request, response) => {
+      if (request.url === "/pointer.html" || request.url === "/clock.html") { response.setHeader("content-type", "text/html"); createReadStream(goFixture(request.url.slice(1))).pipe(response); return; }
       const id = new URL(request.url ?? "/", "http://child.test").searchParams.get("id") ?? "child";
       const serializedId = JSON.stringify(id);
       response.setHeader("content-type", "text/html");
@@ -104,7 +112,8 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     baselineDir = join(artifactDir, "baselines");
     // No chromePath: bilobad runs the same runner-neutral Chrome search the Go suite does, so this
     // exercises the resolution path a real worker takes.
-    sharedBrowser = await startSharedBrowser({executable: daemonExecutable});
+    // BILOBA_TEST_HIGH_FIDELITY=true runs the contract against full headless Chrome, the Go suite's second lane.
+    sharedBrowser = await startSharedBrowser({executable: daemonExecutable, ...(process.env.BILOBA_TEST_HIGH_FIDELITY === "true" && {mode: "headless" as const})});
     browser = await connect({daemonExecutable: daemonExecutable, chromeConnection: sharedBrowser.connection, artifactDir, screenshotBaselinesDir: baselineDir, onScreenshotWarning: ({message}) => screenshotWarnings.push(message)});
     session = await browser.openSession();
   });
@@ -157,6 +166,8 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     await expect(frame.navigate(`${childBaseUrl}/child-form?id=elsewhere`)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
     await expect(frame.addInitScript("window.fromFrameInitScript = true")).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
     await expect(frame.setOffline(true)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(frame.setUserAgent("BilobaFrame/1.0")).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(frame.setDeviceMetrics({width: 400, height: 300, touch: true})).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
     await frameOwner.expectUrl(`${baseUrl}/`, {exact: true});
     await frame.evaluate(`console.log("frame-console-" + window.frameState.id)`);
     expect((await frame.expectConsoleMessage("frame-console-one")).text).toBe("frame-console-one");
@@ -222,6 +233,7 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
       await expect(frame.navigate(`${oopifBaseUrl}/child-form?id=elsewhere`)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
       await expect(frame.addInitScript("window.fromFrameInitScript = true")).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
       await expect(frame.setOffline(true)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+      await expect(frame.setUserAgent("BilobaFrame/1.0")).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
       await expect(frame.captureScreenshot()).rejects.toMatchObject({code: "INVALID_ARGUMENT", message: expect.stringContaining("capture the iframe element")});
       expect((await owner.locator("#oopif").captureScreenshot()).byteLength).toBeGreaterThan(0);
 
@@ -259,7 +271,10 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     expect(path.startsWith(artifactDir)).toBe(true);
     expect((await readFile(path)).subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
 
-    const updater = await connect({daemonExecutable: daemonExecutable, chromeWsUrl: sharedBrowser.wsURL, artifactDir, screenshotBaselinesDir: baselineDir, updateScreenshots: true});
+    // chromeConnection, not chromeWsUrl: a bare URL carries no launch metadata, so against full
+    // headless Chrome the updater would skip the viewport emulation `session` gets and write
+    // baselines at Chrome's un-emulated 1024x732 instead of 1024x768.
+    const updater = await connect({daemonExecutable: daemonExecutable, chromeConnection: sharedBrowser.connection, artifactDir, screenshotBaselinesDir: baselineDir, updateScreenshots: true});
     const updateSession = await updater.openSession();
     await updateSession.navigate(baseUrl);
     const created = await updateSession.getByRole("heading", {name: "Biloba parity"}).expectScreenshot("visual/heading");
@@ -322,6 +337,28 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     expect(rendered).toMatch(/^baseline: .*\.png$/m);
   });
 
+  it("records page errors and Chrome's own console messages", async () => {
+    await session.prepare();
+    await session.navigate(baseUrl);
+    const live: string[] = [];
+    const stop = session.onPageError((pageError) => live.push(pageError.message));
+    await session.evaluate(`setTimeout(function explode() { throw new TypeError("parity boom") })`);
+    const pageError = await session.expectPageError(contains("parity boom"), {timeoutMs: 2_000});
+    expect(pageError.message).toBe("Uncaught TypeError: parity boom");
+    expect(pageError.stack[0]).toMatchObject({functionName: "explode"});
+    expect(pageError.line).toBeGreaterThanOrEqual(0);
+    expect((await session.pageErrors()).map(({message}) => message)).toEqual(["Uncaught TypeError: parity boom"]);
+    await expect.poll(() => live, {timeout: 2_000}).toEqual(["Uncaught TypeError: parity boom"]);
+    stop();
+
+    await session.evaluateAsync(`fetch("/not-found").then(response => response.text())`);
+    await session.evaluate(`console.error("page's own error")`);
+    await expect.poll(async () => (await session.consoleMessages()).map(({source, type}) => `${source}:${type}`), {timeout: 2_000}).toEqual(expect.arrayContaining(["network:error", ":error"]));
+
+    await session.prepare();
+    expect(await session.pageErrors()).toEqual([]);
+  });
+
   it("preserves capture warnings and visual lifecycle state across cancellation", async () => {
     screenshotWarnings.length = 0;
     await session.prepare();
@@ -332,9 +369,21 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     expect(screenshotWarnings.some((warning) => warning.includes("clipped"))).toBe(true);
 
     await session.evaluate(`document.body.insertAdjacentHTML("beforeend", '<style>@keyframes visual-red {from{background:#a00}to{background:#a00}} #animated-visual{width:40px;height:30px;background:#0a0;animation:visual-red 100000s linear forwards}</style><div id="animated-visual"></div>')`);
-    const frozen = await session.locator("#animated-visual").captureScreenshot();
-    const animated = await session.locator("#animated-visual").captureScreenshot({animated: true});
-    expect(animated).not.toEqual(frozen);
+    // A plain capture leaves the page running, as Go's does; frozen is expectScreenshot's freeze.
+    const plain = await session.locator("#animated-visual").captureScreenshot();
+    const frozen = await session.locator("#animated-visual").captureScreenshot({frozen: true});
+    expect(plain).not.toEqual(frozen);
+    expect(await session.evaluate(`document.querySelectorAll("#_biloba-freeze").length`)).toBe(0);
+    expect(await session.locator("#animated-visual").captureScreenshot({hideCaret: true})).toEqual(plain);
+    expect(await session.evaluate(`document.querySelectorAll("#_biloba-caret").length`)).toBe(0);
+
+    const {width, height} = await session.evaluate<{width: number; height: number}>(`({width: Math.round(visualViewport.width), height: Math.round(visualViewport.height)})`);
+    expect(pngSize(await session.captureScreenshot({viewport: true}))).toEqual({width, height});
+    expect(pngSize(await session.captureScreenshot({clip: {x: 2, y: 3, width: 30, height: 20}}))).toEqual({width: 30, height: 20});
+    await expect(session.captureScreenshot({clip: {x: 0, y: height - 5, width: 10, height: 10}})).rejects.toMatchObject({code: "INVALID_ARGUMENT", message: expect.stringContaining("reaches outside")});
+    await session.evaluate(`document.body.insertAdjacentHTML("beforeend", '<div id="below-fold" style="margin-top:3000px;width:10px;height:10px"></div>')`);
+    await expect(session.locator("#below-fold").captureScreenshot({viewport: true})).rejects.toMatchObject({message: expect.stringContaining("not entirely in the viewport")});
+    await session.evaluate(`document.querySelector("#below-fold").remove()`);
 
     await session.setMedia({colorScheme: "dark", reducedMotion: "reduce"});
     const before = await session.evaluate(`[matchMedia("(prefers-color-scheme: dark)").matches, matchMedia("(prefers-reduced-motion: reduce)").matches]`);
@@ -348,6 +397,299 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     await expect(session.captureScreenshot({signal: controller.signal, timeoutMs: 2_000})).rejects.toMatchObject({code: "CANCELLED"});
     await session.navigate(baseUrl);
     expect(await session.evaluate("1 + 1")).toBe(2);
+  });
+
+  describe("the pointer", () => {
+    type PointerEvent = {type: string; pointerType: string; buttons: number; x: number; y: number; pressure: number};
+    const pointerLog = async (on: Session) => await on.evaluate<PointerEvent[]>("window.pointerLog");
+    // On Linux, chrome-headless-shell moves the mouse to (0, 0) when a page from a new site renders its
+    // first frame, so the log starts once the page has rendered two (see settlePointerLog in pointer_test.go).
+    const settle = async (on: Session) => { await on.expectEvaluation("window.framesRendered", true); await on.evaluate("window.pointerLog = []"); };
+    const event = (type: string, pointerType: string, buttons: number, x: number, y: number) => expect.objectContaining({type, pointerType, buttons, x: expect.closeTo(x, 0), y: expect.closeTo(y, 0)});
+    let tab: Session;
+
+    beforeAll(async () => { tab = await browser.openSession(); });
+    afterAll(async () => { await tab.close(); });
+
+    it("dispatches real moves, presses, and releases, with buttons=1 while pressed", async () => {
+      await tab.navigate(`${baseUrl}/pointer.html`);
+      await settle(tab);
+      const p = tab.pointer();
+      await p.moveTo(30, 30);
+      await p.down();
+      await p.moveTo(60, 40);
+      await p.moveTo(90, 50);
+      await p.up();
+      await p.moveTo(100, 60);
+      expect(await pointerLog(tab)).toEqual([
+        event("pointermove", "mouse", 0, 30, 30), event("pointerdown", "mouse", 1, 30, 30), event("pointermove", "mouse", 1, 60, 40),
+        event("pointermove", "mouse", 1, 90, 50), event("pointerup", "mouse", 0, 90, 50), event("pointermove", "mouse", 0, 100, 60),
+      ]);
+    });
+
+    it("dispatches pen events with pressure while the pen touches", async () => {
+      await tab.navigate(`${baseUrl}/pointer.html`);
+      await settle(tab);
+      const pen = tab.pointer({type: "pen"});
+      await pen.moveTo(30, 30);
+      await pen.down();
+      await pen.moveTo(60, 40);
+      await pen.up();
+      const log = await pointerLog(tab);
+      expect(log).toEqual([event("pointermove", "pen", 0, 30, 30), event("pointerdown", "pen", 1, 30, 30), event("pointermove", "pen", 1, 60, 40), event("pointerup", "pen", 0, 60, 40)]);
+      expect(log.map(({pressure}) => pressure)).toEqual([0, 0.5, 0.5, 0]);
+    });
+
+    it("moves to elements, polling for one that shows up late, and drags a slider", async () => {
+      await tab.navigate(`${baseUrl}/pointer.html`);
+      await settle(tab);
+      const p = tab.pointer();
+      await p.moveToElement("#pad");
+      await p.moveToElement(tab.locator("#pad"), {position: {x: 5, y: 10}});
+      await tab.evaluate(`setTimeout(() => { let d = document.createElement("div"); d.id = "late"; d.style.cssText = "position:absolute;left:300px;top:300px;width:40px;height:40px"; document.body.appendChild(d) }, 200)`);
+      await p.moveToElement("#late");
+      expect(await pointerLog(tab)).toEqual([event("pointermove", "mouse", 0, 120, 60), event("pointermove", "mouse", 0, 25, 30), event("pointermove", "mouse", 0, 320, 320)]);
+
+      await p.moveToElement("#track", {position: {x: 0, y: 10}});
+      await p.down();
+      await p.moveTo(70, 170);
+      expect(await tab.locator("#track").getAttribute("data-value")).toBe("25");
+      await p.moveTo(170, 170);
+      await p.up();
+      expect(await tab.locator("#track").getAttribute("data-value")).toBe("75");
+    });
+
+    it("does not scroll, fails on a missing element at the deadline, and refuses a second press", async () => {
+      await tab.navigate(`${baseUrl}/pointer.html`);
+      await settle(tab);
+      const p = tab.pointer();
+      await expect(p.moveToElement("#far", {immediate: true})).rejects.toMatchObject({code: "TIMEOUT", daemonDetail: expect.stringContaining("the pointer does not scroll")});
+      expect(await tab.evaluate("window.scrollY")).toBe(0);
+      await expect(p.moveToElement("#missing", {timeoutMs: 150})).rejects.toMatchObject({code: "TIMEOUT"});
+      await expect(p.up()).rejects.toMatchObject({code: "INVALID_ARGUMENT", message: expect.stringContaining("the pointer is not pressed")});
+      await p.down();
+      await expect(p.down()).rejects.toMatchObject({code: "INVALID_ARGUMENT", message: expect.stringContaining("the pointer is already pressed")});
+      await p.up();
+      expect(await pointerLog(tab)).toEqual([event("pointerdown", "mouse", 1, 0, 0), event("pointerup", "mouse", 0, 0, 0)]);
+    });
+
+    it("works in a cross-origin frame's viewport", async () => {
+      await tab.navigate(baseUrl);
+      await tab.evaluate(`url => { document.body.innerHTML = '<iframe style="position:absolute;left:100px;top:120px;width:360px;height:260px;border:6px solid black"></iframe>'; document.querySelector("iframe").src = url }`, [`${childBaseUrl}/pointer.html`]);
+      const frame = await tab.waitForFrame({has: "#pad"}, {timeoutMs: 5_000});
+      await settle(frame);
+      const p = frame.pointer();
+      await p.moveTo(30, 30);
+      await p.down();
+      await p.moveToElement("#pad", {position: {x: 100, y: 40}});
+      await p.up();
+      expect(await pointerLog(frame)).toEqual([event("pointermove", "mouse", 0, 30, 30), event("pointerdown", "mouse", 1, 30, 30), event("pointermove", "mouse", 1, 120, 60), event("pointerup", "mouse", 0, 120, 60)]);
+      await expect(p.moveToElement(tab.locator("#pad"))).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    });
+
+    it("is released by prepare() when a test leaves it pressed, and starts again at (0, 0)", async () => {
+      await tab.navigate(`${baseUrl}/pointer.html`);
+      await settle(tab);
+      await tab.evaluate(`document.addEventListener("pointerup", () => navigator.sendBeacon("/released"))`);
+      pointerReleases = 0;
+      const p = tab.pointer();
+      await p.moveTo(40, 40);
+      await p.down();
+      await tab.prepare();
+      await expect.poll(() => pointerReleases).toBe(1);
+      await tab.navigate(`${baseUrl}/pointer.html`);
+      await settle(tab);
+      await p.down();
+      await p.up();
+      expect(await pointerLog(tab)).toEqual([event("pointerdown", "mouse", 1, 0, 0), event("pointerup", "mouse", 0, 0, 0)]);
+    });
+  });
+
+  describe("screencasts", () => {
+    let tab: Session;
+    beforeAll(async () => { tab = await browser.openSession(); });
+    afterAll(async () => { await tab.close(); });
+
+    it("records an animating page's frames, timestamped by Chrome, in order, and stops once", async () => {
+      await tab.navigate(`${baseUrl}/screencast.html`);
+      const before = Date.now();
+      const recording = await tab.startScreencast({format: "jpeg", quality: 92});
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const frames = await recording.stop();
+      const after = Date.now();
+      expect(frames.length).toBeGreaterThanOrEqual(2);
+      const size = await tab.windowSize();
+      frames.forEach((frame, index) => {
+        expect([...frame.data.subarray(0, 2)]).toEqual([0xff, 0xd8]);
+        expect([frame.deviceWidth, frame.deviceHeight, frame.pageScaleFactor, frame.scrollOffsetY]).toEqual([size.width, size.height, 1, 0]);
+        expect(frame.timestamp).toBeLessThanOrEqual(after + 1);
+        // The first frame is the one already on screen, so it can predate startScreencast.
+        if (index > 0) {
+          expect(frame.timestamp).toBeGreaterThanOrEqual(before - 1);
+          expect(frame.timestamp).toBeGreaterThanOrEqual(frames[index - 1]!.timestamp);
+        }
+      });
+      expect(await recording.stop()).toBe(frames);
+    });
+
+    it("shrinks PNG frames to fit maxWidth and maxHeight", async () => {
+      await tab.navigate(`${baseUrl}/screencast.html`);
+      const recording = await tab.startScreencast({format: "png", maxWidth: 300, maxHeight: 150});
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const frames = await recording.stop();
+      const last = frames[frames.length - 1]!;
+      expect([...last.data.subarray(1, 4)]).toEqual([0x50, 0x4e, 0x47]);
+      const size = pngSize(last.data);
+      expect(size.width <= 300 && size.height <= 150 && (size.width === 300 || size.height === 150)).toBe(true);
+    });
+
+    it("records one screencast per tab at a time, refuses frame handles, and is discarded by prepare()", async () => {
+      await tab.navigate(`${baseUrl}/screencast.html`);
+      const running = await tab.startScreencast();
+      await expect(tab.startScreencast()).rejects.toMatchObject({code: "INVALID_ARGUMENT", message: expect.stringContaining("already recording a screencast")});
+      const other = await tab.newTab();
+      await other.navigate(`${baseUrl}/screencast.html`);
+      const otherRecording = await other.startScreencast();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect((await otherRecording.stop()).length).toBeGreaterThan(0);
+      expect((await running.stop()).length).toBeGreaterThan(0);
+
+      await tab.evaluate(`url => { const frame = document.createElement("iframe"); frame.src = url; document.body.append(frame) }`, [`${childBaseUrl}/pointer.html`]);
+      const frame = await tab.waitForFrame({has: "#pad"}, {timeoutMs: 5_000});
+      await expect(frame.startScreencast()).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+
+      const forgotten = await tab.startScreencast();
+      await tab.prepare();
+      await expect(forgotten.stop()).rejects.toMatchObject({code: "TARGET_NOT_FOUND", message: expect.stringContaining("discards its recordings when it is prepared or closed")});
+      await (await tab.startScreencast()).stop();
+    });
+  });
+
+  describe("the page clock", () => {
+    const t0 = new Date(Date.UTC(2024, 1, 2, 8));
+    const at = (ms: number) => t0.getTime() + ms;
+    const pausedNote = "This tab's page clock is paused at 2024-02-02T08:00:00.000Z; timers and animation frames won't run until you call runFor, fastForward, or resume.";
+    const text = async (on: Session, selector: string) => await on.locator(selector).innerText();
+    const onRealTime = async (on: Session) => {
+      expect(await on.evaluate("typeof window._bilobaClock")).toBe("undefined");
+      expect(Math.abs(await on.evaluate<number>("Date.now()") - Date.now())).toBeLessThan(5_000);
+    };
+    let tab: Session;
+
+    beforeAll(async () => { tab = await browser.openSession(); });
+    beforeEach(async () => { await tab.prepare(); });
+    afterAll(async () => { await tab.close(); });
+
+    const pausedPage = async () => {
+      const clock = await tab.installClock(t0);
+      await clock.pauseAt(t0);
+      await tab.navigate(`${baseUrl}/clock.html`);
+      return clock;
+    };
+
+    it("starts the page where it was paused and runs its timers and animation frames only when told to", async () => {
+      const clock = await pausedPage();
+      expect(await text(tab, "#now")).toBe("2024-02-02T08:00:00.000Z");
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect([await text(tab, "#countdown"), await text(tab, "#frames")]).toEqual(["10", "0"]);
+
+      await clock.runFor(300);
+      expect([await text(tab, "#chain"), await text(tab, "#frames"), await text(tab, "#later")]).toEqual(["one two three", "18", ""]);
+      await clock.runFor(4_700);
+      expect([await text(tab, "#countdown"), await text(tab, "#later")]).toEqual(["5", "later"]);
+      expect(await tab.evaluate("Date.now()")).toBe(at(5_000));
+    });
+
+    it("fires each due timer once with fastForward, pins Date with setFixedTime, and moves it with setSystemTime", async () => {
+      const clock = await pausedPage();
+      await clock.fastForward(3_600_000);
+      expect([await text(tab, "#countdown"), await text(tab, "#ago")]).toEqual(["9", "60 minutes ago"]);
+      expect(await tab.evaluate("Date.now()")).toBe(at(3_600_000));
+
+      const fixed = Date.UTC(2030, 0, 1);
+      await clock.setFixedTime(new Date(fixed));
+      await clock.runFor(1_000);
+      expect(await text(tab, "#countdown")).toBe("8");
+      expect(await tab.evaluate("[Date.now(), new Date().getTime()]")).toEqual([fixed, fixed]);
+
+      await clock.setSystemTime(at(-3_600_000));
+      expect(await tab.evaluate("Date.now()")).toBe(at(-3_600_000));
+      await clock.runFor(999);
+      expect(await text(tab, "#countdown")).toBe("8");
+      await clock.runFor(1);
+      expect(await text(tab, "#countdown")).toBe("7");
+    });
+
+    it("hands back the installed clock from session.clock(), and lets time flow again with resume", async () => {
+      await pausedPage();
+      await tab.clock().runFor(1_000);
+      expect(await text(tab, "#countdown")).toBe("9");
+      await tab.clock().resume();
+      await tab.locator("#countdown").expectText("8", {timeoutMs: 3_000});
+      await expect.poll(async () => Number(await text(tab, "#frames"))).toBeGreaterThan(5);
+    });
+
+    it("bounds runFor by real time and says how far it got", async () => {
+      const clock = await pausedPage();
+      await tab.evaluate("setInterval(() => {}, 1)");
+      await expect(clock.runFor(3_600_000, {timeoutMs: 50})).rejects.toMatchObject({code: "TIMEOUT", message: expect.stringMatching(/runFor\(3600000\) did not finish within 50ms[\s\S]*fastForward skips ahead/)});
+    });
+
+    it("says the clock is paused when a poll times out, and not for an immediate read or once time flows", async () => {
+      const clock = await pausedPage();
+      const assertion = await tab.locator("#countdown").expectText("9", {timeoutMs: 100}).catch((reason: unknown) => reason);
+      expectTimedOutAssertion(assertion, {locator: `locator("#countdown")`, expected: "9"});
+      expect(assertion.message).toContain(pausedNote);
+      const action = await tab.locator("#not-there").click({timeoutMs: 100}).catch((reason: unknown) => reason);
+      expectTimedOutAction(action, {locator: `locator("#not-there")`, operation: "click"});
+      expect(action.message).toContain(pausedNote);
+
+      await expect(tab.locator("#countdown").expectText("9", {immediate: true})).rejects.toSatisfy((error: Error) => !error.message.includes("page clock"));
+      await clock.resume();
+      await expect(tab.locator("#not-there").click({timeoutMs: 100})).rejects.toSatisfy((error: Error) => error.message.includes("timed out") && !error.message.includes("page clock"));
+    });
+
+    it("covers the tab's same-process frames, which refuse to control it", async () => {
+      const clock = await tab.installClock(t0);
+      await clock.pauseAt(t0);
+      await tab.navigate(baseUrl);
+      await tab.evaluate(`url => { const frame = document.createElement("iframe"); frame.src = url; document.body.append(frame) }`, [`${childBaseUrl}/clock.html`]);
+      const frame = await tab.waitForFrame({has: "#countdown"}, {timeoutMs: 5_000});
+      expect(await text(frame, "#now")).toBe("2024-02-02T08:00:00.000Z");
+      await clock.runFor(5_000);
+      expect([await text(frame, "#countdown"), await text(frame, "#later")]).toEqual(["5", "later"]);
+
+      const failure = await frame.locator("#countdown").expectText("4", {timeoutMs: 100}).catch((reason: unknown) => reason);
+      expect((failure as Error).message).toContain("This tab's page clock is paused at 2024-02-02T08:00:05.000Z");
+      await expect(frame.installClock(t0)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+      await expect(frame.clock().runFor(1_000)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    });
+
+    it("is per tab", async () => {
+      const other = await tab.newTab();
+      try {
+        await (await other.installClock(t0)).pauseAt(t0);
+        await other.navigate(`${baseUrl}/clock.html`);
+        expect(await text(other, "#now")).toBe("2024-02-02T08:00:00.000Z");
+        await tab.navigate(`${baseUrl}/clock.html`);
+        await onRealTime(tab);
+      } finally {
+        await other.close();
+      }
+    });
+
+    it("refuses a second install and calls without one, and prepare() removes it", async () => {
+      await expect(tab.clock().runFor(1)).rejects.toMatchObject({code: "INVALID_ARGUMENT", message: expect.stringContaining("this tab has no page clock")});
+      await pausedPage();
+      await expect(tab.installClock(t0)).rejects.toMatchObject({code: "INVALID_ARGUMENT", message: expect.stringContaining("already installed")});
+      expect(await tab.evaluate("Date.now()")).toBe(t0.getTime());
+
+      await tab.prepare();
+      await tab.navigate(`${baseUrl}/clock.html`);
+      await onRealTime(tab);
+      await expect(tab.clock().resume()).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+      await tab.installClock(t0);
+    });
   });
 
   afterAll(async () => {
@@ -572,6 +914,27 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     expect((await session.waitForRequest({url: endsWith("/observed"), method: "POST"}, {timeoutMs: 1_000})).method).toBe("POST");
     expect((await session.requests({url: endsWith("/observed")})).length).toBeGreaterThan(0);
     expect((await session.responses({url: endsWith("/observed")})).length).toBeGreaterThan(0);
+    const observed = await session.requests({url: endsWith("/observed")});
+    expect(observed[0]).toMatchObject({status: 200, failure: ""});
+    await session.evaluateAsync(`Promise.all([fetch("/not-found").then(response => response.text()), fetch("http://127.0.0.1:1/unreachable").catch(() => null)])`);
+    const failed = await session.waitForRequest({url: endsWith("/unreachable"), failed: true}, {timeoutMs: 1_000});
+    expect(failed.url).toContain("/unreachable");
+    expect(failed.failure).toMatch(/^net::ERR_/);
+    expect(failed.status).toBe(0);
+    expect((await session.requests({status: 404})).map(({url}) => new URL(url).pathname)).toContain("/not-found");
+    expect((await session.responses({status: 404})).map(({url}) => new URL(url).pathname)).toContain("/not-found");
+    expect((await session.responses({status: 404})).every(({status}) => status === 404)).toBe(true);
+    expect(await session.requests({url: endsWith("/not-found"), failed: true})).toEqual([]);
+
+    const idleHold = await session.holdResponse(contains("/network-json?idle"));
+    await session.evaluate(`void fetch("/network-json?idle")`);
+    await idleHold.await({timeoutMs: 2_000});
+    const busy = await session.expectNetworkIdle({timeoutMs: 150}).catch((error: unknown) => error);
+    expect(busy).toBeInstanceOf(BilobaError);
+    expect((busy as BilobaError).code).toBe("TIMEOUT");
+    expect((busy as BilobaError).message).toMatch(/1 in-flight request\(s\)\n {2}GET http:\/\/\S+\/network-json\?idle \(Fetch, in flight for \d+ms\)/);
+    await idleHold.releaseAll();
+
     const idle = await session.expectNetworkIdle({timeoutMs: 1_000});
     expect(idle.attemptCount).toBeGreaterThan(0);
     // The trajectory is the poll's own attempts. Reporting it empty made this a typed result whose
@@ -784,7 +1147,7 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     await session.prepare();
     const startingSize = await session.windowSize();
     await session.navigate(baseUrl);
-    const startingEmulation = await session.evaluate(`[Intl.NumberFormat().resolvedOptions().locale, Intl.DateTimeFormat().resolvedOptions().timeZone, matchMedia('(prefers-color-scheme: dark)').matches, innerWidth, innerHeight, devicePixelRatio]`);
+    const startingEmulation = await session.evaluate(`[Intl.NumberFormat().resolvedOptions().locale, Intl.DateTimeFormat().resolvedOptions().timeZone, matchMedia('(prefers-color-scheme: dark)').matches, innerWidth, innerHeight, devicePixelRatio, navigator.userAgent, navigator.maxTouchPoints, screen.orientation.angle]`);
     const startingPermission = await session.evaluateAsync<string>(`navigator.permissions.query({name: "geolocation"}).then(result => result.state)`);
     expect(await session.url()).toBe(baseUrl + "/");
     await session.expectUrl(endsWith("/"));
@@ -828,12 +1191,18 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     await session.setPermissions(baseUrl, {geolocation: "granted"});
     const position = await session.evaluateAsync<{latitude: number; longitude: number}>(`new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(p => resolve({latitude:p.coords.latitude, longitude:p.coords.longitude}), reject))`);
     expect(position).toEqual({latitude: 0, longitude: 0});
+    // Permission names are navigator.permissions.query's: Chrome rejects CDP's internal ones.
+    await session.setPermissions(baseUrl, {camera: "granted", microphone: "denied", "clipboard-read": "granted"});
+    expect(await session.evaluateAsync(`Promise.all(["camera", "microphone", "clipboard-read"].map(name => navigator.permissions.query({name}).then(result => result.state)))`)).toEqual(["granted", "denied", "granted"]);
     await session.setLocale("fr-FR");
     await session.setTimezone("Europe/Paris");
     await session.setMedia({colorScheme: "dark", reducedMotion: "reduce"});
-    await session.setDeviceMetrics({width: 320, height: 640, deviceScaleFactor: 2, mobile: true});
+    await session.setDeviceMetrics({width: 320, height: 640, deviceScaleFactor: 2, mobile: true, touch: true, landscape: true});
+    await session.setUserAgent("BilobaPhone/1.0");
     expect(await session.evaluate(`[Intl.NumberFormat().resolvedOptions().locale, Intl.DateTimeFormat().resolvedOptions().timeZone, matchMedia('(prefers-color-scheme: dark)').matches]`)).toEqual(["fr-FR", "Europe/Paris", true]);
     expect(await session.evaluate(`[screen.width, screen.height, devicePixelRatio, innerWidth]`)).toEqual([320, 640, 2, 980]);
+    expect(await session.evaluate(`[navigator.maxTouchPoints > 0, screen.orientation.type, screen.orientation.angle, navigator.userAgent]`)).toEqual([true, "landscape-primary", 90, "BilobaPhone/1.0"]);
+    expect(await session.evaluateAsync<string>(`fetch("/user-agent").then(response => response.text())`)).toBe("BilobaPhone/1.0");
     await session.navigate(baseUrl);
     expect(await session.evaluate("window.lifecycleInit")).toBe("installed");
 
@@ -860,7 +1229,7 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     expect(await session.windowSize()).toEqual(startingSize);
     expect(await session.consoleMessages()).toEqual([]);
     await session.navigate(baseUrl);
-    expect(await session.evaluate(`[Intl.NumberFormat().resolvedOptions().locale, Intl.DateTimeFormat().resolvedOptions().timeZone, matchMedia('(prefers-color-scheme: dark)').matches, innerWidth, innerHeight, devicePixelRatio]`)).toEqual(startingEmulation);
+    expect(await session.evaluate(`[Intl.NumberFormat().resolvedOptions().locale, Intl.DateTimeFormat().resolvedOptions().timeZone, matchMedia('(prefers-color-scheme: dark)').matches, innerWidth, innerHeight, devicePixelRatio, navigator.userAgent, navigator.maxTouchPoints, screen.orientation.angle]`)).toEqual(startingEmulation);
     expect(await session.evaluateAsync<string>(`navigator.permissions.query({name: "geolocation"}).then(result => result.state)`)).toBe(startingPermission);
     await session.setPermissions(baseUrl, {geolocation: "granted"});
     const resetGeolocation = await session.evaluateAsync<number>(`new Promise(resolve => navigator.geolocation.getCurrentPosition(() => resolve(0), error => resolve(error.code), {timeout: 100}))`);
@@ -997,3 +1366,8 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     }
   });
 });
+
+function pngSize(png: Uint8Array): {width: number; height: number} {
+  const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
+  return {width: view.getUint32(16), height: view.getUint32(20)};
+}

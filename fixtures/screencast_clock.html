@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Screencast Clock</title>
+    <style>
+        body { margin: 0; background: white; }
+        #marker { position: absolute; top: 0; left: 0; width: 4px; height: 20px; background: red; }
+    </style>
+</head>
+<body>
+    <div id="marker"></div>
+    <script>
+        const marker = document.querySelector("#marker");
+        const tick = () => {
+            marker.style.left = (Date.now() % 1000) + "px";
+            requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+    </script>
+</body>
+</html>

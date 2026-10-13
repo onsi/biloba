@@ -112,6 +112,15 @@ func (b *Biloba) pollOrImmediate(selector any, matcher types.GomegaMatcher) bool
 	if b.immediate {
 		return g.Expect(selector).To(matcher)
 	}
+	// A paused page clock is the usual reason a poll on the page's timers never comes true: say so.
+	fail := g.Fail
+	g.Fail = func(message string, callerSkip ...int) {
+		b.gt.Helper()
+		if note := b.notePausedClock(); note != "" {
+			message += "\n" + note
+		}
+		fail(message, callerSkip...)
+	}
 	assertion := g.Eventually(selector)
 	if b.timeout != nil {
 		assertion = assertion.WithTimeout(*b.timeout)

@@ -229,11 +229,37 @@ func ScreenshotSettleScheduleForTest() []time.Duration {
 	return schedule
 }
 
-// EmulateColorSchemeForTest applies (or, with the empty string, clears) a prefers-color-scheme
-// override on this tab, so visual_test.go can simulate the capture whose deferred teardown never
+// EmulateColorSchemeForTest applies a prefers-color-scheme override on this tab (or, with the empty
+// string, restores the tab's own media), so visual_test.go can simulate the capture whose deferred teardown never
 // landed and assert that the next Prepare() cleans it up.
 func (b *Biloba) EmulateColorSchemeForTest(scheme string) error {
 	return b.emulateColorScheme(scheme)
+}
+
+// LeakEmulationForTest applies a geolocation, a time zone, an offline network, a disabled cache, and
+// a notifications permission for origin without registering their DeferCleanups, so emulation_test.go
+// can simulate teardowns that never landed and assert that the next Prepare() clears them.
+func (b *Biloba) LeakEmulationForTest(timezone, origin string) error {
+	for _, apply := range []func() error{
+		func() error {
+			return applyEmulation(b, "geolocation", geolocationSetting, &Geolocation{Latitude: 1, Longitude: 2, Accuracy: 3}, sendGeolocation)
+		},
+		func() error {
+			return applyEmulation(b, "time zone", timezoneSetting, timezone, engine.SetTimezoneContext)
+		},
+		func() error {
+			return applyEmulation(b, "network state", networkStateSetting, NetworkState{Offline: true}, sendNetworkState)
+		},
+		func() error { return applyEmulation(b, "HTTP cache setting", cacheSetting, true, b.sendCacheDisabled) },
+		func() error {
+			return b.restorePermissions(map[string]map[Permission]PermissionState{origin: {PermissionNotifications: PermissionGranted}})
+		},
+	} {
+		if err := apply(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // TruthyEnvForTest exposes truthyEnv (and its unrecognised-value warning) for visual_test.go,
@@ -271,3 +297,18 @@ func ChromeDownloadLimitForTest() int {
 // FrameOutOfProcessForTest reports whether a frame handle drives an out-of-process frame, so
 // frames_test.go can prove its fixture exercises the process model it claims to.
 func (b *Biloba) FrameOutOfProcessForTest() bool { return b.frame != nil && b.frame.outOfProcess }
+
+// FramesSoFarForTest returns what a running screencast has recorded so far, in arrival order, so
+// screencast_test.go can wait for frames instead of sleeping for them.
+func (rec *ScreencastRecording) FramesSoFarForTest() []ScreencastFrame {
+	rec.lock.Lock()
+	defer rec.lock.Unlock()
+	frames := make([]ScreencastFrame, len(rec.recorded))
+	for i, frame := range rec.recorded {
+		frames[i] = ScreencastFrame(frame)
+	}
+	return frames
+}
+
+// PausedClockReportForTest is the paused-clock entry a failure report would add for this tab now.
+func (b *Biloba) PausedClockReportForTest() string { return b.pausedClockReport() }

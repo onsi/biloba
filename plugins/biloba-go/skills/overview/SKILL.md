@@ -26,7 +26,7 @@ Biloba is a browser-testing framework for Go, built on [chromedp](https://github
 - **Most methods don't return errors** — errors become Ginkgo test failures for you.
 - **Appearance is assertable too.** `Eventually(sel).Should(b.HaveScreenshot("name"))` compares the element (or the whole tab) against a committed baseline PNG, re-capturing on every poll attempt so the comparison waits out fonts and reflow. A missing baseline fails loudly rather than being written and passed. → `visual-assertions`
 - **Biloba polls by default.** A fully-applied call (`b.Click("#go")`, `b.GetProperty(sel, "href")`) polls until the element is ready, acts/reads once, then stops. The under-applied form returns a Gomega matcher *you* wrap in `Eventually`/`Consistently`. This dual API is the core pattern — learn it in `write-tests`. (`b.Immediate()` opts back into act-once/fail-fast; rarely needed.)
-- `console.log` streams to the `GinkgoWriter`; a failing `console.assert` fails the spec.
+- `console.log` streams to the `GinkgoWriter`; a failing `console.assert` fails the spec. `b.AllConsoleMessages()`/`b.AllPageErrors()` snapshot the console and the page's uncaught exceptions.
 
 ## The one habit that keeps suites non-flaky
 
@@ -53,15 +53,27 @@ Every action/matcher takes:
 
 ## The escape hatch
 
-Biloba deliberately does not hide chromedp. Every tab exposes `b.Context`:
+Device and environment emulation is native — reach for it before CDP:
 
 ```go
-chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
-    return emulation.SetGeolocationOverride().WithLatitude(48.8584).WithLongitude(2.2945).Do(ctx)
+b.SetPermissions(appURL, map[biloba.Permission]biloba.PermissionState{biloba.PermissionGeolocation: biloba.PermissionGranted})
+b.SetGeolocation(biloba.Geolocation{Latitude: 48.8584, Longitude: 2.2945, Accuracy: 10})
+b.SetLocale("fr-FR"); b.SetTimezone("Europe/Paris"); b.SetOffline(true)
+```
+
+Each is per tab, undone at spec end, and refused on a frame handle (`api`). Time is too: `b.InstallClock(t0)` fakes the page's timers and `Date`, so a spec can `PauseAt`, `RunFor`, or `FastForward` through a countdown or a debounce instead of waiting for it (`write-tests`).
+
+Biloba deliberately does not hide chromedp. Every tab exposes `b.Context` for a CDP feature without a native wrapper:
+
+```go
+ctx, cancel := context.WithTimeout(b.Context, 30*time.Second)
+defer cancel()
+chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+    return emulation.SetCPUThrottlingRate(4).Do(ctx)
 }))
 ```
 
-Use it for geolocation or any CDP feature without a native wrapper. (Cross-origin iframes have a native wrapper: `b.Frame`.) (For real `:hover`/occlusion/scroll, prefer `b.Realistic()`.)
+An override set this way is yours to undo — `Prepare()` doesn't know about it. (Cross-origin iframes have a native wrapper: `b.Frame`.) (For real `:hover`/occlusion/scroll, prefer `b.Realistic()`.)
 
 ## Where to go next
 

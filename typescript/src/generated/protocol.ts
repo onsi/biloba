@@ -16,12 +16,49 @@ export type ErrorCode =
   | "VISUAL_BASELINE"
 ;
 
+export type PermissionName =
+  | "accelerometer"
+  | "ambient-light-sensor"
+  | "background-fetch"
+  | "background-sync"
+  | "camera"
+  | "captured-surface-control"
+  | "clipboard-read"
+  | "clipboard-write"
+  | "display-capture"
+  | "geolocation"
+  | "gyroscope"
+  | "idle-detection"
+  | "keyboard-lock"
+  | "local-fonts"
+  | "local-network"
+  | "local-network-access"
+  | "loopback-network"
+  | "magnetometer"
+  | "microphone"
+  | "midi"
+  | "nfc"
+  | "notifications"
+  | "payment-handler"
+  | "periodic-background-sync"
+  | "persistent-storage"
+  | "pointer-lock"
+  | "screen-wake-lock"
+  | "speaker-selection"
+  | "storage-access"
+  | "system-wake-lock"
+  | "top-level-storage-access"
+  | "web-app-installation"
+  | "window-management"
+;
+
 export interface Diagnostics {
   locator?: string;
   expected?: string;
   domOutline?: string;
   screenshotPath?: string;
   daemonDetail?: string;
+  pausedClockAt?: string;
   visual?: VisualResult;
   context?: ContextDiagnosticsResponse;
 }
@@ -191,7 +228,7 @@ export interface Point {
 }
 
 export interface DOMOperation {
-  kind: "TEXT" | "TEXTS" | "CLASSES" | "CLASSES_FOR_EACH" | "DISTINCT_ATTRIBUTE_COUNT" | "ATTRIBUTES" | "ATTRIBUTES_FOR_EACH" | "JSON_ATTRIBUTE" | "PROPERTIES" | "PROPERTIES_FOR_EACH" | "PROPERTY_FOR_EACH" | "VALUES" | "STATE" | "ALL_STATE" | "SET_PROPERTY" | "FOCUS" | "BLUR" | "HOVER" | "TYPE" | "SEND_KEYS" | "CLICK" | "CLICK_EACH" | "TAP" | "DRAG" | "SCROLL_INTO_VIEW" | "SCROLL_WHEEL" | "SELECT" | "CLEAR_SELECTION" | "INVOKE_METHOD" | "INVOKE_FUNCTION" | "INVOKE_METHOD_FOR_EACH" | "INVOKE_FUNCTION_FOR_EACH" | "BOUNDING_BOX" | "SCROLL_OFFSET" | "OFFSET_WITHIN" | "RELATIVE_BOXES" | "GEOMETRY_RELATION" | "GAP_BETWEEN" | "IN_VIEWPORT" | "DOCUMENT_ORDER" | "COMPUTED_STYLE" | "COMPUTED_STYLE_NUMBER" | "NORMALIZE_COLOR";
+  kind: "TEXT" | "TEXTS" | "CLASSES" | "CLASSES_FOR_EACH" | "DISTINCT_ATTRIBUTE_COUNT" | "ATTRIBUTES" | "ATTRIBUTES_FOR_EACH" | "JSON_ATTRIBUTE" | "PROPERTIES" | "PROPERTIES_FOR_EACH" | "PROPERTY_FOR_EACH" | "VALUES" | "STATE" | "ALL_STATE" | "SET_PROPERTY" | "FOCUS" | "BLUR" | "HOVER" | "TYPE" | "SEND_KEYS" | "CLICK" | "CLICK_EACH" | "TAP" | "DRAG" | "SCROLL_INTO_VIEW" | "SCROLL_WHEEL" | "SELECT" | "CLEAR_SELECTION" | "INVOKE_METHOD" | "INVOKE_FUNCTION" | "INVOKE_METHOD_FOR_EACH" | "INVOKE_FUNCTION_FOR_EACH" | "BOUNDING_BOX" | "SCROLL_OFFSET" | "OFFSET_WITHIN" | "RELATIVE_BOXES" | "GEOMETRY_RELATION" | "GAP_BETWEEN" | "IN_VIEWPORT" | "DOCUMENT_ORDER" | "COMPUTED_STYLE" | "COMPUTED_STYLE_NUMBER" | "NORMALIZE_COLOR" | "POINTER_MOVE" | "POINTER_MOVE_TO_ELEMENT" | "POINTER_DOWN" | "POINTER_UP";
   locator?: Locator;
   target?: Locator;
   container?: Locator;
@@ -223,6 +260,9 @@ export interface DOMOperation {
   argumentsJson?: string;
   fully?: boolean;
   relation?: "above" | "below" | "leftOf" | "rightOf" | "encloses" | "overlaps";
+  pointerId?: number;
+  pointerType?: "mouse" | "pen";
+  point?: Point;
 }
 
 export interface DOMRequest {
@@ -264,6 +304,8 @@ export interface DeviceMetrics {
   height: number;
   deviceScaleFactor: number;
   mobile?: boolean;
+  touch?: boolean;
+  landscape?: boolean;
 }
 
 export interface Geolocation {
@@ -278,8 +320,14 @@ export interface Media {
   reducedMotion?: string;
 }
 
+export interface ClockOperation {
+  timeMs?: number;
+  durationMs?: number;
+  timeoutMs?: number;
+}
+
 export interface LifecycleOperation {
-  kind: "GET_COOKIES" | "CLEAR_COOKIES" | "COOKIE_QUERY" | "STORAGE_SET" | "STORAGE_GET" | "STORAGE_GET_ALL" | "STORAGE_REMOVE" | "STORAGE_CLEAR" | "STORAGE_LENGTH" | "WAIT_FOR_DEFINED" | "URL" | "TITLE" | "WINDOW_SIZE" | "OUTLINE" | "ACCESSIBILITY_OUTLINE" | "CONSOLE_MESSAGES" | "SET_DEVICE_METRICS" | "CLEAR_DEVICE_METRICS" | "SET_GEOLOCATION" | "CLEAR_GEOLOCATION" | "SET_PERMISSIONS" | "RESET_PERMISSIONS" | "SET_LOCALE" | "CLEAR_LOCALE" | "SET_TIMEZONE" | "CLEAR_TIMEZONE" | "SET_MEDIA" | "CLEAR_MEDIA";
+  kind: "GET_COOKIES" | "CLEAR_COOKIES" | "COOKIE_QUERY" | "STORAGE_SET" | "STORAGE_GET" | "STORAGE_GET_ALL" | "STORAGE_REMOVE" | "STORAGE_CLEAR" | "STORAGE_LENGTH" | "WAIT_FOR_DEFINED" | "URL" | "TITLE" | "WINDOW_SIZE" | "OUTLINE" | "ACCESSIBILITY_OUTLINE" | "CONSOLE_MESSAGES" | "PAGE_ERRORS" | "SET_DEVICE_METRICS" | "CLEAR_DEVICE_METRICS" | "SET_GEOLOCATION" | "CLEAR_GEOLOCATION" | "SET_PERMISSIONS" | "RESET_PERMISSIONS" | "SET_LOCALE" | "CLEAR_LOCALE" | "SET_TIMEZONE" | "CLEAR_TIMEZONE" | "SET_MEDIA" | "CLEAR_MEDIA" | "SET_USER_AGENT" | "CLEAR_USER_AGENT" | "INSTALL_CLOCK" | "PAUSE_CLOCK_AT" | "RESUME_CLOCK" | "RUN_CLOCK_FOR" | "FAST_FORWARD_CLOCK" | "SET_CLOCK_FIXED_TIME" | "SET_CLOCK_SYSTEM_TIME";
   area?: string;
   key?: string;
   valueJson?: string;
@@ -293,6 +341,8 @@ export interface LifecycleOperation {
   locale?: string;
   timezone?: string;
   media?: Media;
+  userAgent?: string;
+  clock?: ClockOperation;
 }
 
 export interface LifecycleRequest {
@@ -338,6 +388,8 @@ export interface EventfulOperation {
   resourceType?: Expectation;
   filename?: Expectation;
   state?: Expectation;
+  status?: Expectation;
+  failed?: boolean;
   contentText?: Expectation;
   contentBase64?: string;
   accept?: boolean;
@@ -351,6 +403,33 @@ export interface EventfulOperation {
   transformTimeoutMs?: number;
   network?: NetworkState;
   cacheEnabled?: boolean;
+  screencast?: ScreencastOptions;
+  offset?: number;
+}
+
+export interface ScreencastOptions {
+  format?: "jpeg" | "png";
+  quality?: number;
+  maxWidth?: number;
+  maxHeight?: number;
+  everyNthFrame?: number;
+}
+
+export interface ScreencastFrame {
+  dataBase64: string;
+  timestampMs: number;
+  deviceWidth: number;
+  deviceHeight: number;
+  pageScaleFactor: number;
+  scrollOffsetX: number;
+  scrollOffsetY: number;
+  offsetTop: number;
+}
+
+export interface ScreencastFramesResponse {
+  count: number;
+  offset: number;
+  frames: ScreencastFrame[];
 }
 
 export interface EventfulRequest {
@@ -498,6 +577,13 @@ export interface ScreenshotTarget {
   locator?: Locator;
 }
 
+export interface ScreenshotClip {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface ScreenshotOperation {
   kind: "CAPTURE" | "EXPECT";
   target: ScreenshotTarget;
@@ -505,6 +591,10 @@ export interface ScreenshotOperation {
   name?: string;
   masks?: Locator[];
   animated?: boolean;
+  frozen?: boolean;
+  hideCaret?: boolean;
+  viewport?: boolean;
+  clip?: ScreenshotClip;
   colorScheme?: "light" | "dark";
   colorSchemes?: ("light" | "dark")[];
   maxBytes?: number;

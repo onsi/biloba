@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -108,6 +109,10 @@ type bilobaT struct {
 	ginkgoT  biloba.GinkgoTInterface
 	buffer   *gbytes.Buffer
 	failures []string
+	// failed makes Failed() report true, for a spec that checks what Biloba does on a failed spec
+	// without failing; reportEntries records the names of the report entries Biloba adds.
+	failed        bool
+	reportEntries []string
 }
 
 func newBilobaT(ginkgoT biloba.GinkgoTInterface) *bilobaT {
@@ -120,6 +125,8 @@ func newBilobaT(ginkgoT biloba.GinkgoTInterface) *bilobaT {
 func (b *bilobaT) reset() {
 	Ω(b.buffer.Clear()).Should(Succeed())
 	b.failures = []string{}
+	b.failed = false
+	b.reportEntries = nil
 }
 
 func (b *bilobaT) Name() string { return b.ginkgoT.Name() }
@@ -133,7 +140,7 @@ func (b *bilobaT) Fatalf(format string, args ...interface{}) {
 	b.failures = append(b.failures, fmt.Sprintf(format, args...))
 }
 func (b *bilobaT) TempDir() string { return b.ginkgoT.TempDir() }
-func (b *bilobaT) Failed() bool    { return b.ginkgoT.Failed() }
+func (b *bilobaT) Failed() bool    { return b.failed || b.ginkgoT.Failed() }
 
 func (b *bilobaT) GinkgoRecover()           { b.ginkgoT.GinkgoRecover() }
 func (b *bilobaT) DeferCleanup(args ...any) { b.ginkgoT.DeferCleanup(args...) }
@@ -159,6 +166,7 @@ func (b *bilobaT) Fiw(indentation uint, maxWidth uint, format string, args ...an
 	return ginkgoFormatter.Fiw(indentation, maxWidth, format, args...)
 }
 func (b *bilobaT) AddReportEntryVisibilityFailureOrVerbose(name string, args ...any) {
+	b.reportEntries = append(b.reportEntries, name)
 	b.ginkgoT.AddReportEntryVisibilityFailureOrVerbose(name, args...)
 }
 func (b *bilobaT) ParallelProcess() int {
@@ -194,6 +202,26 @@ func newFixtureServer() string {
 	s := ghttp.NewServer()
 	s.RouteToHandler("GET", regexp.MustCompile(`^/held$`), func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
+	})
+	// /status/500 answers with that status; /redirect/api/users answers 302 to /api/users
+	s.RouteToHandler("GET", regexp.MustCompile(`^/status/\d+$`), func(w http.ResponseWriter, r *http.Request) {
+		code, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/status/"))
+		w.WriteHeader(code)
+	})
+	// /hang never answers: it holds the request until the browser gives up on it
+	s.RouteToHandler("GET", regexp.MustCompile(`^/hang$`), func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(10 * time.Second):
+		}
+	})
+	// /cached/<anything> answers with a fresh value the browser may cache for an hour
+	s.RouteToHandler("GET", regexp.MustCompile(`^/cached/.+$`), func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Cache-Control", "max-age=3600")
+		fmt.Fprintf(w, "%d", time.Now().UnixNano())
+	})
+	s.RouteToHandler("GET", regexp.MustCompile(`^/redirect/.+$`), func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/"+strings.TrimPrefix(r.URL.Path, "/redirect/"), http.StatusFound)
 	})
 	s.RouteToHandler("GET", regexp.MustCompile(`^/[\w.\-]*$`), func(w http.ResponseWriter, r *http.Request) {
 		fname := strings.Trim(r.URL.Path, "/")

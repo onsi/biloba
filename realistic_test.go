@@ -64,6 +64,20 @@ var _ = Describe("BeClickable and realistic interactions", func() {
 			Eventually("#scroll-result").Should(b.HaveInnerText("clicked"))
 		})
 
+		It("leaves the page where it is when the element is already on screen and clickable", func() {
+			b.Run(`window.scrollTo(0, 5)`)
+			Eventually(`window.scrollY`).Should(b.EvaluateTo(5.))
+			b.Realistic().Click("#plain-btn")
+			Eventually("#plain-result").Should(b.HaveInnerText("clicked"))
+			b.Realistic().Hover("#plain-btn")
+			b.Realistic().Click("#click-pad", b.At(10, 10))
+			Ω(`window.scrollY`).Should(b.EvaluateTo(5.), "nothing needed scrolling, so nothing scrolled")
+
+			b.Realistic().Click("#below-btn")
+			Eventually("#scroll-result").Should(b.HaveInnerText("clicked"))
+			Ω(`window.scrollY`).ShouldNot(b.EvaluateTo(5.), "an off-screen element is still scrolled in")
+		})
+
 		It("clicks an element larger than the viewport at a visible point", func() {
 			// #big is taller than the viewport, so its geometric center is off-screen; the click
 			// point is clamped to the visible intersection

@@ -1,6 +1,6 @@
 ---
 name: realistic-mode
-description: Use Biloba's realistic interaction track (b.Realistic()) in a Go Ginkgo/Gomega suite when a spec must exercise the realism the fast default trades away — clicking through/around an occluding overlay, a menu that opens on CSS :hover, scroll-into-view, a pointer drag (@dnd-kit/Sortable), real wheel scrolling, or touch. Covers what each interaction track actually does (the fast-vs-realistic capability matrix), the inline/per-spec/per-suite (Label) patterns, when NOT to use it, and BeClickable() as a cheaper occlusion guard. Use when testing occlusion/hover/drag/scroll-sensitive flows or deciding fast vs realistic.
+description: Use Biloba's realistic interaction track (b.Realistic()) in a Go Ginkgo/Gomega suite when a spec must exercise the realism the fast default trades away — clicking through/around an occluding overlay, a menu that opens on CSS :hover, scroll-into-view, a pointer drag (@dnd-kit/Sortable), real wheel scrolling, or touch — and b.Pointer() for custom real-pointer gestures (pen strokes, slider scrubbing, mid-drag assertions). Covers what each interaction track actually does (the fast-vs-realistic capability matrix), the inline/per-spec/per-suite (Label) patterns, when NOT to use it, and BeClickable() as a cheaper occlusion guard. Use when testing occlusion/hover/drag/scroll-sensitive flows or deciding fast vs realistic.
 ---
 
 # Realistic interactions
@@ -32,7 +32,9 @@ Quarantine it to a handful of smoke tests. It costs real round-trips and can rei
 
 To merely *assert* an element isn't occluded, use the cheaper deterministic matcher `Eventually(sel).Should(b.BeClickable())` (visible + enabled + topmost-at-its-center) — no realistic round-trips.
 
-Realistic mode works inside a cross-origin iframe through its frame handle — `b.Frame(...).Realistic().Click(...)` translates the point into the tab and fails (keeps polling) if the embedding page covers the frame there; an out-of-process frame (full Chrome, cross-site) gets real input but no embedding-page occlusion check. For geolocation, drop to chromedp via `b.Context` (`overview`).
+Realistic mode works inside a cross-origin iframe through its frame handle — `b.Frame(...).Realistic().Click(...)` translates the point into the tab and fails (keeps polling) if the embedding page covers the frame there; an out-of-process frame (full Chrome, cross-site) gets real input but no embedding-page occlusion check. Geolocation, locale, permissions, and network conditions are emulation, not interaction: `b.SetGeolocation`, `b.SetLocale`, `b.SetPermissions`, `b.SetOffline` (`api`).
+
+**"Topmost at its center".** Biloba takes the center of the element's visible part (the part inside the viewport) and calls `document.elementFromPoint` there. The element is topmost when the hit is the element or something inside it (shadow DOM included). A sticky header, modal backdrop, banner, or tooltip covering that point means it isn't: Biloba scrolls the element to the viewport center and re-checks, and a target still covered there keeps polling and fails "obscured by another element". It tests one point, not the whole box (a covered edge with a clear center passes), and `pointer-events: none` overlays don't count.
 
 ## Capability matrix
 
@@ -40,7 +42,7 @@ Selection is track-agnostic (CSS, `>>>`, locators, XPath all work through either
 
 | Interaction | Fast (`b`) | Realistic (`b.Realistic()`) |
 |---|---|---|
-| `Click` | `el.click()`, no scroll/occlusion test | scroll to center, wait for stability, verify enabled + **topmost** (no click-through), real mouse press/release. Coords inside same-origin `>>>` iframes are translated |
+| `Click` | `el.click()`, no scroll/occlusion test | scroll to center (skipped when already fully on screen and topmost), wait for stability, verify enabled + **topmost** (no click-through), real mouse press/release. Coords inside same-origin `>>>` iframes are translated |
 | `DblClick`/`RightClick`/`MiddleClick` | synthetic `dblclick`/`contextmenu`/`auxclick` | scroll + stability + occlusion + real button input (native context menu fires) |
 | `ClickEachImmediately` | clicks all visible+enabled matches | real input, scrolling and re-measuring each in turn; skips hidden/disabled/off-screen/obscured |
 | `Hover` | JS pointer/mouse events; **no** CSS `:hover` | real pointer → CSS `:hover` activates |
@@ -91,18 +93,22 @@ var _ = Describe("checkout (realistic smoke)", Label("realistic"), func() {
 - A realistic interaction on an occluded/off-screen element **polls and fails** like a real one — the feature, but it makes these specs timing-sensitive. Bump `rb.WithTimeout(d)` for a slow scroll/settle; don't drop to `Immediate()`.
 - `DragTo` drives **pointer-based** DnD (@dnd-kit, Sortable), **not** native HTML5 `draggable` (a separate drag-event model).
 - **Both drag endpoints have to share a screen.** A realistic drag presses at the source and releases at the target, so both points must be live at one scroll position. Biloba finds that position for you — it tries where things already are, then the pair framed around their midpoint, then each endpoint scrolled in with the other scrolled second — which covers two rows of one `overflow: auto` list and endpoints in two separate panes. When no position shows both (rows further apart than their pane is tall) it fails and names both endpoints rather than pressing and releasing in the same place, which the page would receive as a click on the target. Widen the window with `b.SetWindowSize`, drag to a nearer target, or drive the scroll yourself through `b.Context`.
-- **`DragTo` is the whole gesture — press, moves and release in one call.** There is no seam to assert in, so a spec whose subject is the *mid-drag* state (a tree row that auto-expands on a hover dwell, a drop-target highlight, a spring-loaded folder) drops to the three CDP legs on `b.Context` instead. `b.GetBoundingBox` reports in the space CDP mouse events use, so `CenterX`/`CenterY` are the coordinates to send — measure **both** endpoints before the press, for the same reason `DragTo` does:
+- **`DragTo` is the whole gesture — press, moves and release in one call.** There is no seam to assert in, so a spec whose subject is the *mid-drag* state (a tree row that auto-expands on a hover dwell, a drop-target highlight, a spring-loaded folder) drives the pointer itself with `b.Pointer()`. It does not scroll, so both endpoints must already be on screen; measure **both** before the press, for the same reason `DragTo` does (`b.GetBoundingBox` reports in the viewport CSS px `MoveTo` takes):
   ```go
   src, tgt := b.GetBoundingBox("#row"), b.GetBoundingBox("#folder")
-  ctx, cancel := context.WithTimeout(b.Context, 10*time.Second)   // b.Context carries no deadline
-  defer cancel()
-  Expect(chromedp.Run(ctx,
-      chromedp.MouseEvent(input.MousePressed, src.CenterX, src.CenterY, chromedp.ButtonType(input.Left), chromedp.ClickCount(1)),
-      chromedp.MouseEvent(input.MouseMoved, tgt.CenterX, tgt.CenterY, chromedp.ButtonType(input.Left)),
-  )).To(Succeed())
+  p := b.Pointer()
+  p.MoveTo(src.CenterX, src.CenterY)
+  p.Down()
+  p.MoveTo(tgt.CenterX, tgt.CenterY)
   Eventually("#folder").Should(b.HaveAttribute("aria-expanded", "true"))   // button still down
-  Expect(chromedp.Run(ctx,
-      chromedp.MouseEvent(input.MouseReleased, tgt.CenterX, tgt.CenterY, chromedp.ButtonType(input.Left), chromedp.ClickCount(1)),
-  )).To(Succeed())
+  p.Up()
   ```
+
+## Driving the pointer directly
+
+`b.Pointer()` (a mouse) or `b.Pointer(b.Pen())` (every event has `pointerType: "pen"`, pressure 0.5 while down) returns a `*Pointer` for custom gestures — drawing strokes, scrubbing a slider, mid-drag assertions. It is independent of `Realistic()`: always real CDP input, but **no** scroll-into-view, stability wait, or occlusion check, and each call dispatches at once, so the caller owns the timing (`time.Sleep`/`time.Ticker` between moves).
+
+- `p.MoveTo(x, y)` — viewport CSS px (the frame's viewport on a frame handle). One round trip on a tab.
+- `p.MoveToElement(sel)` / `p.MoveToElement(sel, b.At(dx, dy))` — the element's center, or an offset from its top-left. **Polls** until the element exists and is visible, with the knobs of the view the pointer came from (`b.WithTimeout(d).Pointer()`); a point outside the viewport fails (scroll it in first with `b.ScrollIntoView`).
+- `p.Down()` / `p.Up()` — press/release the primary button where the pointer is; moves in between carry `buttons: 1`. Pressing twice or releasing an unpressed pointer fails the spec. A pointer left pressed is released when the spec ends.
 - **A `position: fixed` footer is invisible to the fast track and solid to this one.** `el.click()` does no hit-testing, so the fast track reaches an element the footer sits on top of; real pointer input lands on the footer. A spec that passed for months can fail the moment it switches to `b.Realistic()`, because a row near the bottom of a short list is genuinely underneath the footer. Both tracks are behaving correctly — the realistic one is telling you a user couldn't reach that element either. Scroll it clear (`b.ScrollIntoView(sel, b.AtTopOffset(px))`) instead of suspecting your interaction code.

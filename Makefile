@@ -97,9 +97,9 @@ update-chrome:
 ## orphans the --cpu/--io workers to init, where they peg the CPU until their own --timeout fires.
 stress-test:
 	@command -v stress >/dev/null || { echo "stress not found - install with: brew install stress"; exit 1; }
-	stress --cpu 4 --io 1 --timeout 2000s & \
+	stress --cpu 4 --io 1 --timeout 2700s & \
 	stress_pid=$$!; \
-	$(GINKGO) -procs=6 --randomize-all --repeat 40 --timeout=1500s --poll-progress-after=45s ./... ; \
+	$(GINKGO) -procs=6 --randomize-all --repeat 40 --timeout=2400s --poll-progress-after=45s ./... ; \
 	status=$$?; \
 	pkill -P $$stress_pid 2>/dev/null; kill $$stress_pid 2>/dev/null; \
 	exit $$status

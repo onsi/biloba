@@ -62,11 +62,15 @@ type Session struct {
 	mu                    sync.Mutex
 	requestMu             sync.Mutex
 	requests              []Request
+	requestIndex          map[network.RequestID]int
 	consoleMu             sync.Mutex
 	consoleMessages       []ConsoleMessage
 	consoleDropped        uint64
 	consoleSubs           map[uint64]*consoleSubscriber
 	consoleSubSeq         uint64
+	pageErrors            []PageError
+	pageErrorsDropped     uint64
+	pageErrorSubs         map[uint64]*pageErrorSubscriber
 	dialogMu              sync.Mutex
 	dialogHandlers        []dialogHandlerEntry
 	dialogHistory         []Dialog
@@ -86,7 +90,7 @@ type Session struct {
 	interceptionMu        sync.Mutex
 	interceptionSeq       uint64
 	responses             []Response
-	inflight              map[network.RequestID]struct{}
+	inflight              map[network.RequestID]InflightRequest
 	cacheEnabled          bool
 	networkState          NetworkState
 	networkShadows        []NetworkShadowDiagnostic
@@ -107,8 +111,28 @@ type Session struct {
 	restoreViewport       *ViewportSize
 	visual                visualLifecycle
 	media                 Media
-	highFidelity          bool
-	initScriptIDs         []page.ScriptIdentifier
+	emulated              emulationOverrides
+	boundary              documentBoundary
+	// permissionsSet is raised on the context owner when any session in its context sets a
+	// permission, so the owner's Prepare knows to reset them.  Atomic because a spawned tab raises it
+	// under its own lock, not the owner's.
+	permissionsSet atomic.Bool
+	highFidelity   bool
+	initScriptIDs  []page.ScriptIdentifier
+	// pointers holds the state of the pointers driven through Pointer, keyed by the caller's id.
+	// Guarded by mu: every pointer operation runs under serial.
+	pointers map[uint64]*pointerState
+	// screencastMu guards the session's screencast recordings, which a frame listener appends to
+	// outside serial.
+	screencastMu       sync.Mutex
+	screencasts        map[string]*sessionScreencast
+	recording          *sessionScreencast
+	screencastSequence uint64
+	// clock is the tab's page clock (InstallClock), nil until one is installed.
+	clock *PageClock
+	// frameTab is, on a frame handle, the tab session it was found from: the one whose page clock
+	// covers it.
+	frameTab *Session
 	// crashed is closed by Chrome's Inspector.targetCrashed listener, which runs on chromedp's event
 	// goroutine rather than under mu - hence its own lock.  A channel rather than a bool because an
 	// operation already in flight has to be interrupted, not merely refused next time: CDP does not
@@ -218,10 +242,12 @@ func (s *Session) Close() error {
 		s.mu.Unlock()
 		return nil
 	}
+	s.releasePointersOnClose()
 	s.closed = true
 	s.clearDialogs()
 	s.clearResponseHoldBookkeeping()
 	s.clearNetworkBookkeeping()
+	s.discardScreencasts()
 	var disposeErr error
 	if s.browser != nil && s.ownsContext {
 		ctx, cancel := context.WithTimeout(s.browser.ctx, 5*time.Second)
@@ -305,13 +331,11 @@ func (s *Session) AddInitScript(ctx context.Context, script string) error {
 		return err
 	}
 	return s.serial(ctx, "add init script", func(opCtx context.Context) error {
-		return chromedp.Run(opCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
-			identifier, err := page.AddScriptToEvaluateOnNewDocument(script).Do(runCtx)
-			if err == nil {
-				s.initScriptIDs = append(s.initScriptIDs, identifier)
-			}
-			return err
-		}))
+		identifier, err := AddInitScriptContext(opCtx, script)
+		if err == nil {
+			s.initScriptIDs = append(s.initScriptIDs, identifier)
+		}
+		return err
 	})
 }
 
@@ -339,8 +363,15 @@ func (s *Session) Prepare(ctx context.Context) error {
 		}
 		s.eventsEnabled.Store(false)
 		s.eventGeneration.Add(1)
+		s.boundary.reset()
 		defer s.eventsEnabled.Store(true)
 		wasCrashed := s.hasCrashed()
+		if !wasCrashed {
+			s.releasePointers(opCtx)
+			s.stopScreencastForReset(opCtx)
+		}
+		s.pointers = nil
+		s.discardScreencasts()
 		if err := s.cleanupVisualState(opCtx, !wasCrashed); err != nil && !wasCrashed {
 			return err
 		}
@@ -352,16 +383,20 @@ func (s *Session) Prepare(ctx context.Context) error {
 		}
 		s.clearRequests()
 		s.clearConsoleMessages()
+		s.clearPageErrors()
 		s.clearDialogs()
 		if err := s.resetDownloads(opCtx); err != nil {
 			return err
 		}
 		for _, identifier := range s.initScriptIDs {
-			if err := chromedp.Run(opCtx, page.RemoveScriptToEvaluateOnNewDocument(identifier)); err != nil {
+			if err := RemoveInitScriptContext(opCtx, identifier); err != nil {
 				return err
 			}
 		}
 		s.initScriptIDs = nil
+		if err := s.removeClock(opCtx); err != nil && !wasCrashed {
+			return err
+		}
 		// Clear storage while the tab still has its current origin. about:blank has an opaque
 		// origin, so navigating first would leave localStorage behind for the next spec. A crashed
 		// renderer has already lost that storage and no longer answers evaluation requests, so skip
@@ -404,6 +439,9 @@ func (s *Session) Prepare(ctx context.Context) error {
 			if err := s.resetEmulation(opCtx); err != nil {
 				return err
 			}
+		}
+		if err := s.removeClock(opCtx); err != nil {
+			return err
 		}
 		viewportWidth, viewportHeight := s.initialWidth, s.initialHeight
 		if s.restoreViewport != nil {

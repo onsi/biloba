@@ -11,6 +11,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/chromedp/cdproto/page"
 	"github.com/onsi/biloba/engine"
 )
 
@@ -43,17 +44,18 @@ var _ = Describe("frame visual regressions", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		shot, err := frame.CaptureElementScreenshot(ctx, engine.CSS(".subject"), engine.ScreenshotCaptureOptions{
-			Animated: true,
-			Masks:    []engine.Selector{engine.CSS(".mask")},
+			Masks: []engine.Selector{engine.CSS(".mask")},
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(shot.Width).To(Equal(60))
-		Expect(shot.Height).To(Equal(45))
+		// The 0.75 scale puts the 45px-tall subject at y=1002.5 in the tab, so it touches 46 rows and the
+		// capture rounds out to all of them.
+		Expect(shot.Height).To(Equal(46))
 		Expect(pixelAt(shot.PNG, 8, 8)).To(Equal(color.NRGBA{R: 128, G: 128, B: 128, A: 255}))
 		Expect(pixelAt(shot.PNG, 30, 22)).To(Equal(color.NRGBA{G: 255, A: 255}))
 	})
 
-	It("restores the child animation state after a default frame screenshot", func(ctx SpecContext) {
+	It("restores the child animation state after a frozen frame screenshot", func(ctx SpecContext) {
 		child := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 			response.Header().Set("Content-Type", "text/html")
 			_, _ = response.Write([]byte(`<!doctype html><title>animated-child</title><style>.subject{width:40px;height:40px;background:red;animation:pulse 60s linear infinite}@keyframes pulse{to{background:blue}}</style><div class="subject"></div>`))
@@ -74,9 +76,14 @@ var _ = Describe("frame visual regressions", func() {
 		DeferCleanup(frame.Close)
 		Expect(frame.TargetID()).To(Equal(root.TargetID()), "fixture must exercise a cross-origin frame sharing its renderer target")
 
-		shot, err := frame.CapturePageScreenshot(ctx, engine.ScreenshotCaptureOptions{})
+		shot, err := frame.CapturePageScreenshot(ctx, engine.ScreenshotCaptureOptions{Frozen: true})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(shot.PNG).NotTo(BeEmpty())
+		region, err := frame.CapturePageScreenshot(ctx, engine.ScreenshotCaptureOptions{Clip: &page.Viewport{X: 0, Y: 0, Width: 20, Height: 10}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]int{region.Width, region.Height}).To(Equal([]int{20, 10}))
+		_, err = frame.CapturePageScreenshot(ctx, engine.ScreenshotCaptureOptions{Clip: &page.Viewport{X: 0, Y: 0, Width: 5000, Height: 10}})
+		Expect(err).To(MatchError(ContainSubstring("reaches outside")))
 		state, err := frame.Evaluate(ctx, `[document.querySelectorAll('#_biloba-freeze').length, getComputedStyle(document.querySelector('.subject')).animationName]`)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(state).To(Equal([]any{float64(0), "pulse"}))

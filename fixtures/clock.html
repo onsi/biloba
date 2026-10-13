@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+<title>Clock</title>
+</head>
+<body>
+<div id="now"></div>
+<div id="countdown">10</div>
+<div id="frames">0</div>
+<div id="posted" data-at="">posted</div>
+<div id="ago">just now</div>
+<div id="later"></div>
+<div id="chain"></div>
+<button id="debounced">Save</button>
+<div id="saved"></div>
+<script>
+  // Everything here runs on the page's timers, so the page clock decides when it happens.
+  const $ = (id) => document.getElementById(id)
+  $("now").textContent = new Date().toISOString()
+
+  // a countdown ticking once a second
+  let remaining = 10
+  const countdown = setInterval(() => {
+    remaining -= 1
+    $("countdown").textContent = String(remaining)
+    if (remaining === 0) clearInterval(countdown)
+  }, 1000)
+
+  // an animation-frame counter
+  let frames = 0
+  const frame = () => { frames += 1; $("frames").textContent = String(frames); requestAnimationFrame(frame) }
+  requestAnimationFrame(frame)
+
+  // a "time ago" label refreshed every 30s from Date
+  const posted = Date.now()
+  $("posted").dataset.at = String(posted)
+  const ago = () => {
+    const minutes = Math.floor((Date.now() - posted) / 60000)
+    $("ago").textContent = minutes === 0 ? "just now" : minutes + " minutes ago"
+  }
+  setInterval(ago, 30000)
+
+  // a one-shot timer, and a chain of timers joined by promises
+  setTimeout(() => { $("later").textContent = "later" }, 5000)
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  ;(async () => {
+    const steps = []
+    for (const step of ["one", "two", "three"]) {
+      await sleep(100)
+      steps.push(step)
+      $("chain").textContent = steps.join(" ")
+    }
+  })()
+
+  // a debounced save
+  let debounce = null
+  $("debounced").onclick = () => {
+    clearTimeout(debounce)
+    debounce = setTimeout(() => { $("saved").textContent = "saved at " + new Date().toISOString() }, 300)
+  }
+</script>
+</body>
+</html>

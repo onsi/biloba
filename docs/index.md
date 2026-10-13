@@ -518,7 +518,7 @@ Here are some of the ways Biloba integrates with Ginkgo and Gomega so you can fo
 
 	(Note that the boolean `BilobaConfig` options take an optional bool — `BilobaConfigFailureScreenshots(false)` and `BilobaConfigProgressReportScreenshots(false)` turn those off, and `BilobaConfigFailureOutlines()` turns outlines on.  See [Failure artifacts](#failure-artifacts-humans-ci-and-agents).)
 
-3. All `console.log/info/warn/etc.` output gets immediately streamed to Ginkgo's GinkgoWriter.
+3. All `console.log/info/warn/etc.` output gets immediately streamed to Ginkgo's GinkgoWriter.  Biloba also records it, along with uncaught page errors, for you to [inspect](#console-messages-and-page-errors).
 
 	That means that output will be visible, but only if a test fails or you are running in verbose mode with `ginkgo -v`
 
@@ -565,15 +565,15 @@ This installs a family of `biloba-go:*` skills that activate automatically while
 
 Biloba is only possible because of all the hard work that's gone into the [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/) and the [chromedp](https://github.com/chromedp) [client](https://github.com/chromedp/chromedp) and [Go protocols](https://github.com/chromedp/cdproto).  Biloba wraps all this great stuff to give you a productive testing environment - but it doesn't hide any of it.  You can drop down to `chromedp` and `cdproto` and mix and match Biloba with `chromedp` trivially simply by passing in `b.Context ` to `chromedp`.
 
-For example, Biloba doesn't yet have a first-class wrapper for emulating geolocation.  You can reach for `chromedp` and `cdproto` to do that yourself:
+For example, Biloba doesn't have a first-class wrapper for throttling the CPU.  You can reach for `chromedp` and `cdproto` to do that yourself:
 
 ```go
 chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
-	return emulation.SetGeolocationOverride().WithLatitude(48.8584).WithLongitude(2.2945).WithAccuracy(10).Do(ctx)
+	return emulation.SetCPUThrottlingRate(4).Do(ctx) // run the page four times slower
 }))
 ```
 
-When a capability is common enough Biloba grows native support for it (see, for example, [Cookies and Storage](#cookies-and-storage)).  Until then, `b.Context` is always there as an escape hatch.
+When a capability is common enough Biloba grows native support for it (see, for example, [Cookies and Storage](#cookies-and-storage) and [Emulating Media and Devices](#emulating-media-and-devices)).  Until then, `b.Context` is always there as an escape hatch.  An override you set this way is yours to undo: Biloba doesn't know about it, so `Prepare()` won't clear it for the next spec.
 
 One thing to know when you use it: `b.Context` carries **no deadline**.  Biloba's own commands run under a [backstop deadline](#when-chrome-stops-responding), but a `chromedp.Run(b.Context, ...)` of yours does not — if Chrome stops answering, that call waits forever and takes the suite with it.  Give it one:
 
@@ -584,49 +584,6 @@ chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error { /* ... *
 ```
 
 Derive it from `b.Context` (not `context.Background()`) so chromedp's executor for this tab stays in the chain.
-
-#### Emulation and device conveniences (drop to chromedp)
-
-Device and environment **emulation** - viewport/device metrics, geolocation, permissions, offline, locale/timezone, color-scheme, and reduced-motion/media - is, by design, *not* wrapped by Biloba: it's session-level state that rarely changes mid-spec, the CDP calls are already ergonomic, and wrapping them would add surface without removing real friction.  Reach through `b.Context` with `cdproto`'s `emulation` and `network` domains.  Here are the common recipes:
-
-```go
-import (
-	"github.com/chromedp/cdproto/emulation"
-	"github.com/chromedp/cdproto/network"
-	"github.com/chromedp/chromedp"
-)
-
-// Viewport / device metrics (mobile)
-chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
-	return emulation.SetDeviceMetricsOverride(390, 844, 3, true).Do(ctx) // iPhone-ish: w, h, scale, mobile
-}))
-
-// Geolocation
-chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
-	return emulation.SetGeolocationOverride().WithLatitude(48.8584).WithLongitude(2.2945).WithAccuracy(10).Do(ctx)
-}))
-
-// Locale + timezone
-chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
-	if err := emulation.SetLocaleOverride().WithLocale("fr-FR").Do(ctx); err != nil { return err }
-	return emulation.SetTimezoneOverride("Europe/Paris").Do(ctx)
-}))
-
-// Color scheme / reduced motion (and other media features)
-chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
-	return emulation.SetEmulatedMedia().WithFeatures([]*emulation.MediaFeature{
-		{Name: "prefers-color-scheme", Value: "dark"},
-		{Name: "prefers-reduced-motion", Value: "reduce"},
-	}).Do(ctx)
-}))
-
-// Offline / throttled network
-chromedp.Run(b.Context, chromedp.ActionFunc(func(ctx context.Context) error {
-	return network.OverrideNetworkState(true, 0, -1, -1).Do(ctx) // offline=true, latency, down, up
-}))
-```
-
-(`SetWindowSize` is the one piece of this Biloba *does* wrap natively - see [Window Size](#window-size-screenshots-configuration-and-debugging).)
 
 Multi-browser (Firefox/WebKit) is a deliberate non-goal - Biloba is Chrome-only by design.
 
@@ -1114,11 +1071,13 @@ Not every Biloba method polls, so not every method accepts these knobs.  Biloba 
 | Bucket | Examples | `WithTimeout` / `WithContext` | `WithPolling` | `Immediate` |
 |---|---|---|---|---|
 | **Polling** - actions & value-getters | `Click`, `SetValue`, `Type`, `GetProperty`, `GetValue`, `GetInnerText`, `InvokeOn`, `GetLocation`, `GetTitle`, `GetJSValue` | honored | honored | honored |
-| **Waiting commands** - one bounded wait | `Navigate`, the `CaptureScreenshot*` family, `HoldResponse(...).Await()` | honored (overrides the built-in deadline) | error | error |
+| **Waiting commands** - one bounded wait | `Navigate`, the `CaptureScreenshot*` family, `HoldResponse(...).Await()`, `Clock().RunFor` | honored (overrides the built-in deadline) | error | error |
 | **Snapshot / state queries** | `HasElement`, `Count`, every `Current*ForEach`, `GetCookies`, `AllRequests` | error | error | error |
-| **One-shot mutations & raw JS** | `SetWindowSize`, the `*Immediately` family, `Run`, `RunAsync` | error | error | error |
+| **One-shot mutations & raw JS** | `SetWindowSize`, the `*Immediately` family, `Run`, `RunAsync`, `InstallClock` and the other clock methods | error | error | error |
 
-The intuition: a method polls (and accepts every knob) when it is *waiting for the DOM to reach a state*.  A **waiting command** like `Navigate` does a single bounded wait for one event, so it keeps a purpose-built default deadline (~30s for navigation and for [awaiting a held response](#holding-a-response-hostage), ~5s for screenshots) that `WithTimeout` can override - but there's no repeated probe for `WithPolling` to tune.  A **snapshot** reads "what's true right now" and so never waits; when you want to wait for a snapshot to change, gate it on a polling matcher first (`Eventually(sel).Should(b.HaveCount(n))`, *then* read).  A **one-shot mutation** (and the raw-JS `Run`/`RunAsync`) just does its thing once.
+One handle sits across the buckets: [`b.Pointer()`](#driving-the-pointer-directly) accepts every knob and keeps the view it was made from, because its `MoveToElement` polls with them.  Its `MoveTo`, `Down`, and `Up` dispatch immediately, so the knobs have nothing to configure there and are ignored.
+
+The intuition: a method polls (and accepts every knob) when it is *waiting for the DOM to reach a state*.  A **waiting command** like `Navigate` does a single bounded wait for one event, so it keeps a purpose-built default deadline (~30s for navigation and for [awaiting a held response](#holding-a-response-hostage), ~5s for screenshots, 10s for a [page clock's](#controlling-time) `RunFor`) that `WithTimeout` can override - but there's no repeated probe for `WithPolling` to tune.  A **snapshot** reads "what's true right now" and so never waits; when you want to wait for a snapshot to change, gate it on a polling matcher first (`Eventually(sel).Should(b.HaveCount(n))`, *then* read).  A **one-shot mutation** (and the raw-JS `Run`/`RunAsync`) just does its thing once.
 
 ### Capturing Values from Matchers
 
@@ -2221,6 +2180,8 @@ Eventually("#menu").ShouldNot(b.BeVisible())
 
 **A fidelity note.**  A plain `b.Click(sel)` calls `element.click()` - the most faithful path, because it fires the browser's native default actions (form submit, `<label>` association, and the like).  But `element.click()` carries no coordinates and no modifier state, so the moment you add *any* option the fast path switches to dispatching a synthetic `mousedown`/`mouseup`/`click` sequence carrying the real `clientX`/`clientY` and the modifier flags - so an app reading `e.clientX`/`e.shiftKey` (a `<canvas>` painter, a map, a custom slider) sees exactly what you targeted.  That's a deliberate fidelity-for-control trade: if you need a maximally-faithful click, pass no options (or use [realistic mode](#realistic-interactions), which always uses real CDP input and honors the options natively).  `Tap` ignores keyboard modifiers - they don't apply to touch - but honors `b.At`.
 
+`b.At` also positions a [low-level pointer](#driving-the-pointer-directly): `p.MoveToElement("#canvas", b.At(30, 40))`.
+
 #### Double-Clicking and Right-Clicking
 
 Alongside `Click`, Biloba provides `b.DblClick` and `b.RightClick`, following the same dual immediate/matcher convention, the same visible+enabled checks, and the same [pointer options](#pointer-options-offsets-and-modifiers):
@@ -2251,23 +2212,18 @@ b.DragTo("#card", "#column")             // drags #card's center onto #column's 
 Eventually("#card").Should(b.DragTo("#column"))
 ```
 
-**`DragTo` is the whole gesture.**  The press, the moves, and the release all happen inside the one call, so there is no seam to assert in.  That's fine when the thing you're testing is the *drop* - but a spec whose subject is the **mid-drag** state needs the legs by hand: a tree row that auto-expands after a hover dwell, a drop-target highlight, a spring-loaded folder.  Drive those through [chromedp](#codechromedpcode-breaking-the-fourth-wall) on `b.Context`.  `b.GetBoundingBox` already reports in the space CDP mouse events use - viewport CSS pixels - so `CenterX`/`CenterY` are the coordinates to send:
+**`DragTo` is the whole gesture.**  The press, the moves, and the release all happen inside the one call, so there is no seam to assert in.  That's fine when the thing you're testing is the *drop* - but a spec whose subject is the **mid-drag** state needs the legs by hand: a tree row that auto-expands after a hover dwell, a drop-target highlight, a spring-loaded folder.  Drive those with a [low-level pointer](#driving-the-pointer-directly).  `b.GetBoundingBox` reports in viewport CSS pixels, the space `Pointer.MoveTo` takes, so `CenterX`/`CenterY` are the coordinates to send:
 
 ```go
 src, tgt := b.GetBoundingBox("#row"), b.GetBoundingBox("#folder")   // measure BOTH before pressing
-ctx, cancel := context.WithTimeout(b.Context, 10*time.Second)      // b.Context carries no deadline
-defer cancel()
-
-Expect(chromedp.Run(ctx,
-    chromedp.MouseEvent(input.MousePressed, src.CenterX, src.CenterY, chromedp.ButtonType(input.Left), chromedp.ClickCount(1)),
-    chromedp.MouseEvent(input.MouseMoved, tgt.CenterX, tgt.CenterY, chromedp.ButtonType(input.Left)),
-)).To(Succeed())
+p := b.Pointer()
+p.MoveTo(src.CenterX, src.CenterY)
+p.Down()
+p.MoveTo(tgt.CenterX, tgt.CenterY)
 
 Eventually("#folder").Should(b.HaveAttribute("aria-expanded", "true"))   // asserted with the button still down
 
-Expect(chromedp.Run(ctx,
-    chromedp.MouseEvent(input.MouseReleased, tgt.CenterX, tgt.CenterY, chromedp.ButtonType(input.Left), chromedp.ClickCount(1)),
-)).To(Succeed())
+p.Up()
 ```
 
 Measure both endpoints *before* the press, the way `DragTo` does, and for the same reason: a measurement taken between the legs can be taken after something moved.
@@ -2408,7 +2364,7 @@ Eventually(".menu").Should(rb.Hover()) // moves the real mouse, activating CSS :
 
 In realistic mode:
 
-- **`Click`** scrolls the element to the center of the viewport, **waits for its box to stop moving**, verifies it is enabled and is the topmost element at its center point (so an occluding overlay or an off-screen element does **not** click through - the matcher form keeps polling, the immediate form fails the spec), moves the real pointer to it (so hover-gated clicks register), then dispatches a real `mousePressed`/`mouseReleased`.  This is the inverse of plain `Click`, which clicks the element directly regardless of what's on top of it.  Clicks through `>>>` same-origin iframe boundaries are translated to top-level viewport coordinates so the real mouse lands in the right place.  [Pointer options](#pointer-options-offsets-and-modifiers) are honored natively: `b.At(x,y)` retargets to the offset point (translated to the viewport and bounds-checked), and `b.Shift()`/etc. hold a real CDP modifier bitmask down.
+- **`Click`** scrolls the element to the center of the viewport - unless it is already entirely on screen and topmost at its center, in which case the page stays where it is - **waits for its box to stop moving**, verifies it is enabled and is the topmost element at its center point (so an occluding overlay or an off-screen element does **not** click through - the matcher form keeps polling, the immediate form fails the spec), moves the real pointer to it (so hover-gated clicks register), then dispatches a real `mousePressed`/`mouseReleased`.  This is the inverse of plain `Click`, which clicks the element directly regardless of what's on top of it.  Clicks through `>>>` same-origin iframe boundaries are translated to top-level viewport coordinates so the real mouse lands in the right place.  [Pointer options](#pointer-options-offsets-and-modifiers) are honored natively: `b.At(x,y)` retargets to the offset point (translated to the viewport and bounds-checked), and `b.Shift()`/etc. hold a real CDP modifier bitmask down.
 - **`ClickEachImmediately`** clicks every matching element with real input, scrolling and re-measuring each in turn, and skipping any that are hidden, disabled, off-screen, or obscured.
 - **`DblClick`** / **`RightClick`** / **`MiddleClick`** apply the same scroll/stability/occlusion machinery as `Click`, then dispatch a real double-click (two click sequences with an incrementing click-count, so Chrome fires a genuine `dblclick`), right-button click (firing the browser's native `contextmenu`), or middle-button click (firing `auxclick`) - all honoring pointer options.
 - **`DragTo`** measures stable, actionable points for *both* the source and target **at one scroll position**, then drives a real CDP pointer drag - press at the source, several interpolated moves toward the target, release at the target - so pointer-based drag-and-drop libraries see genuine pointer input (it still does not drive native HTML5 `draggable`).  The single scroll position matters: measuring one endpoint at a time scrolls the target into view and moves the source out from under the coordinate already recorded for it, and for two rows of one `overflow: auto` list both coordinates land on the pane's center - where the press and release arrive together and the page receives a click on the target.  So Biloba tries the current scroll position first (the common case, and it disturbs nothing), then the pair framed around their midpoint, then each endpoint scrolled in with the other scrolled second (which is what endpoints in separate panes need).  If no position shows both - endpoints further apart than their pane is tall - it fails and names both endpoints rather than dispatching a drag it knows is wrong.
@@ -2418,7 +2374,9 @@ In realistic mode:
 - **`SetValue`** drives form controls with real input: a text input is focused with a real click, cleared, and typed with real key events (then blurred to fire `change`); a checkbox is toggled with a real click (and left alone if it's already in the desired state).  Native pickers - radio groups, `<select>`, and multi-selects - fall back to the fast JS path, because they can't be driven by a real pointer (Playwright's `selectOption` sets them programmatically too).
 - **`Type`** / **`SendKeysToWindowImmediately`** already use real CDP key events; in realistic mode they additionally scroll the element into view before typing.
 
-All keep Biloba's dual immediate/matcher API (`rb.Click("#go")` vs `Eventually("#go").Should(rb.Click())`).  For anything else you can still [drop down to chromedp](#codechromedpcode-breaking-the-fourth-wall) via `b.Context`.
+**What "topmost at its center" means.**  Biloba takes the center of the part of the element that is inside the viewport and asks the page what is there with `document.elementFromPoint`.  The element is topmost when the answer is the element itself or something inside it, shadow DOM included.  When a sticky header, a modal backdrop, a cookie banner, or a tooltip covers that point, it isn't: Biloba scrolls the element to the center of the viewport and checks again.  If it is still covered there, the interaction keeps polling and, at the deadline, fails with "obscured by another element".  Biloba checks that one point, not the whole box, so an element with a covered edge but a clear center is topmost.  An overlay with `pointer-events: none` doesn't count, because `elementFromPoint` sees through it.
+
+All keep Biloba's dual immediate/matcher API (`rb.Click("#go")` vs `Eventually("#go").Should(rb.Click())`).  For a custom gesture - drawing a stroke, scrubbing a slider - [drive the pointer directly](#driving-the-pointer-directly) with `b.Pointer()`.  For anything else you can still [drop down to chromedp](#codechromedpcode-breaking-the-fourth-wall) via `b.Context`.
 
 #### Using realistic mode across a spec or a suite
 
@@ -2467,9 +2425,38 @@ Biloba's interactions run on two tracks: the fast default (`b`) is an atomic Jav
 A couple of deliberate gaps are worth calling out, both reachable via [chromedp](#codechromedpcode-breaking-the-fourth-wall) on `b.Context`:
 
 - **Occlusion on the fast track.** Plain `Click` intentionally clicks through overlays (the atomic, no-scroll default).  When you want to *assert* an element is genuinely clickable without paying for full realistic mode, use the deterministic [`b.BeClickable()`](#existence-counting-visibility-and-interactibility) matcher (visible + enabled + topmost-at-its-center); it stays opt-in rather than changing `Click`'s default, so existing click-through behavior is never silently broken.
-- **Native HTML5 drag-and-drop, native `<select>` realism, and device/mobile emulation** are not driven by either track by design - drop to chromedp for those (see the [emulation recipes](#emulation-and-device-conveniences-drop-to-chromedp)).  Both tracks work inside a cross-origin iframe through a [frame handle](#working-with-cross-origin-iframes): `checkout.Realistic().Click(...)` translates the point into the tab and checks that nothing in the embedding page covers it.
+- **Native HTML5 drag-and-drop and native `<select>` realism** are not driven by either track by design - drop to chromedp for those.  Device emulation is separate from both tracks: see [Emulating Media and Devices](#emulating-media-and-devices).  Both tracks work inside a cross-origin iframe through a [frame handle](#working-with-cross-origin-iframes): `checkout.Realistic().Click(...)` translates the point into the tab and checks that nothing in the embedding page covers it.
 
 And one asymmetry to expect when you move a spec from one track to the other: **a `position: fixed` footer or banner is invisible to the fast track and perfectly solid to the realistic one.**  `element.click()` does no hit-testing, so the fast track reaches an element the footer is sitting on top of; real pointer input lands on the footer.  A spec that has passed for months can fail the moment it switches to `b.Realistic()`, because a row near the bottom of a short list is genuinely underneath the footer.  Both tracks are right - the realistic one is telling you a user could not reach that element either.  Scroll it clear of the footer (`b.ScrollIntoView(sel, b.AtTopOffset(px))`) rather than assuming your interaction code is wrong.
+
+#### Driving the pointer directly
+
+The realistic track measures, scrolls, and waits before every interaction, and `DragTo` is a single gesture from one element to another.  When you need a gesture of your own - a pen stroke on a drawing canvas, a slider scrubbed at 60Hz while you record the screen - `b.Pointer()` gives you a real pointer to drive one event at a time:
+
+```go
+pen := b.Pointer(b.Pen())
+pen.MoveTo(100, 200)
+pen.Down()
+for i := 1; i <= 14; i++ {
+    time.Sleep(16 * time.Millisecond)
+    pen.MoveTo(100+float64(i)*10, 200)
+}
+pen.Up()
+```
+
+The pointer has four methods:
+
+- `MoveTo(x, y)` moves to a point in CSS pixels from the top-left of the viewport.
+- `MoveToElement(selector)` moves to the element's center, or to `b.At(x, y)` from its top-left corner: `p.MoveToElement("#track", b.At(0, 10))`.
+- `Down()` presses the primary button where the pointer is, and `Up()` releases it.  Pressing a pressed pointer, or releasing a released one, fails the spec.
+
+The handle remembers its position (it starts at `0, 0`) and whether it is pressed.  Moves while it is pressed carry `buttons: 1`, so the page sees a drag.  `b.Pointer()` is a mouse; `b.Pointer(b.Pen())` is a pen, and every event it dispatches reaches the page as a `PointerEvent` with `pointerType` `"pen"`, reporting a `pressure` of `0.5` while it touches and `0` while it hovers.  A pen works on a page emulating a tablet (`b.SetWindowSize(820, 1180, b.Mobile(), b.TouchScreen())`).
+
+Every call dispatches real CDP input immediately - `MoveTo`, `Down`, and `Up` are one round trip each on a tab.  Nothing scrolls, nothing waits for the page to settle, and nothing is checked for occlusion, so the timing is yours: pace the calls with `time.Sleep` or a `time.Ticker`.  `MoveToElement` is the one call that polls - it waits for the element to exist and be visible, honoring the knobs of the view you made the pointer from (`b.WithTimeout(5 * time.Second).Pointer()`), then dispatches.  It reads the element where it is, so an element whose point is outside the viewport fails the spec instead of receiving input it could never get: scroll it into view first with `b.ScrollIntoView`.  `MoveTo`, `Down`, and `Up` have no wait to tune, so they ignore those knobs.
+
+On a [frame handle](#working-with-cross-origin-iframes), `frame.Pointer()` works in the frame's viewport: Biloba translates each point through the iframe's position (without scrolling the iframe into view), and the frame's page sees the coordinates you passed.
+
+If a spec ends with the pointer still pressed, Biloba releases it, so the next spec does not start with a held button.
 
 ### Uploading Files
 
@@ -3435,6 +3422,59 @@ var result map[string]int
 b.Run("({a:1, b:2})", &result)
 ```
 
+### Init Scripts
+
+`b.AddInitScript` installs JavaScript that runs at the start of every document the tab loads from then on, before the page's own scripts and in each of its frames.  Use it to seed globals or install shims the page reads while it boots:
+
+```go
+b.AddInitScript(`window.__featureFlags = {newCheckout: true}`)
+b.Navigate("/checkout")
+```
+
+It does not run in the document that is already loaded, so call it before `b.Navigate`.  The script stays installed across navigations until the spec ends, when a `DeferCleanup` removes it.
+
+### Console Messages and Page Errors
+
+Biloba streams the page's console output to the `GinkgoWriter` as it happens.  It also records it: `b.AllConsoleMessages()` returns every console message the tab has logged since the last `Prepare()`, oldest first.  Each `ConsoleMessage` has a `Type` (`"log"`, `"info"`, `"warning"`, `"error"`, `"debug"`, ...), a `Text` that joins the call's arguments with spaces, a `Timestamp`, and a `Stack`.
+
+The list also holds the messages Chrome adds to the console itself, the ones DevTools shows next to the page's own: a resource that failed to load, an intervention, a performance violation, a deprecation warning.  These have a `Source` naming where they came from (`"network"`, `"intervention"`, `"violation"`, `"deprecation"`, ...) and a `Type` that is their level; the page's own console calls have an empty `Source`.  Chrome's messages are recorded on the tab rather than on a frame handle.  Its warnings and errors stream to the `GinkgoWriter` the way `console.warn` and `console.error` do, prefixed with their source (`[network] Failed to load resource: the server responded with a status of 404 (Not Found) (http://localhost:8080/missing.json)`), but they are not replayed at the top of the failure block.  Its lower-level messages are only recorded.
+
+`b.AllPageErrors()` returns the uncaught exceptions and unhandled promise rejections the tab has seen since the last `Prepare()`.  Each `PageError` has a `Message` that reads the way DevTools prints it (`"Uncaught TypeError: x is not a function"`, `"Uncaught (in promise) Error: boom"`), the `URL`, `Line`, and `Column` it was thrown from, a `Stack`, and a `Timestamp`.  Page errors stream to the `GinkgoWriter` in red, like `console.error`, and when a spec fails they are replayed with the [console errors](#outline) at the top of the failure block.  The `Line` and `Column` fields, here and in each `StackFrame`, are zero-based, as Chrome reports them.  The locations Biloba prints (`app.js:12:5`, in the streamed output, stack traces, and the failure replay) are one-based, as your editor and DevTools show them.
+
+Both are snapshots: they don't poll and take none of the poll-config knobs.  To wait for something to be logged, poll the snapshot:
+
+```go
+Eventually(b.AllPageErrors).Should(BeEmpty())
+Eventually(b.AllConsoleMessages).Should(ContainElement(HaveField("Text", "ready")))
+```
+
+Biloba keeps the most recent 1000 of each.  Both start empty for each spec: what the previous spec's page logs, throws, or requests while `Prepare()` navigates it away (a fetch it had in flight failing with `Failed to fetch`, say) is dropped, not printed, recorded, or replayed.  A [frame handle](#working-with-cross-origin-iframes) records only its own document's messages and errors, from the moment it is found; the tab records its frames' as well.
+
+Together with the request outcomes [recorded for each request](#observing-requests), these make it easy to build an error report after loading a page:
+
+```go
+b.Navigate("/dashboard")
+Eventually("#loaded").Should(b.Exist())
+
+report := []string{}
+for _, pageError := range b.AllPageErrors() {
+	report = append(report, "page error: "+pageError.Message)
+}
+for _, req := range b.AllRequests() {
+	if req.Failure != "" {
+		report = append(report, fmt.Sprintf("failed request: %s (%s)", req.URL, req.Failure))
+	} else if req.Status >= 400 {
+		report = append(report, fmt.Sprintf("HTTP %d: %s", req.Status, req.URL))
+	}
+}
+for _, message := range b.AllConsoleMessages() {
+	// Chrome's own "Failed to load resource" messages repeat the request outcomes above
+	if message.Source == "" && (message.Type == "error" || message.Type == "warning") {
+		report = append(report, message.Type+": "+message.Text)
+	}
+}
+```
+
 ## Stubbing and Observing the Network
 
 Real browser tests usually talk to a backend.  This is a good thing as you _really_ want rich and expressive tests that are running against the _actual_ backend.  Such an approach _can_ lead to slow (every spec waits on real network round-trips) and flaky (the backend has to be up, seeded, and deterministic) tests if you aren't disciplined.  In general you should lean into discipline and stick with a real backend; investing effort to make it more performant and stable.
@@ -3671,6 +3711,19 @@ apiCalls := b.AllRequests().Filter(b.RequestMatching(ContainSubstring("/api/")))
 
 The recorded requests are scoped to a single tab and are reset by `Prepare()`, so each spec starts with a clean slate.
 
+Each request also records its outcome.  `Status` is the HTTP status of the response: it is `0` until the response headers arrive, and stays `0` for a request that failed before it got a response.  `Failure` is empty unless the request failed, in which case it holds Chrome's error text - `net::ERR_CONNECTION_REFUSED`, `net::ERR_BLOCKED_BY_CLIENT` for a request `AbortRequest` failed, and so on.  A redirect is recorded as one request per hop, and the hop that was redirected has the redirect's status (a `302`, say).  Refine a query on the outcome with `WithStatus` (an `int` or a Gomega matcher) and `Failed`:
+
+```go
+Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/users")).WithStatus(200))
+Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/flaky")).Failed())
+
+serverErrors := b.AllRequests().Filter(b.RequestMatching(ContainSubstring("/api/")).WithStatus(BeNumerically(">=", 500)))
+```
+
+An HTTP error status is not a failure - the request got a response - so a `404` has `Status: 404` and an empty `Failure`.  One wrinkle: Chrome reports `net::ERR_ABORTED` for a request whose body the page abandons, so a `fetch` whose response body is never read (or a download cut short by a navigation) can have both a `Status` and a `Failure`.
+
+`AllRequests` is a snapshot: each `*Request` it returns is a copy, and its `Status` and `Failure` are what Biloba knew when you called it.  To wait for an outcome, poll `HaveMadeRequest` with `WithStatus` or `Failed`.
+
 ### Waiting for the network to settle
 
 `BeNetworkIdle` passes when a tab has no in-flight requests.  Pair it with `Eventually` to wait for a burst of activity to finish:
@@ -3720,9 +3773,138 @@ Once you have a tab, you can resize it using:
 b.SetWindowSize(width, height)
 ```
 
-this also accepts any [`chromedp.EmulateViewportOption`](https://pkg.go.dev/github.com/chromedp/chromedp#EmulateViewportOption) after `height`.  `b.SetWindowSize` automatically sets up a Ginkgo `DeferCleanup` to reset the window size when the spec ends.  You can query the window size of a tab at any time using `b.WindowSize()`.
+this also accepts device options after `height` - see [Emulating Media and Devices](#emulating-media-and-devices).  `b.SetWindowSize` automatically sets up a Ginkgo `DeferCleanup` to reset the window size when the spec ends.  You can query the window size of a tab at any time using `b.WindowSize()`.
 
 One quick hack to speed up a test suite is to use the _smallest_ viable window size to run the tests.  You can then pass `BilobaConfigFailureScreenshotsSize(width, height)` to `ConnectToChrome(...)` to configure the size of Biloba's automatically generated screenshots.  Biloba will scale the window up on failure, take a screenshot, then scale it back down to proceed with other tests.  As an anecdotal data-point a 30% speed-up was observed for a Biloba test suite against a complex web-app running in parallel when the screen-size was minimized in this way.
+
+### Emulating Media and Devices
+
+`b.SetWindowSize` takes options that turn the tab into an emulated device:
+
+```go
+b.SetWindowSize(1194, 834, b.DeviceScaleFactor(2), b.Mobile(), b.TouchScreen(), b.Landscape())
+```
+
+- `b.DeviceScaleFactor(f)` sets `window.devicePixelRatio`, and screenshots come back at `f` times their CSS size.
+- `b.Mobile()` emulates a mobile browser: the page's `<meta name="viewport">` is honoured, and a page without one lays out 980 CSS pixels wide, as on a phone.
+- `b.TouchScreen()` makes `navigator.maxTouchPoints` positive and the `(pointer: coarse)` and `(hover: none)` media queries match.
+- `b.Landscape()` reports a landscape `screen.orientation`.
+
+These are chromedp's `EmulateViewportOption`s, so chromedp's own options work here too.  When the spec ends the window size and every option are reset together.
+
+`b.SetUserAgent` overrides the user agent a tab reports, both `navigator.userAgent` and the `User-Agent` request header.  A document reads its user agent when it loads, so call it before `b.Navigate`:
+
+```go
+b.SetUserAgent("Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1")
+b.Navigate("/draw")
+```
+
+It is restored when the spec ends.
+
+`b.SetMedia` emulates CSS media for a tab - `prefers-color-scheme`, `prefers-reduced-motion`, and the media type:
+
+```go
+b.SetMedia(biloba.Media{ColorScheme: "dark", ReducedMotion: "reduce"})
+b.SetMedia(biloba.Media{Type: "print"})
+```
+
+Each call replaces the tab's previous media (an empty field leaves that aspect to the browser), and the media holds across navigations.  Like `b.SetWindowSize` and `b.SetUserAgent`, `b.SetMedia` registers a `DeferCleanup` that undoes it when the spec ends.  All three apply to a tab and every frame in it; calling them on a frame handle fails the spec.
+
+[Visual assertions](#visual-assertions) render in the tab's media.  `b.InColorSchemes(...)` overrides only the colour scheme for its own captures and then restores the tab's media, so a spec running in dark mode with reduced motion stays that way after it.
+
+The rest of this section covers the tab's environment: where it is, what it is allowed to do, what language and time zone it runs in, and what network it is on.  Every one of these methods works the same way as `b.SetMedia`: it applies to the tab and every frame in it, holds across navigations, and registers a `DeferCleanup` that restores the previous value when the spec ends.  Calling one on a frame handle fails the spec.  If a cleanup doesn't land (say a cancelled context), the next `Prepare()` clears the override, and a spec that never touches these pays nothing for that.
+
+#### Location and permissions
+
+`b.SetGeolocation` sets the position `navigator.geolocation` reports.  The page also needs the geolocation permission to read it, which `b.SetPermissions` grants without a prompt:
+
+```go
+b.SetPermissions(appURL, map[biloba.Permission]biloba.PermissionState{
+	biloba.PermissionGeolocation: biloba.PermissionGranted,
+})
+b.SetGeolocation(biloba.Geolocation{Latitude: 48.8584, Longitude: 2.2945, Accuracy: 10})
+```
+
+A latitude outside [-90, 90], a longitude outside [-180, 180], or a negative accuracy fails the spec.  `b.ClearGeolocation()` removes the emulated position.
+
+`b.SetPermissions(origin, permissions)` sets each permission to `PermissionGranted`, `PermissionDenied`, or `PermissionPrompt` for one origin (`"http://localhost:8080"`), or for every origin when you pass `""`.  Calls add up, and `b.ResetPermissions()` removes them all.  Biloba provides constants for geolocation, notifications, camera, microphone, and the clipboard; any name `navigator.permissions.query` accepts works.  Permissions belong to the tab's browser context, so a tab the page opens shares them, while a tab from `b.NewTab()` has its own.
+
+#### Locale and time zone
+
+```go
+b.SetLocale("fr-FR")
+b.SetTimezone("Europe/Paris")
+```
+
+`b.SetLocale` sets the default locale of the page's `Intl` APIs and `toLocaleString()`, so dates, numbers, and sorting come out in French.  It does not change `navigator.language` or the `Accept-Language` header.  `b.SetTimezone` takes an IANA time zone name and changes what `Date` and `Intl.DateTimeFormat` report.  Both fail the spec on a name Chrome doesn't recognize, and `""` removes the override.  To set the time itself, see [Controlling Time](#controlling-time).
+
+#### Network conditions and the HTTP cache
+
+`b.SetNetworkState` emulates a network condition:
+
+```go
+b.SetNetworkState(biloba.NetworkState{Latency: 400 * time.Millisecond, DownloadThroughput: 50_000})
+b.SetOffline(true)
+```
+
+`Offline` sets `navigator.onLine` to false and makes the tab's requests fail.  `Latency` delays every request, `DownloadThroughput` and `UploadThroughput` cap throughput in bytes per second (0 leaves it alone), and `ConnectionType` is what the page sees in `navigator.connection`.  Each call replaces the previous state.  `b.SetOffline(true)` takes the tab offline and keeps the rest of its state, and `b.SetOffline(false)` brings it back.  `b.NetworkState()` returns the state the tab is emulating.
+
+`b.SetCacheEnabled(false)` turns off the tab's HTTP cache, so every request goes to the network.  [Network interception](#stubbing-and-observing-the-network) turns the cache off too, because a response served from the cache would skip the stubs: once a spec registers a stub, abort, modification, or hold, the cache stays off until the spec ends, whatever `b.SetCacheEnabled` says.
+
+### Controlling Time
+
+Time-dependent UI is slow and flaky to test on real time: a countdown, a "5 minutes ago" label, a debounced save, a session that expires after half an hour.  `b.InstallClock` gives the tab a page clock - fake timers for the page's own code - so a spec can move time forward instead of waiting for it:
+
+```go
+It("expires the session after 30 minutes", func() {
+	clock := b.InstallClock(time.Date(2024, 2, 2, 8, 0, 0, 0, time.UTC))
+	clock.PauseAt(time.Date(2024, 2, 2, 8, 0, 0, 0, time.UTC))
+	b.Navigate(fixtureServer + "/dashboard")
+	Eventually("#welcome").Should(b.Exist())
+
+	clock.RunFor(29 * time.Minute)
+	Ω("#session-warning").ShouldNot(b.Exist())
+	clock.RunFor(time.Minute)
+	Eventually("#session-expired").Should(b.BeVisible())
+})
+```
+
+The page clock replaces the page's `Date` (every constructor form, and `Date.now`; `Date.parse` and `Date.UTC` behave as usual), `performance.now`, `setTimeout`/`clearTimeout`, `setInterval`/`clearInterval`, `requestAnimationFrame`/`cancelAnimationFrame`, and `requestIdleCallback`/`cancelIdleCallback`.  It does not touch CSS animations and transitions or the Web Animations API (`element.animate`), which run on the compositor's timeline - the [screenshot freeze](#freezing-animations-for-a-capture) is the tool for those.  Nothing changes until a spec installs the clock, and it is removed when the spec ends.
+
+Once installed, time flows from the start time at the real rate.  The clock's methods move it:
+
+- `clock.PauseAt(t)` stops time at `t`: no timer or animation frame runs until you call `RunFor`, `FastForward`, or `Resume`.  When `t` is ahead of the clock it gets there the way `FastForward` does.  When `t` is behind it - time flows after `InstallClock`, so pausing at the start time usually goes back a few milliseconds - the clock moves back without firing anything.
+- `clock.RunFor(d)` advances the clock by `d` and runs every timer and animation frame that falls due, in order.  Each runs in its own task, so the page's promise callbacks run in between, as they would on real time.  `RunFor` returns once they have all run.
+- `clock.FastForward(d)` jumps ahead by `d` and fires each timer that fell due along the way once, at the new time - the way a laptop's timers catch up when it wakes from sleep.  An interval that should have fired ten times fires once.
+- `clock.Resume()` lets time flow again at the real rate.
+- `clock.SetFixedTime(t)` pins what `Date` reports to `t`, while timers and animation frames keep running on the clock's own time.
+- `clock.SetSystemTime(t)` moves the clock's time to `t`, forwards or backwards, without firing anything: a pending timer keeps the delay it had left.  It also unpins `SetFixedTime`.
+
+Times have millisecond resolution.  `RunFor`, `FastForward`, and `PauseAt` work the same whether time is flowing or paused, and leave it the way it was (except `PauseAt`, which pauses).
+
+`b.Clock()` returns the installed clock, so a helper doesn't have to be handed it.  It acts through the view it is called on, which is how you give `RunFor` more time: it is a [waiting command](#which-methods-honor-which-knobs) that gives up after 10 seconds of real time by default, and fails with how far it got.  A page that keeps scheduling work (a 1ms interval, a busy animation loop) makes a long `RunFor` slow; `b.WithTimeout(time.Minute).Clock().RunFor(time.Hour)` allows it longer, and `FastForward` skips ahead without running every callback.  `WithContext` aborts it.  `InstallClock` and the other clock methods are one-shot mutations that take no knobs.
+
+#### Installing before or after Navigate
+
+Install the clock before `Navigate` to cover everything the page does.  It also works on a page that has already loaded: the clock replaces the timers in the current document, and `performance.now` carries on from where it was rather than starting again at zero.  But timers the page scheduled before `InstallClock` keep running on real time, and code that kept a reference to the real `Date` or `setTimeout` keeps using it.
+
+Every document the tab loads after `InstallClock` - a navigation, a reload, an iframe - gets the clock in the state it is in, so a page that loads while the clock is paused at noon starts paused at noon.
+
+#### Frames and tabs
+
+The clock covers the tab and its frames: each document has its own fake timers, and every clock method advances all of them, the tab's own document first and then its frames.  Frames in another process - in full Chrome, a cross-site iframe runs in its own process (see [Frames in Another Process](#frames-in-another-process)) - are not covered and keep running on real time.  `InstallClock` applies to a tab, so calling it (or `b.Clock()`) on a frame handle fails the spec.  A tab the page opens (a spawned tab) and a tab from `b.NewTab()` don't share the clock; install one on that tab if it needs it.  A second `InstallClock` on the same tab fails.
+
+#### Biloba keeps running on real time
+
+The clock controls the page's code, not Biloba's.  Biloba's polling, realistic interactions, and screenshot captures run on real time whether the clock is flowing or paused.  That means polling does not move a paused clock: `Eventually("#countdown").Should(b.HaveInnerText("9"))` against a page whose clock is paused will time out, because the page's interval never runs.  Call `RunFor` (or `FastForward`, or `Resume`) first.  When a poll times out while the tab's clock is paused, Biloba adds a line to the failure:
+
+```
+This tab's page clock is paused at 2024-02-02T08:00:00.000Z; timers and animation frames won't run until you call RunFor, FastForward, or Resume.
+```
+
+A `b.Get*` or action that times out carries it in its own failure message; when the timeout came from your own `Eventually`, it appears in the failure report as "Page clock paused".
+
+While time flows, the page's clock advances in steps of up to a frame (about 16ms), so code that spins in a loop waiting for `Date.now()` to change does not see it change.  An exception thrown by a callback the clock runs is reported as an uncaught page error, as it would be on real time.
 
 ### Capturing Screenshots
 
@@ -3751,6 +3933,35 @@ You can use the `ReportEntryVisibilityFailureOrVerbose` decorator to only emit t
 ```go
 AddReportEntry("some description", b.CaptureImgcatScreenshot(), ReportEntryVisibilityFailureOrVerbose)
 ```
+
+#### Capturing only what is on screen
+
+`b.CaptureScreenshot()` captures the whole document.  When the document is taller or wider than the viewport, Chrome lays the page out again at the document's full size to do that, and a responsive page can notice: media queries flip, resize handlers run, and the capture may not look like what the user sees.  `b.Viewport()` captures exactly what is on screen and never resizes the viewport:
+
+```go
+b.CaptureScreenshotToFile("above-the-fold.png", b.Viewport())
+```
+
+`b.Clip(x, y, width, height)` captures one region of the viewport, measured in CSS pixels from its top-left corner.  It also never resizes the viewport, and a region that reaches outside it fails the spec:
+
+```go
+b.CaptureScreenshot(b.Clip(0, 0, 400, 300))
+```
+
+On a frame handle both are measured in the frame's viewport.  `b.Viewport()` also works on `b.CaptureScreenshotOf`, where it refuses an element that is not entirely in view instead of expanding the viewport to reach it.
+
+#### Freezing animations for a capture
+
+Every capture method takes `b.Frozen()`, which captures the page the way a [visual assertion](#visual-assertions) does: it waits for web fonts to load and, for the duration of the capture, turns off CSS animations and transitions and hides the text caret.
+
+```go
+b.CaptureScreenshotToFile("home.png", b.Frozen())
+b.CaptureScreenshotOf("#hero", b.Frozen())
+```
+
+Animations on a scroll or view timeline (`animation-timeline: scroll()`) keep running, since they depend only on the scroll position.  Animations started from JavaScript (`element.animate`, `requestAnimationFrame` loops) are not touched; pausing the [page clock](#controlling-time) stops the `requestAnimationFrame` loops and timers.
+
+To hide only the blinking text caret and leave animations running, pass `b.HideCaret()` instead.
 
 #### Saving screenshots to files
 
@@ -3831,6 +4042,29 @@ Riding along with these, and needing no configuration at all, is a set of **diag
 
 For example, a CI user who only wants screenshots in a specific folder sets `BilobaConfigScreenshotsToDir("./artifacts")` (or `BILOBA_SCREENSHOTS_DIR`) and *still* gets the automation default of outlines-on — they only overrode the directory.
 
+### Recording a Screencast
+
+`b.StartScreencast` records the frames Chrome draws for a tab until you stop it:
+
+```go
+rec := b.StartScreencast(biloba.ScreencastOptions{Format: "jpeg", Quality: 92})
+// ... drive the page ...
+frames := rec.Stop() // []biloba.ScreencastFrame
+```
+
+`ScreencastOptions` takes a `Format` (`"jpeg"`, the default, or `"png"`), a JPEG `Quality` from 0 to 100 (0 leaves it to Chrome), `MaxWidth` and `MaxHeight` to shrink the frames (Chrome keeps the aspect ratio and never enlarges them), and `EveryNthFrame` to keep only one frame in every n.
+
+Each `ScreencastFrame` carries the encoded image in `Data` and a `Timestamp`: the moment Chrome swapped that frame onto the screen.  The timestamp is wall-clock time on the machine running Chrome, so on the same machine you can line frames up against `time.Now()` readings you took while driving the page.  The frame also carries the metadata that maps the image onto the page: `DeviceWidth` and `DeviceHeight` (the viewport the image shows, in CSS pixels), `PageScaleFactor`, `ScrollOffsetX` and `ScrollOffsetY`, and `OffsetTop`.
+
+`rec.Stop()` stops the screencast and waits for Chrome to confirm it, so no frame arrives after it returns.  It returns the frames in `Timestamp` order, and calling it again returns the same frames.  If the spec never calls `Stop`, a `DeferCleanup` stops the recording when the spec ends, and its frames stay available: calling `Stop` afterwards still returns them.  A tab records one screencast at a time - starting a second before stopping the first fails the spec - and, like the other tab-level methods, `StartScreencast` fails the spec when called on a frame handle.
+
+Some things to know:
+
+- **Chrome sends frames only when the page changes.**  You get the frame already on screen when the recording starts (so its timestamp can be a little earlier than your call to `StartScreencast`), and then one frame each time the page draws a new one, up to the display's 60 frames a second.  A page that isn't changing yields one frame and then nothing.
+- **Frames are the size of the window, in CSS pixels.**  An emulated device scale factor (`b.DeviceScaleFactor(2)`) changes how the page renders but does not enlarge the frames.  Use `b.CaptureScreenshot` for a full-resolution still.
+- **Frames are held in memory** until `Stop` returns them.  At 1024x768 a JPEG frame is roughly 40-60KB, a PNG frame 500KB or more, so ten seconds of a busy page at 60 frames a second is tens of megabytes as JPEG.  Shrink the frames with `MaxWidth`/`MaxHeight`, or record fewer with `EveryNthFrame`, for long recordings.
+- **The two Chrome builds behave differently.**  `chrome-headless-shell` (the default) delivers frames steadily, in order, each timestamped within a few milliseconds of being drawn - even while other parallel processes drive their own tabs.  Full Chrome (`HighFidelityHeadless`) encodes frames on several threads and slows down when other tabs in the same browser are busy: frames can arrive out of order (which is why `Stop` sorts them), a recording can go a few hundred milliseconds without a frame, a frame can be timestamped hundreds of milliseconds after it was drawn, and with an emulated device scale factor the first frame or two can ignore `MaxWidth`/`MaxHeight`.  For frame timing you intend to rely on, record in `chrome-headless-shell`.
+
 ### Visual Assertions
 
 Sometimes the thing you want to assert is "this still looks the way it looked."  `b.HaveScreenshot(name)` is a Gomega matcher that captures the subject and compares it, pixel by pixel, against a committed baseline image:
@@ -3840,7 +4074,7 @@ Eventually(".librarian").Should(b.HaveScreenshot("librarian-rail"))  // just thi
 Eventually(b).Should(b.HaveScreenshot("home-desktop"))               // the whole page
 ```
 
-Apply it to a [selector](#working-with-the-dom) to compare a single element — clipped to its bounding box, exactly like [`b.CaptureScreenshotOf`](#capturing-screenshots) — or to the tab itself to compare the whole document.  It's an ordinary matcher, so it composes with the others:
+Apply it to a [selector](#working-with-the-dom) to compare a single element — clipped to its bounding box, exactly like [`b.CaptureScreenshotOf`](#capturing-screenshots) — or to the tab itself to compare the whole document.  An element's box is rounded outward to whole CSS pixels, so an element at a fractional position or size is captured with every pixel it touches.  It's an ordinary matcher, so it composes with the others:
 
 ```go
 Eventually(".card").Should(SatisfyAll(b.BeInViewport(b.Fully()), b.HaveScreenshot("card")))
@@ -4087,11 +4321,11 @@ Eventually(b).Should(b.HaveScreenshot("dashboard", b.Mask(".relative-timestamp",
 
 A relative timestamp is the case that kills a naive baseline on the first day: "3 minutes ago" becomes "4 minutes ago" and a perfectly healthy dashboard starts failing for no reason at all.  Mask it and the rest of the dashboard is still under assertion.  The same paint is applied before a baseline is written and before every comparison, so both sides are always masked identically, and a selector that matches nothing is a no-op — masking an element that's only sometimes on the page must not fail the assertion.
 
-**Animations, transitions, and the blinking text caret — handled.**  For the duration of each capture Biloba injects a stylesheet that sets `animation: none`, `transition: none`, a transparent `caret-color`, and `scroll-behavior: auto`, and removes it again afterwards.  (It's `animation: none` rather than pausing the animations: pausing freezes each one at whatever frame it happened to reach, which is the nondeterminism we're trying to remove.)  If the animation *is* the thing you're asserting on, and you've made it deterministic yourself, opt out with `b.Animated()`.
+**Animations, transitions, and the blinking text caret — handled.**  For the duration of each capture Biloba injects a stylesheet that sets `animation: none`, `transition: none`, a transparent `caret-color`, and `scroll-behavior: auto`, and removes it again afterwards.  (It's `animation: none` rather than pausing the animations: pausing freezes each one at whatever frame it happened to reach, which is the nondeterminism we're trying to remove.)  CSS animations on a scroll or view timeline are left running: they depend only on the scroll position, and turning them off would render a scrolled page as if it were at the top.  If the animation *is* the thing you're asserting on, and you've made it deterministic yourself, opt out with `b.Animated()`.
 
 That stylesheet goes into **every open shadow root** as well as into the document, and is removed from all of them afterwards.  A `*` rule in a document stylesheet doesn't cross a shadow boundary, so a web component would otherwise keep animating — and keep blinking its caret — right through the capture.  A **closed** shadow root can't be reached from script at all, so a component that uses one is left alone; if a capture of such a component won't settle, that's a likely cause.
 
-**A page that never stops changing — only partly handled.**  The settle rule that update mode runs (three consecutive equal captures, at deliberately unequal intervals) defeats any page animating on a fixed period.  It cannot certify a page that has only two or three distinct renderings: something alternating between two frames can come out the same three times in a row by chance, and no sampling schedule fixes that.  The freeze above already removes CSS animations, transitions, and the caret, so what's left in practice is a hand-rolled JavaScript pulse — a `setInterval` swapping a class, a canvas redrawing itself.  The backstop is the never-settled warning plus the fact that the next normal run fails; when either shows up, mask the region rather than re-running the update.
+**A page that never stops changing — only partly handled.**  The settle rule that update mode runs (three consecutive equal captures, at deliberately unequal intervals) defeats any page animating on a fixed period.  It cannot certify a page that has only two or three distinct renderings: something alternating between two frames can come out the same three times in a row by chance, and no sampling schedule fixes that.  The freeze above already removes CSS animations, transitions, and the caret, so what's left in practice is a hand-rolled JavaScript pulse — a `setInterval` swapping a class, a canvas redrawing itself.  Pausing the [page clock](#controlling-time) stops those at the source.  The backstop is the never-settled warning plus the fact that the next normal run fails; when either shows up, mask the region rather than re-running the update.
 
 **A late one-shot change — mostly handled, and the exception is worth knowing.**  Web fonts are the common case, and Biloba waits for `document.fonts.ready` before every capture, on both paths.  What the settle rule *cannot* see is a one-shot change that has not started yet from some other source — a lazy image decode, a late `ResizeObserver`: three captures 100ms and 140ms apart all agree because nothing has happened, the baseline is written, and the change lands at 400ms.  This is the one place where the two paths have genuinely different guarantees: **the poll protects the comparison, not the write.**  An assertion re-captures on every attempt and rides a late change out; a baseline write passes on the first settled capture it takes and has no second chance.  If a subject depends on something that lands late and isn't a font, gate the update on it yourself before generating the baseline.
 
@@ -4141,7 +4375,7 @@ That's the shape on purpose.  A suite-wide default is one number, tuned once, wi
 Eventually(b).Should(b.HaveScreenshot("home", b.InColorSchemes("light", "dark")))
 ```
 
-Each scheme gets its own baseline — `home-light.png` and `home-dark.png` — and a failure names the scheme it belongs to (`home (prefers-color-scheme: dark)`).  Without the option Biloba doesn't emulate `prefers-color-scheme` at all and stores a single `home.png`.
+Each scheme gets its own baseline — `home-light.png` and `home-dark.png` — and a failure names the scheme it belongs to (`home (prefers-color-scheme: dark)`).  Without the option the capture renders in the tab's own media (see [Emulating Media and Devices](#emulating-media-and-devices)) and stores a single `home.png`.  With it, each scheme overrides only `prefers-color-scheme`, and the tab's own media is restored afterwards.
 
 **The emulation drives the media query, so your app has to be listening to it.**  An app with a manual theme override — a tri-state `system`/`light`/`dark` toggle that puts `data-theme` on `<html>` — only follows `prefers-color-scheme` while it's in its follow-the-system state.  A spec that has pinned the theme (directly, through a helper, or through a leftover stored preference) captures **the same rendering twice** and writes it to both `home-light.png` and `home-dark.png`.  Both baselines look right.  Both comparisons pass.  Forever.  The filename is the only thing claiming the dark rendering was ever exercised.
 
@@ -4177,7 +4411,7 @@ When you're debugging a failure whose interesting DOM lands past the cap, overri
 
 **Attachment on failure.** Biloba can attach a DOM Outline for every open tab when a spec fails.  This gives you a readable, text-based view of the page state, which is especially useful in environments that cannot render images.  It is **off for an interactive human** (the screenshot is the more useful artifact) but **on automatically under CI or an AI agent**; force it either way with `BilobaConfigFailureOutlines()` / `BilobaConfigFailureOutlines(false)` (see [Failure artifacts](#failure-artifacts-humans-ci-and-agents)).  When enabled, the entry appears under "DOM Outline for: '<title>'" in the Ginkgo report.
 
-**Console errors on failure.** Biloba streams the page's `console` output to the `GinkgoWriter` as it happens, but on a failure the originating `console.error` (say, the exception behind a React error boundary) is easily lost in the timeline.  So whenever a spec fails Biloba *also* replays every `console.error`/`console.assert` the page logged during the spec, gathered across all tabs, under **"Console errors logged before this failure"** at the **top** of the failure block - usually the fastest path to the root cause.  (This requires no configuration and rides along with the failure-artifact hook.)
+**Console errors on failure.** Biloba streams the page's `console` output to the `GinkgoWriter` as it happens, but on a failure the originating `console.error` (say, the exception behind a React error boundary) is easily lost in the timeline.  So whenever a spec fails Biloba *also* replays every `console.error`/`console.assert` the page logged during the spec, and every uncaught exception or unhandled promise rejection ([page errors](#console-messages-and-page-errors)), gathered across all tabs, under **"Console errors logged before this failure"** at the **top** of the failure block - usually the fastest path to the root cause.  (This requires no configuration and rides along with the failure-artifact hook.)
 
 **Poll trajectory on failure.** When an `Eventually(...)` over a *polled read* times out, the message Gomega prints is a snapshot of the final value — `Timed out … Expected <int>: 120` — and that single number hides three completely different root causes:
 

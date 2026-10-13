@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/chromedp/cdproto/page"
 	"github.com/onsi/biloba/engine"
 	"github.com/onsi/biloba/protocol"
 )
@@ -125,6 +126,20 @@ func (s *engineSession) ExecuteEventful(ctx context.Context, operation protocol.
 		return networkStateToWire(s.session.CurrentNetworkState()), nil
 	case protocol.EventfulSetCacheEnabled:
 		return nil, engineRPCError(s.session.SetCacheEnabled(ctx, operation.CacheEnabled))
+	case protocol.EventfulStartScreencast:
+		options := operation.Screencast
+		id, err := s.session.StartScreencast(ctx, engine.ScreencastParams{Format: options.Format, Quality: options.Quality, MaxWidth: options.MaxWidth, MaxHeight: options.MaxHeight, EveryNthFrame: options.EveryNthFrame})
+		if err != nil {
+			return nil, engineRPCError(err)
+		}
+		return map[string]any{"id": id}, nil
+	case protocol.EventfulStopScreencast:
+		if operation.Offset != 0 {
+			return nil, protocol.NewError(protocol.CodeInvalidArgument, "STOP_SCREENCAST takes no offset; ask SCREENCAST_FRAMES for the rest")
+		}
+		return s.screencastChunk(ctx, operation.ID, 0)
+	case protocol.EventfulScreencastFrames:
+		return s.screencastChunk(ctx, operation.ID, operation.Offset)
 	default:
 		return nil, protocol.NewError(protocol.CodeInvalidArgument, "unsupported eventful operation")
 	}
@@ -184,14 +199,18 @@ func requestQueryFromProtocol(o protocol.EventfulOperation) (engine.RequestQuery
 		return engine.RequestQuery{}, err
 	}
 	resource, err := protocolExpectation(o.ResourceType)
-	return engine.RequestQuery{URL: url, Method: method, ResourceType: resource}, err
+	if err != nil {
+		return engine.RequestQuery{}, err
+	}
+	status, err := protocolExpectation(o.Status)
+	return engine.RequestQuery{URL: url, Method: method, ResourceType: resource, Status: status, Failed: o.Failed}, err
 }
 func responseQueryFromProtocol(o protocol.EventfulOperation) (engine.ResponseQuery, error) {
 	url, err := protocolExpectation(o.URL)
 	if err != nil {
 		return engine.ResponseQuery{}, err
 	}
-	status, err := protocolExpectation(o.State)
+	status, err := protocolExpectation(o.Status)
 	return engine.ResponseQuery{URL: url, Status: status}, err
 }
 
@@ -304,7 +323,7 @@ func downloadsToWire(values []engine.Download) []map[string]any {
 	return result
 }
 func requestToWire(v engine.Request) map[string]any {
-	return map[string]any{"url": v.URL, "method": v.Method, "headers": headerEntriesToWire(v.Headers), "resourceType": v.ResourceType}
+	return map[string]any{"url": v.URL, "method": v.Method, "headers": headerEntriesToWire(v.Headers), "resourceType": v.ResourceType, "status": v.Status, "failure": v.Failure}
 }
 func requestsToWire(values []engine.Request) []map[string]any {
 	result := make([]map[string]any, len(values))
@@ -585,6 +604,17 @@ func (s *engineSession) SubscribeEvents(types []string) (protocol.EventSubscript
 				message, ok := <-subscription.Events()
 				return consoleMessageToWire(message), message.Generation, ok
 			}, subscription.Dropped)
+		case "pageError":
+			subscription, err := s.session.SubscribePageErrors(256)
+			if err != nil {
+				_ = result.Close()
+				return nil, engineRPCError(err)
+			}
+			result.closers = append(result.closers, subscription.Close)
+			forward("pageError", func() (any, uint64, bool) {
+				pageError, ok := <-subscription.Events()
+				return pageErrorToWire(pageError), pageError.Generation, ok
+			}, subscription.Dropped)
 		case "warning":
 			subscription, err := s.session.SubscribeWarnings(256)
 			if err != nil {
@@ -598,7 +628,7 @@ func (s *engineSession) SubscribeEvents(types []string) (protocol.EventSubscript
 			}, subscription.Dropped)
 		default:
 			_ = result.Close()
-			return nil, protocol.NewError(protocol.CodeInvalidArgument, "session subscriptions support console and warning events")
+			return nil, protocol.NewError(protocol.CodeInvalidArgument, "session subscriptions support console, pageError, and warning events")
 		}
 	}
 	go func() {
@@ -847,6 +877,11 @@ func (s *engineSession) Execute(ctx context.Context, operation protocol.Operatio
 		}
 		return s.poll(ctx, operation, assertion)
 	case protocol.OperationDOM:
+		if kind := operation.DOM.Kind; kind == protocol.DOMPointerMove || kind == protocol.DOMPointerDown || kind == protocol.DOMPointerUp {
+			// The pointer's moves, presses, and releases dispatch at once and never poll: the caller
+			// owns the timeline.
+			return oneAttempt(started, s.dispatchPointer(ctx, operation.DOM))
+		}
 		assertion, err := s.domAssertion(operation.DOM)
 		if err != nil {
 			return protocol.Result{}, err
@@ -893,7 +928,10 @@ func (s *engineSession) screenshot(ctx context.Context, operation protocol.Opera
 		target = engine.PageScreenshotTarget()
 	}
 	if request.Kind == protocol.ScreenshotCapture {
-		captureOptions := engine.ScreenshotCaptureOptions{Masks: masks, Animated: request.Animated, ColorScheme: request.ColorScheme, MaxBytes: maxBytes}
+		captureOptions := engine.ScreenshotCaptureOptions{Masks: masks, Frozen: request.Frozen, HideCaret: request.HideCaret, Viewport: request.Viewport, ColorScheme: request.ColorScheme, MaxBytes: maxBytes}
+		if request.Clip != nil {
+			captureOptions.Clip = &page.Viewport{X: request.Clip.X, Y: request.Clip.Y, Width: request.Clip.Width, Height: request.Clip.Height, Scale: 1}
+		}
 		var shot engine.Screenshot
 		var err error
 		if request.Target.Kind == protocol.ScreenshotElement {
@@ -1152,8 +1190,28 @@ func (s *engineSession) lifecycle(ctx context.Context, operation protocol.Operat
 			})
 		}
 		return observedResult(started, consoleMessagesToWire(s.session.ConsoleMessages())), nil
+	case protocol.LifecyclePageErrors:
+		if lifecycle.Expectation.Kind != 0 {
+			return s.poll(ctx, operation, func(context.Context) (engine.Observation, bool, error) {
+				expected, convertErr := expectationFromProtocol(lifecycle.Expectation)
+				if convertErr != nil {
+					return engine.Observation{}, false, engine.Fatal(convertErr)
+				}
+				for _, pageError := range s.session.PageErrors() {
+					matched, matchErr := engine.MatchExpectation(pageError.Message, expected)
+					if matchErr != nil {
+						return engine.Observation{}, false, engine.Fatal(matchErr)
+					}
+					if matched {
+						return engine.Observation{Value: pageErrorToWire(pageError)}, true, nil
+					}
+				}
+				return engine.Observation{Value: nil}, false, nil
+			})
+		}
+		return observedResult(started, pageErrorsToWire(s.session.PageErrors())), nil
 	case protocol.LifecycleSetDeviceMetrics:
-		return oneAttempt(started, s.session.SetDeviceMetrics(ctx, engine.DeviceMetrics{Width: lifecycle.Width, Height: lifecycle.Height, DeviceScaleFactor: lifecycle.DeviceScaleFactor, Mobile: lifecycle.Mobile}))
+		return oneAttempt(started, s.session.SetDeviceMetrics(ctx, engine.DeviceMetrics{Width: lifecycle.Width, Height: lifecycle.Height, DeviceScaleFactor: lifecycle.DeviceScaleFactor, Mobile: lifecycle.Mobile, Touch: lifecycle.Touch, Landscape: lifecycle.Landscape}))
 	case protocol.LifecycleClearDeviceMetrics:
 		return oneAttempt(started, s.session.ClearDeviceMetrics(ctx))
 	case protocol.LifecycleSetGeolocation:
@@ -1180,17 +1238,61 @@ func (s *engineSession) lifecycle(ctx context.Context, operation protocol.Operat
 		return oneAttempt(started, s.session.SetMedia(ctx, engine.Media{Type: lifecycle.MediaType, ColorScheme: lifecycle.ColorScheme, ReducedMotion: lifecycle.ReducedMotion}))
 	case protocol.LifecycleClearMedia:
 		return oneAttempt(started, s.session.ClearMedia(ctx))
+	case protocol.LifecycleSetUserAgent:
+		return oneAttempt(started, s.session.SetUserAgent(ctx, lifecycle.UserAgent))
+	case protocol.LifecycleClearUserAgent:
+		return oneAttempt(started, s.session.ClearUserAgent(ctx))
+	case protocol.LifecycleInstallClock:
+		return oneAttempt(started, s.session.InstallClock(ctx, lifecycle.ClockTime))
+	case protocol.LifecyclePauseClockAt:
+		return oneAttempt(started, s.session.PauseClockAt(ctx, lifecycle.ClockTime))
+	case protocol.LifecycleResumeClock:
+		return oneAttempt(started, s.session.ResumeClock(ctx))
+	case protocol.LifecycleRunClockFor:
+		// The request's deadline outlasts the budget: the client puts its slack on top of it.
+		err := s.session.RunClockFor(ctx, lifecycle.ClockDuration, lifecycle.ClockTimeout)
+		var exceeded *engine.ClockRunExceeded
+		if errors.As(err, &exceeded) {
+			return protocol.Result{}, protocol.NewError(protocol.CodeTimeout, clockRunExceededMessage(exceeded))
+		}
+		return oneAttempt(started, err)
+	case protocol.LifecycleFastForwardClock:
+		return oneAttempt(started, s.session.FastForwardClock(ctx, lifecycle.ClockDuration))
+	case protocol.LifecycleSetClockFixedTime:
+		return oneAttempt(started, s.session.SetClockFixedTime(ctx, lifecycle.ClockTime))
+	case protocol.LifecycleSetClockSystemTime:
+		return oneAttempt(started, s.session.SetClockSystemTime(ctx, lifecycle.ClockTime))
 	default:
 		return protocol.Result{}, protocol.NewError(protocol.CodeInvalidArgument, "unsupported lifecycle operation")
 	}
 }
 
 func consoleMessageToWire(message engine.ConsoleMessage) map[string]any {
-	stack := make([]map[string]any, len(message.Stack))
-	for index, frame := range message.Stack {
+	args := message.Args
+	if args == nil {
+		args = []any{}
+	}
+	return map[string]any{"type": message.Type, "source": message.Source, "text": message.Text, "args": args, "timestamp": message.Timestamp, "stack": stackToWire(message.Stack), "generation": message.Generation}
+}
+
+func stackToWire(frames []engine.ConsoleStackFrame) []map[string]any {
+	stack := make([]map[string]any, len(frames))
+	for index, frame := range frames {
 		stack[index] = map[string]any{"url": frame.URL, "functionName": frame.FunctionName, "line": frame.Line, "column": frame.Column}
 	}
-	return map[string]any{"type": message.Type, "text": message.Text, "args": message.Args, "timestamp": message.Timestamp, "stack": stack, "generation": message.Generation}
+	return stack
+}
+
+func pageErrorToWire(pageError engine.PageError) map[string]any {
+	return map[string]any{"message": pageError.Message, "url": pageError.URL, "line": pageError.Line, "column": pageError.Column, "timestamp": pageError.Timestamp, "stack": stackToWire(pageError.Stack), "generation": pageError.Generation}
+}
+
+func pageErrorsToWire(pageErrors []engine.PageError) []map[string]any {
+	result := make([]map[string]any, len(pageErrors))
+	for index, pageError := range pageErrors {
+		result[index] = pageErrorToWire(pageError)
+	}
+	return result
 }
 
 func consoleMessagesToWire(messages []engine.ConsoleMessage) []map[string]any {
@@ -1545,6 +1647,16 @@ func (s *engineSession) domAssertion(operation protocol.DOMOperation) (engine.As
 			observation, operationErr = s.session.ComputedStyleNumber(ctx, selector, operation.Name)
 		case protocol.DOMNormalizeColor:
 			observation, operationErr = s.session.NormalizeColor(ctx, operation.ValueJSON)
+		case protocol.DOMPointerMoveToElement:
+			pointer, pointerErr := s.session.Pointer(uint64(operation.PointerID), engine.PointerType(operation.PointerType))
+			if pointerErr != nil {
+				return observation, false, engine.Fatal(pointerErr)
+			}
+			var offset *engine.Point
+			if operation.HasOffset {
+				offset = &engine.Point{X: operation.OffsetX, Y: operation.OffsetY}
+			}
+			operationErr = pointer.MoveToElement(ctx, selector, offset)
 		default:
 			return observation, false, engine.Fatal(protocol.NewError(protocol.CodeInvalidArgument, "unsupported DOM operation"))
 		}
@@ -1562,6 +1674,69 @@ func (s *engineSession) domAssertion(operation protocol.DOMOperation) (engine.As
 		}
 		return observation, matched, operationErr
 	}, nil
+}
+
+func (s *engineSession) dispatchPointer(ctx context.Context, operation protocol.DOMOperation) error {
+	pointer, err := s.session.Pointer(uint64(operation.PointerID), engine.PointerType(operation.PointerType))
+	if err != nil {
+		return err
+	}
+	switch operation.Kind {
+	case protocol.DOMPointerMove:
+		return pointer.MoveTo(ctx, operation.PointX, operation.PointY)
+	case protocol.DOMPointerDown:
+		return pointer.Down(ctx)
+	default:
+		return pointer.Up(ctx)
+	}
+}
+
+// screencastChunk answers STOP_SCREENCAST and SCREENCAST_FRAMES, and forgets the recording once its
+// last frame has been sent.
+func (s *engineSession) screencastChunk(ctx context.Context, id string, offset int) (protocol.ScreencastFramesResponse, error) {
+	frames, err := s.session.StopScreencast(ctx, id)
+	if err != nil {
+		// A failed stop still ended the recording, so asking again returns its frames.
+		return protocol.ScreencastFramesResponse{}, engineRPCError(err)
+	}
+	response, err := screencastChunkOf(frames, offset, protocol.MaxScreencastChunkBytes)
+	if err != nil {
+		return protocol.ScreencastFramesResponse{}, err
+	}
+	if offset+len(response.Frames) == len(frames) {
+		s.session.ReleaseScreencast(id)
+	}
+	return response, nil
+}
+
+// screencastChunkOf returns the frames from offset on whose data fits in budget bytes - always at
+// least one, so a frame larger than the budget still goes out on its own.
+func screencastChunkOf(frames []engine.ScreencastFrame, offset, budget int) (protocol.ScreencastFramesResponse, error) {
+	if offset > len(frames) {
+		return protocol.ScreencastFramesResponse{}, protocol.NewError(protocol.CodeInvalidArgument, fmt.Sprintf("offset %d is past the recording's %d frames", offset, len(frames)))
+	}
+	response := protocol.ScreencastFramesResponse{Count: len(frames), Offset: offset, Frames: []protocol.WireScreencastFrame{}}
+	size := 0
+	for _, frame := range frames[offset:] {
+		if len(response.Frames) > 0 && size+len(frame.Data) > budget {
+			break
+		}
+		size += len(frame.Data)
+		response.Frames = append(response.Frames, screencastFrameToWire(frame))
+	}
+	return response, nil
+}
+
+func screencastFrameToWire(frame engine.ScreencastFrame) protocol.WireScreencastFrame {
+	timestamp := 0.0
+	if !frame.Timestamp.IsZero() {
+		timestamp = float64(frame.Timestamp.UnixNano()) / 1e6
+	}
+	return protocol.WireScreencastFrame{
+		DataBase64: base64.StdEncoding.EncodeToString(frame.Data), TimestampMS: timestamp,
+		DeviceWidth: frame.DeviceWidth, DeviceHeight: frame.DeviceHeight, PageScaleFactor: frame.PageScaleFactor,
+		ScrollOffsetX: frame.ScrollOffsetX, ScrollOffsetY: frame.ScrollOffsetY, OffsetTop: frame.OffsetTop,
+	}
 }
 
 func everyMatches(actual any, projectName string, expectation engine.Expectation) (bool, error) {
@@ -1683,7 +1858,7 @@ func (s *engineSession) poll(ctx context.Context, operation protocol.Operation, 
 	diagnostics, diagnosticErr := s.captureContextDiagnostics(diagnosticCtx, protocol.ContextDiagnosticsOptions{Purpose: "failure", Name: "biloba-failure", Screenshots: true, Outlines: true, MaxBytes: s.maxScreenshotBytes}, "biloba-failure")
 	converted.Diagnostics = protocol.Diagnostics{
 		Locator: locatorDescription(operation), Expected: expectedDescription(operation),
-		DaemonDetail: pollErr.Error(), Context: &diagnostics,
+		DaemonDetail: pollErr.Error(), PausedClockAt: s.pausedClockAt(policy), Context: &diagnostics,
 	}
 	if len(diagnostics.Tabs) > 0 {
 		converted.Diagnostics.DOMOutline = diagnostics.Tabs[0].DOMOutline
@@ -1693,6 +1868,28 @@ func (s *engineSession) poll(ctx context.Context, operation protocol.Operation, 
 		converted.Diagnostics.DaemonDetail += "; capture diagnostics: " + diagnosticErr.Error()
 	}
 	return converted, nil
+}
+
+// pausedClockAt is when the tab's page clock is paused, for a poll that ran out of time while it was:
+// the page's timers never ran, which is the likely reason the poll never came true.  It reads the
+// state the last clock operation reported, so a tab without a clock costs nothing.  A one-shot read
+// and a Consistently that saw a change didn't time out waiting, so they get no note.
+func (s *engineSession) pausedClockAt(policy engine.PollPolicy) string {
+	if policy.Mode != engine.PollEventually {
+		return ""
+	}
+	state, installed := s.session.ClockState()
+	if !installed || !state.Paused {
+		return ""
+	}
+	return engine.FormatClockTime(state.Now)
+}
+
+// clockRunExceededMessage is the engine's RunFor overrun in the TypeScript client's names.
+func clockRunExceededMessage(exceeded *engine.ClockRunExceeded) string {
+	return fmt.Sprintf("run the page clock: runFor(%d) did not finish within %dms: after %d timer and animation-frame callbacks the page clock had reached %s.\n"+
+		"The page keeps scheduling work, so running every callback in that much time is slow.  fastForward skips ahead firing each due timer once, or give runFor a larger timeoutMs.",
+		exceeded.Duration.Milliseconds(), exceeded.Budget.Milliseconds(), exceeded.Fired, engine.FormatClockTime(exceeded.Reached))
 }
 
 func withDefaultPollTimeout(policy engine.PollPolicy) engine.PollPolicy {

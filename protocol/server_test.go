@@ -29,7 +29,7 @@ var _ = Describe("driver protocol", func() {
 		Expect(client.call("handshake", protocol.HandshakeRequest{ProtocolVersion: protocol.Version}, &response)).To(Succeed())
 		Expect(response.ProtocolVersion).To(Equal(protocol.Version))
 		Expect(response.Capabilities).NotTo(BeEmpty())
-		Expect(response.Capabilities).To(ContainElements("lifecycle.tabs", "lifecycle.cookies", "lifecycle.storage", "lifecycle.emulation", "lifecycle.frames"))
+		Expect(response.Capabilities).To(ContainElements("lifecycle.tabs", "lifecycle.cookies", "lifecycle.storage", "lifecycle.emulation", "lifecycle.frames", "lifecycle.clock"))
 
 		err := client.call("handshake", protocol.HandshakeRequest{ProtocolVersion: "999"}, nil)
 		Expect(err).To(MatchError(ContainSubstring("protocol version mismatch")))
@@ -118,6 +118,32 @@ var _ = Describe("driver protocol", func() {
 			Operation: &protocol.WireEventfulOperation{Kind: "DIALOGS"},
 		}, nil)).To(Succeed())
 		Expect(recorder.operation.Kind).To(Equal(protocol.EventfulDialogs))
+
+		Expect(client.call("eventful", protocol.EventfulRequest{
+			SessionID: opened.SessionID,
+			Operation: &protocol.WireEventfulOperation{Kind: "REQUESTS", Status: &protocol.WireExpectation{Kind: "EQUAL", ExpectedJSON: "404"}, Failed: true},
+		}, nil)).To(Succeed())
+		Expect(recorder.operation.Kind).To(Equal(protocol.EventfulRequests))
+		Expect(recorder.operation.Status).NotTo(BeNil())
+		Expect(recorder.operation.Status.Kind).To(Equal(protocol.ExpectEqual))
+		Expect(recorder.operation.Failed).To(BeTrue())
+	})
+
+	It("carries page-error lifecycle reads and accepts pageError event subscriptions", func() {
+		recorder := &recordingSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+		Expect(client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "PAGE_ERRORS"}}, nil)).To(Succeed())
+		Expect(recorder.lastOperation().Lifecycle.Kind).To(Equal(protocol.LifecyclePageErrors))
+
+		events := &eventSession{events: make(chan protocol.SessionEvent, 1)}
+		server := protocol.NewServer(&fakeBackend{custom: events})
+		openedValue, openErr := server.Dispatch(context.Background(), "openSession", json.RawMessage(`{}`))
+		Expect(openErr).To(BeNil())
+		_, subscribeErr := server.Dispatch(context.Background(), "subscribeEvents", mustJSON(protocol.SubscribeEventsRequest{SessionID: openedValue.(protocol.OpenSessionResponse).SessionID, Types: []string{"pageError"}}))
+		Expect(subscribeErr).To(BeNil())
 	})
 
 	It("validates and carries screenshot capture and comparison operations", func() {
@@ -139,6 +165,14 @@ var _ = Describe("driver protocol", func() {
 		Expect(capture.Target.Locator.Kind).To(Equal(protocol.LocatorTestID))
 		Expect(capture.Masks).To(HaveLen(1))
 		Expect(capture.MaxBytes).To(Equal(1024))
+
+		Expect(client.call("screenshot", protocol.ScreenshotRequest{SessionID: opened.SessionID, Operation: &protocol.WireScreenshotOperation{
+			Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Frozen: true, HideCaret: true, Viewport: true,
+			Clip: &protocol.WireScreenshotClip{X: 1, Y: 2, Width: 30, Height: 40},
+		}}, nil)).To(Succeed())
+		options := recorder.lastOperation().Screenshot
+		Expect([]bool{options.Frozen, options.HideCaret, options.Viewport}).To(Equal([]bool{true, true, true}))
+		Expect(options.Clip).To(Equal(&protocol.ScreenshotClip{X: 1, Y: 2, Width: 30, Height: 40}))
 
 		Expect(client.call("screenshot", protocol.ScreenshotRequest{SessionID: opened.SessionID, Operation: &protocol.WireScreenshotOperation{
 			Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "checkout/receipt", Masks: []protocol.WireLocator{{Kind: "CSS", Value: ".clock"}},
@@ -268,6 +302,13 @@ var _ = Describe("driver protocol", func() {
 		Entry("capture pixel tolerance", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, PixelTolerance: &pixelNegative}, protocol.PollOptions{}),
 		Entry("capture channel tolerance", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, ChannelTolerance: &channelNegative}, protocol.PollOptions{}),
 		Entry("expect capture scheme", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x", ColorScheme: "dark"}, protocol.PollOptions{}),
+		Entry("capture animated", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Animated: true}, protocol.PollOptions{}),
+		Entry("element clip", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "ELEMENT", Locator: &protocol.WireLocator{Kind: "CSS", Value: "body"}}, Clip: &protocol.WireScreenshotClip{Width: 1, Height: 1}}, protocol.PollOptions{}),
+		Entry("empty clip", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Clip: &protocol.WireScreenshotClip{Width: 0, Height: 1}}, protocol.PollOptions{}),
+		Entry("negative clip origin", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Clip: &protocol.WireScreenshotClip{X: -1, Width: 1, Height: 1}}, protocol.PollOptions{}),
+		Entry("expect frozen", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x", Frozen: true}, protocol.PollOptions{}),
+		Entry("expect viewport", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x", Viewport: true}, protocol.PollOptions{}),
+		Entry("expect clip", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x", Clip: &protocol.WireScreenshotClip{Width: 1, Height: 1}}, protocol.PollOptions{}),
 		Entry("raw poll mode", &protocol.WireScreenshotOperation{Kind: "CAPTURE", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}}, protocol.PollOptions{Mode: "EVENTUALLY"}),
 		Entry("visual consistently", &protocol.WireScreenshotOperation{Kind: "EXPECT", Target: protocol.WireScreenshotTarget{Kind: "PAGE"}, Name: "x"}, protocol.PollOptions{Mode: "CONSISTENTLY"}),
 	)
@@ -304,14 +345,61 @@ var _ = Describe("driver protocol", func() {
 		Expect(recorder.lastOperation().Lifecycle.Key).To(Equal("ready"))
 		Expect(recorder.lastOperation().Poll.Timeout).To(Equal(250 * time.Millisecond))
 
+		Expect(client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "SET_DEVICE_METRICS", Device: &protocol.WireDeviceMetrics{Width: 390, Height: 844, DeviceScaleFactor: 3, Mobile: true, Touch: true, Landscape: true}}}, nil)).To(Succeed())
+		device := recorder.lastOperation().Lifecycle
+		Expect([]any{device.Kind, device.Width, device.Height, device.DeviceScaleFactor, device.Mobile, device.Touch, device.Landscape}).To(Equal([]any{protocol.LifecycleSetDeviceMetrics, 390, 844, 3.0, true, true, true}))
+		Expect(client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "SET_USER_AGENT", UserAgent: "BilobaPhone/1.0"}}, nil)).To(Succeed())
+		Expect(recorder.lastOperation().Lifecycle.Kind).To(Equal(protocol.LifecycleSetUserAgent))
+		Expect(recorder.lastOperation().Lifecycle.UserAgent).To(Equal("BilobaPhone/1.0"))
+		Expect(client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "CLEAR_USER_AGENT"}}, nil)).To(Succeed())
+		Expect(recorder.lastOperation().Lifecycle.Kind).To(Equal(protocol.LifecycleClearUserAgent))
+
 		err := client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "STORAGE_GET", Area: "indexedDB"}}, nil)
 		Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
 		err = client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "RAW_CDP"}}, nil)
 		Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
 		err = client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "SET_PERMISSIONS", Permissions: map[string]string{"not-a-cdp-permission": "granted"}}}, nil)
 		Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
-		err = client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "SET_PERMISSIONS", Permissions: map[string]string{"clipboardReadWrite": "sometimes"}}}, nil)
+		err = client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "SET_PERMISSIONS", Permissions: map[string]string{"clipboard-read": "sometimes"}}}, nil)
 		Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
+		Expect(client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "SET_PERMISSIONS", Permissions: map[string]string{"camera": "granted", "microphone": "denied"}}}, nil)).To(Succeed())
+		Expect(recorder.lastOperation().Lifecycle.Permissions).To(Equal(map[string]string{"camera": "granted", "microphone": "denied"}))
+		err = client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: "SET_PERMISSIONS", Permissions: map[string]string{"videoCapture": "granted"}}}, nil)
+		Expect(err.Message).To(ContainSubstring("unsupported permission videoCapture"), "Chrome rejects CDP's internal names")
+	})
+
+	It("carries the page-clock operations and their arguments", func() {
+		recorder := &recordingSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+		lifecycle := func(kind string, clock *protocol.WireClockOperation) *protocol.ProtocolError {
+			return client.call("lifecycle", protocol.LifecycleRequest{SessionID: opened.SessionID, Operation: &protocol.WireLifecycleOperation{Kind: kind, Clock: clock}}, nil)
+		}
+		ms := func(value int64) *int64 { return &value }
+		t0 := time.Date(2024, 2, 2, 8, 0, 0, 0, time.UTC)
+
+		for kind, expected := range map[string]protocol.LifecycleOperationKind{"INSTALL_CLOCK": protocol.LifecycleInstallClock, "PAUSE_CLOCK_AT": protocol.LifecyclePauseClockAt, "SET_CLOCK_FIXED_TIME": protocol.LifecycleSetClockFixedTime, "SET_CLOCK_SYSTEM_TIME": protocol.LifecycleSetClockSystemTime} {
+			Expect(lifecycle(kind, &protocol.WireClockOperation{TimeMs: ms(t0.UnixMilli())})).To(Succeed())
+			Expect(recorder.lastOperation().Lifecycle.Kind).To(Equal(expected))
+			Expect(recorder.lastOperation().Lifecycle.ClockTime).To(Equal(t0))
+			Expect(lifecycle(kind, nil).Message).To(ContainSubstring("clock.timeMs is required"))
+		}
+		Expect(lifecycle("INSTALL_CLOCK", &protocol.WireClockOperation{TimeMs: ms(0)})).To(Succeed())
+		Expect(recorder.lastOperation().Lifecycle.ClockTime).To(Equal(time.Unix(0, 0).UTC()), "the epoch is a time, not a missing one")
+
+		Expect(lifecycle("RUN_CLOCK_FOR", &protocol.WireClockOperation{DurationMs: ms(1500), TimeoutMs: 20_000})).To(Succeed())
+		run := recorder.lastOperation().Lifecycle
+		Expect([]any{run.Kind, run.ClockDuration, run.ClockTimeout}).To(Equal([]any{protocol.LifecycleRunClockFor, 1500 * time.Millisecond, 20 * time.Second}))
+		Expect(lifecycle("FAST_FORWARD_CLOCK", &protocol.WireClockOperation{DurationMs: ms(0)})).To(Succeed())
+		Expect(recorder.lastOperation().Lifecycle.Kind).To(Equal(protocol.LifecycleFastForwardClock))
+		Expect(lifecycle("RESUME_CLOCK", nil)).To(Succeed())
+		Expect(recorder.lastOperation().Lifecycle.Kind).To(Equal(protocol.LifecycleResumeClock))
+
+		Expect(lifecycle("FAST_FORWARD_CLOCK", nil).Code).To(Equal(protocol.CodeInvalidArgument))
+		Expect(lifecycle("RUN_CLOCK_FOR", &protocol.WireClockOperation{DurationMs: ms(-1)}).Message).To(ContainSubstring("clock.durationMs must be a non-negative number of milliseconds"))
+		Expect(lifecycle("RUN_CLOCK_FOR", &protocol.WireClockOperation{DurationMs: ms(1), TimeoutMs: -1}).Message).To(ContainSubstring("clock.timeoutMs must not be negative"))
 	})
 
 	It("registers discovered handles once and invalidates context siblings on prepare", func() {
@@ -545,6 +633,66 @@ var _ = Describe("driver protocol", func() {
 		err = client.call("dom", invalidEvery, nil)
 		Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
 		Expect(err.Message).To(ContainSubstring("every is only valid"))
+	})
+
+	It("carries pointer operations and rejects malformed ones", func() {
+		recorder := &recordingSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+		dom := func(operation protocol.WireDOMOperation) *protocol.ProtocolError {
+			return client.call("dom", protocol.DOMRequest{SessionID: opened.SessionID, Operation: &operation}, nil)
+		}
+
+		Expect(dom(protocol.WireDOMOperation{Kind: "POINTER_MOVE", PointerID: 3, PointerType: "pen", Point: &protocol.WirePoint{X: 12, Y: 34}})).To(Succeed())
+		operation := recorder.lastOperation().DOM
+		Expect([]any{operation.Kind, operation.PointerID, operation.PointerType, operation.PointX, operation.PointY}).To(Equal([]any{protocol.DOMPointerMove, 3, "pen", 12.0, 34.0}))
+		Expect(dom(protocol.WireDOMOperation{Kind: "POINTER_MOVE_TO_ELEMENT", PointerID: 3, PointerType: "pen", Locator: &protocol.WireLocator{Kind: "CSS", Value: "#track"}, Offset: &protocol.WirePoint{X: 0, Y: 10}})).To(Succeed())
+		operation = recorder.lastOperation().DOM
+		Expect([]any{operation.Kind, operation.Locator.Value, operation.HasOffset, operation.OffsetY}).To(Equal([]any{protocol.DOMPointerMoveToElement, "#track", true, 10.0}))
+		Expect(dom(protocol.WireDOMOperation{Kind: "POINTER_DOWN", PointerID: 1, PointerType: "mouse"})).To(Succeed())
+		Expect(recorder.lastOperation().DOM.Kind).To(Equal(protocol.DOMPointerDown))
+		Expect(dom(protocol.WireDOMOperation{Kind: "POINTER_UP", PointerID: 1, PointerType: "mouse"})).To(Succeed())
+		Expect(recorder.lastOperation().DOM.Kind).To(Equal(protocol.DOMPointerUp))
+
+		for _, invalid := range []struct {
+			operation protocol.WireDOMOperation
+			message   string
+		}{
+			{protocol.WireDOMOperation{Kind: "POINTER_DOWN", PointerType: "mouse"}, "positive pointerId"},
+			{protocol.WireDOMOperation{Kind: "POINTER_DOWN", PointerID: 1, PointerType: "touch"}, `pointerType must be "mouse" or "pen"`},
+			{protocol.WireDOMOperation{Kind: "POINTER_MOVE", PointerID: 1, PointerType: "mouse"}, "POINTER_MOVE requires a point"},
+			{protocol.WireDOMOperation{Kind: "POINTER_MOVE_TO_ELEMENT", PointerID: 1, PointerType: "mouse"}, "locator"},
+			{protocol.WireDOMOperation{Kind: "HOVER", Locator: &protocol.WireLocator{Kind: "CSS", Value: "#x"}, PointerID: 1}, "only valid for pointer operations"},
+		} {
+			err := dom(invalid.operation)
+			Expect(err).NotTo(BeNil())
+			Expect(err.Code).To(Equal(protocol.CodeInvalidArgument))
+			Expect(err.Message).To(ContainSubstring(invalid.message))
+		}
+	})
+
+	It("carries screencast operations", func() {
+		recorder := &recordingEventfulSession{}
+		client, cleanup := startTestServer(&fakeBackend{custom: recorder})
+		DeferCleanup(cleanup)
+		var opened protocol.OpenSessionResponse
+		Expect(client.call("openSession", struct{}{}, &opened)).To(Succeed())
+		eventful := func(operation protocol.WireEventfulOperation) *protocol.ProtocolError {
+			return client.call("eventful", protocol.EventfulRequest{SessionID: opened.SessionID, Operation: &operation}, nil)
+		}
+
+		Expect(eventful(protocol.WireEventfulOperation{Kind: "START_SCREENCAST", Screencast: &protocol.WireScreencastOptions{Format: "png", Quality: 80, MaxWidth: 400, MaxHeight: 300, EveryNthFrame: 2}})).To(Succeed())
+		Expect(recorder.operation.Kind).To(Equal(protocol.EventfulStartScreencast))
+		Expect(recorder.operation.Screencast).To(Equal(protocol.WireScreencastOptions{Format: "png", Quality: 80, MaxWidth: 400, MaxHeight: 300, EveryNthFrame: 2}))
+		Expect(eventful(protocol.WireEventfulOperation{Kind: "STOP_SCREENCAST", ID: "rec-1"})).To(Succeed())
+		Expect([]any{recorder.operation.Kind, recorder.operation.ID}).To(Equal([]any{protocol.EventfulStopScreencast, "rec-1"}))
+		Expect(eventful(protocol.WireEventfulOperation{Kind: "SCREENCAST_FRAMES", ID: "rec-1", Offset: 40})).To(Succeed())
+		Expect([]any{recorder.operation.Kind, recorder.operation.Offset}).To(Equal([]any{protocol.EventfulScreencastFrames, 40}))
+
+		Expect(eventful(protocol.WireEventfulOperation{Kind: "STOP_SCREENCAST"}).Message).To(ContainSubstring("screencast id is required"))
+		Expect(eventful(protocol.WireEventfulOperation{Kind: "SCREENCAST_FRAMES", ID: "rec-1", Offset: -1}).Message).To(ContainSubstring("offset must not be negative"))
 	})
 
 	It("rejects invalid semantic locator refinements at the protocol boundary", func() {

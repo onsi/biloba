@@ -1,6 +1,6 @@
 ---
 name: write-tests
-description: Author Biloba browser tests in TypeScript/Vitest — sessions, tabs, frames, CSS/semantic/XPath locators, polling actions and assertions, realistic input, cookies/storage, dialogs/downloads/network, screenshots, and structured failures. Use when writing or reviewing tests against biloba. For wiring the daemon and shared Chrome, use biloba-vitest:setup.
+description: Author Biloba browser tests in TypeScript/Vitest — sessions, tabs, frames, CSS/semantic/XPath locators, polling actions and assertions, realistic input, cookies/storage, dialogs/downloads/network, time-dependent UI with the page clock (installClock + pauseAt/runFor/fastForward), screenshots, and structured failures. Use when writing or reviewing tests against biloba. For wiring the daemon and shared Chrome, use biloba-vitest:setup.
 ---
 
 # Writing Biloba Vitest tests
@@ -46,8 +46,10 @@ afterAll(async () => { await browser.close(); });
 
 - A root `Session` has its own browser context, so cookies and storage are isolated. `session.prepare()` resets it cheaply — call it between tests rather than opening a new session.
 - `await session.newTab()` opens a sibling tab in the same context. Use `tabs()`/`spawnedTabs()` for snapshots and `findTab()`/`waitForTab()` for popup workflows.
+- Emulation lives on the session and `prepare()` clears it: `setDeviceMetrics({width, height, deviceScaleFactor?, mobile?, touch?, landscape?})`, `setUserAgent(ua)` (both `navigator.userAgent` and the `User-Agent` header), `setMedia({type?, colorScheme?, reducedMotion?})`, `setLocale()`, `setTimezone()`, `setGeolocation()`, `setPermissions(origin, {camera: "granted"})` (the names `navigator.permissions.query` takes: `"camera"`, `"microphone"`, `"clipboard-read"`, ...), each with a `clear...()` (`resetPermissions()`).
 - `frames()` snapshots cross-origin iframe documents and `waitForFrame({url, title, has})` polls for one. It covers nested OOPIFs and same-site cross-origin frames (for example, two localhost ports) through CDP frame scoping. Use the returned session for locators, trusted/fast actions, uploads, assertions, and JavaScript evaluation; `frame.evaluate()` can read globals created by the frame's own scripts. Use `>>>` for same-origin iframe or open-shadow piercing. Removal, iframe/parent navigation, or replacement makes the old handle fail with `TARGET_NOT_FOUND`; closing a non-owning frame leaves independently acquired nested handles live, while owner `prepare()`/`close()` invalidates them with `DRIVER_CLOSED`.
-- A frame handle is a document, not a tab: `navigate()`, `prepare()`, `addInitScript()`, `setWindowSize()`, emulation, `setCookies()`/`clearCookies()`, request stubbing/holding, network state, and `handleDialogs()` fail on it with `INVALID_ARGUMENT` — call them on the owning session. Dialogs from any frame arrive on the owning tab; the frame handle records its own console messages and requests. `frame.captureScreenshot()` captures the frame's viewport; an out-of-process frame can't be screenshotted directly, so capture its `iframe` element from the owning session.
+- Time is per session too: `installClock(t0)` fakes the page's timers and `Date` so a test moves time instead of waiting for it (§8); `prepare()` removes it.
+- A frame handle is a document, not a tab: `navigate()`, `prepare()`, `addInitScript()`, `setWindowSize()`, emulation, the page clock, `setCookies()`/`clearCookies()`, request stubbing/holding, network state, and `handleDialogs()` fail on it with `INVALID_ARGUMENT` — call them on the owning session. Dialogs from any frame arrive on the owning tab; the frame handle records its own console messages, page errors, and requests. `frame.captureScreenshot()` captures the frame's viewport; an out-of-process frame can't be screenshotted directly, so capture its `iframe` element from the owning session.
 
 ## 3. Locators
 
@@ -116,6 +118,20 @@ await session.getByTestId("menu").realistic().hover();
 
 The realistic track also covers click variants, tap, and wheel input. The fast default keeps find-and-act atomic in the page runtime.
 
+For a gesture of your own (a pen stroke, a slider scrubbed while recording), drive a real pointer one event at a time:
+
+```ts
+const pen = session.pointer({type: "pen"});           // default type: "mouse"
+await pen.moveToElement("#canvas", {position: {x: 10, y: 10}});
+await pen.down();
+for (let x = 20; x <= 200; x += 10) await pen.moveTo(x, 40);
+await pen.up();
+```
+
+- `moveTo(x, y)`, `down()`, and `up()` dispatch at once — one round trip, no scroll, no stability wait, no polling; they take only `{signal}`. `moveToElement(target, {position, timeoutMs, ...})` is the one call that polls (until the element exists and is visible); it never scrolls, so a point outside the viewport fails — `scrollIntoView()` first.
+- The pointer remembers its position (starting at 0, 0) and button: moves while pressed carry `buttons: 1`; a pen reports pressure 0.5 while down. `down()` twice or `up()` while released is `INVALID_ARGUMENT`. On a frame handle, coordinates are in the frame's viewport.
+- `prepare()` releases a pointer left pressed and returns it to (0, 0); closing a frame handle releases its pointers.
+
 ## 5. Navigation
 
 ```ts
@@ -162,7 +178,7 @@ try {
 
 Always release a hold. Network handlers are first-match-wins, so assert `count()` or inspect `stats()` when the registration itself is part of the test.
 
-Use `requests()`/`responses()` for history and `waitForRequest()` for an atomic winning observation. `stubRequest()`, `abortRequest()`, `modifyRequest()`, `modifyResponse()`, and `routeResponse()` return first-match-wins handlers with `count()`, `stats()`, and `remove()`. Network-state methods cover cache, offline mode, latency, throughput, and connection type.
+Use `requests()`/`responses()` for history and `waitForRequest()` for an atomic winning observation. A request carries its outcome - `status` (0 until the response arrives) and `failure` (`""` unless it failed) - and the request query filters on both: `waitForRequest({url: endsWith("/orders"), status: 201})`, `requests({failed: true})`. `stubRequest()`, `abortRequest()`, `modifyRequest()`, `modifyResponse()`, and `routeResponse()` return first-match-wins handlers with `count()`, `stats()`, and `remove()`. Network-state methods cover cache, offline mode, latency, throughput, and connection type.
 
 `routeResponse()` starts its callback timeout after the body is read. The body has a separate timeout of five seconds, or `timeoutMs` if longer. When Chrome refuses to provide a body (for example, on a redirect), Biloba continues the response without calling the callback and records the error in `stats()`.
 
@@ -177,9 +193,31 @@ await handler.remove();
 
 Dialog history includes safely auto-handled dialogs and warnings. Download snapshots preserve active, complete, and cancelled state; content is bounded binary data.
 
-## 8. Screenshots and visual assertions
+## 8. Time-dependent UI: the page clock
 
-`captureScreenshot()` returns bounded `Uint8Array` data by default or a daemon-owned path with `{output: "path", name}`. It works on a session or locator.
+Don't wait real seconds for a timer, and don't race one. Install the page clock before `navigate()`, pause it, and move time yourself:
+
+```ts
+const t0 = new Date("2024-02-02T08:00:00Z");
+const clock = await session.installClock(t0);   // times: a Date or epoch ms; durations: ms
+await clock.pauseAt(t0);
+await session.navigate(`${baseUrl}/checkout`);
+await session.locator("#hold-timer").expectText("10:00");
+
+await clock.runFor(9 * 60_000);                  // every timer and frame that falls due, in order
+await session.locator("#hold-timer").expectText("1:00");
+await clock.fastForward(3_600_000);              // like waking a laptop: each due timer fires once
+await session.locator("#hold-expired").expectVisible();
+```
+
+- Biloba itself stays on real time, so **polling never moves a paused clock**: `expectText("9")` on a countdown with the clock paused times out, and the failure ends with `This tab's page clock is paused at <t>; timers and animation frames won't run until you call runFor, fastForward, or resume.` Advance first, then assert.
+- `runFor(ms, {timeoutMs})` gives up after 10s of real time by default (`TIMEOUT`, saying how far it got); a page that keeps scheduling work makes a long `runFor` slow — raise `timeoutMs` or `fastForward` instead.
+- `setFixedTime(t)` pins `Date` while timers run; `setSystemTime(t)` moves the time without firing timers; `resume()` lets it flow again. `session.clock()` returns the installed clock (its methods fail with `INVALID_ARGUMENT` without one).
+- Installed after `navigate()`, the clock misses timers the page already scheduled. CSS animations and transitions aren't on the clock (the screenshot freeze handles those); out-of-process frames (full Chrome's cross-site iframes) and other tabs run on real time. One clock per tab; frame handles refuse it.
+
+## 9. Screenshots and visual assertions
+
+`captureScreenshot()` returns bounded `Uint8Array` data by default or a daemon-owned path with `{output: "path", name}`. It works on a session or locator. A capture takes the page as it is, animations included; `frozen: true` freezes it the way `expectScreenshot()` does, and `hideCaret: true` hides only the caret. `viewport: true` captures what is on screen without resizing the viewport (a locator must be entirely in view), and `clip: {x, y, width, height}` captures a region of the viewport (page captures only; outside the viewport is `INVALID_ARGUMENT`).
 
 `expectScreenshot(name, options)` supports masks, pixel and channel tolerances, automatic animation freezing, animated opt-out, light/dark schemes, baseline update mode, diff artifacts, and structured diagnosis.
 
@@ -191,7 +229,19 @@ const result = await session.getByTestId("chart").expectScreenshot("revenue-char
 expect(result.match).toBe(true);
 ```
 
-## 9. Failures and diagnostics
+Record what Chrome draws with a screencast:
+
+```ts
+const recording = await session.startScreencast({format: "jpeg", quality: 92}); // png, maxWidth, maxHeight, everyNthFrame
+// ... drive the page ...
+const frames = await recording.stop(); // [{data, timestamp, deviceWidth, deviceHeight, pageScaleFactor, scrollOffsetX, scrollOffsetY, offsetTop}]
+```
+
+- `stop()` waits for Chrome, so no frame arrives after it; frames are sorted by `timestamp` (epoch ms, comparable with `Date.now()` on Chrome's machine); calling it again returns the same frames.
+- One recording per tab at a time; frame handles refuse with `INVALID_ARGUMENT`. `prepare()`/`close()` stop and **discard** a running recording — stop it inside the test to keep the frames.
+- Chrome sends frames only when the page changes. For timing you rely on, record in `chrome-headless-shell`: full Chrome can deliver frames late, out of order, and with gaps under load.
+
+## 10. Failures and diagnostics
 
 Everything rejects with a `BilobaError` carrying `code`, `locator`, `expected`, `observed`, `trajectory`, `domOutline`, `screenshotPath`, `diagnostics`, `visual`, `artifactPaths`, and `daemonDetail` as applicable. Narrow on `code`: `NAVIGATION` and the crash codes (`PAGE_CRASHED`, `BROWSER_GONE`, `DRIVER_CLOSED`) mean something specific that waiting will not fix.
 

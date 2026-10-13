@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Stragglers</title>
+    <link rel="icon" href="data:,">
+</head>
+<body>
+    <h1 id="hello">Stragglers</h1>
+    <script>
+        // A page still at work while Prepare tears it down.  Prepare clears localStorage in the
+        // outgoing page just before navigating it away, so this hook runs inside Prepare: it logs,
+        // throws, aborts its in-flight fetch, and starts a new one - all after Prepare has reset the
+        // tab's state.
+        const controller = new AbortController()
+        window.hang = () => fetch("/hang", {signal: controller.signal}).then(r => r.text())
+        const clear = Storage.prototype.clear
+        Storage.prototype.clear = function () {
+            console.error("straggler: console.error while Prepare runs")
+            queueMicrotask(() => { throw new Error("straggler: thrown while Prepare runs") })
+            controller.abort()
+            fetch("/api/straggler")
+            return clear.call(this)
+        }
+    </script>
+</body>
+</html>

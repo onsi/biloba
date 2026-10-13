@@ -26,12 +26,26 @@ var Capabilities = []string{
 	"session.prepare", "session.new_tab", "session.add_init_script", "session.activate", "navigation", "cookies", "action.click", "action.set_value", "action.realistic", "action.type", "action.send_keys", "action.drag_to",
 	"action.set_upload", "viewport.set", "evaluate", "evaluate.async", "assert.visible", "assert.text", "assert.count", "assert.attribute",
 	"assert.value", "assert.url", "assert.evaluate", "assert.exists", "assert.enabled", "assert.clickable", "assert.property", "assert.all_text", "assert.request", "poll.server_side", "diagnostics.structured",
-	"dom.typed", "dom.collections", "dom.geometry", "dom.style", "dom.selection", "action.pointer_options", "action.scroll", "action.element_javascript", "keyboard.modifiers",
-	"lifecycle.tabs", "lifecycle.context_identity", "lifecycle.cookies", "lifecycle.storage", "lifecycle.javascript", "lifecycle.page_state", "lifecycle.console", "lifecycle.emulation", "lifecycle.frames",
+	"dom.typed", "dom.collections", "dom.geometry", "dom.style", "dom.selection", "action.pointer_options", "action.pointer_handle", "action.scroll", "action.element_javascript", "keyboard.modifiers",
+	"lifecycle.tabs", "lifecycle.context_identity", "lifecycle.cookies", "lifecycle.storage", "lifecycle.javascript", "lifecycle.page_state", "lifecycle.console", "lifecycle.page_errors", "lifecycle.emulation", "lifecycle.frames", "lifecycle.clock",
 	"dialogs.handlers", "dialogs.history", "dialogs.warnings", "downloads.history", "downloads.content", "downloads.cancel",
-	"network.history", "network.idle.http", "network.handlers", "network.response_callbacks", "network.holds", "network.emulation", "network.cache",
-	"screenshot.capture", "visual.compare",
-	"browser.launch_metadata", "session.context_diagnostics", "session.console_events", "session.warning_events", "browser.debug_events",
+	"network.history", "network.request_outcomes", "network.idle.http", "network.handlers", "network.response_callbacks", "network.holds", "network.emulation", "network.cache",
+	"screenshot.capture", "screenshot.capture_options", "screencast", "visual.compare",
+	"browser.launch_metadata", "session.context_diagnostics", "session.console_events", "session.page_error_events", "session.warning_events", "browser.debug_events",
+}
+
+// PermissionNames are the permissions SET_PERMISSIONS accepts: the names navigator.permissions.query
+// takes, which are the names Chrome's Browser.setPermission accepts (CDP's camelCase PermissionType
+// names, such as "videoCapture", are not).  A permission whose descriptor needs more than a name -
+// "push" (userVisibleOnly), "fullscreen" (allowWithoutGesture), MIDI with sysex, camera pan-tilt-zoom -
+// cannot be set by name and is left out.  The engine suite grants each one against Chrome.
+var PermissionNames = []string{
+	"accelerometer", "ambient-light-sensor", "background-fetch", "background-sync", "camera", "captured-surface-control",
+	"clipboard-read", "clipboard-write", "display-capture", "geolocation", "gyroscope", "idle-detection", "keyboard-lock",
+	"local-fonts", "local-network", "local-network-access", "loopback-network", "magnetometer", "microphone", "midi", "nfc",
+	"notifications", "payment-handler", "periodic-background-sync", "persistent-storage", "pointer-lock", "screen-wake-lock",
+	"speaker-selection", "storage-access", "system-wake-lock", "top-level-storage-access", "web-app-installation",
+	"window-management",
 }
 
 type ErrorCode string
@@ -202,6 +216,10 @@ type ScreenshotOperation struct {
 	Name                string
 	Masks               []Locator
 	Animated            bool
+	Frozen              bool
+	HideCaret           bool
+	Viewport            bool
+	Clip                *ScreenshotClip
 	ColorScheme         string
 	ColorSchemes        []string
 	MaxBytes            int
@@ -209,6 +227,11 @@ type ScreenshotOperation struct {
 	PixelToleranceSet   bool
 	ChannelTolerance    int
 	ChannelToleranceSet bool
+}
+
+// ScreenshotClip is a capture region in viewport CSS pixels.
+type ScreenshotClip struct {
+	X, Y, Width, Height float64
 }
 
 type LifecycleOperationKind uint8
@@ -242,6 +265,16 @@ const (
 	LifecycleClearTimezone
 	LifecycleSetMedia
 	LifecycleClearMedia
+	LifecycleSetUserAgent
+	LifecycleClearUserAgent
+	LifecyclePageErrors
+	LifecycleInstallClock
+	LifecyclePauseClockAt
+	LifecycleResumeClock
+	LifecycleRunClockFor
+	LifecycleFastForwardClock
+	LifecycleSetClockFixedTime
+	LifecycleSetClockSystemTime
 )
 
 type Operation struct {
@@ -285,6 +318,8 @@ type LifecycleOperation struct {
 	Height            int
 	DeviceScaleFactor float64
 	Mobile            bool
+	Touch             bool
+	Landscape         bool
 	Latitude          float64
 	Longitude         float64
 	Accuracy          float64
@@ -292,9 +327,17 @@ type LifecycleOperation struct {
 	Permissions       map[string]string
 	Locale            string
 	Timezone          string
+	UserAgent         string
 	MediaType         string
 	ColorScheme       string
 	ReducedMotion     string
+	// ClockTime, ClockDuration, and ClockTimeout are the page-clock operations' arguments: the time
+	// INSTALL_CLOCK, PAUSE_CLOCK_AT, and the SET_CLOCK_* operations move the clock to, how far
+	// RUN_CLOCK_FOR and FAST_FORWARD_CLOCK advance it, and RUN_CLOCK_FOR's real-time budget (zero for
+	// the engine's default).
+	ClockTime     time.Time
+	ClockDuration time.Duration
+	ClockTimeout  time.Duration
 }
 
 type CookieQuery struct {
@@ -393,6 +436,10 @@ const (
 	DOMComputedStyle
 	DOMComputedStyleNumber
 	DOMNormalizeColor
+	DOMPointerMove
+	DOMPointerMoveToElement
+	DOMPointerDown
+	DOMPointerUp
 )
 
 type NameSpec struct {
@@ -436,6 +483,12 @@ type DOMOperation struct {
 	ArgumentsJSON string
 	Fully         bool
 	Relation      string
+	// PointerID and PointerType name the pointer a POINTER_* operation drives; PointX and PointY are
+	// where POINTER_MOVE moves it.
+	PointerID   int
+	PointerType string
+	PointX      float64
+	PointY      float64
 }
 
 type LocatorFilterKind uint8
@@ -549,13 +602,16 @@ type Observation struct {
 }
 
 type Diagnostics struct {
-	Locator        string                      `json:"locator,omitempty"`
-	Expected       string                      `json:"expected,omitempty"`
-	DOMOutline     string                      `json:"domOutline,omitempty"`
-	ScreenshotPath string                      `json:"screenshotPath,omitempty"`
-	DaemonDetail   string                      `json:"daemonDetail,omitempty"`
-	Visual         *WireVisualResult           `json:"visual,omitempty"`
-	Context        *ContextDiagnosticsResponse `json:"context,omitempty"`
+	Locator        string `json:"locator,omitempty"`
+	Expected       string `json:"expected,omitempty"`
+	DOMOutline     string `json:"domOutline,omitempty"`
+	ScreenshotPath string `json:"screenshotPath,omitempty"`
+	DaemonDetail   string `json:"daemonDetail,omitempty"`
+	// PausedClockAt is the time the tab's page clock was paused at when a poll ran out of time, as
+	// engine.FormatClockTime renders it: the likely reason the page never changed.
+	PausedClockAt string                      `json:"pausedClockAt,omitempty"`
+	Visual        *WireVisualResult           `json:"visual,omitempty"`
+	Context       *ContextDiagnosticsResponse `json:"context,omitempty"`
 }
 
 // The wire structs below are the authoritative JSON protocol definition.  The
@@ -765,6 +821,9 @@ type WireDOMOperation struct {
 	ArgumentsJSON string         `json:"argumentsJson,omitempty"`
 	Fully         bool           `json:"fully,omitempty"`
 	Relation      string         `json:"relation,omitempty"`
+	PointerID     int            `json:"pointerId,omitempty"`
+	PointerType   string         `json:"pointerType,omitempty"`
+	Point         *WirePoint     `json:"point,omitempty"`
 }
 
 type DOMRequest struct {
@@ -814,6 +873,8 @@ type WireDeviceMetrics struct {
 	Height            int     `json:"height"`
 	DeviceScaleFactor float64 `json:"deviceScaleFactor"`
 	Mobile            bool    `json:"mobile,omitempty"`
+	Touch             bool    `json:"touch,omitempty"`
+	Landscape         bool    `json:"landscape,omitempty"`
 }
 
 type WireGeolocation struct {
@@ -828,21 +889,32 @@ type WireMedia struct {
 	ReducedMotion string `json:"reducedMotion,omitempty"`
 }
 
+// WireClockOperation carries a page-clock operation's arguments, in milliseconds.  timeMs is a time
+// since the Unix epoch; durationMs is how far to advance; timeoutMs is RUN_CLOCK_FOR's real-time
+// budget, omitted for the default.  The request's own deadline has to outlast that budget.
+type WireClockOperation struct {
+	TimeMs     *int64 `json:"timeMs,omitempty"`
+	DurationMs *int64 `json:"durationMs,omitempty"`
+	TimeoutMs  int64  `json:"timeoutMs,omitempty"`
+}
+
 type WireLifecycleOperation struct {
-	Kind        string             `json:"kind"`
-	Area        string             `json:"area,omitempty"`
-	Key         string             `json:"key,omitempty"`
-	ValueJSON   string             `json:"valueJson,omitempty"`
-	Expression  string             `json:"expression,omitempty"`
-	Cookie      *WireCookieQuery   `json:"cookie,omitempty"`
-	Count       bool               `json:"count,omitempty"`
-	Device      *WireDeviceMetrics `json:"device,omitempty"`
-	Geolocation *WireGeolocation   `json:"geolocation,omitempty"`
-	Origin      string             `json:"origin,omitempty"`
-	Permissions map[string]string  `json:"permissions,omitempty"`
-	Locale      string             `json:"locale,omitempty"`
-	Timezone    string             `json:"timezone,omitempty"`
-	Media       *WireMedia         `json:"media,omitempty"`
+	Kind        string              `json:"kind"`
+	Area        string              `json:"area,omitempty"`
+	Key         string              `json:"key,omitempty"`
+	ValueJSON   string              `json:"valueJson,omitempty"`
+	Expression  string              `json:"expression,omitempty"`
+	Cookie      *WireCookieQuery    `json:"cookie,omitempty"`
+	Count       bool                `json:"count,omitempty"`
+	Device      *WireDeviceMetrics  `json:"device,omitempty"`
+	Geolocation *WireGeolocation    `json:"geolocation,omitempty"`
+	Origin      string              `json:"origin,omitempty"`
+	Permissions map[string]string   `json:"permissions,omitempty"`
+	Locale      string              `json:"locale,omitempty"`
+	Timezone    string              `json:"timezone,omitempty"`
+	Media       *WireMedia          `json:"media,omitempty"`
+	UserAgent   string              `json:"userAgent,omitempty"`
+	Clock       *WireClockOperation `json:"clock,omitempty"`
 }
 
 type LifecycleRequest struct {
@@ -972,11 +1044,23 @@ type WireScreenshotOperation struct {
 	Name             string               `json:"name,omitempty"`
 	Masks            []WireLocator        `json:"masks,omitempty"`
 	Animated         bool                 `json:"animated,omitempty"`
+	Frozen           bool                 `json:"frozen,omitempty"`
+	HideCaret        bool                 `json:"hideCaret,omitempty"`
+	Viewport         bool                 `json:"viewport,omitempty"`
+	Clip             *WireScreenshotClip  `json:"clip,omitempty"`
 	ColorScheme      string               `json:"colorScheme,omitempty"`
 	ColorSchemes     []string             `json:"colorSchemes,omitempty"`
 	MaxBytes         *int                 `json:"maxBytes,omitempty"`
 	PixelTolerance   *float64             `json:"pixelTolerance,omitempty"`
 	ChannelTolerance *int                 `json:"channelTolerance,omitempty"`
+}
+
+// WireScreenshotClip is a capture region in viewport CSS pixels.
+type WireScreenshotClip struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
 }
 
 type ScreenshotRequest struct {
@@ -1156,7 +1240,7 @@ func (s *Server) Dispatch(ctx context.Context, method string, params json.RawMes
 				return nil, NewError(CodeInvalidArgument, fmt.Sprintf("duplicate event type %q", kind))
 			}
 			seenTypes[kind] = true
-			if kind != "console" && kind != "warning" && kind != "debug" {
+			if kind != "console" && kind != "pageError" && kind != "warning" && kind != "debug" {
 				return nil, NewError(CodeInvalidArgument, fmt.Sprintf("unsupported event type %q", kind))
 			}
 		}
@@ -1173,7 +1257,7 @@ func (s *Server) Dispatch(ctx context.Context, method string, params json.RawMes
 			subscription, subscribeErr = source.SubscribeDebug()
 		} else {
 			if request.SessionID == "" {
-				return nil, NewError(CodeInvalidArgument, "sessionId is required for console and warning events")
+				return nil, NewError(CodeInvalidArgument, "sessionId is required for console, pageError, and warning events")
 			}
 			entry, sessionErr := s.session(request.SessionID)
 			if sessionErr != nil {
@@ -1700,12 +1784,13 @@ func domOperationFromWire(operation *WireDOMOperation) (DOMOperation, *ProtocolE
 		"RELATIVE_BOXES": DOMRelativeBoxes, "GEOMETRY_RELATION": DOMGeometryRelation, "GAP_BETWEEN": DOMGapBetween,
 		"IN_VIEWPORT": DOMInViewport, "DOCUMENT_ORDER": DOMDocumentOrder, "COMPUTED_STYLE": DOMComputedStyle,
 		"COMPUTED_STYLE_NUMBER": DOMComputedStyleNumber, "NORMALIZE_COLOR": DOMNormalizeColor,
+		"POINTER_MOVE": DOMPointerMove, "POINTER_MOVE_TO_ELEMENT": DOMPointerMoveToElement, "POINTER_DOWN": DOMPointerDown, "POINTER_UP": DOMPointerUp,
 	}
 	kind, ok := kinds[operation.Kind]
 	if !ok {
 		return DOMOperation{}, NewError(CodeInvalidArgument, fmt.Sprintf("unsupported DOM operation %q", operation.Kind))
 	}
-	result := DOMOperation{Kind: kind, TextMode: operation.TextMode, Name: operation.Name, ValueJSON: operation.ValueJSON, All: operation.All, Every: operation.Every, ProjectName: operation.ProjectName, State: operation.State, Realistic: operation.Realistic, Button: operation.Button, ClickCount: operation.ClickCount, Modifiers: append([]string(nil), operation.Modifiers...), Keys: operation.Keys, TopOffset: operation.TopOffset, HasTopOffset: operation.HasTopOffset, DeltaX: operation.DeltaX, DeltaY: operation.DeltaY, Substring: operation.Substring, Occurrence: operation.Occurrence, Start: operation.Start, End: operation.End, Range: operation.Range, Method: operation.Method, Expression: operation.Expression, ArgumentsJSON: operation.ArgumentsJSON, Fully: operation.Fully, Relation: operation.Relation}
+	result := DOMOperation{Kind: kind, TextMode: operation.TextMode, Name: operation.Name, ValueJSON: operation.ValueJSON, All: operation.All, Every: operation.Every, ProjectName: operation.ProjectName, State: operation.State, Realistic: operation.Realistic, Button: operation.Button, ClickCount: operation.ClickCount, Modifiers: append([]string(nil), operation.Modifiers...), Keys: operation.Keys, TopOffset: operation.TopOffset, HasTopOffset: operation.HasTopOffset, DeltaX: operation.DeltaX, DeltaY: operation.DeltaY, Substring: operation.Substring, Occurrence: operation.Occurrence, Start: operation.Start, End: operation.End, Range: operation.Range, Method: operation.Method, Expression: operation.Expression, ArgumentsJSON: operation.ArgumentsJSON, Fully: operation.Fully, Relation: operation.Relation, PointerID: operation.PointerID, PointerType: operation.PointerType}
 	if operation.Offset != nil {
 		result.HasOffset, result.OffsetX, result.OffsetY = true, operation.Offset.X, operation.Offset.Y
 	}
@@ -1715,7 +1800,24 @@ func domOperationFromWire(operation *WireDOMOperation) (DOMOperation, *ProtocolE
 		}
 		result.Names = append(result.Names, NameSpec{Name: name.Name, AllowMissing: name.AllowMissing})
 	}
-	withoutLocator := kind == DOMSendKeys || kind == DOMClearSelection || kind == DOMNormalizeColor
+	pointer := kind == DOMPointerMove || kind == DOMPointerMoveToElement || kind == DOMPointerDown || kind == DOMPointerUp
+	if pointer {
+		if operation.PointerID <= 0 {
+			return DOMOperation{}, NewError(CodeInvalidArgument, "pointer operations require a positive pointerId")
+		}
+		if operation.PointerType != "mouse" && operation.PointerType != "pen" {
+			return DOMOperation{}, NewError(CodeInvalidArgument, `pointerType must be "mouse" or "pen"`)
+		}
+		if kind == DOMPointerMove {
+			if operation.Point == nil {
+				return DOMOperation{}, NewError(CodeInvalidArgument, "POINTER_MOVE requires a point")
+			}
+			result.PointX, result.PointY = operation.Point.X, operation.Point.Y
+		}
+	} else if operation.PointerID != 0 || operation.PointerType != "" || operation.Point != nil {
+		return DOMOperation{}, NewError(CodeInvalidArgument, "pointerId, pointerType, and point are only valid for pointer operations")
+	}
+	withoutLocator := kind == DOMSendKeys || kind == DOMClearSelection || kind == DOMNormalizeColor || kind == DOMPointerMove || kind == DOMPointerDown || kind == DOMPointerUp
 	if !withoutLocator {
 		locator, err := locatorFromWire(operation.Locator)
 		if err != nil {
@@ -2088,6 +2190,25 @@ func screenshotOperationFromWire(wire *WireScreenshotOperation, pollWire PollOpt
 		if pollWire != (PollOptions{}) {
 			return ScreenshotOperation{}, NewError(CodeInvalidArgument, "raw screenshot capture does not support poll options")
 		}
+		if wire.Animated {
+			return ScreenshotOperation{}, NewError(CodeInvalidArgument, "raw screenshot capture does not support animated: a capture is not frozen unless frozen is set")
+		}
+		operation.Frozen, operation.HideCaret, operation.Viewport = wire.Frozen, wire.HideCaret, wire.Viewport
+		if wire.Clip != nil {
+			clip := *wire.Clip
+			for _, value := range []float64{clip.X, clip.Y, clip.Width, clip.Height} {
+				if math.IsNaN(value) || math.IsInf(value, 0) {
+					return ScreenshotOperation{}, NewError(CodeInvalidArgument, "clip must be finite")
+				}
+			}
+			if clip.Width <= 0 || clip.Height <= 0 || clip.X < 0 || clip.Y < 0 {
+				return ScreenshotOperation{}, NewError(CodeInvalidArgument, "clip must have a non-negative origin and a positive width and height")
+			}
+			if targetKind == ScreenshotElement {
+				return ScreenshotOperation{}, NewError(CodeInvalidArgument, "clip selects a region of the viewport, so it applies to page captures: an element capture is already clipped to its element")
+			}
+			operation.Clip = &ScreenshotClip{X: clip.X, Y: clip.Y, Width: clip.Width, Height: clip.Height}
+		}
 		outputs := map[string]ScreenshotOutput{"": ScreenshotBytes, "BYTES": ScreenshotBytes, "PATH": ScreenshotPath}
 		output, exists := outputs[wire.Output]
 		if !exists {
@@ -2112,6 +2233,9 @@ func screenshotOperationFromWire(wire *WireScreenshotOperation, pollWire PollOpt
 	}
 	if wire.Output != "" || wire.ColorScheme != "" {
 		return ScreenshotOperation{}, NewError(CodeInvalidArgument, "visual screenshot comparison does not support output or colorScheme")
+	}
+	if wire.Frozen || wire.HideCaret || wire.Viewport || wire.Clip != nil {
+		return ScreenshotOperation{}, NewError(CodeInvalidArgument, "visual screenshot comparison does not support frozen, hideCaret, viewport, or clip: it freezes unless animated is set")
 	}
 	if err := validateScreenshotName(wire.Name); err != nil {
 		return ScreenshotOperation{}, err
@@ -2187,6 +2311,7 @@ func eventfulOperationFromWire(wire *WireEventfulOperation, pollWire PollOptions
 		"RELEASE_NEXT_RESPONSE": EventfulReleaseNextResponse, "RESPONSE_HOLD_STATS": EventfulResponseHoldStats,
 		"SET_NETWORK_STATE": EventfulSetNetworkState, "NETWORK_STATE": EventfulNetworkState,
 		"SET_CACHE_ENABLED": EventfulSetCacheEnabled,
+		"START_SCREENCAST":  EventfulStartScreencast, "STOP_SCREENCAST": EventfulStopScreencast, "SCREENCAST_FRAMES": EventfulScreencastFrames,
 	}
 	kind, ok := kinds[wire.Kind]
 	if !ok {
@@ -2199,12 +2324,12 @@ func eventfulOperationFromWire(wire *WireEventfulOperation, pollWire PollOptions
 	operation := EventfulOperation{Kind: kind, ID: wire.ID, ResponseID: wire.ResponseID, DialogType: wire.DialogType,
 		Accept: wire.Accept, PromptText: wire.PromptText, Limit: wire.Limit, MaxBodyBytes: wire.MaxBodyBytes,
 		Callsite: wire.Callsite, Action: wire.Action, CallbackID: wire.CallbackID, TransformTimeoutMS: wire.TransformTimeoutMS,
-		CacheEnabled: wire.CacheEnabled != nil && *wire.CacheEnabled, Poll: poll, ContentBase64: wire.ContentBase64}
+		CacheEnabled: wire.CacheEnabled != nil && *wire.CacheEnabled, Poll: poll, ContentBase64: wire.ContentBase64, Failed: wire.Failed}
 	if operation.MaxBodyBytes < 0 || operation.MaxBodyBytes > MaxDecodedBodySize {
 		return EventfulOperation{}, NewError(CodeInvalidArgument, fmt.Sprintf("maxBodyBytes must be between 0 and %d", MaxDecodedBodySize))
 	}
 	for source, destination := range map[*WireExpectation]**Expectation{wire.Message: &operation.Message, wire.URL: &operation.URL,
-		wire.Method: &operation.Method, wire.ResourceType: &operation.ResourceType, wire.Filename: &operation.Filename, wire.State: &operation.State, wire.ContentText: &operation.ContentText} {
+		wire.Method: &operation.Method, wire.ResourceType: &operation.ResourceType, wire.Filename: &operation.Filename, wire.State: &operation.State, wire.Status: &operation.Status, wire.ContentText: &operation.ContentText} {
 		if source == nil {
 			continue
 		}
@@ -2219,6 +2344,16 @@ func eventfulOperationFromWire(wire *WireEventfulOperation, pollWire PollOptions
 	}
 	if wire.Network != nil {
 		operation.Network = *wire.Network
+	}
+	if wire.Screencast != nil {
+		operation.Screencast = *wire.Screencast
+	}
+	operation.Offset = wire.Offset
+	if operation.Offset < 0 {
+		return EventfulOperation{}, NewError(CodeInvalidArgument, "offset must not be negative")
+	}
+	if (kind == EventfulStopScreencast || kind == EventfulScreencastFrames) && operation.ID == "" {
+		return EventfulOperation{}, NewError(CodeInvalidArgument, "screencast id is required")
 	}
 	if kind == EventfulRegisterNetworkHandler {
 		actions := map[string]bool{"fulfill": true, "abort": true, "request": true, "response": true, "callback": true}
@@ -2266,20 +2401,25 @@ func lifecycleOperationFromWire(operation *WireLifecycleOperation, expected *Wir
 	kinds := map[string]LifecycleOperationKind{
 		"GET_COOKIES": LifecycleGetCookies, "CLEAR_COOKIES": LifecycleClearCookies, "COOKIE_QUERY": LifecycleCookieQuery,
 		"STORAGE_SET": LifecycleStorageSet, "STORAGE_GET": LifecycleStorageGet, "STORAGE_GET_ALL": LifecycleStorageGetAll, "STORAGE_REMOVE": LifecycleStorageRemove, "STORAGE_CLEAR": LifecycleStorageClear, "STORAGE_LENGTH": LifecycleStorageLength,
-		"WAIT_FOR_DEFINED": LifecycleWaitForDefined, "URL": LifecycleURL, "TITLE": LifecycleTitle, "WINDOW_SIZE": LifecycleWindowSize, "OUTLINE": LifecycleOutline, "ACCESSIBILITY_OUTLINE": LifecycleAccessibilityOutline, "CONSOLE_MESSAGES": LifecycleConsoleMessages,
+		"WAIT_FOR_DEFINED": LifecycleWaitForDefined, "URL": LifecycleURL, "TITLE": LifecycleTitle, "WINDOW_SIZE": LifecycleWindowSize, "OUTLINE": LifecycleOutline, "ACCESSIBILITY_OUTLINE": LifecycleAccessibilityOutline, "CONSOLE_MESSAGES": LifecycleConsoleMessages, "PAGE_ERRORS": LifecyclePageErrors,
 		"SET_DEVICE_METRICS": LifecycleSetDeviceMetrics, "CLEAR_DEVICE_METRICS": LifecycleClearDeviceMetrics, "SET_GEOLOCATION": LifecycleSetGeolocation, "CLEAR_GEOLOCATION": LifecycleClearGeolocation,
 		"SET_PERMISSIONS": LifecycleSetPermissions, "RESET_PERMISSIONS": LifecycleResetPermissions, "SET_LOCALE": LifecycleSetLocale, "CLEAR_LOCALE": LifecycleClearLocale, "SET_TIMEZONE": LifecycleSetTimezone, "CLEAR_TIMEZONE": LifecycleClearTimezone, "SET_MEDIA": LifecycleSetMedia, "CLEAR_MEDIA": LifecycleClearMedia,
+		"SET_USER_AGENT": LifecycleSetUserAgent, "CLEAR_USER_AGENT": LifecycleClearUserAgent,
+		"INSTALL_CLOCK": LifecycleInstallClock, "PAUSE_CLOCK_AT": LifecyclePauseClockAt, "RESUME_CLOCK": LifecycleResumeClock, "RUN_CLOCK_FOR": LifecycleRunClockFor,
+		"FAST_FORWARD_CLOCK": LifecycleFastForwardClock, "SET_CLOCK_FIXED_TIME": LifecycleSetClockFixedTime, "SET_CLOCK_SYSTEM_TIME": LifecycleSetClockSystemTime,
 	}
 	kind, ok := kinds[operation.Kind]
 	if !ok {
 		return LifecycleOperation{}, NewError(CodeInvalidArgument, "unsupported lifecycle operation")
 	}
-	result := LifecycleOperation{Kind: kind, Area: operation.Area, Key: operation.Key, ValueJSON: operation.ValueJSON, Expression: operation.Expression, Count: operation.Count, Origin: operation.Origin, Permissions: operation.Permissions, Locale: operation.Locale, Timezone: operation.Timezone}
+	result := LifecycleOperation{Kind: kind, Area: operation.Area, Key: operation.Key, ValueJSON: operation.ValueJSON, Expression: operation.Expression, Count: operation.Count, Origin: operation.Origin, Permissions: operation.Permissions, Locale: operation.Locale, Timezone: operation.Timezone, UserAgent: operation.UserAgent}
 	if operation.Device != nil {
 		result.Width = operation.Device.Width
 		result.Height = operation.Device.Height
 		result.DeviceScaleFactor = operation.Device.DeviceScaleFactor
 		result.Mobile = operation.Device.Mobile
+		result.Touch = operation.Device.Touch
+		result.Landscape = operation.Device.Landscape
 	}
 	if operation.Geolocation != nil {
 		result.Latitude = operation.Geolocation.Latitude
@@ -2290,6 +2430,9 @@ func lifecycleOperationFromWire(operation *WireLifecycleOperation, expected *Wir
 		result.MediaType = operation.Media.Type
 		result.ColorScheme = operation.Media.ColorScheme
 		result.ReducedMotion = operation.Media.ReducedMotion
+	}
+	if err := clockOperationFromWire(kind, operation.Clock, &result); err != nil {
+		return LifecycleOperation{}, err
 	}
 	if expected != nil {
 		expectation, err := expectationFromWire(expected, 0)
@@ -2318,7 +2461,10 @@ func lifecycleOperationFromWire(operation *WireLifecycleOperation, expected *Wir
 		return LifecycleOperation{}, NewError(CodeInvalidArgument, "storage set requires valueJson")
 	}
 	if operation.Kind == "SET_PERMISSIONS" {
-		validPermissions := map[string]bool{"ar": true, "audioCapture": true, "automaticFullscreen": true, "backgroundFetch": true, "backgroundSync": true, "cameraPanTiltZoom": true, "capturedSurfaceControl": true, "clipboardReadWrite": true, "clipboardSanitizedWrite": true, "displayCapture": true, "durableStorage": true, "geolocation": true, "handTracking": true, "idleDetection": true, "keyboardLock": true, "localFonts": true, "localNetwork": true, "localNetworkAccess": true, "loopbackNetwork": true, "midi": true, "midiSysex": true, "nfc": true, "notifications": true, "paymentHandler": true, "periodicBackgroundSync": true, "pointerLock": true, "protectedMediaIdentifier": true, "sensors": true, "smartCard": true, "speakerSelection": true, "storageAccess": true, "topLevelStorageAccess": true, "videoCapture": true, "vr": true, "wakeLockScreen": true, "wakeLockSystem": true, "webAppInstallation": true, "webPrinting": true, "windowManagement": true}
+		validPermissions := map[string]bool{}
+		for _, name := range PermissionNames {
+			validPermissions[name] = true
+		}
 		for permission, state := range operation.Permissions {
 			if !validPermissions[permission] {
 				return LifecycleOperation{}, NewError(CodeInvalidArgument, "unsupported permission "+permission)
@@ -2583,4 +2729,34 @@ func normalizeError(err error) *ProtocolError {
 	default:
 		return NewError(CodeDriver, fmt.Sprintf("daemon operation failed: %v", err))
 	}
+}
+
+// clockOperationFromWire checks a page-clock operation has the arguments it needs: a time for the
+// operations that move the clock to one, a non-negative duration for those that advance it.
+func clockOperationFromWire(kind LifecycleOperationKind, clock *WireClockOperation, result *LifecycleOperation) *ProtocolError {
+	needsTime := kind == LifecycleInstallClock || kind == LifecyclePauseClockAt || kind == LifecycleSetClockFixedTime || kind == LifecycleSetClockSystemTime
+	needsDuration := kind == LifecycleRunClockFor || kind == LifecycleFastForwardClock
+	if !needsTime && !needsDuration {
+		return nil
+	}
+	if clock == nil {
+		clock = &WireClockOperation{}
+	}
+	if needsTime {
+		if clock.TimeMs == nil {
+			return NewError(CodeInvalidArgument, "clock.timeMs is required")
+		}
+		result.ClockTime = time.UnixMilli(*clock.TimeMs).UTC()
+	}
+	if needsDuration {
+		if clock.DurationMs == nil || *clock.DurationMs < 0 {
+			return NewError(CodeInvalidArgument, "clock.durationMs must be a non-negative number of milliseconds")
+		}
+		result.ClockDuration = time.Duration(*clock.DurationMs) * time.Millisecond
+	}
+	if clock.TimeoutMs < 0 {
+		return NewError(CodeInvalidArgument, "clock.timeoutMs must not be negative")
+	}
+	result.ClockTimeout = time.Duration(clock.TimeoutMs) * time.Millisecond
+	return nil
 }

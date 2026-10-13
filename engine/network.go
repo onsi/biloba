@@ -158,16 +158,24 @@ func (r *cdpStreamReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// Request is one request observed in a session since its last Prepare.
+// Request is one request observed in a session since its last Prepare.  Status is the response's HTTP
+// status: 0 until the response headers arrive, and 0 for a request that failed without one.  A
+// redirect is one Request per hop, and a hop that was redirected has the redirect's status.  Failure
+// is empty unless the request failed, when it is RequestFailureText's rendering of the failure.
 type Request struct {
 	URL          string
 	Method       string
 	Headers      map[string]string
 	ResourceType string
+	Status       int
+	Failure      string
 }
 
+// RequestQuery filters observed requests.  Status matches the response status (0 while there is
+// none); Failed keeps only requests whose Failure is not empty.
 type RequestQuery struct {
-	URL, Method, ResourceType *Expectation
+	URL, Method, ResourceType, Status *Expectation
+	Failed                            bool
 }
 
 // HeldResponse identifies a matching response paused by HoldResponse.
@@ -223,10 +231,59 @@ func (s *Session) recordRequest(event *network.EventRequestWillBeSent) {
 		headers[name] = fmt.Sprint(value)
 	}
 	s.requestMu.Lock()
+	defer s.requestMu.Unlock()
+	if s.requestIndex == nil {
+		s.requestIndex = map[network.RequestID]int{}
+	}
+	// A redirect announces the next hop under the same request ID, carrying the response that sent it.
+	if previous, ok := s.requestIndex[event.RequestID]; ok && event.RedirectResponse != nil {
+		s.requests[previous].Status = int(event.RedirectResponse.Status)
+	}
+	s.requestIndex[event.RequestID] = len(s.requests)
 	s.requests = append(s.requests, Request{
 		URL: event.Request.URL, Method: event.Request.Method, Headers: headers, ResourceType: event.Type.String(),
 	})
-	s.requestMu.Unlock()
+}
+
+// recordResponseStatus records a response's status on the request it answers.
+func (s *Session) recordResponseStatus(event *network.EventResponseReceived) {
+	if event.Response != nil {
+		s.recordRequestOutcome(event.RequestID, int(event.Response.Status), "")
+	}
+}
+
+// recordRequestOutcome fills in the status or failure of the latest hop recorded under id.  Requests
+// this session never recorded (another frame's, say) are ignored.
+func (s *Session) recordRequestOutcome(id network.RequestID, status int, failure string) {
+	s.requestMu.Lock()
+	defer s.requestMu.Unlock()
+	index, ok := s.requestIndex[id]
+	if !ok {
+		return
+	}
+	if status != 0 {
+		s.requests[index].Status = status
+	}
+	if failure != "" {
+		s.requests[index].Failure = failure
+	}
+}
+
+// RequestFailureText renders a Network.loadingFailed event as a request's failure: Chrome's error text
+// (net::ERR_CONNECTION_REFUSED, net::ERR_ABORTED, ...), followed by the blocked or CORS reason when
+// Chrome gives one.
+func RequestFailureText(event *network.EventLoadingFailed) string {
+	text := event.ErrorText
+	if event.BlockedReason != "" {
+		text += fmt.Sprintf(" (blocked: %s)", event.BlockedReason)
+	}
+	if event.CorsErrorStatus != nil && event.CorsErrorStatus.CorsError != "" {
+		text += fmt.Sprintf(" (CORS: %s)", event.CorsErrorStatus.CorsError)
+	}
+	if text == "" {
+		text = "failed"
+	}
+	return text
 }
 
 // Requests returns a snapshot of requests observed by the session.
@@ -250,12 +307,15 @@ func (s *Session) RequestsMatching(query RequestQuery) []Request {
 		for _, candidate := range []struct {
 			value       any
 			expectation *Expectation
-		}{{request.URL, query.URL}, {request.Method, query.Method}, {request.ResourceType, query.ResourceType}} {
+		}{{request.URL, query.URL}, {request.Method, query.Method}, {request.ResourceType, query.ResourceType}, {request.Status, query.Status}} {
 			if candidate.expectation == nil {
 				continue
 			}
 			ok, _ := MatchExpectation(candidate.value, *candidate.expectation)
 			matches = matches && ok
+		}
+		if query.Failed && request.Failure == "" {
+			matches = false
 		}
 		if matches {
 			matched = append(matched, request)
@@ -283,7 +343,7 @@ func (s *Session) WaitForRequest(ctx context.Context, query RequestQuery, policy
 
 func (s *Session) clearRequests() {
 	s.requestMu.Lock()
-	s.requests = nil
+	s.requests, s.requestIndex = nil, nil
 	s.requestMu.Unlock()
 }
 

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -859,12 +860,25 @@ func (s *Session) Responses(q ResponseQuery) []Response {
 	}
 	return out
 }
-func (s *Session) trackRequest(id network.RequestID) {
+
+// InflightRequest is a request Chrome announced and has not yet finished or failed: what
+// WaitForNetworkIdle names when it times out.  A redirect replaces it with the next hop and keeps the
+// original Started.
+type InflightRequest struct {
+	Method, URL, ResourceType string
+	Started                   time.Time
+}
+
+func (s *Session) trackRequest(event *network.EventRequestWillBeSent) {
 	s.networkMu.Lock()
 	if s.inflight == nil {
-		s.inflight = map[network.RequestID]struct{}{}
+		s.inflight = map[network.RequestID]InflightRequest{}
 	}
-	s.inflight[id] = struct{}{}
+	started := time.Now()
+	if hop, ok := s.inflight[event.RequestID]; ok {
+		started = hop.Started
+	}
+	s.inflight[event.RequestID] = InflightRequest{Method: event.Request.Method, URL: event.Request.URL, ResourceType: event.Type.String(), Started: started}
 	s.networkMu.Unlock()
 }
 func (s *Session) finishRequest(id network.RequestID) {
@@ -877,38 +891,66 @@ func (s *Session) InflightRequestCount() int {
 	defer s.networkMu.Unlock()
 	return len(s.inflight)
 }
+
+// InflightRequests returns the requests in flight, oldest first.
+func (s *Session) InflightRequests() []InflightRequest {
+	s.networkMu.Lock()
+	out := make([]InflightRequest, 0, len(s.inflight))
+	for _, request := range s.inflight {
+		out = append(out, request)
+	}
+	s.networkMu.Unlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].Started.Before(out[j].Started) })
+	return out
+}
+
+// WaitForNetworkIdle polls until no request is in flight.  When the poll times out, its error names
+// each request its last attempt saw in flight (method, URL, resource type, and how long it had been
+// in flight), oldest first.
 func (s *Session) WaitForNetworkIdle(ctx context.Context, p PollPolicy) (PollResult, error) {
-	return Poll(ctx, p, func(context.Context) (Observation, bool, error) {
+	var last []InflightRequest
+	var at time.Time
+	result, err := Poll(ctx, p, func(context.Context) (Observation, bool, error) {
 		if err := s.frameObservationError("wait for network idle"); err != nil {
 			return Observation{}, false, err
 		}
-		n := s.InflightRequestCount()
-		return Observation{Value: n}, n == 0, nil
+		last, at = s.InflightRequests(), time.Now()
+		return Observation{Value: len(last)}, len(last) == 0, nil
 	})
+	var pollErr *Error
+	if errors.As(err, &pollErr) && pollErr.Code == CodeTimeout && len(last) > 0 {
+		pollErr.Operation = "wait for network idle"
+		pollErr.Message = NetworkIdleFailureMessage(last, at)
+	}
+	return result, err
+}
+
+// NetworkIdleFailureMessage describes the requests still in flight at time at, the way both clients
+// report a network-idle assertion that timed out.
+func NetworkIdleFailureMessage(inflight []InflightRequest, at time.Time) string {
+	return "expected the session to be network idle, but it has " + DescribeInflightRequests(inflight, at)
+}
+
+// DescribeInflightRequests renders "N in-flight request(s)" followed by one line per request: method,
+// URL, resource type, and how long it had been in flight at at.  Both clients' network-idle failures
+// use it.
+func DescribeInflightRequests(inflight []InflightRequest, at time.Time) string {
+	out := &strings.Builder{}
+	fmt.Fprintf(out, "%d in-flight request(s)", len(inflight))
+	for _, request := range inflight {
+		fmt.Fprintf(out, "\n  %s %s (%s, in flight for %s)", request.Method, request.URL, request.ResourceType, at.Sub(request.Started).Round(time.Millisecond))
+	}
+	return out.String()
 }
 func (s *Session) SetNetworkState(ctx context.Context, state NetworkState) error {
 	if err := s.tabOnly("set network state"); err != nil {
 		return err
 	}
-	if state.Latency < 0 || state.DownloadThroughput < 0 || state.UploadThroughput < 0 {
-		return &Error{Code: CodeInvalidArgument, Operation: "set network state", Message: "latency and throughput must not be negative"}
-	}
-	if !validNetworkConnectionType(state.ConnectionType) {
-		return &Error{Code: CodeInvalidArgument, Operation: "set network state", Message: "unsupported connection type", Observed: state.ConnectionType}
+	if err := ValidateNetworkState(state); err != nil {
+		return withOperation("set network state", err)
 	}
 	return s.serial(ctx, "set network state", func(op context.Context) error {
-		download, upload := state.DownloadThroughput, state.UploadThroughput
-		if download == 0 {
-			download = -1
-		}
-		if upload == 0 {
-			upload = -1
-		}
-		action := network.OverrideNetworkState(state.Offline, float64(state.Latency.Milliseconds()), download, upload)
-		if state.ConnectionType != "" {
-			action = action.WithConnectionType(network.ConnectionType(state.ConnectionType))
-		}
-		if err := chromedp.Run(op, action); err != nil {
+		if err := SetNetworkStateContext(op, state); err != nil {
 			return err
 		}
 		s.networkMu.Lock()
@@ -916,6 +958,51 @@ func (s *Session) SetNetworkState(ctx context.Context, state NetworkState) error
 		s.networkMu.Unlock()
 		return nil
 	})
+}
+
+// ValidateNetworkState rejects negative latency or throughput and an unknown connection type, which
+// Chrome would otherwise accept.
+func ValidateNetworkState(state NetworkState) error {
+	if state.Latency < 0 || state.DownloadThroughput < 0 || state.UploadThroughput < 0 {
+		return &Error{Code: CodeInvalidArgument, Message: "latency and throughput must not be negative"}
+	}
+	if !validNetworkConnectionType(state.ConnectionType) {
+		return &Error{Code: CodeInvalidArgument, Message: "unsupported connection type", Observed: state.ConnectionType}
+	}
+	return nil
+}
+
+// SetNetworkStateContext emulates a network condition; the zero NetworkState removes the override.
+// A zero throughput means unthrottled.  Chrome splits this in two: overrideNetworkState is what the
+// page reads (navigator.onLine, navigator.connection), and emulateNetworkConditionsByRule is what
+// the tab's requests get (failing offline, delayed, throttled).
+func SetNetworkStateContext(ctx context.Context, state NetworkState) error {
+	download, upload := state.DownloadThroughput, state.UploadThroughput
+	if download == 0 {
+		download = -1
+	}
+	if upload == 0 {
+		upload = -1
+	}
+	latency := float64(state.Latency.Milliseconds())
+	action := network.OverrideNetworkState(state.Offline, latency, download, upload)
+	conditions := []*network.Conditions{} // empty, not nil: Chrome wants a list
+	if state != (NetworkState{}) {
+		conditions = append(conditions, &network.Conditions{Offline: state.Offline, Latency: latency, DownloadThroughput: download, UploadThroughput: upload, ConnectionType: network.ConnectionType(state.ConnectionType)})
+	}
+	if state.ConnectionType != "" {
+		action = action.WithConnectionType(network.ConnectionType(state.ConnectionType))
+	}
+	return chromedp.Run(ctx, action, chromedp.ActionFunc(func(ctx context.Context) error {
+		_, err := network.EmulateNetworkConditionsByRule(conditions).Do(ctx)
+		return err
+	}))
+}
+
+// SetCacheDisabledContext turns the HTTP cache off or back on.  Request interception needs it off
+// (see EnableInterceptionContext), so callers keep it disabled while interception is on.
+func SetCacheDisabledContext(ctx context.Context, disabled bool) error {
+	return chromedp.Run(ctx, network.SetCacheDisabled(disabled))
 }
 
 func validNetworkConnectionType(connectionType NetworkConnectionType) bool {
@@ -949,11 +1036,24 @@ func (s *Session) SetCacheEnabled(ctx context.Context, enabled bool) error {
 		s.holdMu.Lock()
 		intercepting := s.fetchEnabled
 		s.holdMu.Unlock()
-		return chromedp.Run(op, network.SetCacheDisabled(intercepting || !enabled))
+		return SetCacheDisabledContext(op, intercepting || !enabled)
 	})
 }
 func (s *Session) resetNetworkState(ctx context.Context) error {
-	if err := chromedp.Run(ctx, network.OverrideNetworkState(false, 0, -1, -1), network.SetCacheDisabled(false)); err != nil {
+	s.networkMu.Lock()
+	emulating := s.networkState != (NetworkState{})
+	s.networkMu.Unlock()
+	reset := SetNetworkStateContext
+	if !emulating {
+		// the request conditions were never set, so only the navigator state needs the reset it always had
+		reset = func(ctx context.Context, _ NetworkState) error {
+			return chromedp.Run(ctx, network.OverrideNetworkState(false, 0, -1, -1))
+		}
+	}
+	if err := reset(ctx, NetworkState{}); err != nil {
+		return err
+	}
+	if err := SetCacheDisabledContext(ctx, false); err != nil {
 		return err
 	}
 	s.clearNetworkBookkeeping()

@@ -21,8 +21,8 @@ So an agent or CI run needs nothing: `ginkgo -r -p`, then read the outline and t
 
 ## Read the artifacts in this order
 
-1. **Console errors** — any `console.error`/`console.assert` before the failure, replayed under "Console errors logged before this failure" at the **top** of the failure block. On a JS crash (a React error boundary) this is the root cause.
-2. **`⚠` diagnostic notes** — they name the cause outright.
+1. **Console errors** — any `console.error`/`console.assert` and any uncaught exception or unhandled rejection (`Uncaught …`) before the failure, replayed under "Console errors logged before this failure" at the **top** of the failure block. On a JS crash (a React error boundary) this is the root cause. Everything here (and in the streamed timeline, `AllPageErrors`, `AllConsoleMessages`, `AllRequests`) comes from this spec: what the previous spec's page raised as `Prepare()` navigated it away is dropped. Locations (`app.js:12:5`) are one-based, so they open at the right line in an editor. Chrome's own warnings and errors (`[network] Failed to load resource: … (url)`, `[intervention] …`) appear in the streamed timeline but not in this replay; read the timeline for a failed load, or `b.AllConsoleMessages()` / `b.AllRequests()` for the full record.
+2. **`⚠` diagnostic notes** — they name the cause outright. "Page clock paused" (or the same line at the end of a poll's timeout: `This tab's page clock is paused at <t>; …`) means the page's timers were stopped by the spec's own `b.InstallClock`/`PauseAt` — advance the clock before asserting (`flaky-specs` §9).
 3. **Poll trajectory** — what the read you failed on did over its whole deadline (absent when the failure had no value read behind it).
 4. **Visual diagnosis** — only on a failed `b.HaveScreenshot`: pixel counts plus the *shape* of the change, in words, before you open any image.
 5. **Screenshot** — `Read` the printed PNG path.
@@ -60,7 +60,7 @@ The shape line (`one box`, `changed regions: N boxes`, `scattered`, `uniform shi
 
 **"never settled" is printed during an update run, not on a failure.** The run stays green, but the baseline it just wrote was captured from a page still changing and the next normal run will fail against it. Mask the moving region (or stop it moving) and re-run the update; re-running alone changes nothing. → `visual-assertions`
 
-**"Failed to clear the emulated prefers-color-scheme"** — a dropped `b.InColorSchemes` teardown. The override is target-level and survives navigation, so `b.Prepare()` clears the leak before the next spec; the spec that printed the warning, though, finished rendering in the emulated scheme. Read any odd-looking screenshot from that spec with that in mind.
+**"Failed to restore the tab's prefers-color-scheme"** — a dropped `b.InColorSchemes` teardown. The override is target-level and survives navigation, so `b.Prepare()` clears the leak before the next spec; the spec that printed the warning, though, finished rendering in the emulated scheme. Read any odd-looking screenshot from that spec with that in mind.
 
 ### The `⚠` diagnostic notes
 
@@ -138,7 +138,7 @@ ReportAfterEach(func(report SpecReport) {
 
 Keep the `?? null` so a crashed page doesn't turn the snapshot itself into a failure. (That's a *snapshot*. To **wait** on app state as part of a spec, use `b.GetJSValue` — `flaky-specs` §3.)
 
-**Page `console.*` streams to the `GinkgoWriter`**, each argument rendered space-separated. Objects come from CDP's **shallow** preview, so nested/large objects log lossily. Build the string yourself when you need the whole value: `console.log('state ' + JSON.stringify(obj))`.
+**Page `console.*` streams to the `GinkgoWriter`**, each argument rendered space-separated, and so do uncaught page errors (in red, with their stack). `b.AllConsoleMessages()`/`b.AllPageErrors()` hand you the same as data. Objects come from CDP's **shallow** preview, so nested/large objects log lossily. Build the string yourself when you need the whole value: `console.log('state ' + JSON.stringify(obj))`.
 
 ## Two headless quirks that look like Biloba bugs
 

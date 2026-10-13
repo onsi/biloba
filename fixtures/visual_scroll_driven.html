@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en-US">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Visual Scroll-Driven Animation Testpage</title>
+
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            background-color: #ffffff;
+        }
+
+        /* Both boxes render green with no animation and their keyframe colour while animating; each
+           animation's keyframes are a single colour, so the animating rendering is itself
+           deterministic.  #timed runs on the document timeline and the freeze turns it off; #scrolled
+           runs on the root scroll timeline and the freeze leaves it alone. */
+        #timed, #scrolled {
+            position: fixed;
+            top: 20px;
+            width: 80px;
+            height: 80px;
+            background-color: #00aa00;
+        }
+
+        #timed {
+            left: 20px;
+            animation: reddish 100000s linear forwards;
+        }
+
+        #scrolled {
+            left: 120px;
+            animation: bluish linear both;
+            animation-timeline: scroll(root);
+        }
+
+        #spacer {
+            height: 3000px;
+        }
+
+        @keyframes reddish {
+            from { background-color: #aa0000; }
+            to   { background-color: #aa0000; }
+        }
+
+        @keyframes bluish {
+            from { background-color: #0000aa; }
+            to   { background-color: #0000aa; }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="timed"></div>
+    <div id="scrolled"></div>
+    <div id="spacer"></div>
+</body>
+
+</html>

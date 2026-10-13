@@ -77,10 +77,13 @@ describe("Biloba TypeScript client", () => {
   let closeSessionError: string | undefined;
   let daemonVersion: string | undefined;
   const requests: Array<{method: string; request: Record<string, unknown>}> = [];
+  // The deadline each request carried, in step with requests.
+  const deadlines: Array<number | undefined> = [];
   let openedSessions = 0;
 
   beforeEach(() => {
     requests.length = 0;
+    deadlines.length = 0;
     openedSessions = 0;
     assertImplementation = (_request, respond) => {
       respond(operationResult({
@@ -115,6 +118,7 @@ describe("Biloba TypeScript client", () => {
     const request = envelope.params as Record<string, unknown>;
     const method = envelope.method[0]!.toUpperCase() + envelope.method.slice(1);
     requests.push({method, request});
+    deadlines.push(envelope.timeoutMs);
     const reply = (result: unknown) => toClient.write(encodeFrame({id: envelope.id, result}));
     const respond: Respond = reply;
     switch (envelope.method) {
@@ -133,7 +137,8 @@ describe("Biloba TypeScript client", () => {
           STORAGE_GET: {found: true, value: 3}, STORAGE_GET_ALL: {count: 3}, STORAGE_LENGTH: 1,
           WAIT_FOR_DEFINED: 42, URL: "https://app.test/ready", TITLE: "Ready", WINDOW_SIZE: {width: 800, height: 600},
           OUTLINE: "<body>Ready</body>", ACCESSIBILITY_OUTLINE: "document\n  button \"Save\"",
-          CONSOLE_MESSAGES: [{type: "log", text: "ready", args: ["ready"], timestamp: "2026-01-01T00:00:00Z"}],
+          CONSOLE_MESSAGES: [{type: "log", source: "", text: "ready", args: ["ready"], timestamp: "2026-01-01T00:00:00Z"}],
+          PAGE_ERRORS: [{message: "Uncaught Error: boom", url: "https://app.test/app.js", line: 4, column: 7, stack: [], timestamp: "2026-01-01T00:00:00Z"}],
           COOKIE_QUERY: {name: "auth", value: "abc", path: "/", session: true},
         };
         respond(operationResult({observedJson: JSON.stringify(values[operation.kind ?? ""])}));
@@ -144,10 +149,17 @@ describe("Biloba TypeScript client", () => {
         const values: Record<string, unknown> = {
           REGISTER_DIALOG_HANDLER: {id: "dialog-1"}, DIALOGS: [{type: "alert", message: "hi", defaultPrompt: "", accepted: false, promptText: "", autoHandled: true}], WARNINGS: warningHistory,
           DOWNLOADS: [{id: "download-1", url: "/file", filename: "file.txt", state: "complete", receivedBytes: 3, totalBytes: 3, startedAt: 1}], WAIT_FOR_DOWNLOAD: {id: "download-1", url: "/file", filename: "file.txt", state: "complete", receivedBytes: 3, totalBytes: 3, startedAt: 1}, DOWNLOAD_CONTENT: {bodyBase64: Buffer.from("abc").toString("base64")},
-          REQUESTS: [{url: "/api", method: "POST", headers: [], resourceType: "Fetch"}], WAIT_FOR_REQUEST: {url: "/api", method: "POST", headers: [], resourceType: "Fetch"}, RESPONSES: [{url: "/api", status: 201, headers: [], resourceType: "Fetch"}],
+          REQUESTS: [{url: "/api", method: "POST", headers: [], resourceType: "Fetch", status: 404, failure: ""}, {url: "/down", method: "GET", headers: [], resourceType: "Fetch", status: 0, failure: "net::ERR_CONNECTION_REFUSED"}], WAIT_FOR_REQUEST: {url: "/api", method: "POST", headers: [], resourceType: "Fetch"}, RESPONSES: [{url: "/api", status: 201, headers: [], resourceType: "Fetch"}],
           REGISTER_NETWORK_HANDLER: {id: "network-1"}, NETWORK_HANDLER_STATS: {id: "network-1", callsite: "test", count: 1, shadowed: 0, lastError: ""}, NETWORK_SHADOWS: [],
           HOLD_RESPONSE: {id: "hold-2"}, AWAIT_RESPONSE_HOLD: {id: "response-1", url: "/api", status: 200, headers: [], bodyBase64: Buffer.from("held").toString("base64")}, RESPONSE_HOLD_STATS: {count: 1, held: 1, passedThrough: 0, holding: 1, lastError: ""}, NETWORK_STATE: {offline: false, latencyMs: 0, downloadThroughput: 0, uploadThroughput: 0, connectionType: "wifi"},
         };
+        if (operation.kind === "START_SCREENCAST") { reply({id: "recording-1"}); break; }
+        if (operation.kind === "STOP_SCREENCAST" || operation.kind === "SCREENCAST_FRAMES") {
+          // Three frames, one per chunk, the way the daemon splits a recording too big for one response.
+          const offset = (request.operation as {offset?: number}).offset ?? 0;
+          reply({count: 3, offset, frames: [{dataBase64: Buffer.from([offset]).toString("base64"), timestampMs: 1_000.5 + offset, deviceWidth: 800, deviceHeight: 600, pageScaleFactor: 1, scrollOffsetX: 0, scrollOffsetY: offset, offsetTop: 0}]});
+          break;
+        }
         reply(values[operation.kind ?? ""] ?? {});
         break;
       }
@@ -182,6 +194,49 @@ describe("Biloba TypeScript client", () => {
       {kind: "CAPTURE", target: {kind: "PAGE"}, output: "BYTES"},
       {kind: "CAPTURE", target: {kind: "ELEMENT", locator: {kind: "TEST_ID", value: "card", match: "EXACT", first: false}}, output: "PATH", name: "checkout/card", masks: [{kind: "CSS", value: ".clock", match: "EXACT", first: false}]},
     ]);
+  });
+
+  it("sends capture options only when asked, and refuses animated and a locator clip", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    await session.captureScreenshot({frozen: true, hideCaret: true, clip: {x: 1, y: 2, width: 30, height: 40}});
+    await session.locator("#card").captureScreenshot({viewport: true, frozen: false});
+    expect(requests.filter(({method}) => method === "Screenshot").map(({request}) => request.operation)).toEqual([
+      {kind: "CAPTURE", target: {kind: "PAGE"}, output: "BYTES", frozen: true, hideCaret: true, clip: {x: 1, y: 2, width: 30, height: 40}},
+      {kind: "CAPTURE", target: {kind: "ELEMENT", locator: {kind: "CSS", value: "#card", match: "EXACT", first: false}}, output: "BYTES", viewport: true},
+    ]);
+    await expect(session.captureScreenshot({animated: true} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT", message: expect.stringContaining("frozen: true")});
+    await expect(session.locator("#card").captureScreenshot({clip: {x: 0, y: 0, width: 1, height: 1}} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT", message: expect.stringContaining("page captures")});
+    expect(requests.filter(({method}) => method === "Screenshot")).toHaveLength(2);
+  });
+
+  it("returns request outcomes and sends the status and failed filters", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    const observed = await session.requests({status: 404, failed: false});
+    expect(observed.map(({url, status, failure}) => ({url, status, failure}))).toEqual([
+      {url: "/api", status: 404, failure: ""},
+      {url: "/down", status: 0, failure: "net::ERR_CONNECTION_REFUSED"},
+    ]);
+    await session.requests({failed: true});
+    const sent = requests.filter(({method}) => method === "Eventful").map(({request}) => request.operation);
+    expect(sent.at(-2)).toEqual({kind: "REQUESTS", status: {kind: "EQUAL", expectedJson: "404"}});
+    expect(sent.at(-1)).toEqual({kind: "REQUESTS", failed: true});
+  });
+
+  it("reads, expects, and streams page errors", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    expect(await session.pageErrors()).toEqual([{message: "Uncaught Error: boom", url: "https://app.test/app.js", line: 4, column: 7, stack: [], timestamp: "2026-01-01T00:00:00Z"}]);
+    expect(requests.at(-1)).toMatchObject({method: "Lifecycle", request: {operation: {kind: "PAGE_ERRORS"}}});
+    const seen: unknown[] = [];
+    const remove = session.onPageError((pageError) => seen.push(pageError));
+    await expect.poll(() => requests.some(({method}) => method === "SubscribeEvents")).toBe(true);
+    expect(requests.find(({method}) => method === "SubscribeEvents")!.request).toEqual({sessionId: session.id, types: ["pageError"]});
+    toClient.write(encodeFrame({event: "pageError", params: {subscriptionId: "subscription-1", sessionId: session.id, generation: 0, sequence: 1, payload: {message: "Uncaught Error: live", url: "", line: 0, column: 0, stack: [], timestamp: ""}}}));
+    await expect.poll(() => seen.length).toBe(1);
+    expect(seen[0]).toMatchObject({message: "Uncaught Error: live"});
+    remove();
   });
 
   it("returns launch metadata and bounded all-tab diagnostics", async () => {
@@ -526,6 +581,106 @@ describe("Biloba TypeScript client", () => {
     expect(await session.getCookies()).toEqual([{name: "auth", value: "abc", path: "/", session: true}]);
   });
 
+  it("drives a pointer through POINTER_* DOM operations, polling only moveToElement", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    const mouse = session.pointer();
+    const pen = session.pointer({type: "pen"});
+    expect([mouse.type, pen.type]).toEqual(["mouse", "pen"]);
+    await pen.moveTo(10, 20);
+    await pen.down();
+    await pen.moveToElement(session.getByTestId("track"), {position: {x: 0, y: 10}, timeoutMs: 500});
+    await pen.up();
+    await mouse.moveToElement("#pad", {immediate: true});
+    expect(requests.filter(({method}) => method === "Dom").map(({request}) => [request.operation, request.poll])).toEqual([
+      [{kind: "POINTER_MOVE", point: {x: 10, y: 20}, pointerId: 2, pointerType: "pen"}, {}],
+      [{kind: "POINTER_DOWN", pointerId: 2, pointerType: "pen"}, {}],
+      [{kind: "POINTER_MOVE_TO_ELEMENT", locator: {kind: "TEST_ID", value: "track", match: "EXACT", first: false}, pointerId: 2, pointerType: "pen", offset: {x: 0, y: 10}}, {timeoutMs: 500}],
+      [{kind: "POINTER_UP", pointerId: 2, pointerType: "pen"}, {}],
+      [{kind: "POINTER_MOVE_TO_ELEMENT", locator: {kind: "CSS", value: "#pad", match: "EXACT", first: false}, pointerId: 1, pointerType: "mouse"}, {mode: "IMMEDIATE"}],
+    ]);
+
+    expect(() => session.pointer({type: "touch" as never})).toThrow(/pointer type must be "mouse" or "pen"/);
+    await expect(mouse.moveTo(1, 2, {timeoutMs: 5} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(mouse.moveToElement("#pad", {mode: "consistently"})).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    const other = await browser.openSession();
+    await expect(mouse.moveToElement(other.locator("#pad"))).rejects.toMatchObject({code: "INVALID_ARGUMENT", message: expect.stringContaining("different session")});
+  });
+
+  it("collects a screencast's frames chunk by chunk, once", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    const recording = await session.startScreencast({format: "png", maxWidth: 400, everyNthFrame: 2});
+    const frames = await recording.stop();
+    expect(frames).toEqual([0, 1, 2].map((index) => ({data: new Uint8Array([index]), timestamp: 1_000.5 + index, deviceWidth: 800, deviceHeight: 600, pageScaleFactor: 1, scrollOffsetX: 0, scrollOffsetY: index, offsetTop: 0})));
+    expect(await recording.stop()).toBe(frames);
+    expect(requests.filter(({method}) => method === "Eventful").map(({request}) => request.operation)).toEqual([
+      {kind: "START_SCREENCAST", screencast: {format: "png", maxWidth: 400, everyNthFrame: 2}},
+      {kind: "STOP_SCREENCAST", id: "recording-1"},
+      {kind: "SCREENCAST_FRAMES", id: "recording-1", offset: 1},
+      {kind: "SCREENCAST_FRAMES", id: "recording-1", offset: 2},
+    ]);
+
+    await expect(session.startScreencast({format: "webp" as never})).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(session.startScreencast({quality: 101})).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(session.startScreencast({maxHeight: -1})).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(session.startScreencast({timeoutMs: 5} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+  });
+
+  it("drives the page clock through typed lifecycle operations, giving runFor a deadline past its budget", async () => {
+    browser = await connectClient();
+    const session = await browser.openSession();
+    const t0 = new Date(Date.UTC(2024, 1, 2, 8));
+    const clock = await session.installClock(t0);
+    await clock.pauseAt(t0.getTime());
+    await clock.runFor(1_500);
+    await clock.runFor(60_000, {timeoutMs: 30_000});
+    await clock.fastForward(3_600_000);
+    await clock.setFixedTime(new Date(0));
+    await clock.setSystemTime(t0);
+    await session.clock().resume();
+    const lifecycle = requests.map((entry, index) => ({...entry, deadline: deadlines[index]})).filter(({method}) => method === "Lifecycle");
+    expect(lifecycle.map(({request}) => request.operation)).toEqual([
+      {kind: "INSTALL_CLOCK", clock: {timeMs: t0.getTime()}},
+      {kind: "PAUSE_CLOCK_AT", clock: {timeMs: t0.getTime()}},
+      {kind: "RUN_CLOCK_FOR", clock: {durationMs: 1_500, timeoutMs: 10_000}},
+      {kind: "RUN_CLOCK_FOR", clock: {durationMs: 60_000, timeoutMs: 30_000}},
+      {kind: "FAST_FORWARD_CLOCK", clock: {durationMs: 3_600_000}},
+      {kind: "SET_CLOCK_FIXED_TIME", clock: {timeMs: 0}},
+      {kind: "SET_CLOCK_SYSTEM_TIME", clock: {timeMs: t0.getTime()}},
+      {kind: "RESUME_CLOCK"},
+    ]);
+    expect(lifecycle[2]!.deadline).toBeGreaterThan(10_000);
+    expect(lifecycle[3]!.deadline).toBeGreaterThan(30_000);
+
+    await expect(session.installClock(new Date(Number.NaN))).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(clock.fastForward(-1)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(clock.runFor(Number.POSITIVE_INFINITY)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(clock.runFor(10, {timeoutMs: 0})).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(clock.resume({timeoutMs: 5} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    await expect(clock.runFor(10, {intervalMs: 5} as never)).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+  });
+
+  it("says the page clock is paused when a poll times out under it", async () => {
+    const pausedClock = {locator: `locator("#countdown")`, daemonDetail: "timed out", pausedClockAt: "2024-02-02T08:00:00.000Z"};
+    const note = "This tab's page clock is paused at 2024-02-02T08:00:00.000Z; timers and animation frames won't run until you call runFor, fastForward, or resume.";
+    assertImplementation = (_request, respond) => respond(operationResult({matched: false, observedJson: JSON.stringify("10"), trajectory: [{attempt: 1, elapsedMs: 0, observedJson: JSON.stringify("10")}], diagnostics: {...pausedClock, expected: "9"}}));
+    clickImplementation = (_request, respond) => respond(operationResult({matched: false, attemptCount: 1, trajectory: [{attempt: 1, elapsedMs: 0}], diagnostics: {...pausedClock, expected: "operation to succeed"}}));
+    browser = await connectClient();
+    const session = await browser.openSession();
+
+    const assertion = await session.locator("#countdown").expectText("9", {timeoutMs: 50}).catch((reason: unknown) => reason);
+    expectTimedOutAssertion(assertion, {locator: `locator("#countdown")`, expected: "9"});
+    expect(assertion.message).toContain(note);
+    const action = await session.locator("#countdown").click({timeoutMs: 50}).catch((reason: unknown) => reason);
+    expectTimedOutAction(action, {locator: `locator("#countdown")`, operation: "click"});
+    expect(action.message).toContain(note);
+
+    assertImplementation = (_request, respond) => respond(operationResult({matched: false, observedJson: JSON.stringify("10"), trajectory: [{attempt: 1, elapsedMs: 0}], diagnostics: {locator: `locator("#countdown")`, expected: "9"}}));
+    const unpaused = await session.locator("#countdown").expectText("9", {timeoutMs: 50}).catch((reason: unknown) => reason);
+    expect((unpaused as Error).message).not.toContain("page clock");
+  });
+
   it("serializes live handles, storage, page state, and emulation through typed lifecycle operations", async () => {
     browser = await connectClient();
     const session = await browser.openSession();
@@ -541,15 +696,21 @@ describe("Biloba TypeScript client", () => {
     expect(await session.accessibilityOutline()).toContain("button");
     expect(await session.consoleMessages()).toHaveLength(1);
     await session.setGeolocation({latitude: 0, longitude: 0});
-    await session.setPermissions("https://app.test", {clipboardReadWrite: "granted", geolocation: "denied"});
+    await session.setPermissions("https://app.test", {"clipboard-read": "granted", geolocation: "denied"});
     await session.setMedia({colorScheme: "dark", reducedMotion: "reduce"});
+    await session.setDeviceMetrics({width: 390, height: 844, mobile: true, touch: true, landscape: true});
+    await session.setUserAgent("BilobaPhone/1.0");
+    await session.clearUserAgent();
 
     expect(requests).toEqual(expect.arrayContaining([
       expect.objectContaining({method: "ListTabs", request: expect.objectContaining({spawnedOnly: true})}),
       expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "STORAGE_GET", area: "localStorage", key: "count"}})}),
       expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "WAIT_FOR_DEFINED", expression: "window.ready"}, poll: {timeoutMs: 50}})}),
       expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "SET_GEOLOCATION", geolocation: {latitude: 0, longitude: 0}}})}),
-      expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "SET_PERMISSIONS", origin: "https://app.test", permissions: {clipboardReadWrite: "granted", geolocation: "denied"}}})}),
+      expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "SET_PERMISSIONS", origin: "https://app.test", permissions: {"clipboard-read": "granted", geolocation: "denied"}}})}),
+      expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "SET_DEVICE_METRICS", device: {width: 390, height: 844, deviceScaleFactor: 1, mobile: true, touch: true, landscape: true}}})}),
+      expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "SET_USER_AGENT", userAgent: "BilobaPhone/1.0"}})}),
+      expect.objectContaining({method: "Lifecycle", request: expect.objectContaining({operation: {kind: "CLEAR_USER_AGENT"}})}),
     ]));
   });
 
