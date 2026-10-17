@@ -1375,13 +1375,15 @@ func (b *Biloba) renderShadowedHandlers() string {
 const maxUnreadableResponseBodies = 5
 
 // unreadableResponseBody is one response-stage handler dispatch whose body Chrome refused to hand
-// over, or that otherwise failed to read (see engine.ReadInterceptedResponseBodyContext).  Recorded
-// whenever it happens, surfaced only when the spec fails.
+// over, or that otherwise failed to read (see engine.ReadInterceptedResponseBodyContext), or whose
+// resolved response Chrome then refused to accept.  Recorded whenever it happens, surfaced only when
+// the spec fails.
 type unreadableResponseBody struct {
 	api, location, url string
 	status             int
 	err                string
 	continued          bool // true: Biloba continued the response unmodified; false: it failed the request
+	fulfill            bool // true: the body was read, but fulfilling the resolved response failed
 }
 
 // unreadableResponseBodyRecorder holds a tab's most recent unreadable-response-body notes.  Like
@@ -1425,8 +1427,12 @@ func (r *unreadableResponseBodyRecorder) render() string {
 		if !e.continued {
 			action = "failed the request"
 		}
-		fmt.Fprintf(out, "⚠ %s %s handler registered at %s could not read the response body for %s (status %d):\n  %s\n  Biloba %s.\n",
-			indefiniteArticle(e.api), e.api, e.location, e.url, e.status, e.err, action)
+		what := "read the response body"
+		if e.fulfill {
+			what = "deliver its response"
+		}
+		fmt.Fprintf(out, "⚠ %s %s handler registered at %s could not %s for %s (status %d):\n  %s\n  Biloba %s.\n",
+			indefiniteArticle(e.api), e.api, e.location, what, e.url, e.status, e.err, action)
 	}
 	return out.String()
 }
@@ -1528,14 +1534,20 @@ func (b *Biloba) handleResponseStagePause(ev *fetch.EventRequestPaused) {
 		if response.Status == 0 {
 			response.Status = http.StatusOK
 		}
-		params := fetch.FulfillRequest(ev.RequestID, int64(response.Status)).
-			WithBody(base64.StdEncoding.EncodeToString([]byte(response.Body)))
-		if headers := response.headerEntries(); len(headers) > 0 {
-			params = params.WithResponseHeaders(headers)
-		}
-		_ = b.runEngine("fulfill a modified network response", func(ctx context.Context) error {
-			return engine.RunActionContext(ctx, params)
+		// the body is always sent, even when empty: an absent body tells Chrome to reuse the original,
+		// which was taken as a stream above, and Chrome leaves the request unresolved
+		fulfill := engine.FulfillInterceptedResponse(ev.RequestID, response.Status, response.headerEntries(), []byte(response.Body))
+		err = b.runEngine("fulfill a modified network response", func(ctx context.Context) error {
+			return engine.RunActionContext(ctx, fulfill)
 		})
+		if err != nil {
+			// the body has left Chrome, so the response can't be continued: fail the request rather
+			// than leave the page waiting on it
+			b.recordUnfulfilledResponse(handler, ev, err)
+			_ = b.runEngine("fail an unfulfilled network response", func(ctx context.Context) error {
+				return engine.RunActionContext(ctx, fetch.FailRequest(ev.RequestID, network.ErrorReasonFailed))
+			})
+		}
 	}()
 }
 
@@ -1550,6 +1562,18 @@ func (b *Biloba) recordUnreadableResponseBody(handler *ResponseModification, ev 
 	b.unreadableResponseBodies.record(unreadableResponseBody{
 		api: handler.prov.api, location: handler.prov.location.String(), url: ev.Request.URL,
 		status: int(ev.ResponseStatusCode), err: readErr.Error(), continued: continued,
+	})
+}
+
+// recordUnfulfilledResponse notes a response-stage handler dispatch whose resolved response Chrome
+// refused, for the on-failure report.
+func (b *Biloba) recordUnfulfilledResponse(handler *ResponseModification, ev *fetch.EventRequestPaused, fulfillErr error) {
+	if b.unreadableResponseBodies == nil {
+		return
+	}
+	b.unreadableResponseBodies.record(unreadableResponseBody{
+		api: handler.prov.api, location: handler.prov.location.String(), url: ev.Request.URL,
+		status: int(ev.ResponseStatusCode), err: fulfillErr.Error(), fulfill: true,
 	})
 }
 

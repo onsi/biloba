@@ -320,6 +320,39 @@ var _ = Describe("Observing the network", func() {
 			Expect(miss.Count()).To(Equal(0))
 		})
 
+		// At the response stage Chrome reads an absent Fetch.fulfillRequest body as "reuse the original",
+		// which Biloba has already taken as a stream - so an empty body has to be sent explicitly, or the
+		// page's fetch never settles.  See https://github.com/onsi/biloba/issues/45.
+		Describe("responses that resolve to an empty body", func() {
+			It("delivers a modified response whose real body is empty", func() {
+				mod := b.ModifyResponse(ContainSubstring("/api/empty")).WithHeader("X-Touched", "1")
+				b.Run(`doFetch('/api/empty', {method: 'POST'})`)
+				Eventually("#status").Should(b.HaveInnerText("202"))
+				Expect("#body").To(b.HaveInnerText(""))
+				Expect("#error").To(b.HaveInnerText(""))
+				Expect(mod.Count()).To(Equal(1))
+			})
+
+			It("delivers a response whose body is replaced with an empty one", func() {
+				b.ModifyResponse(ContainSubstring("/api/echo")).WithStatus(204).WithBody("")
+				b.Click("#fetch")
+				Eventually("#status").Should(b.HaveInnerText("204"))
+				Expect("#body").To(b.HaveInnerText(""))
+				Expect("#error").To(b.HaveInnerText(""))
+			})
+
+			It("fails the request, and says so, when Chrome refuses the resolved response", func() {
+				b.ModifyResponse(ContainSubstring("/api/echo")).WithStatus(42)
+				loc := lineAbove()
+				b.Click("#fetch")
+				Eventually("#error").Should(b.HaveInnerText(ContainSubstring("fetch failed")))
+				Expect(b.UnreadableResponseBodyNoteForTest()).To(And(
+					ContainSubstring("⚠ A ModifyResponse handler registered at "+loc+" could not deliver its response for "),
+					ContainSubstring("Biloba failed the request."),
+				))
+			})
+		})
+
 		// Handlers are first-match-wins, and Prepare() is OncePerOrdered - so inside an Ordered
 		// container a handler registered by an earlier It is still registered and shadows an
 		// identical handler registered by a later It.  This pins that (surprising) behavior.
@@ -741,6 +774,19 @@ var _ = Describe("Observing the network", func() {
 			Eventually("#body").Should(b.HaveInnerText(ContainSubstring("/api/echo")))
 			Expect("#status").To(b.HaveInnerText("200"))
 			Expect(hold.Count()).To(Equal(1))
+		})
+
+		It("releases a held response whose body is empty", func() {
+			hold := b.HoldResponse(ContainSubstring("/api/empty"))
+			b.Run(`doFetch('/api/empty', {method: 'POST'})`)
+
+			response := hold.Await()
+			Expect(response.Status).To(Equal(202))
+			Expect(response.Body).To(BeEmpty())
+
+			hold.Release()
+			Eventually("#status").Should(b.HaveInnerText("202"))
+			Expect("#error").To(b.HaveInnerText(""))
 		})
 
 		It("counts matching responses and can be polled", func() {

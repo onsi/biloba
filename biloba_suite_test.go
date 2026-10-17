@@ -237,6 +237,11 @@ func newFixtureServer() string {
 		if strings.Contains(r.URL.Path, "slow") {
 			time.Sleep(300 * time.Millisecond)
 		}
+		if strings.Contains(r.URL.Path, "empty") {
+			// a 202 with no body, like a fire-and-forget POST
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{

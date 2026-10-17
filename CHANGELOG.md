@@ -4,6 +4,8 @@
 
 ### Fixes
 
+- Go: `HoldResponse` and `ModifyResponse` no longer leave the page's request hanging when the response they deliver has an empty body (a `202` with no body, say, or `WithBody("")`), matching the TypeScript client. If Chrome refuses the response a handler resolved to, Biloba now fails the request and notes it in the failure report instead of silently leaving it unresolved (#45).
+
 ## 0.18.0
 
 This release brings the Go and TypeScript clients to parity and adds, in both:

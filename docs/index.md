@@ -4483,6 +4483,8 @@ A handler is only reported when it **never fired** *and* was shadowed at least o
   Biloba continued the response unmodified.
 ```
 
+The same note covers the other end of the handler: if Chrome refuses the response a handler resolved to (an out-of-range status, for example), Biloba fails the request and the note says the handler `could not deliver its response`.
+
 All six of these are **diagnostic only**: none of them changes whether a spec passes, and none appears unless it fails.
 
 You can also call `b.Outline()` directly in a spec to capture a snapshot at any point:

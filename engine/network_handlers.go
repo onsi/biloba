@@ -602,11 +602,20 @@ func (s *Session) fulfillResponse(id fetch.RequestID, status int, headers []Head
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
 	headers = stripEntityHeaderEntries(headers)
-	return chromedp.Run(ctx, fulfillWithExplicitBody{
+	return chromedp.Run(ctx, FulfillInterceptedResponse(id, status, fetchHeaderEntries(headers), body))
+}
+
+// FulfillInterceptedResponse is the Fetch.fulfillRequest that answers a response paused at the
+// response stage once its body has been read (see fulfillWithExplicitBody).
+func FulfillInterceptedResponse(id fetch.RequestID, status int, headers []*fetch.HeaderEntry, body []byte) chromedp.Action {
+	if headers == nil {
+		headers = []*fetch.HeaderEntry{}
+	}
+	return fulfillWithExplicitBody{
 		RequestID: id, ResponseCode: int64(status),
-		ResponseHeaders: fetchHeaderEntries(headers),
+		ResponseHeaders: headers,
 		Body:            base64.StdEncoding.EncodeToString(body),
-	})
+	}
 }
 
 // fulfillWithExplicitBody is Fetch.fulfillRequest with the body always on the wire.  cdproto tags

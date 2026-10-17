@@ -96,6 +96,8 @@ Reported only when a handler **never fired** *and* was shadowed at least once. *
   Biloba continued the response unmodified.
 ```
 
+The same note reports a handler whose resolved response Chrome refused (an out-of-range status, say) as `could not deliver its response`; Biloba fails that request.
+
 ### When the failure is Chrome itself
 
 Every command Biloba sends Chrome runs under a deadline, so an unresponsive browser produces a failing spec instead of a hung suite. Three shapes, each naming its cause on the first line:

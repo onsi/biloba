@@ -66,6 +66,7 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
       if (request.url === "/pointer.html" || request.url === "/screencast.html" || request.url === "/clock.html") { response.setHeader("content-type", "text/html"); createReadStream(goFixture(request.url.slice(1))).pipe(response); return; }
       if (request.url === "/released") { pointerReleases++; response.end(); return; }
       if (request.url === "/user-agent") { response.setHeader("content-type", "text/plain"); response.end(request.headers["user-agent"] ?? ""); return; }
+      if (request.url === "/empty") { response.statusCode = 202; response.end(); return; }
       if (request.url === "/slow") { setTimeout(() => response.end("slow"), 100); return; }
       if (request.url === "/slow-callback") {
         response.setHeader("content-type", "text/plain");
@@ -878,6 +879,16 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     const emptyBody = await session.routeResponse(endsWith("/callback"), () => ({status: 204, body: new Uint8Array()}));
     expect(await session.evaluateAsync(`fetch("/callback").then(async response => [response.status, await response.text()])`)).toEqual([204, ""]);
     await emptyBody.remove();
+    // The same holds when the real response is the empty one: a transform that keeps its body, or a
+    // hold that releases it, still has to send that empty body explicitly (onsi/biloba#45).
+    const emptyOriginal = await session.routeResponse(endsWith("/empty"), (response) => ({status: response.status, headers: [{name: "x-touched", value: "1"}], body: response.body}));
+    expect(await session.evaluateAsync(`fetch("/empty", {method: "POST"}).then(async response => [response.status, response.headers.get("x-touched"), await response.text()])`)).toEqual([202, "1", ""]);
+    await emptyOriginal.remove();
+    const emptyHold = await session.holdResponse(endsWith("/empty"));
+    await session.evaluate(`{ window.__emptyHeld = fetch("/empty", {method: "POST"}).then(async response => [response.status, await response.text()]); }`);
+    expect(new TextDecoder().decode((await emptyHold.await({timeoutMs: 2_000})).body)).toBe("");
+    await emptyHold.release();
+    expect(await session.evaluateAsync(`window.__emptyHeld`)).toEqual([202, ""]);
 
     const failingTransform = await session.routeResponse(endsWith("/callback"), () => { throw new Error("route failed"); });
     expect(await session.evaluateAsync(`fetch("/callback").then(response => response.text())`)).toBe("callback");
