@@ -1123,6 +1123,34 @@ var _ = Describe("Observing the network", func() {
 		})
 	})
 
+	// Chrome answers Fetch.enable before the renderer has the intercepting loader factory, and a busy
+	// page runs a keydown ahead of that update - so an input-started fetch right after the tab's first
+	// registration used to escape (about one in four here).  Prepare turns interception off, so every
+	// repeat registers the tab's first handler again.
+	Describe("the tab's first registration", func() {
+		BeforeEach(func() {
+			b.Navigate(fixtureServer + "/network-interception.html")
+			Eventually("#hello").Should(b.Exist())
+		})
+
+		It("intercepts a request that keyboard input starts straight away", MustPassRepeatedly(25), func() {
+			b.Run(`(() => {
+				const until = performance.now() + 2000
+				let pressed = false
+				window.addEventListener("keydown", () => { pressed = true; fetch("/api/echo?pressed", {method: "POST"}) })
+				const busy = () => {
+					const t = performance.now(); while (performance.now() - t < 14) {}
+					if (!pressed && performance.now() < until) requestAnimationFrame(busy)
+				}
+				busy()
+			})()`)
+			hold := b.WithTimeout(time.Second).HoldResponse(ContainSubstring("/api/echo?pressed"))
+			b.SendKeysToWindowImmediately("a")
+			hold.Await()
+			hold.Release()
+		})
+	})
+
 	Describe("interception and the HTTP cache", func() {
 		var cacheServer string
 		var serverHits int32

@@ -14,15 +14,39 @@ import (
 	"github.com/chromedp/cdproto/fetch"
 	cdpio "github.com/chromedp/cdproto/io"
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
 
-// EnableInterceptionContext turns on request interception after disabling the HTTP cache.
+// EnableInterceptionContext turns on request interception after disabling the HTTP cache, and
+// returns once the page's renderer is intercepting (see AwaitInterceptionArmedContext).
 func EnableInterceptionContext(ctx context.Context) error {
-	return chromedp.Run(ctx,
+	if err := chromedp.Run(ctx,
 		network.SetCacheDisabled(true),
 		fetch.Enable().WithPatterns([]*fetch.RequestPattern{{URLPattern: "*"}}),
-	)
+	); err != nil {
+		return err
+	}
+	return AwaitInterceptionArmedContext(ctx)
+}
+
+// AwaitInterceptionArmedContext returns once requests the page starts will be intercepted.  Chrome
+// answers Fetch.enable when it has sent the renderer an intercepting URL loader factory, not when the
+// renderer has installed it.  Runtime.evaluate is ordered behind that update; input events are not,
+// and a busy page's scheduler can run a keydown that calls fetch() ahead of it, so the request
+// escapes interception.  One evaluate round trip makes the update land first.
+//
+// An evaluate that fails because the page is navigating is fine: the new document gets the
+// intercepting factory with its commit.  Only the context ending is an error.
+func AwaitInterceptionArmedContext(ctx context.Context) error {
+	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		_, _, err := runtime.Evaluate("0").Do(ctx)
+		return err
+	}))
+	if err != nil && ctx.Err() != nil {
+		return err
+	}
+	return nil
 }
 
 // RunActionContext dispatches one CDP action against the target executor carried by ctx.

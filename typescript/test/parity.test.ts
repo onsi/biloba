@@ -780,6 +780,31 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     await session.setWindowSize(1920, 1080);
   });
 
+  // Chrome answers Fetch.enable before the renderer has the intercepting loader factory, and a busy
+  // page runs a keydown ahead of that update - so an input-started fetch right after the session's
+  // first registration used to escape.  prepare() turns interception off, so every round registers
+  // the first handler again.
+  it("intercepts a request that keyboard input starts straight after the first registration", async () => {
+    for (let round = 0; round < 25; round++) {
+      await session.prepare();
+      await session.navigate(baseUrl);
+      await session.evaluate(`(() => {
+        const until = performance.now() + 2000
+        let pressed = false
+        window.addEventListener("keydown", () => { pressed = true; fetch("/network-json?pressed", {method: "POST"}) })
+        const busy = () => {
+          const t = performance.now(); while (performance.now() - t < 14) {}
+          if (!pressed && performance.now() < until) requestAnimationFrame(busy)
+        }
+        busy()
+      })()`);
+      const hold = await session.holdResponse(endsWith("/network-json?pressed"));
+      await session.sendKeys("a");
+      await hold.await({timeoutMs: 1_000});
+      await hold.release();
+    }
+  });
+
   it("reads the response body before starting the callback timeout", async () => {
     await session.prepare();
     await session.navigate(baseUrl);

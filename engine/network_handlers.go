@@ -351,6 +351,9 @@ func (s *Session) ensureInterception(ctx context.Context) error {
 	if err := chromedp.Run(ctx, network.SetCacheDisabled(true), fetch.Enable().WithPatterns([]*fetch.RequestPattern{{URLPattern: "*", RequestStage: fetch.RequestStageRequest}})); err != nil {
 		return err
 	}
+	if err := AwaitInterceptionArmedContext(ctx); err != nil {
+		return err
+	}
 	s.holdMu.Lock()
 	s.fetchEnabled = true
 	s.holdMu.Unlock()
