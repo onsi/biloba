@@ -4,6 +4,10 @@
 
 ### Fixes
 
+## 0.18.3
+
+### Fixes
+
 - A tab's first network handler or hold now returns only once Chrome is intercepting the page's requests. Before, a request the page started from keyboard or pointer input straight afterwards could escape interception on a busy page (both clients).
 
 ## 0.18.2
