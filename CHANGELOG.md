@@ -4,6 +4,10 @@
 
 ### Fixes
 
+## 0.18.2
+
+### Fixes
+
 - Screencast frame timestamps are documented as Chrome 156 reports them: when Chrome expects to display the frame, about one frame after the page drew it, so the last frame can be stamped a little after `Stop()`/`stop()` returns. Earlier versions of Chrome stamp the frame when they send it (both clients).
 
 ## 0.18.1
