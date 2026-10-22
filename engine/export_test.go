@@ -22,6 +22,10 @@ func SetVisualOperationHooksForTest(session *Session, hooks VisualOperationHooks
 	}
 }
 
+// RecentDownloadWindowForTest is how long a finished download keeps a download slot, so a spec can
+// work out when a saturated window closes.
+const RecentDownloadWindowForTest = recentDownloadWindow
+
 // SessionContextForTest exposes a session's chromedp target context so engine_test.go can
 // exercise the context-level primitives (NavigateContext and friends) against a live tab.
 func SessionContextForTest(session *Session) context.Context {

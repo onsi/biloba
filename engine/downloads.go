@@ -221,12 +221,16 @@ func (s *Session) CancelDownload(ctx context.Context, id string) error {
 	})
 }
 
+// recentDownloadWindow is how long a finished download keeps counting toward a browser context's
+// download slots (see waitForDownloadSlot).
+const recentDownloadWindow = time.Second
+
 func (s *Session) activeOrRecentDownloadCount(now time.Time) int {
 	s.downloadMu.Lock()
 	defer s.downloadMu.Unlock()
 	count := 0
 	for _, download := range s.downloads {
-		if download.State == DownloadActive || (!download.CompletedAt.IsZero() && now.Sub(download.CompletedAt) < time.Second) {
+		if download.State == DownloadActive || (!download.CompletedAt.IsZero() && now.Sub(download.CompletedAt) < recentDownloadWindow) {
 			count++
 		}
 	}

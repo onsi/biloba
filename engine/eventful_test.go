@@ -315,24 +315,49 @@ var _ = Describe("eventful engine state", func() {
 		Expect(string(rootContent)).To(Equal("downloaded report"))
 	})
 
+	// The window stays saturated only until the earliest of the ten downloads ages out of it, and a
+	// slow runner can finish them so far apart that it closes before the tenth lands.  So the spec
+	// sets the scenario up until the window is saturated with room to spare, and asserts against the
+	// moment it actually closes rather than a fixed delay.
 	It("throttles DOM handlers while Chrome's download completion window is saturated", func(ctx SpecContext) {
-		session, err := browser.OpenSession(ctx)
-		Expect(err).NotTo(HaveOccurred())
+		var session *engine.Session
+		var windowCloses time.Time
+		Eventually(func(g Gomega) {
+			if session != nil {
+				Expect(session.Close()).To(Succeed())
+			}
+			var err error
+			session, err = browser.OpenSession(ctx)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+			_, err = session.Evaluate(ctx, `for(let i=0;i<10;i++){const a=document.createElement("a");a.href="/download?i="+i;a.download="";document.documentElement.append(a);a.click()}`)
+			g.Expect(err).NotTo(HaveOccurred())
+			var downloads []engine.Download
+			g.Eventually(func() []engine.Download {
+				downloads = session.Downloads(engine.DownloadQuery{State: engine.DownloadComplete})
+				return downloads
+			}, 2*time.Second).Should(HaveLen(10))
+			windowCloses = downloads[0].CompletedAt
+			for _, download := range downloads {
+				if download.CompletedAt.Before(windowCloses) {
+					windowCloses = download.CompletedAt
+				}
+			}
+			windowCloses = windowCloses.Add(engine.RecentDownloadWindowForTest)
+			g.Expect(time.Until(windowCloses)).To(BeNumerically(">", 200*time.Millisecond), "the downloads finished too far apart to saturate the window")
+		}, 10*time.Second, time.Millisecond).Should(Succeed())
 		DeferCleanup(session.Close)
-		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
-		_, err = session.Evaluate(ctx, `for(let i=0;i<10;i++){const a=document.createElement("a");a.href="/download?i="+i;a.download="";document.documentElement.append(a);a.click()}`)
-		Expect(err).NotTo(HaveOccurred())
-		Eventually(func() int {
-			return len(session.Downloads(engine.DownloadQuery{State: engine.DownloadComplete}))
-		}, 2*time.Second).Should(Equal(10))
 
-		done := make(chan error, 1)
+		done := make(chan time.Time, 1)
 		go func() {
+			defer GinkgoRecover()
 			_, handlerErr := session.Exists(ctx, engine.TestID("name"))
-			done <- handlerErr
+			Expect(handlerErr).NotTo(HaveOccurred())
+			done <- time.Now()
 		}()
-		Consistently(done, 50*time.Millisecond).ShouldNot(Receive())
-		Eventually(done, 2*time.Second).Should(Receive(Succeed()))
+		var returned time.Time
+		Eventually(done, 2*time.Second).Should(Receive(&returned))
+		Expect(returned).To(BeTemporally(">=", windowCloses))
 	})
 
 	It("fulfills, aborts, and modifies requests and responses with ordered handler stats", func(ctx SpecContext) {
