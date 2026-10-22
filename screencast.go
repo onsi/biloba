@@ -52,11 +52,12 @@ func (o ScreencastOptions) validate() error {
 ScreencastFrame is one frame of a screencast - see [Biloba.StartScreencast]:
 
   - Data is the encoded image, in the format the screencast was started with.
-  - Timestamp is when Chrome swapped the frame onto the screen.  It is wall-clock time on the machine
-    running Chrome, so on the same machine it compares directly with time.Now().  It is the zero
-    time in the unlikely event that Chrome sent a frame without one.  chrome-headless-shell stamps
-    a frame within a few milliseconds of drawing it; full Chrome usually does too, but can stamp a
-    frame hundreds of milliseconds late when it falls behind.
+  - Timestamp is when Chrome expects to display the frame: from Chrome 156, about one frame (16ms at
+    60 frames a second) after the page drew it, so the last frame's Timestamp can be a little later
+    than Stop returning.  Earlier versions stamp the frame when they send it.  It is wall-clock time
+    on the machine running Chrome, so on the same machine it compares directly with time.Now().  It
+    is the zero time in the unlikely event that Chrome sent a frame without one.  Full Chrome can
+    stamp a frame hundreds of milliseconds late when it falls behind.
   - DeviceWidth and DeviceHeight are the viewport size, in CSS pixels, that the image shows.
   - PageScaleFactor is the page's pinch-zoom scale.
   - ScrollOffsetX and ScrollOffsetY are the page's scroll position, in CSS pixels, when the frame was

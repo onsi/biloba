@@ -523,7 +523,9 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
       frames.forEach((frame, index) => {
         expect([...frame.data.subarray(0, 2)]).toEqual([0xff, 0xd8]);
         expect([frame.deviceWidth, frame.deviceHeight, frame.pageScaleFactor, frame.scrollOffsetY]).toEqual([size.width, size.height, 1, 0]);
-        expect(frame.timestamp).toBeLessThanOrEqual(after + 1);
+        // From Chrome 156 a frame is stamped with when Chrome expects to display it, about one frame
+        // after it was drawn, so the last frame's timestamp can be later than stop() resolving.
+        expect(frame.timestamp).toBeLessThanOrEqual(after + 50);
         // The first frame is the one already on screen, so it can predate startScreencast.
         if (index > 0) {
           expect(frame.timestamp).toBeGreaterThanOrEqual(before - 1);

@@ -237,7 +237,7 @@ const recording = await session.startScreencast({format: "jpeg", quality: 92}); 
 const frames = await recording.stop(); // [{data, timestamp, deviceWidth, deviceHeight, pageScaleFactor, scrollOffsetX, scrollOffsetY, offsetTop}]
 ```
 
-- `stop()` waits for Chrome, so no frame arrives after it; frames are sorted by `timestamp` (epoch ms, comparable with `Date.now()` on Chrome's machine); calling it again returns the same frames.
+- `stop()` waits for Chrome, so no frame arrives after it; frames are sorted by `timestamp` (epoch ms when Chrome expects to display the frame, comparable with `Date.now()` on Chrome's machine; from Chrome 156 about one frame after it was drawn, so the last one can postdate `stop()` resolving); calling it again returns the same frames.
 - One recording per tab at a time; frame handles refuse with `INVALID_ARGUMENT`. `prepare()`/`close()` stop and **discard** a running recording — stop it inside the test to keep the frames.
 - Chrome sends frames only when the page changes. For timing you rely on, record in `chrome-headless-shell`: full Chrome can deliver frames late, out of order, and with gaps under load.
 

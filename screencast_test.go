@@ -63,7 +63,9 @@ var _ = Describe("Screencasts", func() {
 			Ω(frame.DeviceHeight).Should(BeNumerically("==", height))
 			Ω(frame.PageScaleFactor).Should(BeNumerically("==", 1))
 			Ω(frame.ScrollOffsetY).Should(BeZero())
-			Ω(frame.Timestamp).Should(BeTemporally("<=", after))
+			// From Chrome 156 a frame is stamped with when Chrome expects to display it, about one frame
+			// after it was drawn, so the last frame's timestamp can be later than Stop returning.
+			Ω(frame.Timestamp).Should(BeTemporally("<=", after.Add(50*time.Millisecond)))
 			if i > 0 {
 				// The first frame is the one already on screen, so it can predate StartScreencast.
 				Ω(frame.Timestamp).Should(BeTemporally(">=", before))

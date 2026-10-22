@@ -347,9 +347,11 @@ export interface ScreencastOptions extends CancellationOptions {
   everyNthFrame?: number | undefined;
 }
 /**
- * One screencast frame.  timestamp is when Chrome swapped the frame onto the screen, in milliseconds
- * since the Unix epoch (fractional), so on the machine running Chrome it compares directly with
- * Date.now(); it is 0 if Chrome sent none.  deviceWidth and deviceHeight are the viewport size the
+ * One screencast frame.  timestamp is when Chrome expects to display the frame, in milliseconds since
+ * the Unix epoch (fractional), so on the machine running Chrome it compares directly with Date.now();
+ * it is 0 if Chrome sent none.  From Chrome 156 that is about one frame after the page drew it, so the
+ * last frame's timestamp can be a little later than stop() resolving; earlier versions stamp the frame
+ * when they send it.  deviceWidth and deviceHeight are the viewport size the
  * image shows, in CSS pixels; scrollOffsetX and scrollOffsetY are the page's scroll position; offsetTop
  * is how far down the image the page starts.
  */
