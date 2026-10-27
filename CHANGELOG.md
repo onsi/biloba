@@ -2,10 +2,14 @@
 
 ### Features
 
+### Fixes
+
+## 0.19.0
+
+### Features
+
 - Go: `b.RunAsync`/`RunErrAsync` return the value of a script that is a single expression, so `b.RunAsync("(await fetch(url)).status")` works without a `return`. A script with statements or a `return` runs as a function body, as before.
 - New `biloba-go:look-at-pages` skill for looking at your own UI while you build it: a scratch spec that screenshots light/dark × phone/desktop, the text views, the states worth capturing, and turning what you saw into assertions.
-
-### Fixes
 
 ## 0.18.3
 

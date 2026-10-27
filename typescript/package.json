@@ -1,6 +1,6 @@
 {
   "name": "biloba",
-  "version": "0.18.3",
+  "version": "0.19.0",
   "description": "Fast, stable browser testing from TypeScript and Vitest through Biloba",
   "license": "MIT",
   "repository": {
