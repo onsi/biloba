@@ -88,6 +88,7 @@ Sibling skills are named here without a prefix; invoke one with the same plugin 
 | Asserting appearance / visual regression baselines | `visual-assertions` |
 | Building XPath selectors | `xpath` |
 | Testing a page/app you haven't seen | `explore-unfamiliar-page` |
+| Looking at your own UI while you build it (light/dark, phone/desktop, states) | `look-at-pages` |
 | A spec failed and you want to see why | `debug-failures` |
 | A spec is flaky / order-dependent / only fails under `-p` or CI | `flaky-specs` |
 | Measuring failure rates or suite performance across many runs (a flake hunt) | `flake-hunt` |

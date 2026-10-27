@@ -557,6 +557,7 @@ This installs a family of `biloba-go:*` skills that activate automatically while
 | `biloba-go:xpath` | Building selectors with the `b.XPath()` DSL. |
 | `biloba-go:api` | A one-line reference for every method and matcher. |
 | `biloba-go:explore-unfamiliar-page` | Orienting to a page you haven't seen, then drafting a starter spec. |
+| `biloba-go:look-at-pages` | Looking at your own UI while you build it: light/dark, phone/desktop, and the states worth capturing. |
 | `biloba-go:debug-failures` | DOM outlines, screenshots, and the env/config knobs that surface them. |
 | `biloba-go:flaky-specs` | A spec that's flaky, order-dependent, or only fails under `-p`/CI — the smells and their polling fixes. |
 | `biloba-go:flake-hunt` | Running the suite many times to measure each spec's failure rate, reading the JSON reports, and keeping a performance record. |

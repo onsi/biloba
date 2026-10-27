@@ -25,6 +25,7 @@ All skills are namespaced under `biloba-go:` and cover Biloba's Go API in Ginkgo
 | `biloba-go:xpath` | You're building an XPath selector with Biloba's `b.XPath()` DSL. |
 | `biloba-go:api` | You need a one-line reference for a Biloba method or matcher. |
 | `biloba-go:explore-unfamiliar-page` | You're writing tests against a page or app you haven't seen — orient first, then draft a spec. |
+| `biloba-go:look-at-pages` | You want to see your own UI while you build it — screenshots across light/dark and phone/desktop, the text views, the states worth capturing. |
 | `biloba-go:debug-failures` | A spec failed and you want the DOM outline, a11y tree, and screenshots — and the env knobs that surface them. |
 | `biloba-go:flaky-specs` | A spec is flaky, order-dependent, or only fails under `-p`/CI — the single-shot-read and racing-interaction smells, and their polling fixes. |
 
