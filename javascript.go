@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync/atomic"
 
@@ -107,7 +108,7 @@ func (b *Biloba) runErr(script string, awaitPromise bool, args ...any) (any, err
 /*
 RunErrAsync() runs the passed in script in an async function and awaits the result, returning the result as well as an error
 
-A script that is a single expression returns its value, as with [Biloba.Run]:
+A script that doesn't use return and is a single expression returns its value, as with [Biloba.Run]:
 
 	b.RunErrAsync(`(await fetch("/api/entries")).status`)
 
@@ -120,13 +121,18 @@ You should generally use [Biloba.RunAsync] instead of RunErrAsync and let Biloba
 Read https://onsi.github.io/biloba/#running-arbitrary-javascript to learn more about running JavaScript in Biloba
 */
 func (b *Biloba) RunErrAsync(script string, args ...any) (any, error) {
-	// Try the script as a single expression first, so it returns its value without a `return`.  A
-	// script with statements fails to parse that way, and nothing has run yet, so it is safe to run it
-	// again as the function body.
+	// A script that uses `return` is a function body, and runs as one.  Any other script is tried as a
+	// single expression first, so it returns its value without a `return`.  A script with statements
+	// fails to parse that way, and nothing has run yet, so it is safe to run it again as the function
+	// body.  Checking for `return` first spares the common `return` form that second round trip.
+	body := "(async () => {" + script + "\n})()"
+	if returnKeyword.MatchString(script) {
+		return b.runErr(body, true, args...)
+	}
 	expression := strings.TrimRight(script, "; \t\n")
 	res, err := b.runErr("(async () => (\n"+expression+"\n))()", true, args...)
 	if isParseError(err) {
-		return b.runErr("(async () => {"+script+"\n})()", true, args...)
+		return b.runErr(body, true, args...)
 	}
 	// A side-effect script such as `await store.dispatch(action)` may resolve to a value Chrome can't
 	// return (a cyclic object).  It already ran, and as a function body it would have resolved to
@@ -136,6 +142,8 @@ func (b *Biloba) RunErrAsync(script string, args ...any) (any, error) {
 	}
 	return res, err
 }
+
+var returnKeyword = regexp.MustCompile(`\breturn\b`)
 
 // isParseError reports whether err is Chrome failing to parse the script it was asked to evaluate.
 // Chrome reports a parse error as a synchronous "Uncaught" SyntaxError.  Anything the script throws
@@ -209,7 +217,7 @@ func illegalReturnHint(err error) string {
 /*
 RunAsync() runs the passed in script in an async function, awaits the result, and returns it.
 
-A script that is a single expression returns its value, just as with [Biloba.Run], and can use await:
+A script that doesn't use return and is a single expression returns its value, just as with [Biloba.Run], and can use await:
 
 	status := b.RunAsync(`(await fetch("/api/entries/X", {method: "DELETE"})).status`)
 

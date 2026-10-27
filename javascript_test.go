@@ -125,6 +125,13 @@ var _ = Describe("Javascript", func() {
 			})
 		})
 
+		Context("when the script uses return anywhere", func() {
+			It("runs it as the function body", func() {
+				Ω(b.RunErrAsync(`[1, 2].map(x => { return x * 2 })`)).Should(BeNil())
+				Ω(b.RunErrAsync(`return [1, 2].map(x => { return x * 2 })`)).Should(HaveExactElements(2.0, 4.0))
+			})
+		})
+
 		Context("when the script has statements but no return", func() {
 			It("runs them and resolves to nil", func() {
 				Ω(b.RunErrAsync(`window.first = 1; window.second = await Promise.resolve(2)`)).Should(BeNil())

@@ -3408,7 +3408,7 @@ b.RunAsync(`return await app.load()`, &users)
 
 ...and a non-promise value works just fine too (`b.RunAsync("1 + 2")` returns `3`).
 
-Biloba tries your script as a single expression first.  If it doesn't parse as one (it has statements, `const`, or a `return`), nothing has run yet, and Biloba runs it as the function body.  A function body that doesn't `return` resolves to `undefined`.  If a single expression's value can't be sent back from the browser (a cyclic object, say), `RunAsync` returns `nil` as it would have for a function body; with a decode pointer it fails with Chrome's error.
+A script that uses `return` anywhere runs as the function body.  Any other script is tried as a single expression first; if it doesn't parse as one (it has statements or `const`), nothing has run yet, and Biloba runs it as the function body.  So an expression that only uses `return` inside a callback (`items.map(x => { return x.id })`) is a function body too, and resolves to `undefined` - drop the braces (`items.map(x => x.id)`) to get its value.  A function body that doesn't `return` resolves to `undefined`.  If a single expression's value can't be sent back from the browser (a cyclic object, say), `RunAsync` returns `nil` as it would have for a function body; with a decode pointer it fails with Chrome's error.
 
 `b.Run`, by contrast, only takes an expression: a top-level `return` in `b.Run` is a syntax error (`Illegal return statement`), because `b.Run` evaluates a bare expression.  When you hit that, reach for `b.RunAsync` (which wraps your script in a function body) rather than wrapping it in an IIFE yourself - Biloba's failure message points you here.
 
