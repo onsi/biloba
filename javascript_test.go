@@ -107,6 +107,63 @@ var _ = Describe("Javascript", func() {
 			})
 		})
 
+		Context("when the script is a single expression", func() {
+			It("returns the expression's value without a return", func() {
+				Ω(b.RunErrAsync(`1 + 2`)).Should(Equal(3.0))
+				Ω(b.RunErrAsync(`await Promise.resolve(42)`)).Should(Equal(42.0))
+				Ω(b.RunErrAsync(`(await Promise.resolve({status: 400})).status;`)).Should(Equal(400.0))
+				Ω(b.RunErrAsync(`
+					await Promise.resolve("multi-line")
+					// with a trailing comment
+				`)).Should(Equal("multi-line"))
+			})
+
+			It("decodes the value into an argument", func() {
+				var n int
+				Ω(b.RunErrAsync(`await Promise.resolve(7)`, &n)).Error().ShouldNot(HaveOccurred())
+				Ω(n).Should(Equal(7))
+			})
+		})
+
+		Context("when the script has statements but no return", func() {
+			It("runs them and resolves to nil", func() {
+				Ω(b.RunErrAsync(`window.first = 1; window.second = await Promise.resolve(2)`)).Should(BeNil())
+				Ω(b.Run(`[window.first, window.second]`)).Should(HaveExactElements(1.0, 2.0))
+			})
+		})
+
+		Context("when the script throws a SyntaxError as it runs", func() {
+			It("runs the script only once", func() {
+				_, err := b.RunErrAsync(`(window.expressionRuns = (window.expressionRuns || 0) + 1, JSON.parse("{"))`)
+				Ω(err).Should(MatchError(ContainSubstring("JSON")))
+				Ω(b.Run(`window.expressionRuns`)).Should(Equal(1.0))
+
+				_, err = b.RunErrAsync(`window.bodyRuns = (window.bodyRuns || 0) + 1; JSON.parse("{")`)
+				Ω(err).Should(MatchError(ContainSubstring("JSON")))
+				Ω(b.Run(`window.bodyRuns`)).Should(Equal(1.0))
+			})
+		})
+
+		Context("when the script does not parse", func() {
+			It("returns the error from the function body form", func() {
+				_, err := b.RunErrAsync(`const x = ;`)
+				Ω(err).Should(MatchError(ContainSubstring("SyntaxError")))
+			})
+		})
+
+		Context("when a single expression's value can't be returned by value", func() {
+			It("resolves to nil, as the script would have as a function body", func() {
+				Ω(b.RunErrAsync(`(window.cyclic = {}, window.cyclic.self = window.cyclic, window.cyclic)`)).Should(BeNil())
+				Ω(b.Run(`window.cyclic === window.cyclic.self`)).Should(BeTrue())
+			})
+
+			It("returns Chrome's error when there is a decode target", func() {
+				var out map[string]any
+				_, err := b.RunErrAsync(`(window.cyclic = {}, window.cyclic.self = window.cyclic, window.cyclic)`, &out)
+				Ω(err).Should(MatchError(ContainSubstring("Object reference chain is too long")))
+			})
+		})
+
 		Context("with an argument", func() {
 			It("decodes the awaited result into the argument", func() {
 				var n int
@@ -125,6 +182,11 @@ var _ = Describe("Javascript", func() {
 	})
 
 	Describe("RunAsync", func() {
+		It("can be polled with a single expression", func() {
+			b.Run(`window.app = {status: () => Promise.resolve(400)}`)
+			Eventually(b.RunAsync).WithArguments(`await app.status()`).Should(BeNumerically("==", 400))
+		})
+
 		It("runs just like RunErrAsync but fails if an error occurs", func() {
 			b.Run(`window.app = {load: () => Promise.resolve(17)}`)
 			Ω(b.RunAsync(`return await app.load()`)).Should(Equal(17.0))

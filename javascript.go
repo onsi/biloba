@@ -3,11 +3,14 @@ package biloba
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
 
+	"github.com/chromedp/cdproto"
 	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/onsi/biloba/engine"
 	"github.com/onsi/gomega/gcustom"
 )
@@ -102,18 +105,57 @@ func (b *Biloba) runErr(script string, awaitPromise bool, args ...any) (any, err
 }
 
 /*
-RunErrAsync() runs the passed in script as the body of an async function and awaits the result, returning the result as well as an error
+RunErrAsync() runs the passed in script in an async function and awaits the result, returning the result as well as an error
 
-Use await freely and return the value you want out of the script:
+A script that is a single expression returns its value, as with [Biloba.Run]:
 
-	b.RunErrAsync(`return await app.load()`)
+	b.RunErrAsync(`(await fetch("/api/entries")).status`)
+
+Any other script is the body of the function: use await freely and return the value you want out of it:
+
+	b.RunErrAsync(`const res = await fetch("/api/entries"); return res.status`)
 
 You should generally use [Biloba.RunAsync] instead of RunErrAsync and let Biloba handle errors for you
 
 Read https://onsi.github.io/biloba/#running-arbitrary-javascript to learn more about running JavaScript in Biloba
 */
 func (b *Biloba) RunErrAsync(script string, args ...any) (any, error) {
-	return b.runErr("(async () => {"+script+"\n})()", true, args...)
+	// Try the script as a single expression first, so it returns its value without a `return`.  A
+	// script with statements fails to parse that way, and nothing has run yet, so it is safe to run it
+	// again as the function body.
+	expression := strings.TrimRight(script, "; \t\n")
+	res, err := b.runErr("(async () => (\n"+expression+"\n))()", true, args...)
+	if isParseError(err) {
+		return b.runErr("(async () => {"+script+"\n})()", true, args...)
+	}
+	// A side-effect script such as `await store.dispatch(action)` may resolve to a value Chrome can't
+	// return (a cyclic object).  It already ran, and as a function body it would have resolved to
+	// undefined, so without a decode target treat it that way.
+	if (len(args) == 0 || args[0] == nil) && isUnreturnableValue(err) {
+		return nil, nil
+	}
+	return res, err
+}
+
+// isParseError reports whether err is Chrome failing to parse the script it was asked to evaluate.
+// Chrome reports a parse error as a synchronous "Uncaught" SyntaxError.  Anything the script throws
+// once it runs inside RunErrAsync's async wrapper rejects the promise instead, which Chrome reports as
+// "Uncaught (in promise) ..." - so a SyntaxError thrown by, say, JSON.parse is never mistaken for one.
+func isParseError(err error) bool {
+	var details *runtime.ExceptionDetails
+	if !errors.As(err, &details) || details.Exception == nil {
+		return false
+	}
+	return details.Text == "Uncaught" && details.Exception.ClassName == "SyntaxError"
+}
+
+// isUnreturnableValue reports whether err is Chrome refusing to return the script's value by value.
+func isUnreturnableValue(err error) bool {
+	var cdpErr *cdproto.Error
+	if !errors.As(err, &cdpErr) {
+		return false
+	}
+	return strings.Contains(cdpErr.Message, "Object reference chain is too long") || strings.Contains(cdpErr.Message, "Object couldn't be returned by value")
 }
 
 /*
@@ -165,9 +207,13 @@ func illegalReturnHint(err error) string {
 }
 
 /*
-RunAsync() runs the passed in script as the body of an async function, awaits the result, and returns it.
+RunAsync() runs the passed in script in an async function, awaits the result, and returns it.
 
-Unlike [Biloba.Run] (which evaluates a synchronous expression) RunAsync lets you use await and return the value you care about:
+A script that is a single expression returns its value, just as with [Biloba.Run], and can use await:
+
+	status := b.RunAsync(`(await fetch("/api/entries/X", {method: "DELETE"})).status`)
+
+Any other script is the body of the function, so you return the value you care about:
 
 	users := b.RunAsync(`
 		const response = await fetch("/api/users")

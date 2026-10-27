@@ -2,6 +2,8 @@
 
 ### Features
 
+- Go: `b.RunAsync`/`RunErrAsync` return the value of a script that is a single expression, so `b.RunAsync("(await fetch(url)).status")` works without a `return`. Scripts with statements run as a function body, as before.
+
 ### Fixes
 
 ## 0.18.3

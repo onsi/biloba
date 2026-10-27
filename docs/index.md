@@ -3377,11 +3377,19 @@ Eventually("window.__storeLog").Should(b.EvaluateTo(HaveLen(2)).Capture(&log))
 
 `b.Run` evaluates a _synchronous_ expression.  Modern web applications, however, often expose `async` APIs (`fetch`, dynamic `import`, `await app.load()`).  To work with these use `b.RunAsync` (and its error-returning sibling `b.RunErrAsync`).
 
-`RunAsync` runs your script as the **body of an async function**.  That means you can `await` freely and `return` the value you care about:
+`RunAsync` runs your script inside an async function, so you can `await` freely.  A script that is a single expression returns its value, just as it would with `b.Run`:
 
 ```go
 // await an application API
-b.RunAsync(`return await app.load()`)
+b.RunAsync(`await app.load()`)
+
+// the status of a request
+status := b.RunAsync(`(await fetch("/api/entries/X", {method: "DELETE"})).status`)
+```
+
+Anything longer becomes the **body of the function**, and you `return` the value you care about:
+
+```go
 
 // fetch from the network and decode the response
 users := b.RunAsync(`
@@ -3397,9 +3405,11 @@ var users []User
 b.RunAsync(`return await app.load()`, &users)
 ```
 
-...and a non-promise value works just fine too (`b.RunAsync("return 1 + 2")` returns `3`).
+...and a non-promise value works just fine too (`b.RunAsync("1 + 2")` returns `3`).
 
-The key difference from `b.Run` is the `return`.  Because your script is the body of a function (not a bare expression) you must `return` the value you want out of it - a script that forgets to `return` will resolve to `undefined`.  The flip side: a top-level `return` in `b.Run` is a syntax error (`Illegal return statement`), because `b.Run` evaluates a bare expression.  When you hit that, reach for `b.RunAsync` (which wraps your script in a function body) rather than wrapping it in an IIFE yourself - Biloba's failure message points you here.
+Biloba tries your script as a single expression first.  If it doesn't parse as one (it has statements, `const`, or a `return`), nothing has run yet, and Biloba runs it as the function body.  A function body that doesn't `return` resolves to `undefined`.  If a single expression's value can't be sent back from the browser (a cyclic object, say), `RunAsync` returns `nil` as it would have for a function body; with a decode pointer it fails with Chrome's error.
+
+`b.Run`, by contrast, only takes an expression: a top-level `return` in `b.Run` is a syntax error (`Illegal return statement`), because `b.Run` evaluates a bare expression.  When you hit that, reach for `b.RunAsync` (which wraps your script in a function body) rather than wrapping it in an IIFE yourself - Biloba's failure message points you here.
 
 If the script throws, or the promise you `await` (or `return`) rejects, the spec fails (use `RunErrAsync` if you'd like to handle the error yourself):
 
