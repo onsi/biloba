@@ -217,7 +217,7 @@ Each produces a genuine `window.getSelection()` range and dispatches `mouseup` (
 
 ## Dialogs  (per-tab; reset by `Prepare`; register handlers BEFORE the triggering action)
 
-- `b.HandleAlertDialogs()` / `HandleConfirmDialogs()` / `HandlePromptDialogs()` / `HandleBeforeunloadDialogs()` → `DialogHandler`; chain `.MatchingMessage(string|matcher)`, `.WithResponse(bool)`, `.WithText(s)`. · `b.RemoveDialogHandler(h)`.
+- `b.HandleAlertDialogs()` / `HandleConfirmDialogs()` / `HandlePromptDialogs()` / `HandleBeforeunloadDialogs()` → `DialogHandler`; chain `.MatchingMessage(string|matcher)`, `.WithResponse(bool)`, `.WithText(s)`. · `b.RemoveDialogHandler(h)`. The **most recently registered** matching handler wins, so registering `WithResponse(true)` after `WithResponse(false)` flips the next dialog's answer; remove the newer handler to fall back to the older one.
 - `b.Dialogs()` → `Dialogs`, filtered with `.OfType(biloba.DialogTypeAlert|DialogTypeConfirm|DialogTypePrompt|DialogTypeBeforeunload)`, `.MatchingMessage(string|matcher)`, `.MostRecent()`. There is **no** dialog matcher — assert with plain Gomega: `Ω(b.Dialogs().MostRecent()).Should(HaveField("Message", "…"))`.
 - `Dialog{Type, Message, DefaultPrompt, HandleResponse, HandleText, Autohandled}` (`Autohandled` = no registered handler matched, so a Biloba default ran).
 - Default handling: alerts accepted; confirm/prompt cancelled; beforeunload accepted. An unhandled dialog also prints a "you should add an explicit dialog handler" warning — except the `beforeunload` that `Prepare`'s own `about:blank` navigation raises when it unloads the previous spec's page, which is accepted silently and left out of `b.Dialogs()`.

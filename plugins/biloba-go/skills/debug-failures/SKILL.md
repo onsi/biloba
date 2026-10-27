@@ -19,6 +19,32 @@ Biloba detects the environment in `ConnectToChrome`. "Automation" = `CI` is set 
 
 So an agent or CI run needs nothing: `ginkgo -r -p`, then read the outline and the screenshot files. `BILOBA_SCREENSHOTS_DIR=./artifacts` points the directory elsewhere.
 
+## Find the failure message first: it is at the bottom of each block
+
+Ginkgo prints a failed spec's **Timeline** first and its full failure message **last**. Biloba attaches its artifacts to the timeline after the spec fails, so the outline (often 100+ lines), the poll trajectory and the screenshot paths all come *before* the message:
+
+```
+• [FAILED] [3.1 seconds]
+Projects editing a project [It] …
+  Timeline >>
+  [FAILED] in [It] - projects_test.go:42 @ …     ← a marker, not the message
+  [DOM Outline for: '…'] …                        ← Biloba's artifacts
+  << Timeline
+
+  [FAILED] Timed out after 1.000s.                ← the message
+  Expected …
+  In [It] at: projects_test.go:42
+```
+
+Read each block from the bottom. To pull out only the messages from a long run:
+
+```bash
+ginkgo --no-color -r -p 2>&1 | grep -A12 '^  \[FAILED\] [^i]'   # skips the "[FAILED] in [It]" markers
+ginkgo -r -p --json-report=report.json; jq -r '.[].SpecReports[] | select(.State=="failed") | "\(.LeafNodeText)\n\(.Failure.Message)\n"' report.json
+```
+
+Then go to the artifacts for that spec, in the order below.
+
 ## Read the artifacts in this order
 
 1. **Console errors** — any `console.error`/`console.assert` and any uncaught exception or unhandled rejection (`Uncaught …`) before the failure, replayed under "Console errors logged before this failure" at the **top** of the failure block. On a JS crash (a React error boundary) this is the root cause. Everything here (and in the streamed timeline, `AllPageErrors`, `AllConsoleMessages`, `AllRequests`) comes from this spec: what the previous spec's page raised as `Prepare()` navigated it away is dropped. Locations (`app.js:12:5`) are one-based, so they open at the right line in an editor. Chrome's own warnings and errors (`[network] Failed to load resource: … (url)`, `[intervention] …`) appear in the streamed timeline but not in this replay; read the timeline for a failed load, or `b.AllConsoleMessages()` / `b.AllRequests()` for the full record.

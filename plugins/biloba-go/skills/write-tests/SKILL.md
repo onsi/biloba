@@ -136,7 +136,7 @@ b.SetValue(b.ByLabel("Email"), "jane@acme.com")    // Locator — a control by i
 b.Click(b.XPath("li").WithText("OK").Ancestor("ul"))// XPath — an axis query nothing else expresses
 ```
 
-Constructors (each text-valued one has a `*Contains` variant): `b.ByRole`, `b.ByText`, `b.ByLabel`, `b.ByPlaceholder`, `b.ByAltText`, `b.ByTitle`, `b.ByTestID` (attr = `biloba.TestIDAttribute`, default `data-testid`), `b.ByCSS(sel)` (raw CSS into the algebra — the structural escape hatch). Refine a role with `.WithName(n)`, `.Level(n)`, or ARIA states `.Checked()`/`.Disabled()`/`.Expanded()`/`.Pressed()`/`.Selected()`.
+Constructors (each text-valued one has a `*Contains` variant): `b.ByRole`, `b.ByText`, `b.ByLabel`, `b.ByPlaceholder`, `b.ByAltText`, `b.ByTitle`, `b.ByTestID` (attr = `biloba.TestIDAttribute`, default `data-testid`), `b.ByCSS(sel)` (raw CSS into the algebra — the structural escape hatch). Locators resolve inside the browser in one pass, so their filters take strings, not Gomega matchers: `WithName(ContainSubstring("Acme"))` won't compile; write `WithNameContains("Acme")`. Refine a role with `.WithName(n)` (exact) or `.WithNameContains(n)` (substring), `.Level(n)`, or ARIA states `.Checked()`/`.Disabled()`/`.Expanded()`/`.Pressed()`/`.Selected()`.
 
 Locators **compose**, and every filter accepts **any** selector (CSS/XPath/Locator):
 
@@ -271,6 +271,17 @@ Three traps, detailed in `flaky-specs`:
 - **Observe in order:** `Eventually(b).Should(b.HaveMadeRequest(...))` **first**, *then* `Eventually(b).Should(b.BeNetworkIdle())`. Idle means "nothing in flight right now", so alone it passes at t=0.
 - **Handlers accumulate in an `Ordered` container** (`Prepare()` is `OncePerOrdered`), so an earlier `It`'s handler silently shadows a later identical one — sometimes a timeout, sometimes a spec that just passes.
 - **Assert your own interception state** (`Eventually(hold.Count).Should(Equal(1))`) so you'd notice either.
+
+**Waiting for the request your action triggered.** Don't add a busy flag to the app. In order of preference:
+
+1. **Wait for the UI the response produces** (the row appears, the selection shows as selected). It is the barrier the user sees, and it catches apps that act before the response lands.
+2. With no visible outcome, wait for the response itself: `Eventually(b).Should(b.HaveMadeRequest(ContainSubstring("/api/entries")).WithMethod("POST").WithStatus(201))`. Status is 0 until the response arrives.
+3. `HaveMadeRequest` sees every request of the spec, so a **repeat** of an earlier request passes on the first one. Count instead:
+
+```go
+q := b.RequestMatching(ContainSubstring("/api/entries")).WithMethod("POST").WithStatus(201)
+Eventually(func() biloba.Requests { return b.AllRequests().Filter(q) }).Should(HaveLen(2))
+```
 
 **`b.HoldResponse(url)` holds a real response hostage** so you can force an arrival order — the honest way to test optimistic-UI reconciliation, where the bug only shows when a stale response lands *after* the next action.
 
