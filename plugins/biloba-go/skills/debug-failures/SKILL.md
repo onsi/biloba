@@ -194,7 +194,7 @@ Each boolean takes an optional bool (no arg = `true`). **Explicit settings win, 
 - `BilobaConfigScreenshotsToDir(dir)` — write each tab's failure screenshot there (prints the absolute path).
 - `BilobaConfigFailureOutlines(...bool)` / `BilobaConfigInlineScreenshots(...bool)` — force on/off.
 - `BilobaConfigFailureScreenshots(...bool)` (default on) / `BilobaConfigPollTrajectory(...bool)` (default on) / `BilobaConfigProgressReportScreenshots(...bool)` (default on).
-- `BilobaConfigFailureScreenshotsSize(w,h)` / `BilobaConfigProgressReportScreenshotSize(w,h)`.
+- `BilobaConfigFailureScreenshotsSize(w,h)` / `BilobaConfigProgressReportScreenshotSize(w,h)`. The progress-report size resizes each tab under the running spec, which the page can observe, and the report says so. Leave it unset unless you need it.
 - `BilobaConfigDebugLogging(...bool)` — stream all CDP traffic to the `GinkgoWriter` (verbose).
 - `BilobaConfigScreenshotBaselinesDir(dir)` — where `b.HaveScreenshot` reads/writes committed baselines (default `./biloba-baselines`; commit that dir, gitignore the screenshots dir).
 - `BilobaConfigScreenshotTolerance(fraction)` / `BilobaConfigScreenshotChannelTolerance(delta)` — suite-wide visual-comparison defaults, both `0` (exact) by default; `b.Tolerance(...)`/`b.ChannelTolerance(...)` override per assertion. → `visual-assertions`
@@ -214,4 +214,4 @@ Headful, high fidelity, prints the failure and waits for `^C`. Use a small handf
 
 ## A hang, not a failure
 
-Biloba screenshots Ginkgo [progress reports](https://onsi.github.io/ginkgo/#getting-visibility-into-long-running-specs) — on a spec timeout, a `PollProgressAfter` spec, or on demand: `^T` (SIGINFO) on macOS, `SIGUSR2` on Linux.
+Biloba screenshots Ginkgo [progress reports](https://onsi.github.io/ginkgo/#getting-visibility-into-long-running-specs) — on a spec timeout, a `PollProgressAfter` spec, or on demand: `^T` (SIGINFO) on macOS, `SIGUSR2` on Linux. Each screenshot shows the tab's viewport, not the whole page, so the report can't disturb the spec it is reporting on.

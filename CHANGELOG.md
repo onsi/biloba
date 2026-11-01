@@ -4,6 +4,8 @@
 
 ### Fixes
 
+- Go: a progress report's screenshot no longer disturbs a running spec. It used to lay the page out at full size and back, firing resize events and resetting scroll positions under the spec's assertions; it now shows each tab's viewport as it stands. `BilobaConfigProgressReportScreenshotSize` still resizes the page, since that is the only way to render at that size, and the report now says so.
+
 ## 0.19.0
 
 ### Features

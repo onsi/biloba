@@ -511,6 +511,8 @@ func BilobaConfigFailureScreenshotsSize(width, height int) func(*Biloba) {
 /*
 Pass BilobaConfigProgressReportScreenshots to [ConnectToChrome] to control whether Biloba emits screenshots when Progress Reports are requested.
 
+A progress report can fire while its spec is still running, so the screenshot shows each tab's viewport as it stands and the page cannot tell it was taken.
+
 It is on by default; BilobaConfigProgressReportScreenshots(false) turns it off.
 */
 func BilobaConfigProgressReportScreenshots(enabled ...bool) func(*Biloba) {
@@ -521,6 +523,8 @@ func BilobaConfigProgressReportScreenshots(enabled ...bool) func(*Biloba) {
 
 /*
 Pass BilobaConfigProgressReportScreenshotSize to [ConnectToChrome] to set the size for the screenshots generated when a progress report is requested
+
+This resizes each tab and then restores it, which a running spec's page can observe: a resize event fires and a responsive page may re-render.  The report says when it has done this.  Leave the size unset to keep progress reports from changing the page.
 */
 func BilobaConfigProgressReportScreenshotSize(width, height int) func(*Biloba) {
 	return func(b *Biloba) {
@@ -1421,7 +1425,7 @@ func (b *Biloba) attachFailureArtifactsIfFailed() {
 		if !b.failureScreenshots {
 			return
 		}
-		for _, screenshot := range b.safeAllTabScreenshots(b.failureScreenshotWidth, b.failureScreenshotHeight) {
+		for _, screenshot := range b.safeAllTabScreenshots(b.failureScreenshotWidth, b.failureScreenshotHeight, engine.CaptureFullScreenshotContext) {
 			if screenshot.failure != "" {
 				b.gt.AddReportEntryVisibilityFailureOrVerbose(screenshot.failure)
 			} else {
@@ -1443,10 +1447,18 @@ func (b *Biloba) attachFailureArtifactsIfFailed() {
 	}
 }
 
+// progressReporter fires while the spec is still running, so unlike a failure screenshot its capture
+// must not change the page under the spec's assertions: it takes the viewport as it stands.  The one
+// exception is a size the suite configured, which can only be honored by laying the page out at that
+// size, so the report says it happened.
 func (b *Biloba) progressReporter() string {
 	out := &strings.Builder{}
 	inlineEnabled := b.inlineScreenshotsEnabled()
-	for _, screenshot := range b.safeAllTabScreenshots(b.progressReportScreenshotWidth, b.progressReportScreenshotHeight) {
+	width, height := b.progressReportScreenshotWidth, b.progressReportScreenshotHeight
+	if width > 0 && height > 0 {
+		out.WriteString(b.gt.F("{{orange}}BilobaConfigProgressReportScreenshotSize: each tab was resized to %dx%d and back for these screenshots, and the page can observe that.{{/}}\n", width, height))
+	}
+	for _, screenshot := range b.safeAllTabScreenshots(width, height, engine.CaptureViewportScreenshotContext) {
 		if screenshot.failure != "" {
 			out.WriteString(b.gt.F("{{red}}" + screenshot.failure + "{{/}}\n"))
 		} else {

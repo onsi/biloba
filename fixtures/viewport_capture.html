@@ -35,6 +35,15 @@
         // Every resize the page sees, so a spec can tell whether a capture laid the page out again.
         window.resizes = 0
         window.addEventListener("resize", () => window.resizes++)
+
+        // The other ways a page can notice one.  A ResizeObserver reports once when it starts observing,
+        // so a spec waits for that before zeroing these.
+        window.scrolls = 0
+        window.addEventListener("scroll", () => window.scrolls++)
+        window.layoutObservations = 0
+        new ResizeObserver(() => window.layoutObservations++).observe(document.documentElement)
+        window.mediaChanges = 0
+        window.matchMedia("(min-height: 1000px)").addEventListener("change", () => window.mediaChanges++)
     </script>
 </body>
 

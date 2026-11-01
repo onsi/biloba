@@ -58,7 +58,7 @@ Wrap it in a `make flake-hunt` target if the project has a Makefile, and gitigno
 - **Compiled once.** Every run replays the same test binary, so 60 runs aren't 60 compiles and the code under test can't change halfway through. Build any embedded frontend assets before starting.
 - **One JSON report per run.** Each report records the run's `RandomSeed`, each failure's message and `file:line`, the spec's `GinkgoWriter` output (where Biloba streams `console.log`), and Biloba's failure artifacts as report entries: the poll trajectory, the DOM outline, the screenshot path, and the detached-node, occluded-click, and shadowed-handler diagnoses when they apply.
 - **A separate `BILOBA_SCREENSHOTS_DIR` per run.** Failure screenshots are named after the spec and the tab, so in a shared directory a later run overwrites an earlier run's screenshot of the same spec. An explicit `BilobaConfigScreenshotsToDir` in the bootstrap takes precedence over the variable, so remove it or have it read the variable.
-- **`--poll-progress-after=10s`.** A spec still running after 10s gets a progress report with a goroutine dump and a screenshot of every open tab. That's the evidence you need for a hang.
+- **`--poll-progress-after=10s`.** A spec still running after 10s gets a progress report with a goroutine dump and a screenshot of every open tab's viewport. That's the evidence you need for a hang, and taking it doesn't change the page, so the flag doesn't change what you're hunting.
 - **`LABELS` and `FOCUS_FILE`** narrow a hunt without editing the script (`LABELS='!visual'`, `FOCUS_FILE=checkout`). Focus by file. A substring `--focus` into an `Ordered` container runs the matched spec without the earlier specs whose state it depends on.
 
 ## Choosing `--procs`

@@ -84,13 +84,16 @@ func SandboxDecisionForTest(mode engine.ChromeMode, options ...SpinUpOption) (di
 
 // SafeAllTabScreenshotsForTest exposes safeAllTabScreenshots for integration tests.
 func (b *Biloba) SafeAllTabScreenshotsForTest(width, height int) []TabScreenshotForTest {
-	shots := b.safeAllTabScreenshots(width, height)
+	shots := b.safeAllTabScreenshots(width, height, engine.CaptureFullScreenshotContext)
 	out := make([]TabScreenshotForTest, len(shots))
 	for i, s := range shots {
 		out[i] = TabScreenshotForTest{Title: s.title, FilePath: s.filePath, Failure: s.failure, ImgcatScreenshot: s.imgcatScreenshot}
 	}
 	return out
 }
+
+// ProgressReporterForTest renders what Ginkgo gets from Biloba's progress reporter.
+func (b *Biloba) ProgressReporterForTest() string { return b.progressReporter() }
 
 // FailureArtifactConfigForTest exposes the resolved on-failure artifact configuration
 // (after options and environment-driven policy are applied) for screenshots_test.go.

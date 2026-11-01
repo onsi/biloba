@@ -631,12 +631,15 @@ func sanitizeForFilename(s string) string {
 	return s
 }
 
-func (b *Biloba) safeAllTabScreenshots(width int, height int) []tabScreenshot {
+// safeAllTabScreenshots captures every tab with capture, first emulating width x height when both are
+// set.  The emulation resizes the page, and so does engine.CaptureFullScreenshotContext: a progress
+// report fires while its spec is still running, so it uses engine.CaptureViewportScreenshotContext
+// unless the suite asked for a size.
+func (b *Biloba) safeAllTabScreenshots(width int, height int, capture func(context.Context) ([]byte, string, error)) []tabScreenshot {
 	out := []tabScreenshot{}
 	for idx, tab := range b.AllTabs() {
-		// Bound the capture so a wedged tab can't hang screenshot collection, but keep it generous:
-		// FullScreenshot encodes a PNG of the whole page and, under heavy parallel/CI load, legitimately
-		// takes well over a second.  A 1s bound here spuriously timed out healthy captures - surfacing as
+		// Bound the capture so a wedged tab can't hang screenshot collection, but keep it generous: encoding
+		// a PNG of the whole page, under heavy parallel/CI load, legitimately takes well over a second.  A 1s bound here spuriously timed out healthy captures - surfacing as
 		// "Timed out attempting to fetch screenshot" noise and flaking the inline-encoding specs.
 		ctx, cancel := context.WithTimeout(tab.Context, screenshotCaptureTimeout)
 		defer cancel()
@@ -644,7 +647,7 @@ func (b *Biloba) safeAllTabScreenshots(width int, height int) []tabScreenshot {
 		var originalWidth, originalHeight int
 		if width > 0 && height > 0 {
 			originalWidth, originalHeight = b.WindowSize()
-			err := tab.runEngineIn(ctx, screenshotCaptureTimeout, "set the failure-screenshot window size", func(runCtx context.Context) error {
+			err := tab.runEngineIn(ctx, screenshotCaptureTimeout, "set the screenshot window size", func(runCtx context.Context) error {
 				return engine.EmulateViewportContext(runCtx, width, height)
 			})
 			if err != nil {
@@ -654,13 +657,13 @@ func (b *Biloba) safeAllTabScreenshots(width int, height int) []tabScreenshot {
 		}
 		var img []byte
 		var title string
-		err := tab.runEngineIn(ctx, screenshotCaptureTimeout, "capture a failure screenshot", func(runCtx context.Context) error {
+		err := tab.runEngineIn(ctx, screenshotCaptureTimeout, "capture a tab screenshot", func(runCtx context.Context) error {
 			var err error
-			img, title, err = engine.CaptureFullScreenshotContext(runCtx, 100)
+			img, title, err = capture(runCtx)
 			return err
 		})
 		if width > 0 && height > 0 {
-			err := tab.runEngineIn(ctx, screenshotCaptureTimeout, "reset the failure-screenshot window size", func(runCtx context.Context) error {
+			err := tab.runEngineIn(ctx, screenshotCaptureTimeout, "reset the screenshot window size", func(runCtx context.Context) error {
 				return engine.EmulateViewportContext(runCtx, originalWidth, originalHeight, chromedp.EmulatePortrait)
 			})
 			if err != nil {

@@ -254,6 +254,78 @@ var _ = Describe("Screenshots", func() {
 		})
 	})
 
+	Describe("progress report screenshots", func() {
+		var dir string
+
+		// connect returns a fresh root tab, parked at a scrolled position on a page much taller than its
+		// viewport, with every signal the page could notice a capture by at zero.
+		connect := func(options ...biloba.BilobaConfigOption) *biloba.Biloba {
+			GinkgoHelper()
+			dir = GinkgoT().TempDir()
+			options = append(options, biloba.BilobaConfigScreenshotsToDir(dir), biloba.BilobaConfigInlineScreenshots(false))
+			tab := biloba.ConnectToChrome(gt, options...)
+			tab.SetWindowSize(300, 250)
+			tab.Navigate(fixtureServer + "/viewport_capture.html")
+			Eventually("#filler").Should(tab.Exist())
+			tab.Run(`window.scrollTo(0, 150)`)
+			Eventually(`window.scrolls > 0 && window.layoutObservations > 0 && window.scrollY === 150`).Should(tab.EvaluateTo(true))
+			tab.Run(`window.resizes = 0; window.scrolls = 0; window.layoutObservations = 0; window.mediaChanges = 0`)
+			return tab
+		}
+
+		screenshot := func() image.Image {
+			GinkgoHelper()
+			paths, err := filepath.Glob(filepath.Join(dir, "*.png"))
+			Ω(err).ShouldNot(HaveOccurred())
+			Ω(paths).Should(HaveLen(1))
+			raw, err := os.ReadFile(paths[0])
+			Ω(err).ShouldNot(HaveOccurred())
+			img, _, err := image.Decode(bytes.NewBuffer(raw))
+			Ω(err).ShouldNot(HaveOccurred())
+			return img
+		}
+
+		const noticed = `["resizes", "scrolls", "layoutObservations", "mediaChanges"].map(k => k + "=" + window[k]).join(" ")`
+
+		It("shows the viewport as it stands, and the page cannot tell", func() {
+			tab := connect()
+			Ω(tab.ProgressReporterForTest()).Should(ContainSubstring("Screenshot for: 'Viewport Capture Testpage'"))
+
+			// the page hears about a resize a frame or two after it happens, so reading once right after the
+			// capture would pass even on a capture that resized it
+			Consistently(noticed).WithTimeout(300 * time.Millisecond).Should(tab.EvaluateTo("resizes=0 scrolls=0 layoutObservations=0 mediaChanges=0"))
+			Ω(`window.scrollY`).Should(tab.EvaluateTo(150.))
+
+			img := screenshot()
+			Ω(img.Bounds().Dx()).Should(Equal(300))
+			Ω(img.Bounds().Dy()).Should(Equal(250))
+			Ω(img.At(150, 25)).Should(Equal(color.RGBA{0xff, 0, 0, 0xff}), "the viewport is scrolled 150px down, so red ends 50px in")
+			Ω(img.At(150, 100)).Should(Equal(color.RGBA{0, 0xff, 0, 0xff}))
+		})
+
+		It("resizes the page only when a size was asked for, and says it did", func() {
+			tab := connect(biloba.BilobaConfigProgressReportScreenshotSize(400, 300))
+			Ω(tab.ProgressReporterForTest()).Should(ContainSubstring("resized to 400x300 and back"))
+			Eventually(`window.resizes`).Should(tab.EvaluateTo(BeNumerically(">", 0.)))
+
+			width, height := tab.WindowSize()
+			Ω(width).Should(Equal(300))
+			Ω(height).Should(Equal(250))
+
+			img := screenshot()
+			Ω(img.Bounds().Dx()).Should(Equal(400))
+			Ω(img.Bounds().Dy()).Should(Equal(300))
+		})
+
+		It("leaves failure screenshots showing the whole page", func() {
+			tab := connect()
+			shots := tab.SafeAllTabScreenshotsForTest(0, 0)
+			Ω(shots).Should(HaveLen(1))
+			Ω(shots[0].Failure).Should(BeEmpty())
+			Ω(screenshot().Bounds().Dy()).Should(BeNumerically(">", 2000))
+		})
+	})
+
 	Describe("HideCaret", func() {
 		BeforeEach(func() {
 			b.Navigate(fixtureServer + "/visual_scroll_driven.html")

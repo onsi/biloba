@@ -143,11 +143,22 @@ func ViewportRegionClip(region *page.Viewport, originX, originY, width, height f
 
 // CaptureFullScreenshotContext captures the page at full size and reads its title in the same round
 // trip, which is what the on-failure artifact path wants: a picture and something to label it with.
-func CaptureFullScreenshotContext(ctx context.Context, quality int) (img []byte, title string, err error) {
+// It always expands the viewport, so the page sees a resize: it is for a spec that has already failed.
+func CaptureFullScreenshotContext(ctx context.Context) (img []byte, title string, err error) {
 	err = chromedp.Run(ctx,
 		chromedp.Title(&title),
-		chromedp.FullScreenshot(&img, quality),
+		chromedp.FullScreenshot(&img, 100),
 	)
+	return img, title, err
+}
+
+// CaptureViewportScreenshotContext is CaptureFullScreenshotContext for a spec that is still running: it
+// captures only what the viewport shows, so the page cannot tell it happened.
+func CaptureViewportScreenshotContext(ctx context.Context) (img []byte, title string, err error) {
+	if err := chromedp.Run(ctx, chromedp.Title(&title)); err != nil {
+		return nil, "", err
+	}
+	img, err = CaptureViewportContext(ctx, nil)
 	return img, title, err
 }
 
