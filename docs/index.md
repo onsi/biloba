@@ -510,7 +510,7 @@ Here are some of the ways Biloba integrates with Ginkgo and Gomega so you can fo
 
 	This happens in `b.Prepare()`.
 	
-	Biloba registers a Ginkgo hook that runs after each spec.  If the spec has failed, a screenshot of every tab associated with that spec is captured.  Screenshots are emitted to the terminal as inline images (Kitty, iTerm2, or Sixel) **only when the terminal supports it** (see [Inline image gating](#inline-image-gating) below).  Biloba can also attach a text DOM outline of every tab on failure; this is off by default for an interactive human but on automatically under CI or an AI agent (see [Failure artifacts](#failure-artifacts-humans-ci-and-agents)).
+	Biloba registers a Ginkgo [`DeferOnFailure`](https://onsi.github.io/ginkgo/#capturing-failure-state-deferonfailure) callback for each spec.  If the spec fails, the callback runs as soon as the failing node returns, before the spec's `AfterEach` and cleanup nodes, so it sees the page the spec failed on.  It captures a screenshot of every tab associated with that spec.  Screenshots are emitted to the terminal as inline images (Kitty, iTerm2, or Sixel) **only when the terminal supports it** (see [Inline image gating](#inline-image-gating) below).  Biloba can also attach a text DOM outline of every tab on failure; this is off by default for an interactive human but on automatically under CI or an AI agent (see [Failure artifacts](#failure-artifacts-humans-ci-and-agents)).
 
 	In addition, Biloba registers a Ginkgo ProgressReporter that will emit screenshots whenever a [progress report](https://onsi.github.io/ginkgo/#getting-visibility-into-long-running-specs) is requested.  This can happen when a spec times out, or when a spec decorated with `PollProgressAfter(X duration)` has taken longer than `X` to complete.  On MacOS you can get a progress report instantly by sending a `SIGINFO` signal with `^T`.  On Linux you can send a `SIGUSR2` signal.  A progress report can fire while the spec is still running, so these screenshots show each tab's viewport as it stands rather than the whole page: the page sees no resize and no scroll, and the spec's assertions carry on undisturbed.
 
@@ -4576,7 +4576,7 @@ The configuration outlined above has to be added to your code.  But sometimes yo
 BILOBA_INTERACTIVE=true ginkgo
 ```
 
-Biloba will run with `headless` set to `false` and will emit the failure message when a spec fails and then pause until you send a `^C` signal to end the suite.  You should generally do this with a small handful of focused spec and only in serial (running in non-headless mode in parallel is... a lot).
+Biloba will run with `headless` set to `false` and will emit the failure message when a spec fails and then pause until you send a `^C` signal to end the suite.  The pause comes before the spec's `AfterEach` and cleanup nodes, so the browser still shows the page the spec failed on.  You should generally do this with a small handful of focused spec and only in serial (running in non-headless mode in parallel is... a lot).
 
 ## Nurturing Maintainable Suites
 

@@ -84,7 +84,7 @@ func SandboxDecisionForTest(mode engine.ChromeMode, options ...SpinUpOption) (di
 
 // SafeAllTabScreenshotsForTest exposes safeAllTabScreenshots for integration tests.
 func (b *Biloba) SafeAllTabScreenshotsForTest(width, height int) []TabScreenshotForTest {
-	shots := b.safeAllTabScreenshots(b.gt.Name(), width, height, engine.CaptureFullScreenshotContext)
+	shots := b.safeAllTabScreenshots(context.Background(), b.AllTabs(), b.gt.Name(), width, height, engine.CaptureFullScreenshotContext)
 	out := make([]TabScreenshotForTest, len(shots))
 	for i, s := range shots {
 		out[i] = TabScreenshotForTest{Title: s.title, FilePath: s.filePath, Failure: s.failure, ImgcatScreenshot: s.imgcatScreenshot}
@@ -156,7 +156,7 @@ func SetTransientReadErrorForTest(fn func() error) func() {
 // SafeAllTabConsoleErrorsForTest exposes safeAllTabConsoleErrors for logging_test.go - the captured
 // console.error/console.assert messages Biloba replays at the top of the failure block.
 func (b *Biloba) SafeAllTabConsoleErrorsForTest() []string {
-	return b.safeAllTabConsoleErrors()
+	return b.safeAllTabConsoleErrors(b.AllTabs())
 }
 
 // DetachedNodeNoteForTest exposes the poll-trajectory recorder's detached-node annotation (the

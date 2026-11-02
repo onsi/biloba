@@ -1,6 +1,7 @@
 package biloba_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -113,6 +114,9 @@ type bilobaT struct {
 	// without failing; reportEntries records the names of the report entries Biloba adds.
 	failed        bool
 	reportEntries []string
+	// onFailure records the callbacks Biloba registers with DeferOnFailure (they are also passed on
+	// to Ginkgo), so a spec can run one against a page it controls.
+	onFailure []func(context.Context)
 }
 
 func newBilobaT(ginkgoT biloba.GinkgoTInterface) *bilobaT {
@@ -127,6 +131,7 @@ func (b *bilobaT) reset() {
 	b.failures = []string{}
 	b.failed = false
 	b.reportEntries = nil
+	b.onFailure = nil
 }
 
 func (b *bilobaT) Name() string { return b.ginkgoT.Name() }
@@ -144,6 +149,12 @@ func (b *bilobaT) Failed() bool    { return b.failed || b.ginkgoT.Failed() }
 
 func (b *bilobaT) GinkgoRecover()           { b.ginkgoT.GinkgoRecover() }
 func (b *bilobaT) DeferCleanup(args ...any) { b.ginkgoT.DeferCleanup(args...) }
+func (b *bilobaT) DeferOnFailure(args ...any) {
+	if callback, ok := args[0].(func(context.Context)); ok {
+		b.onFailure = append(b.onFailure, callback)
+	}
+	b.ginkgoT.DeferOnFailure(args...)
+}
 func (b *bilobaT) Print(args ...any) {
 	fmt.Fprint(b.buffer, args...)
 	GinkgoWriter.Print(args...)

@@ -71,10 +71,12 @@ type tabOutline struct {
 	failure string
 }
 
-func (b *Biloba) safeAllTabOutlines() []tabOutline {
+// safeAllTabOutlines captures each tab's DOM outline; parent cancels every capture still in flight.
+func (b *Biloba) safeAllTabOutlines(parent context.Context, tabs Tabs) []tabOutline {
 	out := []tabOutline{}
-	for _, tab := range b.AllTabs() {
-		ctx, cancel := context.WithTimeout(tab.Context, time.Second)
+	for _, tab := range tabs {
+		bound := tab.WithContext(parent)
+		ctx, cancel := bound.cdpContext(time.Second)
 		defer cancel()
 
 		title, err := engine.TitleContext(ctx)
@@ -88,7 +90,7 @@ func (b *Biloba) safeAllTabOutlines() []tabOutline {
 		}
 
 		resp := &bilobaJSResponse{}
-		if _, err := tab.RunErr("_biloba.outline()", resp); err != nil || resp.Error() != nil {
+		if _, err := bound.RunErr("_biloba.outline()", resp); err != nil || resp.Error() != nil {
 			msg := ""
 			if err != nil {
 				msg = err.Error()

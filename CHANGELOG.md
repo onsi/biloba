@@ -4,6 +4,7 @@
 
 ### Fixes
 
+- Go: failure artifacts (screenshots, DOM outlines, and the rest) are now captured as soon as the spec fails, before its `AfterEach` and cleanup nodes run, using Ginkgo's new `DeferOnFailure`. They used to be captured after the spec's teardown, which could already have navigated away from or cleared the page. `BILOBA_INTERACTIVE`'s pause moves to the same point. Biloba now requires Ginkgo v2.34.0 or later, and `GinkgoTInterface` gains a `DeferOnFailure` method.
 - Go: a progress report's screenshots now reach the report when screenshots are written to a directory, which is the default under CI and AI agents. Writing the file used to hang until Ginkgo's 5-second deadline, stalling the spec's reporting and dropping the report's screenshots.
 - A request that `ModifyRequest(...).WithURL` (Go) or `modifyRequest()` with a `url` (TypeScript) sends to another URL now reaches response handlers and holds that match either the URL the page requested or the one it was sent to. In Go it reached neither, so a `HoldResponse` never held it; in TypeScript only the destination URL matched.
 

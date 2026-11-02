@@ -2,6 +2,7 @@ package biloba_test
 
 import (
 	"bytes"
+	"context"
 	"image"
 	"image/color"
 	_ "image/png"
@@ -344,6 +345,40 @@ var _ = Describe("Screenshots", func() {
 			Ω(shots).Should(HaveLen(1))
 			Ω(shots[0].Failure).Should(BeEmpty())
 			Ω(screenshot().Bounds().Dy()).Should(BeNumerically(">", 2000))
+		})
+	})
+
+	// Ginkgo runs a DeferOnFailure callback only for a spec that really fails, so these specs run the
+	// one Prepare registers themselves: gt records it on its way to Ginkgo.
+	Describe("the failure capture", func() {
+		var tab *biloba.Biloba
+		var capture func(context.Context)
+		BeforeEach(func() {
+			tab = biloba.ConnectToChrome(gt, biloba.BilobaConfigFailureOutlines(), biloba.BilobaConfigFailureScreenshots(false))
+			gt.onFailure = nil
+			tab.Prepare()
+			Ω(gt.onFailure).Should(HaveLen(1), "Prepare registers the capture with DeferOnFailure")
+			capture = gt.onFailure[0]
+			tab.Navigate(fixtureServer + "/dom.html")
+			Eventually("#hello").Should(tab.Exist())
+		})
+
+		It("attaches the page as it stands when Ginkgo calls it", func() {
+			capture(context.Background())
+			Ω(gt.reportEntries).Should(ContainElement(HavePrefix("DOM Outline for:")))
+		})
+
+		It("stops calling Chrome once its context is cancelled", func() {
+			restore := biloba.SetWedgedCDPForTest(func() bool { return true })
+			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel()
+			start := time.Now()
+			capture(ctx)
+			elapsed := time.Since(start)
+			restore()
+			// a wedged call that ignored ctx would wait out the 30s cdpTimeout backstop
+			Ω(elapsed).Should(BeNumerically("<", 5*time.Second))
+			Ω(gt.reportEntries).Should(ContainElement(ContainSubstring("Failed to capture DOM outline")))
 		})
 	})
 

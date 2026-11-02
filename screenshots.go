@@ -635,13 +635,14 @@ func sanitizeForFilename(s string) string {
 // set.  The emulation resizes the page, and so does engine.CaptureFullScreenshotContext: a progress
 // report fires while its spec is still running, so it uses engine.CaptureViewportScreenshotContext
 // unless the suite asked for a size.
-func (b *Biloba) safeAllTabScreenshots(specName string, width int, height int, capture func(context.Context) ([]byte, string, error)) []tabScreenshot {
+// parent cancels every capture still in flight.
+func (b *Biloba) safeAllTabScreenshots(parent context.Context, tabs Tabs, specName string, width int, height int, capture func(context.Context) ([]byte, string, error)) []tabScreenshot {
 	out := []tabScreenshot{}
-	for idx, tab := range b.AllTabs() {
+	for idx, tab := range tabs {
 		// Bound the capture so a wedged tab can't hang screenshot collection, but keep it generous: encoding
 		// a PNG of the whole page, under heavy parallel/CI load, legitimately takes well over a second.  A 1s bound here spuriously timed out healthy captures - surfacing as
 		// "Timed out attempting to fetch screenshot" noise and flaking the inline-encoding specs.
-		ctx, cancel := context.WithTimeout(tab.Context, screenshotCaptureTimeout)
+		ctx, cancel := tab.WithContext(parent).cdpContext(screenshotCaptureTimeout)
 		defer cancel()
 
 		var originalWidth, originalHeight int

@@ -36,6 +36,7 @@ import (
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
+	"github.com/onsi/ginkgo/v2"
 )
 
 const BILOBA_VERSION = "0.19.1"
@@ -104,6 +105,7 @@ type GinkgoTInterface interface {
 
 	GinkgoRecover()
 	DeferCleanup(args ...any)
+	DeferOnFailure(args ...any)
 	Print(args ...any)
 	Printf(format string, args ...any)
 	Println(a ...any)
@@ -1137,31 +1139,28 @@ func (b *Biloba) Prepare() {
 		})
 	}
 
-	// attachFailureArtifactsIfFailed clears the per-spec poll diagnostics on its way out, but it is
-	// only registered when failure artifacts are on - so clear them here too.  A detached-node signal
-	// or an occluded click carried over from the previous spec would diagnose the wrong spec.
+	// The poll-time diagnostics are scoped to a spec: a detached-node signal or an occluded click
+	// carried over from the previous spec would diagnose the wrong spec.  So they are cleared here, and
+	// again on the way out of the spec, pass or fail.
 	b.resetPollDiagnostics()
+	b.gt.DeferCleanup(b.resetPollDiagnostics)
 
+	// Failure callbacks run newest first, so the interactive pause is registered before the capture:
+	// the artifacts are taken, then the suite waits for the user.
+	if os.Getenv("BILOBA_INTERACTIVE") != "" {
+		b.gt.DeferOnFailure(b.pauseForInteraction, ginkgo.NodeTimeout(interactivePauseTimeout))
+	}
 	if b.failureScreenshots || b.failureOutlines {
-		b.gt.DeferCleanup(b.attachFailureArtifactsIfFailed)
+		// DeferOnFailure runs as soon as the failing node returns, before the spec's AfterEach and
+		// cleanup nodes, so the artifacts show the page the spec failed on rather than whatever its
+		// teardown left behind.
+		b.gt.DeferOnFailure(b.captureFailureArtifacts, ginkgo.NodeTimeout(failureArtifactsTimeout))
 	}
 	if b.progressReportScreenshots {
 		// read here because Ginkgo holds the lock Name takes while it queries reporters: a reporter that
 		// calls Name waits out Ginkgo's deadline, and Ginkgo then discards what it returns
 		specName := b.gt.Name()
 		b.gt.DeferCleanup(b.gt.AttachProgressReporter(func() string { return b.progressReporter(specName) }))
-	}
-	if os.Getenv("BILOBA_INTERACTIVE") != "" {
-		b.gt.DeferCleanup(func(ctx context.Context) {
-			if b.gt.Failed() {
-				fmt.Println(b.gt.F("{{red}}{{bold}}This spec failed and you are running in interactive mode.  Here's a timeline of the spec:{{/}}"))
-				fmt.Println(b.gt.Fi(1, b.gt.Name()))
-				fmt.Println(b.gt.Fi(1, b.gt.RenderTimeline()))
-
-				fmt.Println(b.gt.F("{{red}}{{bold}}Biloba will now sleep so you can interact with the browser.  Hit ^C when you're done to shut down the suite{{/}}"))
-				<-ctx.Done()
-			}
-		})
 	}
 
 	// the root tab is reused between specs, so clear cookies and web storage (which otherwise
@@ -1231,8 +1230,13 @@ func (b *Biloba) AllTabs() Tabs {
 	if err != nil {
 		b.gt.Fatalf("Failed to list tabs:\n%s", err.Error())
 	}
-	tabs := Tabs{}
+	return b.tabsFor(targets)
+}
 
+// tabsFor maps Chrome's targets to this spec's tabs, registering any tab the page spawned since the
+// last look.
+func (b *Biloba) tabsFor(targets []*target.Info) Tabs {
+	tabs := Tabs{}
 	for _, target := range targets {
 		b.root.lock.Lock()
 		tab, ok := b.root.tabs[target.TargetID]
@@ -1374,9 +1378,9 @@ func (b *Biloba) waitUntilTargetsGone(targetIDs []target.ID) {
 
 // safeAllTabConsoleErrors gathers the console.error/console.assert messages captured across every tab
 // so attachFailureArtifactsIfFailed can replay them at the top of the failure block.
-func (b *Biloba) safeAllTabConsoleErrors() []string {
+func (b *Biloba) safeAllTabConsoleErrors(tabs Tabs) []string {
 	out := []string{}
-	for _, tab := range b.AllTabs() {
+	for _, tab := range tabs {
 		tab.lock.Lock()
 		out = append(out, tab.state.consoleErrors...)
 		tab.lock.Unlock()
@@ -1384,72 +1388,108 @@ func (b *Biloba) safeAllTabConsoleErrors() []string {
 	return out
 }
 
-func (b *Biloba) attachFailureArtifactsIfFailed() {
-	// The poll-time diagnostics are scoped to a spec - a match trail or an occluded click that outlived
-	// its spec would point at the wrong failure - so they are cleared on the way out, pass or fail.
-	defer b.resetPollDiagnostics()
-	if b.gt.Failed() {
-		if consoleErrors := b.safeAllTabConsoleErrors(); len(consoleErrors) > 0 {
-			b.gt.AddReportEntryVisibilityFailureOrVerbose("Console errors logged before this failure", strings.Join(consoleErrors, "\n"))
-		}
-		if b.failureOutlines {
-			for _, outline := range b.safeAllTabOutlines() {
-				if outline.failure != "" {
-					b.gt.AddReportEntryVisibilityFailureOrVerbose(outline.failure)
-				} else {
-					b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("DOM Outline for: '%s'", outline.title), outline.text)
-				}
-			}
-		}
-		for _, tab := range b.AllTabs() {
-			suffix := ""
-			if !tab.isRootTab() {
-				suffix = fmt.Sprintf(" for tab: %s", tab.targetID)
-			}
-			if b.pollTrajectory {
-				// the detached-node diagnosis leads: it explains a failure that otherwise reads
-				// identically to "that selector was never there"
-				if detached := tab.probes.renderDetachedNode(); detached != "" {
-					b.gt.AddReportEntryVisibilityFailureOrVerbose("Selector matched, then stopped matching"+suffix, detached)
-				}
-				if trajectory := tab.probes.render(); trajectory != "" {
-					b.gt.AddReportEntryVisibilityFailureOrVerbose("Poll trajectory"+suffix, trajectory)
-				}
-			}
-			if occluded := tab.occlusions.render(); occluded != "" {
-				b.gt.AddReportEntryVisibilityFailureOrVerbose("Click dispatched onto a covered element"+suffix, occluded)
-			}
-			// a network handler that never ran is silently dead code - the spec fails downstream, at
-			// whatever was waiting on it, and points nowhere near the registration that lost
-			if shadowed := tab.renderShadowedHandlers(); shadowed != "" {
-				b.gt.AddReportEntryVisibilityFailureOrVerbose("Network handler never ran (shadowed by an earlier handler)"+suffix, shadowed)
-			}
-			// a redirect's body (or one Biloba otherwise couldn't read) never reaches
-			// Using/WithStatus/WithHeader/WithBody or a hold - this says why, and what Biloba did instead
-			if unreadable := tab.unreadableResponseBodies.render(); unreadable != "" {
-				b.gt.AddReportEntryVisibilityFailureOrVerbose("Network handler could not read a response body"+suffix, unreadable)
-			}
-		}
-		if !b.failureScreenshots {
-			return
-		}
-		for _, screenshot := range b.safeAllTabScreenshots(b.gt.Name(), b.failureScreenshotWidth, b.failureScreenshotHeight, engine.CaptureFullScreenshotContext) {
-			if screenshot.failure != "" {
-				b.gt.AddReportEntryVisibilityFailureOrVerbose(screenshot.failure)
+// failureArtifactsTimeout bounds captureFailureArtifacts.  A healthy capture takes well under a
+// second per tab; the bound is for a wedged browser, whose calls would otherwise each wait out the
+// 30s cdpTimeout backstop.
+const failureArtifactsTimeout = 10 * time.Second
+
+// interactivePauseTimeout bounds BILOBA_INTERACTIVE's pause, which lasts until the user hits ^C.  The
+// suite's own --timeout still applies.
+const interactivePauseTimeout = 24 * time.Hour
+
+func (b *Biloba) pauseForInteraction(ctx context.Context) {
+	fmt.Println(b.gt.F("{{red}}{{bold}}This spec failed and you are running in interactive mode.  Here's a timeline of the spec:{{/}}"))
+	fmt.Println(b.gt.Fi(1, b.gt.Name()))
+	fmt.Println(b.gt.Fi(1, b.gt.RenderTimeline()))
+
+	fmt.Println(b.gt.F("{{red}}{{bold}}Biloba will now sleep so you can interact with the browser.  Hit ^C when you're done to shut down the suite{{/}}"))
+	<-ctx.Done()
+}
+
+// allTabsIn is AllTabs bounded by ctx, for the failure capture: it returns the error rather than
+// failing the spec, which has already failed.
+func (b *Biloba) allTabsIn(ctx context.Context) (Tabs, error) {
+	listCtx, cancel := context.WithCancel(b.root.Context)
+	defer cancel()
+	stop := context.AfterFunc(ctx, cancel)
+	defer stop()
+	targets, err := chromedp.Targets(listCtx)
+	if err != nil {
+		return nil, err
+	}
+	return b.tabsFor(targets), nil
+}
+
+// captureFailureArtifacts is the on-failure capture Prepare registers with DeferOnFailure: Ginkgo
+// calls it only when the spec fails, straight after the failing node and before any teardown.  ctx
+// is the callback's; every call into Chrome is tied to it, so a capture that runs out of time stops
+// instead of driving the browser while teardown runs.
+func (b *Biloba) captureFailureArtifacts(ctx context.Context) {
+	tabs, err := b.allTabsIn(ctx)
+	if err != nil {
+		b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("Failed to list tabs for the failure artifacts: %s", err.Error()))
+		return
+	}
+	if consoleErrors := b.safeAllTabConsoleErrors(tabs); len(consoleErrors) > 0 {
+		b.gt.AddReportEntryVisibilityFailureOrVerbose("Console errors logged before this failure", strings.Join(consoleErrors, "\n"))
+	}
+	if b.failureOutlines {
+		for _, outline := range b.safeAllTabOutlines(ctx, tabs) {
+			if outline.failure != "" {
+				b.gt.AddReportEntryVisibilityFailureOrVerbose(outline.failure)
 			} else {
-				inlineEnabled := b.inlineScreenshotsEnabled()
-				if screenshot.filePath != "" {
-					b.gt.Printf("Screenshot for '%s' written to: %s\n", screenshot.title, screenshot.filePath)
-					if inlineEnabled {
-						b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("Screenshot for: '%s'", screenshot.title), fmt.Sprintf("File: %s\n\n%s", screenshot.filePath, screenshot.imgcatScreenshot))
-					} else {
-						b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("Screenshot for: '%s'", screenshot.title), fmt.Sprintf("File: %s", screenshot.filePath))
-					}
-				} else if inlineEnabled {
-					b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("Screenshot for: '%s'", screenshot.title), screenshot.imgcatScreenshot)
+				b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("DOM Outline for: '%s'", outline.title), outline.text)
+			}
+		}
+	}
+	for _, tab := range tabs {
+		suffix := ""
+		if !tab.isRootTab() {
+			suffix = fmt.Sprintf(" for tab: %s", tab.targetID)
+		}
+		if b.pollTrajectory {
+			// the detached-node diagnosis leads: it explains a failure that otherwise reads
+			// identically to "that selector was never there"
+			if detached := tab.probes.renderDetachedNode(); detached != "" {
+				b.gt.AddReportEntryVisibilityFailureOrVerbose("Selector matched, then stopped matching"+suffix, detached)
+			}
+			if trajectory := tab.probes.render(); trajectory != "" {
+				b.gt.AddReportEntryVisibilityFailureOrVerbose("Poll trajectory"+suffix, trajectory)
+			}
+		}
+		if occluded := tab.occlusions.render(); occluded != "" {
+			b.gt.AddReportEntryVisibilityFailureOrVerbose("Click dispatched onto a covered element"+suffix, occluded)
+		}
+		// a network handler that never ran is silently dead code - the spec fails downstream, at
+		// whatever was waiting on it, and points nowhere near the registration that lost
+		if shadowed := tab.renderShadowedHandlers(); shadowed != "" {
+			b.gt.AddReportEntryVisibilityFailureOrVerbose("Network handler never ran (shadowed by an earlier handler)"+suffix, shadowed)
+		}
+		// a redirect's body (or one Biloba otherwise couldn't read) never reaches
+		// Using/WithStatus/WithHeader/WithBody or a hold - this says why, and what Biloba did instead
+		if unreadable := tab.unreadableResponseBodies.render(); unreadable != "" {
+			b.gt.AddReportEntryVisibilityFailureOrVerbose("Network handler could not read a response body"+suffix, unreadable)
+		}
+	}
+	if !b.failureScreenshots {
+		return
+	}
+	for _, screenshot := range b.safeAllTabScreenshots(ctx, tabs, b.gt.Name(), b.failureScreenshotWidth, b.failureScreenshotHeight, engine.CaptureFullScreenshotContext) {
+		if screenshot.failure != "" {
+			b.gt.AddReportEntryVisibilityFailureOrVerbose(screenshot.failure)
+		} else {
+			inlineEnabled := b.inlineScreenshotsEnabled()
+			if screenshot.filePath != "" {
+				b.gt.Printf("Screenshot for '%s' written to: %s\n", screenshot.title, screenshot.filePath)
+				if inlineEnabled {
+					b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("Screenshot for: '%s'", screenshot.title), fmt.Sprintf("File: %s\n\n%s", screenshot.filePath, screenshot.imgcatScreenshot))
 				} else {
-					b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("Screenshot for: '%s'", screenshot.title), "(inline screenshots disabled; configure BilobaConfigScreenshotsToDir to save screenshot files)")
+					b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("Screenshot for: '%s'", screenshot.title), fmt.Sprintf("File: %s", screenshot.filePath))
 				}
+			} else if inlineEnabled {
+				b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("Screenshot for: '%s'", screenshot.title), screenshot.imgcatScreenshot)
+			} else {
+				b.gt.AddReportEntryVisibilityFailureOrVerbose(fmt.Sprintf("Screenshot for: '%s'", screenshot.title), "(inline screenshots disabled; configure BilobaConfigScreenshotsToDir to save screenshot files)")
 			}
 		}
 	}
@@ -1466,7 +1506,7 @@ func (b *Biloba) progressReporter(specName string) string {
 	if width > 0 && height > 0 {
 		out.WriteString(b.gt.F("{{orange}}BilobaConfigProgressReportScreenshotSize: each tab was resized to %dx%d and back for these screenshots, and the page can observe that.{{/}}\n", width, height))
 	}
-	for _, screenshot := range b.safeAllTabScreenshots(specName, width, height, engine.CaptureViewportScreenshotContext) {
+	for _, screenshot := range b.safeAllTabScreenshots(context.Background(), b.AllTabs(), specName, width, height, engine.CaptureViewportScreenshotContext) {
 		if screenshot.failure != "" {
 			out.WriteString(b.gt.F("{{red}}" + screenshot.failure + "{{/}}\n"))
 		} else {
