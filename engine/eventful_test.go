@@ -360,6 +360,55 @@ var _ = Describe("eventful engine state", func() {
 		Expect(returned).To(BeTemporally(">=", windowCloses))
 	})
 
+	// A request override that changes the URL used to leave every response owner unfired: Chrome
+	// reports the response under one URL and the spec named the other.  Owners match either.
+	DescribeTable("hands the response of a request sent to another URL to owners of either URL",
+		func(ctx SpecContext, ownerSuffix string, respond bool) {
+			session, err := browser.OpenSession(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(session.Close)
+			Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+			rewrite, err := session.RegisterNetworkHandler(ctx, engine.NetworkHandlerOptions{
+				URL:     engine.Expectation{Kind: engine.ExpectSuffix, Expected: "/rewrite-me"},
+				Request: &engine.RequestOverride{URL: stringPtr(server.URL + "/modifiable")},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			if respond {
+				modify, err := session.RegisterNetworkHandler(ctx, engine.NetworkHandlerOptions{
+					URL:      engine.Expectation{Kind: engine.ExpectSuffix, Expected: ownerSuffix},
+					Response: &engine.ResponseOverride{Body: bytesPtr([]byte("modified body"))},
+				})
+				Expect(err).NotTo(HaveOccurred())
+				result, err := session.EvaluateAsync(ctx, `fetch("/rewrite-me").then(r => r.text())`)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result).To(Equal("modified body"))
+				stats, err := session.NetworkHandlerStats(modify.ID)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(stats.Count).To(Equal(1))
+			} else {
+				hold, err := session.HoldResponse(ctx, engine.Expectation{Kind: engine.ExpectSuffix, Expected: ownerSuffix})
+				Expect(err).NotTo(HaveOccurred())
+				_, err = session.Evaluate(ctx, `void (window.rewritten = fetch("/rewrite-me").then(r => r.text()))`)
+				Expect(err).NotTo(HaveOccurred())
+				held, err := session.AwaitResponseHold(ctx, hold)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(string(held.Body)).To(Equal("original body"))
+				Expect(session.ReleaseResponseHold(ctx, hold)).To(Succeed())
+				result, err := session.EvaluateAsync(ctx, `window.rewritten`)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result).To(Equal("original body"))
+			}
+			stats, err := session.NetworkHandlerStats(rewrite.ID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(stats.Count).To(Equal(1))
+		},
+		Entry("a hold on the URL the page asked for", "/rewrite-me", false),
+		Entry("a hold on the URL the request went to", "/modifiable", false),
+		Entry("a response handler on the URL the page asked for", "/rewrite-me", true),
+		Entry("a response handler on the URL the request went to", "/modifiable", true),
+	)
+
 	It("fulfills, aborts, and modifies requests and responses with ordered handler stats", func(ctx SpecContext) {
 		session, err := browser.OpenSession(ctx)
 		Expect(err).NotTo(HaveOccurred())

@@ -1291,7 +1291,10 @@ func (b *Biloba) requestHandlerFor(url string) *requestHandler {
 // responseHandlerFor resolves the response-stage handler for url and records the dispatch (see
 // requestHandlerFor).  Call it only when actually dispatching - the request-stage probe that decides
 // whether to opt into response interception uses hasResponseHandlerFor so it doesn't double-count.
-func (b *Biloba) responseHandlerFor(url string) *ResponseModification {
+//
+// urls holds the URL the page requested and, for a request a ModifyRequest rewrote, the URL it was
+// rewritten to; a handler claims the response if it matches either.
+func (b *Biloba) responseHandlerFor(urls ...string) *ResponseModification {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	if len(b.state.responseHandlers) == 0 {
@@ -1299,7 +1302,7 @@ func (b *Biloba) responseHandlerFor(url string) *ResponseModification {
 	}
 	var winner *ResponseModification
 	for _, h := range b.state.responseHandlers {
-		if match, _ := h.matcher.Match(url); match {
+		if matchesAnyURL(h.matcher, urls) {
 			if winner == nil {
 				winner = h
 			} else {
@@ -1316,15 +1319,46 @@ func (b *Biloba) responseHandlerFor(url string) *ResponseModification {
 // hasResponseHandlerFor is the non-recording probe: does any response handler claim this URL?  It
 // short-circuits on the first match and leaves the provenance bookkeeping to the response-stage
 // dispatch, which is the pause that actually resolves a handler.
-func (b *Biloba) hasResponseHandlerFor(url string) bool {
+func (b *Biloba) hasResponseHandlerFor(urls ...string) bool {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	for _, h := range b.state.responseHandlers {
-		if match, _ := h.matcher.Match(url); match {
+		if matchesAnyURL(h.matcher, urls) {
 			return true
 		}
 	}
 	return false
+}
+
+func matchesAnyURL(matcher types.GomegaMatcher, urls []string) bool {
+	for _, url := range urls {
+		if match, _ := matcher.Match(url); match {
+			return true
+		}
+	}
+	return false
+}
+
+// rewrittenURL is the URL a request-stage handler sends the request to in place of requestedURL, or
+// "" when it leaves the URL alone.
+func (h *requestHandler) rewrittenURL(requestedURL string) string {
+	if h == nil || h.modify == nil || h.modify.url == nil || *h.modify.url == requestedURL {
+		return ""
+	}
+	return *h.modify.url
+}
+
+// requestedURLs is the set of URLs a response-stage pause answers to: the URL Chrome reports and, when
+// a ModifyRequest rewrote the request, the URL the page asked for (listed first).
+func (b *Biloba) requestedURLs(ev *fetch.EventRequestPaused) []string {
+	b.lock.Lock()
+	requested, rewritten := b.state.rewrittenRequests[ev.RequestID]
+	delete(b.state.rewrittenRequests, ev.RequestID)
+	b.lock.Unlock()
+	if !rewritten || requested == ev.Request.URL {
+		return []string{ev.Request.URL}
+	}
+	return []string{requested, ev.Request.URL}
 }
 
 // renderShadowedHandlers returns the on-failure note for this tab's silently-dead network handlers:
@@ -1459,8 +1493,19 @@ func (b *Biloba) handleRequestStagePause(ev *fetch.EventRequestPaused) {
 		// response interception so the request pauses again at the response stage.  (A request-stage
 		// "*" pattern matches first and would otherwise consume the request before the response-stage
 		// pattern could fire.)  A stub/abort short-circuits the real network, so it never reaches the
-		// response stage and doesn't need this.
-		interceptResponse := b.hasResponseHandlerFor(ev.Request.URL)
+		// response stage and doesn't need this.  A request a ModifyRequest sends to another URL
+		// answers to response handlers for either URL, so the response stage is told the original.
+		urls := []string{ev.Request.URL}
+		rewritten := handler.rewrittenURL(ev.Request.URL)
+		if rewritten != "" {
+			urls = append(urls, rewritten)
+		}
+		interceptResponse := b.hasResponseHandlerFor(urls...)
+		if interceptResponse && rewritten != "" {
+			b.lock.Lock()
+			b.state.rewrittenRequests[ev.RequestID] = ev.Request.URL
+			b.lock.Unlock()
+		}
 		var action chromedp.Action
 		switch {
 		case handler == nil:
@@ -1494,7 +1539,7 @@ func (b *Biloba) handleRequestStagePause(ev *fetch.EventRequestPaused) {
 }
 
 func (b *Biloba) handleResponseStagePause(ev *fetch.EventRequestPaused) {
-	handler := b.responseHandlerFor(ev.Request.URL)
+	handler := b.responseHandlerFor(b.requestedURLs(ev)...)
 	go func() {
 		if handler == nil {
 			// Not ours to modify: hand the real response straight back to the page.

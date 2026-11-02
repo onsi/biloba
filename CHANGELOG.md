@@ -5,6 +5,7 @@
 ### Fixes
 
 - Go: a progress report's screenshots now reach the report when screenshots are written to a directory, which is the default under CI and AI agents. Writing the file used to hang until Ginkgo's 5-second deadline, stalling the spec's reporting and dropping the report's screenshots.
+- A request that `ModifyRequest(...).WithURL` (Go) or `modifyRequest()` with a `url` (TypeScript) sends to another URL now reaches response handlers and holds that match either the URL the page requested or the one it was sent to. In Go it reached neither, so a `HoldResponse` never held it; in TypeScript only the destination URL matched.
 
 ## 0.19.1
 

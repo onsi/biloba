@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/target"
@@ -95,24 +96,27 @@ type Session struct {
 	networkState          NetworkState
 	networkShadows        []NetworkShadowDiagnostic
 	networkShadowsDropped uint64
-	eventsEnabled         atomic.Bool
-	eventGeneration       atomic.Uint64
-	holdMu                sync.Mutex
-	holds                 map[string]*responseHold
-	holdOrder             []string
-	holdSequence          uint64
-	fetchEnabled          bool
-	interceptions         int
-	closed                bool
-	installed             bool
-	root                  *Session
-	initialWidth          int
-	initialHeight         int
-	restoreViewport       *ViewportSize
-	visual                visualLifecycle
-	media                 Media
-	emulated              emulationOverrides
-	boundary              documentBoundary
+	// rewrittenRequests maps a paused request whose URL a request override rewrote to the URL the
+	// page asked for, so its response stage can match response owners against either URL.
+	rewrittenRequests map[fetch.RequestID]string
+	eventsEnabled     atomic.Bool
+	eventGeneration   atomic.Uint64
+	holdMu            sync.Mutex
+	holds             map[string]*responseHold
+	holdOrder         []string
+	holdSequence      uint64
+	fetchEnabled      bool
+	interceptions     int
+	closed            bool
+	installed         bool
+	root              *Session
+	initialWidth      int
+	initialHeight     int
+	restoreViewport   *ViewportSize
+	visual            visualLifecycle
+	media             Media
+	emulated          emulationOverrides
+	boundary          documentBoundary
 	// permissionsSet is raised on the context owner when any session in its context sets a
 	// permission, so the owner's Prepare knows to reset them.  Atomic because a spawned tab raises it
 	// under its own lock, not the owner's.

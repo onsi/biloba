@@ -3559,6 +3559,8 @@ b.ModifyRequest(ContainSubstring("/api/users")).
 
 Each `WithHeader` accumulates, so you can build up several headers.  Anything you don't set passes through unchanged.  The builder also carries a `Count()` - hold on to it and `Eventually(mod.Count).Should(Equal(1))` proves the modification actually ran, [as with a stub](#stubbing-requests).
 
+A request you send elsewhere with `WithURL` still reaches [`ModifyResponse`](#modifying-responses) and `HoldResponse`: they match its response under the URL the page requested and under the URL it was sent to.
+
 ### Modifying responses
 
 `b.ModifyResponse` intercepts the **real** response coming back and hands the page a modified version of it.  Use the chainable form to override pieces of the response:

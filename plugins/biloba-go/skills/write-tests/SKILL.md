@@ -269,7 +269,7 @@ Every registration returns a handle — `stub.Count()`/`abort.Count()`/`mod.Coun
 Three traps, detailed in `flaky-specs`:
 
 - **Observe in order:** `Eventually(b).Should(b.HaveMadeRequest(...))` **first**, *then* `Eventually(b).Should(b.BeNetworkIdle())`. Idle means "nothing in flight right now", so alone it passes at t=0.
-- **Handlers accumulate in an `Ordered` container** (`Prepare()` is `OncePerOrdered`), so an earlier `It`'s handler silently shadows a later identical one — sometimes a timeout, sometimes a spec that just passes. Request and response handlers are separate lists, but a stub, an abort, or a `ModifyRequest` that rewrites the URL still keeps a `HoldResponse` from firing.
+- **Handlers accumulate in an `Ordered` container** (`Prepare()` is `OncePerOrdered`), so an earlier `It`'s handler silently shadows a later identical one — sometimes a timeout, sometimes a spec that just passes. Request and response handlers are separate lists, but a stub or an abort still keeps a `HoldResponse` from firing.
 - **Assert your own interception state** (`Eventually(hold.Count).Should(Equal(1))`) so you'd notice either.
 
 **Waiting for the request your action triggered.** Don't add a busy flag to the app. In order of preference:

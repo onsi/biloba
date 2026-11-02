@@ -270,6 +270,40 @@ var _ = Describe("Observing the network", func() {
 
 			Expect(miss.Count()).To(Equal(0))
 		})
+
+		// Chrome reports a rewritten request's response under one URL, and the spec may name either,
+		// so response handlers match both.  They used to match neither.
+		Describe("when it sends the request to another URL", func() {
+			var mod *biloba.RequestModification
+			BeforeEach(func() {
+				mod = b.ModifyRequest(ContainSubstring("/api/echo")).WithURL(fixtureServer + "/api/rewritten")
+			})
+
+			DescribeTable("a hold catches the response under either URL", func(url string) {
+				hold := b.HoldResponse(ContainSubstring(url))
+				b.Click("#fetch")
+				Expect(hold.Await().Body).To(ContainSubstring(`"path":"/api/rewritten"`))
+				hold.Release()
+				Eventually("#body").Should(b.HaveInnerText(ContainSubstring(`"path":"/api/rewritten"`)))
+				Expect(hold.Count()).To(Equal(1))
+				Expect(mod.Count()).To(Equal(1))
+			},
+				Entry("the URL the page requested", "/api/echo"),
+				Entry("the URL it was sent to", "/api/rewritten"),
+			)
+
+			DescribeTable("ModifyResponse modifies the response under either URL", func(url string) {
+				modResponse := b.ModifyResponse(ContainSubstring(url)).WithStatus(503).WithBody("service unavailable")
+				b.Click("#fetch")
+				Eventually("#body").Should(b.HaveInnerText("service unavailable"))
+				Expect("#status").To(b.HaveInnerText("503"))
+				Expect(modResponse.Count()).To(Equal(1))
+				Expect(mod.Count()).To(Equal(1))
+			},
+				Entry("the URL the page requested", "/api/echo"),
+				Entry("the URL it was sent to", "/api/rewritten"),
+			)
+		})
 	})
 
 	Describe("ModifyResponse", func() {

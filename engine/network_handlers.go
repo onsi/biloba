@@ -404,7 +404,7 @@ func (s *Session) handlePausedEvent(event *fetch.EventRequestPaused) {
 			go s.continueResponse(event.RequestID)
 			return
 		}
-		handler, hold := s.selectResponseOwner(event.Request.URL)
+		handler, hold := s.selectResponseOwner(s.requestedURLs(event)...)
 		if handler != nil {
 			s.handleResponseModification(event, handler)
 		} else {
@@ -453,6 +453,9 @@ func (s *Session) resolveRequest(event *fetch.EventRequestPaused) {
 			p := fetch.ContinueRequest(event.RequestID).WithInterceptResponse(true)
 			if o.URL != nil {
 				p = p.WithURL(*o.URL)
+				if *o.URL != event.Request.URL {
+					s.recordRewrittenRequest(event.RequestID, event.Request.URL)
+				}
 			}
 			if o.Method != nil {
 				p = p.WithMethod(*o.Method)
@@ -637,7 +640,44 @@ func (p fulfillWithExplicitBody) Do(ctx context.Context) error {
 	return cdp.Execute(ctx, fetch.CommandFulfillRequest, p, nil)
 }
 
-func (s *Session) selectResponseOwner(url string) (*networkHandlerEntry, *responseHold) {
+// recordRewrittenRequest remembers the URL the page asked for when a request override sends the
+// request somewhere else, for requestedURLs.
+func (s *Session) recordRewrittenRequest(id fetch.RequestID, requested string) {
+	s.networkMu.Lock()
+	defer s.networkMu.Unlock()
+	if s.rewrittenRequests == nil {
+		s.rewrittenRequests = map[fetch.RequestID]string{}
+	}
+	s.rewrittenRequests[id] = requested
+}
+
+// requestedURLs is the set of URLs a response-stage pause answers to: the URL Chrome reports and, when
+// a request override rewrote the request, the URL the page asked for (listed first).
+func (s *Session) requestedURLs(event *fetch.EventRequestPaused) []string {
+	s.networkMu.Lock()
+	requested, rewritten := s.rewrittenRequests[event.RequestID]
+	delete(s.rewrittenRequests, event.RequestID)
+	s.networkMu.Unlock()
+	if !rewritten || requested == event.Request.URL {
+		return []string{event.Request.URL}
+	}
+	return []string{requested, event.Request.URL}
+}
+
+func matchesAnyURL(urls []string, expectation Expectation) bool {
+	for _, url := range urls {
+		if matched, _ := MatchExpectation(url, expectation); matched {
+			return true
+		}
+	}
+	return false
+}
+
+// selectResponseOwner resolves the response-stage owner for a request.  urls holds the URL the page
+// requested and, for a request an override rewrote, the URL it went to; an owner claims the response
+// if it matches either.
+func (s *Session) selectResponseOwner(urls ...string) (*networkHandlerEntry, *responseHold) {
+	url := urls[0]
 	s.networkMu.Lock()
 	s.holdMu.Lock()
 	defer s.networkMu.Unlock()
@@ -651,8 +691,7 @@ func (s *Session) selectResponseOwner(url string) (*networkHandlerEntry, *respon
 		if handler == nil || !handler.active || (handler.options.Response == nil && handler.options.Transform == nil) {
 			continue
 		}
-		matched, _ := MatchExpectation(url, handler.options.URL)
-		if matched {
+		if matchesAnyURL(urls, handler.options.URL) {
 			handlers = append(handlers, handler)
 		}
 	}
@@ -662,8 +701,7 @@ func (s *Session) selectResponseOwner(url string) (*networkHandlerEntry, *respon
 		if candidate == nil || candidate.released {
 			continue
 		}
-		matched, _ := MatchExpectation(url, candidate.expectation)
-		if matched {
+		if matchesAnyURL(urls, candidate.expectation) {
 			hold = candidate
 			break
 		}
@@ -1081,6 +1119,7 @@ func (s *Session) clearNetworkBookkeeping() {
 	s.cacheEnabled = true
 	s.networkState = NetworkState{}
 	s.networkShadows, s.networkShadowsDropped = nil, 0
+	s.rewrittenRequests = nil
 	s.networkMu.Unlock()
 }
 func cloneStringMap(in map[string]string) map[string]string {

@@ -30,6 +30,7 @@ import (
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/emulation"
+	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/inspector"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
@@ -898,19 +899,23 @@ type tabState struct {
 	inflightRequests map[network.RequestID]engine.InflightRequest
 	requestHandlers  []*requestHandler       // ordered, first-match-wins: stub / abort / modify-request
 	responseHandlers []*ResponseModification // ordered, first-match-wins: modify-response (response stage)
-	fetchEnabled     bool
+	// rewrittenRequests maps a paused request whose URL a ModifyRequest rewrote to the URL the page
+	// asked for, so its response stage can match response handlers against either URL.
+	rewrittenRequests map[fetch.RequestID]string
+	fetchEnabled      bool
 }
 
 // newTabState is the zero-state of a fresh tab, and is also exactly what Prepare resets a tab to.
 // Keeping the two in one place means a field added here cannot be forgotten by Prepare.
 func newTabState() *tabState {
 	return &tabState{
-		downloads:        map[string]*Download{},
-		downloadHistory:  map[string]time.Time{},
-		dialogHandlers:   []*DialogHandler{},
-		dialogs:          Dialogs{},
-		requestsByID:     map[network.RequestID]*Request{},
-		inflightRequests: map[network.RequestID]engine.InflightRequest{},
+		downloads:         map[string]*Download{},
+		downloadHistory:   map[string]time.Time{},
+		dialogHandlers:    []*DialogHandler{},
+		dialogs:           Dialogs{},
+		requestsByID:      map[network.RequestID]*Request{},
+		inflightRequests:  map[network.RequestID]engine.InflightRequest{},
+		rewrittenRequests: map[fetch.RequestID]string{},
 	}
 }
 

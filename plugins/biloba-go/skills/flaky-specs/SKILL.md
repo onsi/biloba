@@ -242,8 +242,7 @@ Handlers (`StubRequest`/`AbortRequest`/`ModifyRequest`/`ModifyResponse`/`HoldRes
 There are two lists, one per stage: `StubRequest`/`AbortRequest`/`ModifyRequest` compete when a request pauses, and `ModifyResponse`/`HoldResponse` compete when its response does. A handler only shadows handlers in its own list. Across the two:
 
 - A `StubRequest` or `AbortRequest` never reaches the network, so a response handler on the same URL never runs.
-- A `ModifyRequest` that changes a header composes with a `HoldResponse`, in either registration order: both counts reach 1.
-- A `ModifyRequest` that rewrites the URL loses the hold, whether the hold matches the old URL or the new one: the mod count reaches 1, the hold count stays 0, and the response reaches the page unheld.
+- A `ModifyRequest` composes with a `HoldResponse` or `ModifyResponse`, in either registration order: both counts reach 1. When it rewrites the URL, the response handler may match either the URL the page requested or the one the request was sent to.
 
 No shadowed-handler note explains the cross-list cases, so assert each handler's `Count()`.
 

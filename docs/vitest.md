@@ -390,7 +390,7 @@ const serverErrors = await session.requests({url: contains("/api/"), status: num
 
 `expectNetworkIdle()` waits for the session's in-flight requests to finish.  When it times out, its message names each request still in flight as of its last attempt - method, URL, resource type, and how long it had been in flight - oldest first.
 
-Import `endsWith` (or another Biloba expectation) from the package.  Always release a hold.  Network handlers are first-match-wins; use each handler's `count()` or `stats()` and `networkShadowDiagnostics()` to prove that the intended handler claimed the request.
+Import `endsWith` (or another Biloba expectation) from the package.  Always release a hold.  Network handlers are first-match-wins; use each handler's `count()` or `stats()` and `networkShadowDiagnostics()` to prove that the intended handler claimed the request.  A request that `modifyRequest()` sends to another `url` still reaches `modifyResponse()`, `routeResponse()`, and `holdResponse()`: they match its response under the URL the page requested and under the URL it was sent to.
 
 `routeResponse()` starts its callback timeout after reading the response body. Body reads have a separate timeout of five seconds, or `timeoutMs` if it is longer. For example, `{timeoutMs: 30_000}` allows up to 30 seconds to read the body, then another 30 seconds for the callback. If Chrome refuses to provide a body, as it does for redirects, Biloba continues the response without calling the callback and records the error in the handler's `stats()`.
 
