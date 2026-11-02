@@ -1,6 +1,6 @@
 ---
 name: flaky-specs
-description: Diagnose and prevent flaky Go/Ginkgo Biloba specs — specs that pass locally but fail in CI, fail intermittently under `-p` or load, or fail somewhere other than the line that is actually wrong. Biloba polls by default, so the headline rule is "don't reach for b.Immediate()". Covers the residual smells — single-shot `b.Run(expr,&x)` reads and gate-then-re-read pairs (fix with .Capture); the non-polling SendKeysToWindowImmediately and `*Immediately` verbs; optimistic-UI and server-reconciliation traps (barrier on app state with b.GetJSValue, force the arrival order with b.HoldResponse + Limit/ReleaseNext); async-settling geometry, layout, and document-order reads; AllowMissing for properties absent on the element type; network handlers accumulating across an Ordered container; vacuous assertions that can never fail (an unresolved locator scope, BeNetworkIdle before the request starts, an empty Current*ForEach under a negation, a visual baseline written without ever being reviewed, a screenshot tolerance widened until nothing can fail, BILOBA_UPDATE_SCREENSHOTS left set in CI); gating on a DOM anchor instead of the URL; and timer-driven UI (debounces, countdowns, expiries) taken off real time with the page clock (b.InstallClock, PauseAt/RunFor/FastForward), including why a poll never advances a paused clock. Use when a browser spec is flaky, nondeterministic, order-dependent, load-sensitive, or CI-only, or when reviewing a suite for latent races.
+description: Diagnose and prevent flaky Go/Ginkgo Biloba specs — specs that pass locally but fail in CI, fail intermittently under `-p` or load, or fail somewhere other than the line that is actually wrong. Biloba polls by default, so the headline rule is "don't reach for b.Immediate()". Covers the residual smells — single-shot `b.Run(expr,&x)` reads and gate-then-re-read pairs (fix with .Capture); the non-polling SendKeysToWindowImmediately and `*Immediately` verbs; optimistic-UI and server-reconciliation traps (barrier on app state with b.GetJSValue, force the arrival order with b.HoldResponse + Limit/ReleaseNext); async-settling geometry, layout, and document-order reads; AllowMissing for properties absent on the element type; network handlers accumulating across an Ordered container; vacuous assertions that can never fail (an unresolved locator scope, BeNetworkIdle before the request starts, an empty Current*ForEach under a negation, a visual baseline written without ever being reviewed, a screenshot tolerance widened until nothing can fail, BILOBA_UPDATE_SCREENSHOTS left set in CI); gating on a DOM anchor instead of the URL; never waiting out a clock for a fact you can observe (durations clustered at one timer's period give it away); and timer-driven UI (debounces, countdowns, expiries) taken off real time with the page clock (b.InstallClock, PauseAt/RunFor/FastForward), including why a poll never advances a paused clock. Use when a browser spec is flaky, nondeterministic, order-dependent, load-sensitive, or CI-only, or when reviewing a suite for latent races.
 ---
 
 # Flaky Biloba specs
@@ -20,6 +20,7 @@ Failure *artifacts* (outlines, screenshots, poll trajectory) → `debug-failures
 | Fails at an assertion, not at the interaction before it | `b.Immediate()` acted a frame early | delete the `Immediate()` | [2](#2-actions-that-dont-poll) |
 | Times out *consistently*, not intermittently | Value is stably wrong — product bug, not a short timeout | read the poll trajectory; fix product-side | [4](#4-layout-geometry-and-document-order) |
 | Spec on a countdown, debounce, "x minutes ago", or expiry is slow or timing-sensitive | It waits on the page's real timers | `b.InstallClock` + `PauseAt`, then `RunFor`/`FastForward` | [9](#9-time-dependent-ui) |
+| Durations of many specs or `By` steps sit at one value across a hunt (say, all near 2.5s) | Each waits out a timer of that length instead of observing what it guards | poll for the guarded fact, or put the timer on the page clock | [9](#9-time-dependent-ui) |
 | Poll times out with "This tab's page clock is paused at …" | Polling doesn't advance a paused page clock | `clock.RunFor`/`FastForward`/`Resume` before the assertion | [9](#9-time-dependent-ui) |
 | Getter times out on an element that's plainly there | Property is never *defined* on that element type | `b.AllowMissing("name")` | [5](#5-two-axis-getters) |
 | Green forever, even against a broken page | Vacuous assertion (empty scope / empty slice / t=0 idle) | anchor the subject first | [7](#7-assertions-that-cannot-fail) |
@@ -238,6 +239,14 @@ Works for every decode target (`.Capture` and the getters' trailing pointer), an
 
 Handlers (`StubRequest`/`AbortRequest`/`ModifyRequest`/`ModifyResponse`/`HoldResponse`) are first-match-wins in registration order, and `Prepare()` is what clears them. With `BeforeEach(func(){ b.Prepare() }, OncePerOrdered)`, `Prepare()` does **not** run between the `It`s — so handlers accumulate and a later identical handler is **silent dead code**.
 
+There are two lists, one per stage: `StubRequest`/`AbortRequest`/`ModifyRequest` compete when a request pauses, and `ModifyResponse`/`HoldResponse` compete when its response does. A handler only shadows handlers in its own list. Across the two:
+
+- A `StubRequest` or `AbortRequest` never reaches the network, so a response handler on the same URL never runs.
+- A `ModifyRequest` that changes a header composes with a `HoldResponse`, in either registration order: both counts reach 1.
+- A `ModifyRequest` that rewrites the URL loses the hold, whether the hold matches the old URL or the new one: the mod count reaches 1, the hold count stays 0, and the response reaches the page unheld.
+
+No shadowed-handler note explains the cross-list cases, so assert each handler's `Count()`.
+
 **Detector: an interception gate that times out only when the spec runs with the rest of the suite, and passes when focused alone.** Check what ran before it in the same process before diagnosing anything else.
 
 **Shadowing is silent in both directions, and the green direction is worse.** A leftover **stateful** handler — one keeping a counter — claims the response, and because its counter has moved on, passes it through untouched. The app behaves normally; the later spec's own counter stays 0; nothing hangs.
@@ -333,6 +342,8 @@ Eventually("#dashboard-root").Should(b.Exist())     // the destination actually 
 **Fast interactions act in place.** `b.Click`/`b.Tap` do **not** `scrollIntoView` and do **not** move focus. If a scroll position changes around a fast click, the cause is app-side. Scroll-into-view comes only from `b.Realistic()` and from focus-bearing ops (`b.Focus`, `b.SetValue`, `b.Type`) whose `.focus()` scrolls its target. If a spec asserts on scroll position, keep focus-bearing ops off the element under test.
 
 ## 9. Time-dependent UI
+
+**Never wait out a clock for a fact you can observe.** A `time.Sleep`, or a timeout sized to outlast some timer, spends real time on a fact the spec could check directly. If the spec needs something observable (a request went out, a response arrived, an element rendered, an app-state flag flipped), poll for it. If it needs the timer itself to fire, take the timer off real time with the page clock, below. Specs that wait out a timer show up in a hunt's timing data: their durations cluster at the timer's period (`flake-hunt`).
 
 A spec that waits for a real `setTimeout` (a debounce, a toast that hides after 3s, a countdown, a "5 minutes ago" label refreshed every 30s, a session expiry) is slow when it works and flaky under load when the timer and the poll deadline race. Don't widen the timeout — take the timers away from real time:
 
