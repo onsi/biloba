@@ -39,7 +39,7 @@ import (
 	"github.com/onsi/ginkgo/v2"
 )
 
-const BILOBA_VERSION = "0.19.1"
+const BILOBA_VERSION = "0.20.0"
 
 // minimumSupportedChromeMajor is the oldest Chrome major version Biloba's behavior is known to
 // assume.  Biloba tracks (and CI continuously validates against) the latest stable Chrome, so this
