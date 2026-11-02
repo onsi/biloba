@@ -52,6 +52,13 @@ CI runs every one of these (`.github/workflows/test.yml`). Two rules keep them h
 
 `bilobad` resolves Chrome itself, so neither lane needs a browser environment variable.
 
+Two scheduled workflows watch for upstream changes. `chrome-tracking.yml` runs the Go suite daily
+against whatever Chrome just shipped. `chromedp-tracking.yml` runs daily, checks whether a newer
+chromedp or cdproto than `go.mod`'s has been released, and if so calls `test.yml` with
+`chromedp: latest`. That input makes every job that builds Go code `go get` the newest versions
+first (and skips the module-tidiness and docs jobs). It stays red until Biloba is ported to the new
+versions, and a scheduled failure opens an issue titled "chromedp-tracking CI is failing".
+
 `make driver-test` deliberately does *not* run `go generate ./engine` — regenerating
 `engine/biloba.js` there would silently repair the drift the engine suite exists to catch. Run
 `go generate ./engine` yourself after editing `biloba.js` or `clock.js`.

@@ -5,9 +5,17 @@ on:
   pull_request:
   # The Release workflow calls this one, so nothing is released unless all of it passes.
   workflow_call:
+    inputs:
+      # "latest" builds and tests against the newest released chromedp and cdproto instead of the
+      # versions go.mod pins (see chromedp-tracking.yml).  Empty, the default, leaves every job as is.
+      chromedp:
+        type: string
+        default: ""
 
 jobs:
   mod:
+    # Asserts go.mod is tidy as committed, which means nothing once chromedp has been upgraded.
+    if: inputs.chromedp != 'latest'
     runs-on: ubuntu-latest
     name: Check modules
     steps:
@@ -19,6 +27,7 @@ jobs:
     - run: make check-plugins
 
   docs:
+    if: inputs.chromedp != 'latest'
     # Pinned: commonmarker 0.23.8, which github-pages 228 locks, does not compile on ubuntu-26.04.
     runs-on: ubuntu-24.04
     name: Build docs
@@ -40,6 +49,11 @@ jobs:
     - uses: actions/setup-go@v6
       with:
         go-version-file: 'go.mod'
+    - name: Upgrade chromedp and cdproto
+      if: inputs.chromedp == 'latest'
+      run: |
+        go get github.com/chromedp/chromedp@latest github.com/chromedp/cdproto@latest && go mod tidy
+        go list -m github.com/chromedp/chromedp github.com/chromedp/cdproto
     - run: go vet ./...
     # Ubuntu 23.10+ (the ubuntu-latest runner) restricts unprivileged user namespaces via
     # AppArmor, which Chrome's sandbox needs to start. Biloba itself now auto-adds --no-sandbox
@@ -64,6 +78,11 @@ jobs:
     - uses: actions/setup-go@v6
       with:
         go-version-file: 'go.mod'
+    - name: Upgrade chromedp and cdproto
+      if: inputs.chromedp == 'latest'
+      run: |
+        go get github.com/chromedp/chromedp@latest github.com/chromedp/cdproto@latest && go mod tidy
+        go list -m github.com/chromedp/chromedp github.com/chromedp/cdproto
     # Ubuntu 23.10+ (the ubuntu-latest runner) restricts unprivileged user namespaces via
     # AppArmor, which Chrome's sandbox needs to start. Biloba itself now auto-adds --no-sandbox
     # on a restricted host, but relaxing this here keeps this lane covering the sandbox-ON path -
@@ -83,6 +102,11 @@ jobs:
     - uses: actions/setup-go@v6
       with:
         go-version-file: 'go.mod'
+    - name: Upgrade chromedp and cdproto
+      if: inputs.chromedp == 'latest'
+      run: |
+        go get github.com/chromedp/chromedp@latest github.com/chromedp/cdproto@latest && go mod tidy
+        go list -m github.com/chromedp/chromedp github.com/chromedp/cdproto
     - uses: pnpm/action-setup@v4
       with:
         package_json_file: typescript/package.json
@@ -126,6 +150,11 @@ jobs:
     - uses: actions/setup-go@v6
       with:
         go-version-file: 'go.mod'
+    - name: Upgrade chromedp and cdproto
+      if: inputs.chromedp == 'latest'
+      run: |
+        go get github.com/chromedp/chromedp@latest github.com/chromedp/cdproto@latest && go mod tidy
+        go list -m github.com/chromedp/chromedp github.com/chromedp/cdproto
     - uses: pnpm/action-setup@v4
       with:
         package_json_file: typescript/package.json

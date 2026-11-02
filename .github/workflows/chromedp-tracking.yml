@@ -1,0 +1,108 @@
+name: chromedp-tracking
+
+# Biloba is built on chromedp and cdproto, and go.mod pins the versions it was last ported to.  A new
+# release of either can change an API or a CDP type Biloba uses, and GitHub cannot trigger a workflow
+# from another repository's release, so this runs daily and does nothing unless a newer chromedp or
+# cdproto than go.mod's has been released.  When there is one, it calls test.yml with `chromedp:
+# latest`, which upgrades both modules and runs every lane that builds Go code: it fails if Biloba no
+# longer compiles against them or any test fails.  When a scheduled run fails we open (or comment on)
+# a tracking issue so the breakage surfaces without anyone watching the Actions tab.  A run triggered
+# by hand always tests, stale or not.
+#
+# Until Biloba is ported to the newer versions this keeps failing, and the issue it opens stays
+# open: today that port is #47.
+
+on:
+  schedule:
+    # daily at 14:43 UTC - off the top of the hour to dodge cron congestion
+    - cron: '43 14 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    name: Check for new chromedp or cdproto
+    outputs:
+      stale: ${{ steps.versions.outputs.stale }}
+      chromedp: ${{ steps.versions.outputs.chromedp }}
+      cdproto: ${{ steps.versions.outputs.cdproto }}
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/setup-go@v6
+      with:
+        go-version-file: 'go.mod'
+    - id: versions
+      run: |
+        current_chromedp=$(go list -m -f '{{.Version}}' github.com/chromedp/chromedp)
+        current_cdproto=$(go list -m -f '{{.Version}}' github.com/chromedp/cdproto)
+        latest_chromedp=$(go list -m -f '{{.Version}}' github.com/chromedp/chromedp@latest)
+        latest_cdproto=$(go list -m -f '{{.Version}}' github.com/chromedp/cdproto@latest)
+        echo "chromedp: go.mod has $current_chromedp, latest is $latest_chromedp"
+        echo "cdproto:  go.mod has $current_cdproto, latest is $latest_cdproto"
+        stale=false
+        if [ "$current_chromedp" != "$latest_chromedp" ] || [ "$current_cdproto" != "$latest_cdproto" ]; then
+          stale=true
+        fi
+        echo "stale=$stale" >> "$GITHUB_OUTPUT"
+        echo "chromedp=$latest_chromedp" >> "$GITHUB_OUTPUT"
+        echo "cdproto=$latest_cdproto" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: check
+    if: needs.check.outputs.stale == 'true' || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/test.yml
+    with:
+      chromedp: latest
+
+  notify:
+    needs: [check, test]
+    # only file an issue when a *scheduled* run breaks - manual (workflow_dispatch) debugging runs
+    # shouldn't open issues
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+    - uses: actions/github-script@v7
+      env:
+        CHROMEDP_VERSION: ${{ needs.check.outputs.chromedp }}
+        CDPROTO_VERSION: ${{ needs.check.outputs.cdproto }}
+      with:
+        script: |
+          const marker = 'chromedp-tracking CI is failing';
+          const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+          const body = [
+            `The daily chromedp-tracking run failed: ${runUrl}`,
+            ``,
+            `It tested Biloba against chromedp ${process.env.CHROMEDP_VERSION} and cdproto ${process.env.CDPROTO_VERSION},`,
+            `the newest releases, rather than the versions go.mod pins. Either Biloba no longer compiles`,
+            `against them or a test fails. Check the run log for the compile errors or failing specs.`,
+            ``,
+            `The current known port is #47 (Port to chromedp v0.21 / cdproto v0.159).`,
+          ].join('\n');
+          // find an existing open tracking issue by title marker (no label dependency)
+          const { data: issues } = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'open',
+            per_page: 100,
+          });
+          const existing = issues.find(i => !i.pull_request && i.title.includes(marker));
+          if (existing) {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: existing.number,
+              body,
+            });
+          } else {
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🔴 chromedp-tracking CI is failing`,
+              body,
+            });
+          }
