@@ -4,6 +4,8 @@
 
 ### Fixes
 
+- Go: a progress report's screenshots now reach the report when screenshots are written to a directory, which is the default under CI and AI agents. Writing the file used to hang until Ginkgo's 5-second deadline, stalling the spec's reporting and dropping the report's screenshots.
+
 ## 0.19.1
 
 ### Fixes

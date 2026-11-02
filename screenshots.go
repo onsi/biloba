@@ -635,7 +635,7 @@ func sanitizeForFilename(s string) string {
 // set.  The emulation resizes the page, and so does engine.CaptureFullScreenshotContext: a progress
 // report fires while its spec is still running, so it uses engine.CaptureViewportScreenshotContext
 // unless the suite asked for a size.
-func (b *Biloba) safeAllTabScreenshots(width int, height int, capture func(context.Context) ([]byte, string, error)) []tabScreenshot {
+func (b *Biloba) safeAllTabScreenshots(specName string, width int, height int, capture func(context.Context) ([]byte, string, error)) []tabScreenshot {
 	out := []tabScreenshot{}
 	for idx, tab := range b.AllTabs() {
 		// Bound the capture so a wedged tab can't hang screenshot collection, but keep it generous: encoding
@@ -685,12 +685,11 @@ func (b *Biloba) safeAllTabScreenshots(width int, height int, capture func(conte
 			ts.imgcatScreenshot = b.asInlineImage(img, detectInlineImageProtocol())
 		}
 		if b.root.screenshotsDir != "" {
-			specName := sanitizeForFilename(b.gt.Name())
 			tabLabel := sanitizeForFilename(title)
 			if tabLabel == "" {
 				tabLabel = fmt.Sprintf("tab%d", idx)
 			}
-			filename := fmt.Sprintf("screenshot-%s-%s.png", specName, tabLabel)
+			filename := fmt.Sprintf("screenshot-%s-%s.png", sanitizeForFilename(specName), tabLabel)
 			absPath := filepath.Join(b.root.screenshotsDir, filename)
 			if mkErr := os.MkdirAll(b.root.screenshotsDir, 0755); mkErr == nil {
 				if writeErr := os.WriteFile(absPath, img, 0644); writeErr == nil {

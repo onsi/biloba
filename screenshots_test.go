@@ -317,6 +317,27 @@ var _ = Describe("Screenshots", func() {
 			Ω(img.Bounds().Dy()).Should(Equal(300))
 		})
 
+		Context("when Ginkgo itself asks for the report", func() {
+			BeforeEach(func() {
+				connect().Prepare() // Prepare is what attaches the reporter
+			})
+
+			// ProgressReporterForTest can't stand in for this: Ginkgo holds a lock while it queries
+			// reporters, and a reporter that needs that lock only hangs when Ginkgo is the caller
+			It("delivers the screenshot before Ginkgo's deadline", PollProgressAfter(50*time.Millisecond), func() {
+				Eventually(func() []string {
+					reports := []string{}
+					for _, report := range CurrentSpecReport().ProgressReports {
+						reports = append(reports, report.AdditionalReports...)
+					}
+					return reports
+				}).WithTimeout(10 * time.Second).Should(ContainElement(SatisfyAll(
+					ContainSubstring("Screenshot for:"),
+					ContainSubstring(filepath.Join(dir, "screenshot-")),
+				)))
+			})
+		})
+
 		It("leaves failure screenshots showing the whole page", func() {
 			tab := connect()
 			shots := tab.SafeAllTabScreenshotsForTest(0, 0)

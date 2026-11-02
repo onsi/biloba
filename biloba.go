@@ -1141,7 +1141,10 @@ func (b *Biloba) Prepare() {
 		b.gt.DeferCleanup(b.attachFailureArtifactsIfFailed)
 	}
 	if b.progressReportScreenshots {
-		b.gt.DeferCleanup(b.gt.AttachProgressReporter(b.progressReporter))
+		// read here because Ginkgo holds the lock Name takes while it queries reporters: a reporter that
+		// calls Name waits out Ginkgo's deadline, and Ginkgo then discards what it returns
+		specName := b.gt.Name()
+		b.gt.DeferCleanup(b.gt.AttachProgressReporter(func() string { return b.progressReporter(specName) }))
 	}
 	if os.Getenv("BILOBA_INTERACTIVE") != "" {
 		b.gt.DeferCleanup(func(ctx context.Context) {
@@ -1425,7 +1428,7 @@ func (b *Biloba) attachFailureArtifactsIfFailed() {
 		if !b.failureScreenshots {
 			return
 		}
-		for _, screenshot := range b.safeAllTabScreenshots(b.failureScreenshotWidth, b.failureScreenshotHeight, engine.CaptureFullScreenshotContext) {
+		for _, screenshot := range b.safeAllTabScreenshots(b.gt.Name(), b.failureScreenshotWidth, b.failureScreenshotHeight, engine.CaptureFullScreenshotContext) {
 			if screenshot.failure != "" {
 				b.gt.AddReportEntryVisibilityFailureOrVerbose(screenshot.failure)
 			} else {
@@ -1451,14 +1454,14 @@ func (b *Biloba) attachFailureArtifactsIfFailed() {
 // must not change the page under the spec's assertions: it takes the viewport as it stands.  The one
 // exception is a size the suite configured, which can only be honored by laying the page out at that
 // size, so the report says it happened.
-func (b *Biloba) progressReporter() string {
+func (b *Biloba) progressReporter(specName string) string {
 	out := &strings.Builder{}
 	inlineEnabled := b.inlineScreenshotsEnabled()
 	width, height := b.progressReportScreenshotWidth, b.progressReportScreenshotHeight
 	if width > 0 && height > 0 {
 		out.WriteString(b.gt.F("{{orange}}BilobaConfigProgressReportScreenshotSize: each tab was resized to %dx%d and back for these screenshots, and the page can observe that.{{/}}\n", width, height))
 	}
-	for _, screenshot := range b.safeAllTabScreenshots(width, height, engine.CaptureViewportScreenshotContext) {
+	for _, screenshot := range b.safeAllTabScreenshots(specName, width, height, engine.CaptureViewportScreenshotContext) {
 		if screenshot.failure != "" {
 			out.WriteString(b.gt.F("{{red}}" + screenshot.failure + "{{/}}\n"))
 		} else {
