@@ -791,8 +791,8 @@ func (b *Biloba) bootstrapIsolatedTab(allocatorContext context.Context, bootstra
 			lastErr = err
 			continue
 		}
-		// Frame handles look their documents up in this registry; it starts from the documents the
-		// target has now (see engine.TrackFrameWorlds), before anything else listens to the tab.
+		// Frame handles look their documents up in this registry, which the engine has kept since the
+		// tab's session sent its first message (see engine.TrackFrameWorlds).
 		tracked, err := engine.TrackFrameWorlds(tabCtx)
 		if err != nil {
 			cancelTab()
@@ -1667,7 +1667,7 @@ func (b *Biloba) registerTabFor(targetID target.ID, parent context.Context, crea
 		cancel()
 		return nil
 	}
-	// the frame-world registry starts from the documents the tab has now (see bootstrapIsolatedTab)
+	// frame handles look the tab's documents up in its frame-world registry (see bootstrapIsolatedTab)
 	tracked, err := engine.TrackFrameWorlds(c)
 	if err != nil {
 		cancel()

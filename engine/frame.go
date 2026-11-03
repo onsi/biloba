@@ -623,7 +623,7 @@ func AttachFrameTargetContext(ctx, lifetime context.Context, targetID target.ID)
 		cancelTarget()
 		return nil, nil, contextError("attach frame target", err)
 	}
-	tracked, err := trackFrameWorlds(targetCtx, ctx)
+	tracked, err := trackFrameWorlds(targetCtx)
 	if err != nil {
 		cancelTarget()
 		return nil, nil, contextError("attach frame target", err)

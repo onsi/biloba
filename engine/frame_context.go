@@ -2,13 +2,12 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"sync"
-	"time"
 
 	"github.com/chromedp/cdproto"
 	"github.com/chromedp/cdproto/cdp"
+	jsonv2 "github.com/chromedp/cdproto/cdp/jsonv2"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
@@ -20,68 +19,86 @@ type frameWorld struct {
 
 type frameWorldsKey struct{}
 
+/*
+frameWorlds is the frame-world registry of one session: the page JavaScript context of each frame
+document, as the session announces them.  It belongs to the renderer attachment, not to any one frame
+handle.
+
+The event hub keeps one for every session, from the session's first message, and updates it before
+any listener runs (see eventHub.dispatch).  So it sees every context the session announces, the ones
+Chrome reports when chromedp enables Runtime during its attach included, without asking Chrome to
+announce them again.
+*/
 type frameWorlds struct {
 	mu      sync.RWMutex
 	byFrame map[cdp.FrameID]frameWorld
 }
 
-// frameWorldsTimeout bounds the two Runtime commands trackFrameWorlds sends, which a healthy Chrome
-// answers in milliseconds; it is a backstop, like the Go client's cdpTimeout.
-const frameWorldsTimeout = 30 * time.Second
+func newFrameWorlds() *frameWorlds {
+	return &frameWorlds{byFrame: map[cdp.FrameID]frameWorld{}}
+}
 
-/*
-trackFrameWorlds starts the frame-world registry of an attached target: the page JavaScript context of
-each frame document, as the target announces them.  This registry belongs to the renderer attachment,
-not to any one frame handle.
+// frameWorldEvent reports whether a method changes the frame-world registry.
+func frameWorldEvent(method string) bool {
+	switch method {
+	case runtime.ExecutionContextCreated.Method, runtime.ExecutionContextDestroyed.Method, runtime.ExecutionContextsCleared.Method:
+		return true
+	}
+	return false
+}
 
-Chrome announces the contexts that already exist only when Runtime is enabled, and chromedp enabled it
-when it attached, before anything could listen.  Enabling it again announces nothing, so this
-disables it, starts listening, and enables it again: Chrome then announces every context the target
-has, and while Runtime is disabled no context event arrives, so the registry starts from exactly what
-exists.  The two round trips are the price of each tracked attachment; the enable also replays the
-console messages Chrome kept, which nothing listens to yet at attach time.
-*/
-//
-// bound, when not nil, also ends the two commands: the caller's own deadline for bringing the target up.
-func trackFrameWorlds(ctx, bound context.Context) (context.Context, error) {
-	callCtx, cancel := context.WithTimeout(ctx, frameWorldsTimeout)
-	defer cancel()
-	if bound != nil {
-		defer context.AfterFunc(bound, cancel)()
-	}
-	if _, err := chromedp.Call(callCtx, runtime.Disable, cdp.Empty{}); err != nil {
-		return nil, err
-	}
-	worlds := &frameWorlds{byFrame: map[cdp.FrameID]frameWorld{}}
-	err := ListenTarget(ctx, func(event any) {
-		worlds.mu.Lock()
-		defer worlds.mu.Unlock()
-		switch event := event.(type) {
-		case *runtime.EventExecutionContextCreated:
-			var aux struct {
-				FrameID   cdp.FrameID `json:"frameId"`
-				IsDefault bool        `json:"isDefault"`
-			}
-			if json.Unmarshal(event.Context.AuxData, &aux) == nil && aux.IsDefault && aux.FrameID != "" {
-				worlds.byFrame[aux.FrameID] = frameWorld{id: event.Context.ID, uniqueID: event.Context.UniqueID}
-			}
-		case *runtime.EventExecutionContextDestroyed:
-			for id, world := range worlds.byFrame {
-				if world.uniqueID == event.ExecutionContextUniqueID {
-					delete(worlds.byFrame, id)
-				}
-			}
-		case *runtime.EventExecutionContextsCleared:
-			clear(worlds.byFrame)
+// observe applies one context event, from its undecoded params, to the registry.
+func (w *frameWorlds) observe(method string, params jsonv2.Value) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	switch method {
+	case runtime.ExecutionContextCreated.Method:
+		var created struct {
+			Context struct {
+				ID       runtime.ExecutionContextID `json:"id"`
+				UniqueID string                     `json:"uniqueId"`
+				AuxData  struct {
+					FrameID   cdp.FrameID `json:"frameId"`
+					IsDefault bool        `json:"isDefault"`
+				} `json:"auxData"`
+			} `json:"context"`
 		}
-	}, runtime.ExecutionContextCreated.Method, runtime.ExecutionContextDestroyed.Method, runtime.ExecutionContextsCleared.Method)
+		if jsonv2.Unmarshal(params, &created, chromedp.DefaultUnmarshalOptions) != nil {
+			return
+		}
+		if aux := created.Context.AuxData; aux.IsDefault && aux.FrameID != "" {
+			w.byFrame[aux.FrameID] = frameWorld{id: created.Context.ID, uniqueID: created.Context.UniqueID}
+		}
+	case runtime.ExecutionContextDestroyed.Method:
+		var destroyed struct {
+			UniqueID string `json:"executionContextUniqueId"`
+		}
+		if jsonv2.Unmarshal(params, &destroyed, chromedp.DefaultUnmarshalOptions) != nil {
+			return
+		}
+		for id, world := range w.byFrame {
+			if world.uniqueID == destroyed.UniqueID {
+				delete(w.byFrame, id)
+			}
+		}
+	case runtime.ExecutionContextsCleared.Method:
+		clear(w.byFrame)
+	}
+}
+
+// trackFrameWorlds gives an attached target's context its session's frame-world registry, which the
+// event hub has kept since the session's first message.  It sends no command.  Call it after the
+// first Run on ctx, on the goroutine that ran it or after it, since that Run sets the context's
+// target.
+func trackFrameWorlds(ctx context.Context) (context.Context, error) {
+	hub, c, err := hubFor(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := chromedp.Call(callCtx, runtime.Enable, cdp.Empty{}); err != nil {
-		return nil, err
+	if c.Target == nil {
+		return nil, errors.New("tracking frame worlds needs an attached target: run the context once first")
 	}
-	return context.WithValue(ctx, frameWorldsKey{}, worlds), nil
+	return context.WithValue(ctx, frameWorldsKey{}, hub.worldsFor(c.Target.SessionID)), nil
 }
 
 func mainFrameWorld(ctx context.Context, id cdp.FrameID) (frameWorld, error) {

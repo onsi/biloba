@@ -102,7 +102,7 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 		}
 		return nil, nil
 	}
-	tabCtx, err := trackFrameWorlds(attached, ctx)
+	tabCtx, err := trackFrameWorlds(attached)
 	if err != nil {
 		cancelTab()
 		return nil, contextError("attach tab", err)

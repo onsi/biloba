@@ -58,7 +58,7 @@ var _ = Describe("attaching a tab the page spawned", func() {
 	})
 
 	It("closes the tab when the caller gives up while an attach that got through is still setting up", func(ctx SpecContext) {
-		stalled, release, err := engine.StallAttachForTest(ctx, root, popup)
+		stalled, _, release, err := engine.StallAttachForTest(ctx, root, popup)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(release)
 		// The attempt returns as soon as the caller gives up.  Holding it there for longer than the

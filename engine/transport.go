@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chromedp/cdproto"
@@ -87,6 +88,17 @@ func newOrderedTransport(tr chromedp.Transport, hub *eventHub) *orderedTransport
 		out: make(chan *cdproto.Message), ended: make(chan struct{}), closing: make(chan struct{}),
 		workers: map[target.SessionID]*sessionWorker{}, detached: map[target.SessionID]struct{}{},
 	}
+}
+
+// observeWrite, when set, sees every message a transport sends Chrome.  It is the seam a spec uses to
+// tell which commands an operation sent.
+var observeWrite atomic.Pointer[func(*cdproto.Message)]
+
+func (t *orderedTransport) Write(ctx context.Context, msg *cdproto.Message) error {
+	if observe := observeWrite.Load(); observe != nil {
+		(*observe)(msg)
+	}
+	return t.Transport.Write(ctx, msg)
 }
 
 // Read returns the next message whose listeners have run.  chromedp calls it from one goroutine;

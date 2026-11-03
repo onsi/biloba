@@ -36,9 +36,10 @@ messages.  Other sessions carry on, as each target's goroutine did in chromedp b
 browser listener runs on the reader, as chromedp's own did, and must not wait on anything.  Hand slow
 work to a goroutine (listenRaw exists for events with big payloads).
 
-Listeners attach to a context that is already attached.  A listener that needs what the target
-already had when it attached - the frame-world registry - gets Chrome to announce it again
-(trackFrameWorlds).
+Listeners attach to a context that is already attached, so they miss what the target announced while
+chromedp attached it.  The one thing Biloba needs from that time, the frame-world registry (the page
+JavaScript context of each frame document), the hub keeps itself: for every session, from the
+session's first message, updated before any listener runs (see frameWorlds in frame_context.go).
 */
 
 // eventHub dispatches one connection's events to Biloba's listeners.
@@ -47,6 +48,9 @@ type eventHub struct {
 	// listeners are keyed by session; the browser's own events have the empty session ID.  A list is
 	// never modified in place, so received can call a snapshot of it without holding mu.
 	listeners map[target.SessionID][]*eventListener
+	// worlds is each session's frame-world registry, made by the session's first context event (or
+	// by trackFrameWorlds asking for it) and dropped when the session ends.
+	worlds map[target.SessionID]*frameWorlds
 	// slowf, when set, is told about a listener that held its session's worker too long.  It is only
 	// set for a connection with debug logging on, so timing costs nothing otherwise.
 	slowf func(string, ...any)
@@ -73,6 +77,7 @@ const slowListenerThreshold = 100 * time.Millisecond
 func newEventHub(slowf func(string, ...any)) *eventHub {
 	return &eventHub{
 		listeners: map[target.SessionID][]*eventListener{},
+		worlds:    map[target.SessionID]*frameWorlds{},
 		slowf:     slowf,
 	}
 }
@@ -100,6 +105,7 @@ func (h *eventHub) connectionLost() {
 		}
 		delete(h.listeners, session)
 	}
+	clear(h.worlds)
 	h.mu.Unlock()
 	for _, end := range ended {
 		end()
@@ -200,8 +206,33 @@ func (h *eventHub) dispatch(msg *cdproto.Message) {
 	}
 	h.mu.Lock()
 	list := h.listeners[msg.SessionID]
+	var worlds *frameWorlds
+	if msg.SessionID != "" && frameWorldEvent(string(msg.Method)) {
+		worlds = h.worldsLocked(msg.SessionID)
+	}
 	h.mu.Unlock()
+	// before the listeners, so one that asks whether its frame's world is current sees this event
+	if worlds != nil {
+		worlds.observe(string(msg.Method), msg.Params)
+	}
 	h.deliver(msg, list)
+}
+
+// worldsFor returns a session's frame-world registry, making it if the session has announced no
+// context yet.
+func (h *eventHub) worldsFor(session target.SessionID) *frameWorlds {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.worldsLocked(session)
+}
+
+func (h *eventHub) worldsLocked(session target.SessionID) *frameWorlds {
+	worlds := h.worlds[session]
+	if worlds == nil {
+		worlds = newFrameWorlds()
+		h.worlds[session] = worlds
+	}
+	return worlds
 }
 
 // detachedSession is the session a browser-level Target.detachedFromTarget names, or "".
@@ -255,12 +286,13 @@ func (h *eventHub) deliver(msg *cdproto.Message, list []*eventListener) {
 	}
 }
 
-// sessionDetached drops a session's listeners: Chrome sends it nothing more, and a message that
-// still arrives for it finds no listeners.
+// sessionEnded drops a session's listeners and frame-world registry: Chrome sends it nothing more, and
+// a message that still arrives for it finds no listeners.
 func (h *eventHub) sessionEnded(session target.SessionID) {
 	h.mu.Lock()
 	list := h.listeners[session]
 	delete(h.listeners, session)
+	delete(h.worlds, session)
 	h.mu.Unlock()
 	// (on the session's worker: an ended hook must not block)
 	for _, l := range list {

@@ -20,13 +20,12 @@ import (
 // runner calls them for its frame handles. Each takes a ctx scoped to the frame by ScopeToFrameContext,
 // since the frame-local measurements they need run as JavaScript in the frame's document.
 
-// TrackFrameWorlds records each frame document's page JavaScript context as the target ctx is
-// attached to announces it, which is what ScopeToFrameContext looks frames up in.  Call it once ctx's
-// first Run has attached the target, before anything else listens to it: it re-enables Runtime so
-// Chrome announces the contexts that already exist (two round trips), which also replays the
-// target's stored console messages.
+// TrackFrameWorlds gives ctx the frame-world registry of the target it is attached to: each frame
+// document's page JavaScript context, which is what ScopeToFrameContext looks frames up in.  The event
+// hub has kept it since the target's session sent its first message, so it sends no command.  Call it
+// once ctx's first Run has attached the target.
 func TrackFrameWorlds(ctx context.Context) (context.Context, error) {
-	return trackFrameWorlds(ctx, nil)
+	return trackFrameWorlds(ctx)
 }
 
 // ScopeToFrameContext pins JavaScript evaluation in ctx (EvaluateContext, RunHandlerContext, and the

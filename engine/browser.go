@@ -416,7 +416,7 @@ func (b *Browser) openTabLocked(ctx, opCtx context.Context, browserContextID cdp
 		cancelTab()
 		return nil, contextError("open tab", err)
 	}
-	tabCtx, err := trackFrameWorlds(attached, ctx)
+	tabCtx, err := trackFrameWorlds(attached)
 	if err != nil {
 		cancelTab()
 		return nil, contextError("open tab", err)
