@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"fmt"
+
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
 	cdplog "github.com/chromedp/cdproto/log"
@@ -16,7 +18,7 @@ import (
 // pin the ordering rules documentBoundary relies on, one event at a time.
 var _ = ginkgo.Describe("documentBoundary", ginkgo.Label("no-browser"), func() {
 	created := func(id runtime.ExecutionContextID) *runtime.EventExecutionContextCreated {
-		return &runtime.EventExecutionContextCreated{Context: &runtime.ExecutionContextDescription{ID: id}}
+		return &runtime.EventExecutionContextCreated{Context: &runtime.ExecutionContextDescription{ID: id, UniqueID: fmt.Sprintf("unique-%d", id)}}
 	}
 	request := func(loader, id string) *network.EventRequestWillBeSent {
 		return &network.EventRequestWillBeSent{LoaderID: cdp.LoaderID(loader), RequestID: network.RequestID(id)}
@@ -31,7 +33,7 @@ var _ = ginkgo.Describe("documentBoundary", ginkgo.Label("no-browser"), func() {
 		gomega.Expect(boundary.staleContext(2)).To(gomega.BeFalse())
 		gomega.Expect(boundary.staleLogEntry(&cdplog.Entry{})).To(gomega.BeTrue(), "a log entry while the old document is alive is the old document's")
 
-		boundary.observe(&runtime.EventExecutionContextDestroyed{ExecutionContextID: 1})
+		boundary.observe(&runtime.EventExecutionContextDestroyed{ExecutionContextUniqueID: "unique-1"})
 		gomega.Expect(boundary.staleContext(1)).To(gomega.BeFalse(), "Chrome may reuse the ID once the context is gone")
 		gomega.Expect(boundary.staleLogEntry(&cdplog.Entry{})).To(gomega.BeFalse())
 

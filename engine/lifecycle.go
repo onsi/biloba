@@ -21,19 +21,14 @@ import (
 
 // ChromeProductContext reports Chrome's product string, e.g. "HeadlessChrome/152.0.7977.64".
 func ChromeProductContext(ctx context.Context) (string, error) {
-	var product string
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		_, p, _, _, _, versionErr := browser.GetVersion().Do(runCtx)
-		product = p
-		return versionErr
-	}))
-	return product, err
+	version, err := chromedp.Call(ctx, browser.GetVersion, cdp.Empty{})
+	return version.Product, err
 }
 
 // ViewportDimensionsContext reads the tab's current inner width and height in CSS pixels.
 func ViewportDimensionsContext(ctx context.Context) (width, height int64, err error) {
-	var dims []int64
-	if err = chromedp.Run(ctx, chromedp.Evaluate("[window.innerWidth, window.innerHeight]", &dims)); err != nil {
+	dims, err := chromedp.Run(ctx, chromedp.Evaluate[[]int64]("[window.innerWidth, window.innerHeight]"))
+	if err != nil {
 		return 0, 0, err
 	}
 	if len(dims) != 2 {
@@ -47,54 +42,53 @@ func ViewportDimensionsContext(ctx context.Context) (width, height int64, err er
 // focus/blur *event* dispatch on it - element.focus() still moves activeElement, but the events
 // never fire, so onBlur handlers silently never run.  Per-target, so every tab must opt in.
 func SetFocusEmulationContext(ctx context.Context) error {
-	return chromedp.Run(ctx, emulation.SetFocusEmulationEnabled(true))
+	_, err := chromedp.Call(ctx, emulation.SetFocusEmulationEnabled, emulation.SetFocusEmulationEnabledParams{Enabled: true})
+	return err
 }
 
 // EnableCrashReportingContext enables the target-level event Chrome uses to report a dead renderer.
 func EnableCrashReportingContext(ctx context.Context) error {
-	return chromedp.Run(ctx, inspector.Enable())
+	_, err := chromedp.Call(ctx, inspector.Enable, cdp.Empty{})
+	return err
 }
 
 // InstallScriptOnNewDocumentContext asks Chrome to evaluate script at the start of every new document.
 func InstallScriptOnNewDocumentContext(ctx context.Context, script string) error {
-	return chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		_, err := page.AddScriptToEvaluateOnNewDocument(script).Do(runCtx)
-		return err
-	}))
+	_, err := chromedp.Call(ctx, page.AddScriptToEvaluateOnNewDocument, page.AddScriptToEvaluateOnNewDocumentParams{Source: script})
+	return err
 }
 
 // AddInitScriptContext installs script to run at the start of every new document and returns the
 // identifier RemoveInitScriptContext takes to uninstall it.
 func AddInitScriptContext(ctx context.Context, script string) (page.ScriptIdentifier, error) {
-	var identifier page.ScriptIdentifier
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		var err error
-		identifier, err = page.AddScriptToEvaluateOnNewDocument(script).Do(runCtx)
-		return err
-	}))
-	return identifier, err
+	added, err := chromedp.Call(ctx, page.AddScriptToEvaluateOnNewDocument, page.AddScriptToEvaluateOnNewDocumentParams{Source: script})
+	return added.Identifier, err
 }
 
 // RemoveInitScriptContext uninstalls a script AddInitScriptContext installed.  Documents it already
 // ran in keep whatever it did.
 func RemoveInitScriptContext(ctx context.Context, identifier page.ScriptIdentifier) error {
-	return chromedp.Run(ctx, page.RemoveScriptToEvaluateOnNewDocument(identifier))
+	_, err := chromedp.Call(ctx, page.RemoveScriptToEvaluateOnNewDocument, page.RemoveScriptToEvaluateOnNewDocumentParams{Identifier: identifier})
+	return err
 }
 
 // DisableInterceptionContext tears request interception down and restores the HTTP cache.
 // Symmetric with EnableInterceptionContext, and just as order-dependent in reverse: leaving the
 // cache disabled would silently change how later work is served.
 func DisableInterceptionContext(ctx context.Context) error {
-	return chromedp.Run(ctx, fetch.Disable(), network.SetCacheDisabled(false))
+	return chromedp.Do(ctx, Step(fetch.Disable, cdp.Empty{}), Step(network.SetCacheDisabled, network.SetCacheDisabledParams{CacheDisabled: false}))
 }
 
 // ConfigureDownloadsContext points a browser context's downloads at a directory and asks Chrome to
 // report download events.  Browser-scoped: it takes a BrowserContextID.
 func ConfigureDownloadsContext(ctx context.Context, browserContextID cdp.BrowserContextID, downloadDir string) error {
-	return chromedp.Run(ctx, browser.SetDownloadBehavior(browser.SetDownloadBehaviorBehaviorAllowAndName).
-		WithDownloadPath(downloadDir).
-		WithEventsEnabled(true).
-		WithBrowserContextID(browserContextID))
+	_, err := chromedp.Call(ctx, browser.SetDownloadBehavior, browser.SetDownloadBehaviorParams{
+		Behavior:         browser.SetDownloadBehaviorBehaviorAllowAndName,
+		DownloadPath:     downloadDir,
+		EventsEnabled:    ptr(true),
+		BrowserContextID: browserContextID,
+	})
+	return err
 }
 
 // NewIsolatedTargetContext creates an isolated browser context and a target within it, returning
@@ -103,18 +97,19 @@ func ConfigureDownloadsContext(ctx context.Context, browserContextID cdp.Browser
 func NewIsolatedTargetContext(ctx context.Context) (cdp.BrowserContextID, target.ID, error) {
 	var browserContextID cdp.BrowserContextID
 	var targetID target.ID
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		chrome := chromedp.FromContext(runCtx)
-		browserExecutor := cdp.WithExecutor(runCtx, chrome.Browser)
-		var createErr error
-		browserContextID, createErr = target.CreateBrowserContext().WithDisposeOnDetach(true).Do(browserExecutor)
+	err := chromedp.Do(ctx, chromedp.Func(func(runCtx context.Context, _ *chromedp.Target) error {
+		browser := chromedp.FromContext(runCtx).Browser
+		created, createErr := cdp.Call(runCtx, browser, target.CreateBrowserContext, target.CreateBrowserContextParams{DisposeOnDetach: ptr(true)})
 		if createErr != nil {
 			return createErr
 		}
-		targetID, createErr = target.CreateTarget("about:blank").
-			WithBrowserContextID(browserContextID).
-			WithNewWindow(true).
-			Do(browserExecutor)
+		browserContextID = created.BrowserContextID
+		opened, createErr := cdp.Call(runCtx, browser, target.CreateTarget, target.CreateTargetParams{
+			URL:              "about:blank",
+			BrowserContextID: browserContextID,
+			NewWindow:        ptr(true),
+		})
+		targetID = opened.TargetID
 		return createErr
 	}))
 	return browserContextID, targetID, err
@@ -123,29 +118,24 @@ func NewIsolatedTargetContext(ctx context.Context) (cdp.BrowserContextID, target
 // TargetBrowserContextContext reports which browser context a target belongs to - the way a tab
 // Chrome opened for us (a spawned tab) reveals whose isolation it inherited.
 func TargetBrowserContextContext(ctx context.Context) (cdp.BrowserContextID, error) {
-	var browserContextID cdp.BrowserContextID
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		info, infoErr := target.GetTargetInfo().Do(runCtx)
-		if infoErr != nil {
-			return infoErr
-		}
-		browserContextID = info.BrowserContextID
-		return nil
-	}))
-	return browserContextID, err
+	info, err := chromedp.Call(ctx, target.GetTargetInfo, target.GetTargetInfoParams{})
+	if err != nil || info.TargetInfo == nil {
+		return "", err
+	}
+	return info.TargetInfo.BrowserContextID, nil
 }
 
 // PingContext is the cheapest round trip that proves a target is attached and answering.
 func PingContext(ctx context.Context) error {
-	return chromedp.Run(ctx, chromedp.Evaluate("1", nil))
+	return chromedp.Do(ctx, chromedp.Evaluate[chromedp.Void]("1"))
 }
 
 // OuterWindowSizeContext reads the browser window's outer dimensions.  Zero width and height with a
 // nil error means the page answered with something unusable, which callers treat as "leave it alone"
 // rather than as a failure.
 func OuterWindowSizeContext(ctx context.Context) (width, height int, err error) {
-	var dims []int
-	if err = chromedp.Run(ctx, chromedp.Evaluate("[window.outerWidth, window.outerHeight]", &dims)); err != nil {
+	dims, err := chromedp.Run(ctx, chromedp.Evaluate[[]int]("[window.outerWidth, window.outerHeight]"))
+	if err != nil {
 		return 0, 0, err
 	}
 	if len(dims) != 2 {

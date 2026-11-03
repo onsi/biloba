@@ -10,6 +10,7 @@ import (
 	"time"
 
 	cdpbrowser "github.com/chromedp/cdproto/browser"
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/chromedp"
 )
 
@@ -186,7 +187,7 @@ func (s *Session) DownloadContent(ctx context.Context, id string, maxBytes int64
 	defer file.Close()
 	content, err := readBounded(ctx, file, maxBytes)
 	if err != nil {
-		if err == context.Canceled || err == context.DeadlineExceeded {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, contextError("read download", err)
 		}
 		var limitErr *contentLimitError
@@ -215,8 +216,9 @@ func (s *Session) CancelDownload(ctx context.Context, id string) error {
 		return &Error{Code: CodeInvalidArgument, Operation: "cancel download", Message: "download not found", Observed: id}
 	}
 	return s.serial(ctx, "cancel download", func(op context.Context) error {
-		return s.withBrowserExecutor(op, func(browserCtx context.Context) error {
-			return cdpbrowser.CancelDownload(id).WithBrowserContextID(s.browserContextID).Do(browserCtx)
+		return s.withBrowserExecutor(op, func(browserCtx context.Context, browser cdp.Session) error {
+			_, err := cdp.Call(browserCtx, browser, cdpbrowser.CancelDownload, cdpbrowser.CancelDownloadParams{GUID: id, BrowserContextID: s.browserContextID})
+			return err
 		})
 	})
 }
@@ -270,8 +272,9 @@ func (s *Session) removeOwnDownloadArtifacts() {
 }
 
 func (s *Session) resetDownloads(ctx context.Context) error {
-	if err := chromedp.Run(ctx, cdpbrowser.SetDownloadBehavior(cdpbrowser.SetDownloadBehaviorBehaviorDeny).
-		WithBrowserContextID(s.browserContextID)); err != nil {
+	if _, err := chromedp.Call(ctx, cdpbrowser.SetDownloadBehavior, cdpbrowser.SetDownloadBehaviorParams{
+		Behavior: cdpbrowser.SetDownloadBehaviorBehaviorDeny, BrowserContextID: s.browserContextID,
+	}); err != nil {
 		return err
 	}
 	s.downloadMu.Lock()
@@ -289,8 +292,9 @@ func (s *Session) resetDownloads(ctx context.Context) error {
 	ownsContext := s.ownsContext
 	s.downloadMu.Unlock()
 	for _, id := range active {
-		_ = s.withBrowserExecutor(ctx, func(browserCtx context.Context) error {
-			return cdpbrowser.CancelDownload(id).WithBrowserContextID(s.browserContextID).Do(browserCtx)
+		_ = s.withBrowserExecutor(ctx, func(browserCtx context.Context, browser cdp.Session) error {
+			_, err := cdp.Call(browserCtx, browser, cdpbrowser.CancelDownload, cdpbrowser.CancelDownloadParams{GUID: id, BrowserContextID: s.browserContextID})
+			return err
 		})
 	}
 	if ownsContext {

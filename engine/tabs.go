@@ -34,11 +34,11 @@ func (s *Session) Tabs(ctx context.Context) ([]*Session, error) {
 func (s *Session) tabs(ctx context.Context) ([]*Session, error) {
 	opCtx, cancel := executorContext(s.browser.ctx, ctx)
 	defer cancel()
-	chrome := chromedp.FromContext(opCtx)
-	infos, err := target.GetTargets().Do(cdp.WithExecutor(opCtx, chrome.Browser))
+	listed, err := cdp.Call(opCtx, chromedp.FromContext(opCtx).Browser, target.GetTargets, target.GetTargetsParams{})
 	if err != nil {
 		return nil, contextError("list tabs", err)
 	}
+	infos := listed.TargetInfos
 	out := []*Session{}
 	for _, info := range infos {
 		if info.Type != "page" || info.BrowserContextID != s.browserContextID {
@@ -75,8 +75,18 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 	// The probe runs unlocked.  Holding b.mu across it puts every other session on this worker -
 	// OpenSession, openTab, Close, Sessions, target reconciliation - behind a round trip to a target
 	// that may be mid-teardown.  listenToSession's own comment says as much from the other side.
-	tabCtx, cancelTab := chromedp.NewContext(b.ctx, chromedp.WithTargetID(targetID))
-	tabCtx = trackFrameWorlds(tabCtx)
+	attached, detachTab := newTabContext(b.ctx, targetID)
+	// Discarding a tab closes it, as chromedp did when it cancelled the context of a target it had
+	// attached (see newTabContext).
+	cancelTab := func() {
+		detachTab()
+		b.discardTarget(targetID)
+	}
+	tabCtx, err := trackFrameWorlds(attached, targetID)
+	if err != nil {
+		detachTab()
+		return nil, contextError("attach tab", err)
+	}
 	if !attachProbeSucceeds(ctx, tabCtx) {
 		cancelTab()
 		// A target that will not attach is skipped - it is almost always one Chrome is still
@@ -106,13 +116,14 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 				session.openerID = openerID
 			}
 			b.mu.Unlock()
-			cancelTab()
+			// Another goroutine attached it first: drop this attachment, not the tab it now owns.
+			detachTab()
 			return session, nil
 		}
 	}
 	defer b.mu.Unlock()
 	session := &Session{
-		browser: b, ctx: tabCtx, cancel: cancelTab, browserContextID: root.browserContextID,
+		browser: b, ctx: tabCtx, cancel: detachTab, browserContextID: root.browserContextID,
 		targetID: targetID, openerID: openerID, root: root, artifactDir: b.artifactDir,
 		initialWidth: b.windowWidth, initialHeight: b.windowHeight,
 		highFidelity: b.mode == ChromeModeHeadless, cacheEnabled: true,
@@ -130,7 +141,10 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 		return nil, contextError("apply initial viewport", err)
 	}
 	session.eventsEnabled.Store(true)
-	b.listenToSession(session)
+	if err := b.listenToSession(session); err != nil {
+		cancelTab()
+		return nil, contextError("listen to tab", err)
+	}
 	if err := session.setupDownloads(tabCtx); err != nil {
 		cancelTab()
 		return nil, contextError("configure downloads", err)
@@ -233,7 +247,7 @@ func attachProbeSucceeds(ctx context.Context, tabCtx context.Context) bool {
 			}
 		}
 		done := make(chan error, 1)
-		go func() { done <- chromedp.Run(tabCtx, chromedp.Evaluate("1", nil)) }()
+		go func() { done <- chromedp.Do(tabCtx, chromedp.Evaluate[chromedp.Void]("1")) }()
 		select {
 		case err := <-done:
 			if err == nil {

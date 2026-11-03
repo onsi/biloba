@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
@@ -22,12 +23,13 @@ import (
 //
 // It returns an Action rather than doing the work so callers can compose it into a Run alongside
 // their own steps, which is how the visual-regression path settles a capture.
-func PageCaptureAction(img *[]byte, cssWidth *float64) chromedp.ActionFunc {
-	return func(ctx context.Context) error {
-		_, _, _, cssLayoutViewport, _, cssContentSize, err := page.GetLayoutMetrics().Do(ctx)
+func PageCaptureAction(img *[]byte, cssWidth *float64) chromedp.Action[chromedp.Void] {
+	return chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
+		metrics, err := cdp.Call(ctx, t, page.GetLayoutMetrics, cdp.Empty{})
 		if err != nil {
 			return err
 		}
+		cssLayoutViewport, cssContentSize := metrics.CSSLayoutViewport, metrics.CSSContentSize
 		if cssWidth != nil {
 			*cssWidth = cssContentSize.Width
 		}
@@ -35,19 +37,20 @@ func PageCaptureAction(img *[]byte, cssWidth *float64) chromedp.ActionFunc {
 			cssContentSize.Width == float64(cssLayoutViewport.ClientWidth) &&
 			cssContentSize.Height == float64(cssLayoutViewport.ClientHeight) &&
 			cssContentSize.X == 0 && cssContentSize.Y == 0
-		*img, err = page.CaptureScreenshot().
-			WithFromSurface(true).
-			WithCaptureBeyondViewport(!fits).
-			WithFormat(page.CaptureScreenshotFormatPng).
-			Do(ctx)
+		shot, err := cdp.Call(ctx, t, page.CaptureScreenshot, page.CaptureScreenshotParams{
+			FromSurface:           ptr(true),
+			CaptureBeyondViewport: ptr(!fits),
+			Format:                page.CaptureScreenshotFormatPng,
+		})
+		*img = shot.Data
 		return err
-	}
+	})
 }
 
 // CapturePageContext captures the whole page.
 func CapturePageContext(ctx context.Context, cssWidth *float64) ([]byte, error) {
 	var img []byte
-	if err := chromedp.Run(ctx, PageCaptureAction(&img, cssWidth)); err != nil {
+	if err := chromedp.Do(ctx, PageCaptureAction(&img, cssWidth)); err != nil {
 		return nil, err
 	}
 	return img, nil
@@ -55,20 +58,15 @@ func CapturePageContext(ctx context.Context, cssWidth *float64) ([]byte, error) 
 
 // CaptureClipContext captures one region of the page.
 func CaptureClipContext(ctx context.Context, clip *page.Viewport, beyondViewport bool) ([]byte, error) {
-	var img []byte
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		var captureErr error
-		img, captureErr = page.CaptureScreenshot().
-			WithClip(clip).
-			WithFromSurface(true).
-			WithCaptureBeyondViewport(beyondViewport).
-			Do(runCtx)
-		return captureErr
-	}))
+	shot, err := chromedp.Call(ctx, page.CaptureScreenshot, page.CaptureScreenshotParams{
+		Clip:                  clip,
+		FromSurface:           ptr(true),
+		CaptureBeyondViewport: ptr(beyondViewport),
+	})
 	if err != nil {
 		return nil, err
 	}
-	return img, nil
+	return shot.Data, nil
 }
 
 // EnclosingClip rounds an element's clip outward to whole CSS pixels.  An element's box is usually
@@ -87,44 +85,34 @@ func EnclosingClip(clip *page.Viewport) *page.Viewport {
 // page is not laid out again at a different size.  A region that reaches outside the viewport is an
 // error.
 func CaptureViewportContext(ctx context.Context, region *page.Viewport) ([]byte, error) {
-	var img []byte
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		capture := page.CaptureScreenshot().WithFromSurface(true).WithCaptureBeyondViewport(false).WithFormat(page.CaptureScreenshotFormatPng)
-		if region != nil {
-			viewport, err := visualViewport(runCtx)
-			if err != nil {
-				return err
-			}
-			clip, err := ViewportRegionClip(region, viewport.X, viewport.Y, viewport.Width, viewport.Height)
-			if err != nil {
-				return err
-			}
-			capture = capture.WithClip(clip)
+	capture := page.CaptureScreenshotParams{FromSurface: ptr(true), CaptureBeyondViewport: ptr(false), Format: page.CaptureScreenshotFormatPng}
+	if region != nil {
+		viewport, err := visualViewport(ctx)
+		if err != nil {
+			return nil, err
 		}
-		var err error
-		img, err = capture.Do(runCtx)
-		return err
-	}))
-	return img, err
+		clip, err := ViewportRegionClip(region, viewport.X, viewport.Y, viewport.Width, viewport.Height)
+		if err != nil {
+			return nil, err
+		}
+		capture.Clip = clip
+	}
+	shot, err := chromedp.Call(ctx, page.CaptureScreenshot, capture)
+	return shot.Data, err
 }
 
 // VisualViewportContext reports the visual viewport: where its top-left corner sits in page
 // coordinates (X, Y) and its size, all in CSS pixels.
 func VisualViewportContext(ctx context.Context) (*page.Viewport, error) {
-	var viewport *page.Viewport
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		var err error
-		viewport, err = visualViewport(runCtx)
-		return err
-	}))
-	return viewport, err
+	return visualViewport(ctx)
 }
 
 func visualViewport(ctx context.Context) (*page.Viewport, error) {
-	_, _, _, _, cssVisualViewport, _, err := page.GetLayoutMetrics().Do(ctx)
+	metrics, err := chromedp.Call(ctx, page.GetLayoutMetrics, cdp.Empty{})
 	if err != nil {
 		return nil, err
 	}
+	cssVisualViewport := metrics.CSSVisualViewport
 	return &page.Viewport{X: cssVisualViewport.PageX, Y: cssVisualViewport.PageY, Width: cssVisualViewport.ClientWidth, Height: cssVisualViewport.ClientHeight, Scale: 1}, nil
 }
 
@@ -145,17 +133,17 @@ func ViewportRegionClip(region *page.Viewport, originX, originY, width, height f
 // trip, which is what the on-failure artifact path wants: a picture and something to label it with.
 // It always expands the viewport, so the page sees a resize: it is for a spec that has already failed.
 func CaptureFullScreenshotContext(ctx context.Context) (img []byte, title string, err error) {
-	err = chromedp.Run(ctx,
-		chromedp.Title(&title),
-		chromedp.FullScreenshot(&img, 100),
-	)
+	if title, err = chromedp.Run(ctx, chromedp.Title()); err != nil {
+		return nil, "", err
+	}
+	img, err = chromedp.Run(ctx, chromedp.FullScreenshot(100))
 	return img, title, err
 }
 
 // CaptureViewportScreenshotContext is CaptureFullScreenshotContext for a spec that is still running: it
 // captures only what the viewport shows, so the page cannot tell it happened.
 func CaptureViewportScreenshotContext(ctx context.Context) (img []byte, title string, err error) {
-	if err := chromedp.Run(ctx, chromedp.Title(&title)); err != nil {
+	if title, err = chromedp.Run(ctx, chromedp.Title()); err != nil {
 		return nil, "", err
 	}
 	img, err = CaptureViewportContext(ctx, nil)

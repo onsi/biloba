@@ -427,11 +427,9 @@ var _ = Describe("cross-origin frame targets", func() {
 			// An extension or another tool can create isolated worlds in the same frame. Their
 			// context-created events must not replace the page's default world in Biloba's registry.
 			targetCtx := engine.SessionContextForTest(selected.Session)
-			err = chromedp.Run(targetCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
-				_, createErr := page.CreateIsolatedWorld(selected.FrameID()).
-					WithWorldName("biloba-main-world-regression").Do(runCtx)
-				return createErr
-			}))
+			_, err = chromedp.Call(targetCtx, page.CreateIsolatedWorld, page.CreateIsolatedWorldParams{
+				FrameID: selected.FrameID(), WorldName: "biloba-main-world-regression",
+			})
 			Expect(err).NotTo(HaveOccurred())
 			value, err = selected.Evaluate(ctx, `[window.frameWindowValue, frameLexicalState.value]`)
 			Expect(err).NotTo(HaveOccurred())

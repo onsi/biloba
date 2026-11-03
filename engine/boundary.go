@@ -23,8 +23,10 @@ import (
 // reset.  A Log.entryAdded carries no execution context: it is stale when it names a stale request, or
 // while any stale context is still alive.
 type documentBoundary struct {
-	mu                      sync.Mutex
-	live, staleContexts     map[runtime.ExecutionContextID]struct{}
+	mu                  sync.Mutex
+	live, staleContexts map[runtime.ExecutionContextID]struct{}
+	// uniqueIDs names each live context by its unique ID, which is how Chrome names the one it destroys.
+	uniqueIDs               map[string]runtime.ExecutionContextID
 	loaders, staleLoaders   map[cdp.LoaderID]struct{}
 	requests, staleRequests map[network.RequestID]struct{}
 }
@@ -35,14 +37,19 @@ func (d *documentBoundary) observe(event any) {
 	switch event := event.(type) {
 	case *runtime.EventExecutionContextCreated:
 		if d.live == nil {
-			d.live = map[runtime.ExecutionContextID]struct{}{}
+			d.live, d.uniqueIDs = map[runtime.ExecutionContextID]struct{}{}, map[string]runtime.ExecutionContextID{}
 		}
 		d.live[event.Context.ID] = struct{}{}
+		d.uniqueIDs[event.Context.UniqueID] = event.Context.ID
 	case *runtime.EventExecutionContextDestroyed:
-		delete(d.live, event.ExecutionContextID)
-		delete(d.staleContexts, event.ExecutionContextID)
+		if id, known := d.uniqueIDs[event.ExecutionContextUniqueID]; known {
+			delete(d.uniqueIDs, event.ExecutionContextUniqueID)
+			delete(d.live, id)
+			delete(d.staleContexts, id)
+		}
 	case *runtime.EventExecutionContextsCleared:
 		clear(d.live)
+		clear(d.uniqueIDs)
 		clear(d.staleContexts)
 	case *network.EventRequestWillBeSent:
 		if _, stale := d.staleLoaders[event.LoaderID]; stale {

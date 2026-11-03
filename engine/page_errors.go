@@ -29,9 +29,7 @@ type PageError struct {
 // same way.
 func NewPageError(event *runtime.EventExceptionThrown) PageError {
 	pageError := PageError{Stack: []ConsoleStackFrame{}}
-	if event.Timestamp != nil {
-		pageError.Timestamp = event.Timestamp.Time()
-	}
+	pageError.Timestamp = TimestampTime(event.Timestamp)
 	details := event.ExceptionDetails
 	if details == nil {
 		return pageError

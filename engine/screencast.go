@@ -2,11 +2,12 @@ package engine
 
 import (
 	"context"
-	"encoding/base64"
 	"slices"
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
+	jsonv2 "github.com/chromedp/cdproto/cdp/jsonv2"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
@@ -57,74 +58,121 @@ arrives - Chrome sends no further frames while one is unacknowledged.
 
 The listener and the acknowledgements outlive ctx, which only bounds the start command: they run on
 ctx's values without its deadline until stop.  stop sends Page.stopScreencast and, once Chrome has
-answered, guarantees onFrame is not called again.  A target's events and command responses arrive on
-one ordered stream, so every frame Chrome sent before answering has been delivered by then.
+answered, guarantees onFrame is not called again.  Every frame Chrome sent before answering has been
+handed to onFrame by the time stop returns: the connection's reader queues each frame before it reads
+the answer (see ListenTarget), and stop waits for the queue to drain.
+
+A frame is large, so the reader only queues its raw params; one goroutine per screencast decodes
+them, acknowledges the frame, and calls onFrame, in arrival order.
 */
 func StartScreencastContext(ctx context.Context, params ScreencastParams, onFrame func(ScreencastFrame)) (stop func(context.Context) error, err error) {
 	listenCtx, cancelListen := context.WithCancel(context.WithoutCancel(ctx))
-	var lock sync.Mutex
-	stopped := false
-	chromedp.ListenTarget(listenCtx, func(ev any) {
-		event, ok := ev.(*page.EventScreencastFrame)
-		if !ok {
+	frames := newScreencastQueue()
+	go frames.deliver(func(raw jsonv2.Value) {
+		var event page.EventScreencastFrame
+		if jsonv2.Unmarshal(raw, &event, chromedp.DefaultUnmarshalOptions) != nil {
 			return
 		}
-		// The listener runs on the target's event goroutine, which is also the goroutine that delivers
-		// command responses: acknowledging synchronously here would wait forever on itself.
+		// The acknowledgement waits on a reply, so it can't hold up the frames behind this one.
 		go func() {
 			ackCtx, cancel := context.WithTimeout(listenCtx, screencastAckTimeout)
 			defer cancel()
-			_ = chromedp.Run(ackCtx, page.ScreencastFrameAck(event.SessionID))
+			_, _ = chromedp.Call(ackCtx, page.ScreencastFrameAck, page.ScreencastFrameAckParams{SessionID: event.SessionID})
 		}()
-		frame := ScreencastFrame{}
-		if data, err := base64.StdEncoding.DecodeString(event.Data); err == nil {
-			frame.Data = data
-		}
+		frame := ScreencastFrame{Data: event.Data} // cdproto decodes the base64
 		if m := event.Metadata; m != nil {
 			frame.DeviceWidth, frame.DeviceHeight = m.DeviceWidth, m.DeviceHeight
 			frame.PageScaleFactor = m.PageScaleFactor
 			frame.ScrollOffsetX, frame.ScrollOffsetY = m.ScrollOffsetX, m.ScrollOffsetY
 			frame.OffsetTop = m.OffsetTop
-			if m.Timestamp != nil {
-				frame.Timestamp = m.Timestamp.Time()
-			}
+			frame.Timestamp = EpochTime(m.Timestamp)
 		}
-		lock.Lock()
-		defer lock.Unlock()
-		if !stopped {
-			onFrame(frame)
-		}
+		onFrame(frame)
 	})
+	if err := listenRaw(listenCtx, func(_ string, raw jsonv2.Value) { frames.push(raw) }, page.ScreencastFrame.Method); err != nil {
+		cancelListen()
+		frames.close()
+		return nil, err
+	}
 
 	// Chrome's own default is PNG; spell the format out so "" means JPEG.
-	format := page.ScreencastFormatJpeg
+	start := page.StartScreencastParams{Format: page.StartScreencastFormatJpeg}
 	if params.Format != "" {
-		format = page.ScreencastFormat(params.Format)
+		start.Format = page.StartScreencastFormat(params.Format)
 	}
-	start := page.StartScreencast().WithFormat(format)
 	if params.Quality > 0 {
-		start = start.WithQuality(int64(params.Quality))
+		start.Quality = ptr(int64(params.Quality))
 	}
-	if params.MaxWidth > 0 {
-		start = start.WithMaxWidth(int64(params.MaxWidth))
-	}
-	if params.MaxHeight > 0 {
-		start = start.WithMaxHeight(int64(params.MaxHeight))
-	}
-	if params.EveryNthFrame > 0 {
-		start = start.WithEveryNthFrame(int64(params.EveryNthFrame))
-	}
-	if err := chromedp.Run(ctx, start); err != nil {
+	start.MaxWidth = int64(max(params.MaxWidth, 0))
+	start.MaxHeight = int64(max(params.MaxHeight, 0))
+	start.EveryNthFrame = int64(max(params.EveryNthFrame, 0))
+	if _, err := chromedp.Call(ctx, page.StartScreencast, start); err != nil {
 		cancelListen()
+		frames.close()
 		return nil, err
 	}
 
 	return func(stopCtx context.Context) error {
-		err := chromedp.Run(stopCtx, page.StopScreencast())
-		lock.Lock()
-		stopped = true
-		lock.Unlock()
+		_, err := chromedp.Call(stopCtx, page.StopScreencast, cdp.Empty{})
+		frames.close() // drops anything Chrome sends after answering, and delivers what came before
 		cancelListen()
 		return err
 	}, nil
+}
+
+// screencastQueue hands a screencast's frames from the connection's reader to the goroutine that
+// delivers them, without a bound: the reader must never wait on it.
+type screencastQueue struct {
+	mu        sync.Mutex
+	pending   []jsonv2.Value
+	closed    bool
+	wake      chan struct{}
+	delivered chan struct{}
+}
+
+func newScreencastQueue() *screencastQueue {
+	return &screencastQueue{wake: make(chan struct{}, 1), delivered: make(chan struct{})}
+}
+
+func (q *screencastQueue) push(raw jsonv2.Value) {
+	q.mu.Lock()
+	if !q.closed {
+		q.pending = append(q.pending, raw)
+	}
+	q.mu.Unlock()
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
+}
+
+// close stops accepting frames and returns once every frame accepted before it has been delivered.
+func (q *screencastQueue) close() {
+	q.mu.Lock()
+	q.closed = true
+	q.mu.Unlock()
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
+	<-q.delivered
+}
+
+func (q *screencastQueue) deliver(handle func(jsonv2.Value)) {
+	defer close(q.delivered)
+	for {
+		q.mu.Lock()
+		batch, closed := q.pending, q.closed
+		q.pending = nil
+		q.mu.Unlock()
+		for _, raw := range batch {
+			handle(raw)
+		}
+		if closed && len(batch) == 0 {
+			return
+		}
+		if len(batch) == 0 {
+			<-q.wake
+		}
+	}
 }

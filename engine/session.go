@@ -262,14 +262,16 @@ func (s *Session) Close() error {
 	var disposeErr error
 	if s.browser != nil && s.ownsContext {
 		ctx, cancel := context.WithTimeout(s.browser.ctx, 5*time.Second)
-		disposeErr = s.withBrowserExecutor(ctx, func(browserCtx context.Context) error {
-			return target.DisposeBrowserContext(s.browserContextID).Do(browserCtx)
+		disposeErr = s.withBrowserExecutor(ctx, func(browserCtx context.Context, browser cdp.Session) error {
+			_, err := cdp.Call(browserCtx, browser, target.DisposeBrowserContext, target.DisposeBrowserContextParams{BrowserContextID: s.browserContextID})
+			return err
 		})
 		cancel()
 	} else if s.browser != nil && !s.frameTarget && !s.browser.targetWasDestroyed(s.targetID) {
 		ctx, cancel := context.WithTimeout(s.browser.ctx, 5*time.Second)
-		disposeErr = s.withBrowserExecutor(ctx, func(browserCtx context.Context) error {
-			return target.CloseTarget(s.targetID).Do(browserCtx)
+		disposeErr = s.withBrowserExecutor(ctx, func(browserCtx context.Context, browser cdp.Session) error {
+			_, err := cdp.Call(browserCtx, browser, target.CloseTarget, target.CloseTargetParams{TargetID: s.targetID})
+			return err
 		})
 		cancel()
 	}
@@ -356,8 +358,9 @@ func (s *Session) Activate(ctx context.Context) error {
 		return err
 	}
 	return s.serial(ctx, "activate tab", func(opCtx context.Context) error {
-		return s.withBrowserExecutor(opCtx, func(browserCtx context.Context) error {
-			return target.ActivateTarget(s.targetID).Do(browserCtx)
+		return s.withBrowserExecutor(opCtx, func(browserCtx context.Context, browser cdp.Session) error {
+			_, err := cdp.Call(browserCtx, browser, target.ActivateTarget, target.ActivateTargetParams{TargetID: s.targetID})
+			return err
 		})
 	})
 }
@@ -423,10 +426,8 @@ func (s *Session) Prepare(ctx context.Context) error {
 			return emulationErr
 		}
 		navigateBlank := func() error {
-			return chromedp.Run(opCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
-				_, _, _, _, err := page.Navigate("about:blank").Do(runCtx)
-				return err
-			}))
+			_, err := chromedp.Call(opCtx, page.Navigate, page.NavigateParams{URL: "about:blank"})
+			return err
 		}
 		err := navigateBlank()
 		if err != nil && s.hasCrashed() {
@@ -556,8 +557,8 @@ func (s *Session) SetCookies(ctx context.Context, cookies []Cookie) error {
 		return err
 	}
 	return s.serial(ctx, "set cookies", func(opCtx context.Context) error {
-		var location string
-		if err := chromedp.Run(opCtx, chromedp.Location(&location)); err != nil {
+		location, err := chromedp.Run(opCtx, chromedp.Location())
+		if err != nil {
 			return err
 		}
 		return SetCookiesContext(opCtx, s.browserContextID, location, cookies)
@@ -812,14 +813,11 @@ func (s *Session) CaptureDiagnostics(ctx context.Context, prefix string) (Diagno
 		if mkdirErr := os.MkdirAll(s.artifactDir, 0o755); mkdirErr != nil {
 			return mkdirErr
 		}
-		var image []byte
-		if screenshotErr := chromedp.Run(opCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
-			var captureErr error
-			image, captureErr = page.CaptureScreenshot().WithCaptureBeyondViewport(false).Do(runCtx)
-			return captureErr
-		})); screenshotErr != nil {
+		shot, screenshotErr := chromedp.Call(opCtx, page.CaptureScreenshot, page.CaptureScreenshotParams{FromSurface: ptr(true), CaptureBeyondViewport: ptr(false)})
+		if screenshotErr != nil {
 			return screenshotErr
 		}
+		image := shot.Data
 		if writeErr := os.WriteFile(path, image, 0o644); writeErr != nil {
 			return writeErr
 		}
@@ -1107,9 +1105,8 @@ func requestContextError(operation string, requestCtx context.Context, err error
 	return contextError(operation, err)
 }
 
-func (s *Session) withBrowserExecutor(ctx context.Context, run func(context.Context) error) error {
-	chrome := chromedp.FromContext(s.ctx)
-	return run(cdp.WithExecutor(ctx, chrome.Browser))
+func (s *Session) withBrowserExecutor(ctx context.Context, run func(context.Context, cdp.Session) error) error {
+	return run(ctx, chromedp.FromContext(s.ctx).Browser)
 }
 
 func intValue(value any) int {

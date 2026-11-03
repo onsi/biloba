@@ -222,13 +222,13 @@ func (s *Session) handleDialog(event *page.EventJavascriptDialogOpening) {
 	dialog := Dialog{Type: DialogType(event.Type), Message: event.Message, DefaultPrompt: event.DefaultPrompt}
 	accept := dialog.Type == DialogBeforeUnload
 	if !s.eventsEnabled.Load() {
-		go func() { _ = chromedp.Run(s.ctx, page.HandleJavaScriptDialog(accept)) }()
+		go s.answerDialog(page.HandleJavaScriptDialogParams{Accept: accept})
 		return
 	}
 	s.dialogMu.Lock()
 	if !s.eventsEnabled.Load() {
 		s.dialogMu.Unlock()
-		go func() { _ = chromedp.Run(s.ctx, page.HandleJavaScriptDialog(accept)) }()
+		go s.answerDialog(page.HandleJavaScriptDialogParams{Accept: accept})
 		return
 	}
 	var selected *dialogHandlerEntry
@@ -270,13 +270,17 @@ func (s *Session) handleDialog(event *page.EventJavascriptDialogOpening) {
 		})
 	}
 	s.dialogMu.Unlock()
-	go func() {
-		action := page.HandleJavaScriptDialog(accept)
-		if dialog.Type == DialogPrompt && accept {
-			action = action.WithPromptText(dialog.PromptText)
-		}
-		_ = chromedp.Run(s.ctx, action)
-	}()
+	answer := page.HandleJavaScriptDialogParams{Accept: accept}
+	if dialog.Type == DialogPrompt && accept {
+		answer.PromptText = dialog.PromptText
+	}
+	go s.answerDialog(answer)
+}
+
+// answerDialog runs on its own goroutine: the event that asks for it is handled on the connection's
+// reader, which also delivers the answer's reply.
+func (s *Session) answerDialog(answer page.HandleJavaScriptDialogParams) {
+	_, _ = chromedp.Call(s.ctx, page.HandleJavaScriptDialog, answer)
 }
 
 func (s *Session) recordWarning(warning Warning) {

@@ -157,9 +157,7 @@ func (s *Session) appendConsoleMessage(generation uint64, message ConsoleMessage
 // so every client renders a console message's text the same way.
 func NewConsoleMessage(event *runtime.EventConsoleAPICalled) ConsoleMessage {
 	message := ConsoleMessage{Type: string(event.Type), Stack: ConsoleStack(event.StackTrace)}
-	if event.Timestamp != nil {
-		message.Timestamp = event.Timestamp.Time()
-	}
+	message.Timestamp = TimestampTime(event.Timestamp)
 	parts := make([]string, 0, len(event.Args))
 	for index, object := range event.Args {
 		if index >= 64 {
@@ -185,9 +183,7 @@ func NewLogEntryMessage(entry *cdplog.Entry) ConsoleMessage {
 		level = "debug"
 	}
 	message := ConsoleMessage{Type: level, Source: string(entry.Source), Text: truncateUTF8(entry.Text, DefaultConsolePreviewBytes), Stack: ConsoleStack(entry.StackTrace)}
-	if entry.Timestamp != nil {
-		message.Timestamp = entry.Timestamp.Time()
-	}
+	message.Timestamp = TimestampTime(entry.Timestamp)
 	return message
 }
 
@@ -218,7 +214,7 @@ func safeConsolePreview(object *runtime.RemoteObject) any {
 			return value
 		}
 	}
-	if object.Type == runtime.TypeString && len(object.Value) > DefaultConsolePreviewBytes {
+	if object.Type == runtime.RemoteObjectTypeString && len(object.Value) > DefaultConsolePreviewBytes {
 		value := string(object.Value)
 		value = strings.TrimPrefix(value, `"`)
 		value = strings.TrimSuffix(value, `"`)

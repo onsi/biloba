@@ -20,10 +20,12 @@ import (
 // runner calls them for its frame handles. Each takes a ctx scoped to the frame by ScopeToFrameContext,
 // since the frame-local measurements they need run as JavaScript in the frame's document.
 
-// TrackFrameWorlds records each frame document's page JavaScript context as its target announces it,
-// which is what ScopeToFrameContext looks frames up in. Call it on a target's chromedp context before
+// TrackFrameWorlds records each frame document's page JavaScript context as targetID announces it,
+// which is what ScopeToFrameContext looks frames up in. Call it on the target's chromedp context before
 // that context's first Run: Runtime.enable announces the existing contexts then.
-func TrackFrameWorlds(ctx context.Context) context.Context { return trackFrameWorlds(ctx) }
+func TrackFrameWorlds(ctx context.Context, targetID target.ID) (context.Context, error) {
+	return trackFrameWorlds(ctx, targetID)
+}
 
 // ScopeToFrameContext pins JavaScript evaluation in ctx (EvaluateContext, RunHandlerContext, and the
 // helpers built on them) to frameID's current document. ctx must descend from a context passed to
@@ -172,19 +174,23 @@ func reportedCrossOrigin(child, parent *cdp.Frame) bool {
 // isolated world so a page that replaces Window.parent cannot answer it.
 func FrameOriginBoundaryContext(ctx context.Context, frameID cdp.FrameID) (bool, error) {
 	var boundary bool
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		id, err := page.CreateIsolatedWorld(frameID).WithWorldName("biloba-origin-check-" + string(frameID)).Do(runCtx)
+	err := chromedp.Do(ctx, chromedp.Func(func(runCtx context.Context, t *chromedp.Target) error {
+		world, err := cdp.Call(runCtx, t, page.CreateIsolatedWorld, page.CreateIsolatedWorldParams{FrameID: frameID, WorldName: "biloba-origin-check-" + string(frameID)})
 		if err != nil {
 			return err
 		}
-		result, exception, err := runtime.Evaluate(`(() => { try { void parent.document; return false; } catch (error) { if (error.name === 'SecurityError') return true; throw error; } })()`).WithContextID(id).WithReturnByValue(true).Do(runCtx)
+		evaluated, err := cdp.Call(runCtx, t, runtime.Evaluate, runtime.EvaluateParams{
+			Expression:    `(() => { try { void parent.document; return false; } catch (error) { if (error.name === 'SecurityError') return true; throw error; } })()`,
+			ContextID:     world.ExecutionContextID,
+			ReturnByValue: ptr(true),
+		})
 		if err != nil {
 			return err
 		}
-		if exception != nil {
-			return exception
+		if evaluated.ExceptionDetails != nil {
+			return &chromedp.ExceptionError{ExceptionDetails: evaluated.ExceptionDetails}
 		}
-		boundary = string(result.Value) == "true"
+		boundary = string(evaluated.Result.Value) == "true"
 		return nil
 	}))
 	if err != nil {
@@ -237,21 +243,21 @@ func translateFramePoints(ctx context.Context, frameID cdp.FrameID, points []act
 		return nil, &Error{Code: CodeActionFailed, Operation: "translate frame point", Message: "frame viewport has no area"}
 	}
 	var quad dom.Quad
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		backendNodeID, _, ownerErr := dom.GetFrameOwner(frameID).Do(runCtx)
+	err := chromedp.Do(ctx, chromedp.Func(func(runCtx context.Context, t *chromedp.Target) error {
+		owner, ownerErr := cdp.Call(runCtx, t, dom.GetFrameOwner, dom.GetFrameOwnerParams{FrameID: frameID})
 		if ownerErr != nil {
 			return ownerErr
 		}
 		if scroll {
-			if scrollErr := dom.ScrollIntoViewIfNeeded().WithBackendNodeID(backendNodeID).Do(runCtx); scrollErr != nil {
+			if _, scrollErr := cdp.Call(runCtx, t, dom.ScrollIntoViewIfNeeded, dom.ScrollIntoViewIfNeededParams{BackendNodeID: owner.BackendNodeID}); scrollErr != nil {
 				return scrollErr
 			}
 		}
-		model, modelErr := dom.GetBoxModel().WithBackendNodeID(backendNodeID).Do(runCtx)
+		box, modelErr := cdp.Call(runCtx, t, dom.GetBoxModel, dom.GetBoxModelParams{BackendNodeID: owner.BackendNodeID})
 		if modelErr != nil {
 			return modelErr
 		}
-		quad = model.Content
+		quad = box.Model.Content
 		return nil
 	}))
 	if err != nil {
@@ -271,14 +277,17 @@ func FramePointReachableContext(ctx context.Context, frameID cdp.FrameID, point 
 func framePointReachable(ctx context.Context, frameID cdp.FrameID, point actionPoint) (bool, error) {
 	var hitFrame cdp.FrameID
 	var tree *page.FrameTree
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		var hitErr error
-		_, hitFrame, _, hitErr = dom.GetNodeForLocation(int64(math.Round(point.x)), int64(math.Round(point.y))).WithIncludeUserAgentShadowDOM(true).Do(runCtx)
+	err := chromedp.Do(ctx, chromedp.Func(func(runCtx context.Context, t *chromedp.Target) error {
+		hit, hitErr := cdp.Call(runCtx, t, dom.GetNodeForLocation, dom.GetNodeForLocationParams{
+			X: int64(math.Round(point.x)), Y: int64(math.Round(point.y)), IncludeUserAgentShadowDOM: ptr(true),
+		})
+		hitFrame = hit.FrameID
 		if hitErr != nil || hitFrame == frameID {
 			return hitErr
 		}
 		// The target may sit in a same-origin child of this frame, reached with >>>.
-		tree, hitErr = page.GetFrameTree().Do(runCtx)
+		frames, hitErr := cdp.Call(runCtx, t, page.GetFrameTree, cdp.Empty{})
+		tree = frames.FrameTree
 		return hitErr
 	}))
 	var protocolErr *cdproto.Error
@@ -327,11 +336,12 @@ func FrameScreenshotRectContext(ctx context.Context, frameID cdp.FrameID, x, y, 
 	}
 
 	var pageX, pageY float64
-	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		_, _, _, _, viewport, _, metricsErr := page.GetLayoutMetrics().Do(runCtx)
+	if err := chromedp.Do(ctx, chromedp.Func(func(runCtx context.Context, t *chromedp.Target) error {
+		metrics, metricsErr := cdp.Call(runCtx, t, page.GetLayoutMetrics, cdp.Empty{})
 		if metricsErr != nil {
 			return metricsErr
 		}
+		viewport := metrics.CSSVisualViewport
 		if viewport == nil {
 			return errors.New("Chrome did not report a visual viewport")
 		}

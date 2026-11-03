@@ -9,7 +9,7 @@ import (
 	"github.com/chromedp/cdproto"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/runtime"
-	"github.com/chromedp/chromedp"
+	"github.com/chromedp/cdproto/target"
 )
 
 type frameWorld struct {
@@ -27,14 +27,9 @@ type frameWorlds struct {
 // trackFrameWorlds must run before the target's first chromedp.Run: Runtime.enable
 // announces existing contexts then, including documents loaded before attachment.
 // This registry belongs to the renderer attachment, not to any one frame handle.
-func trackFrameWorlds(ctx context.Context) context.Context {
+func trackFrameWorlds(ctx context.Context, targetID target.ID) (context.Context, error) {
 	worlds := &frameWorlds{byFrame: map[cdp.FrameID]frameWorld{}}
-	chromedp.ListenTarget(ctx, func(event any) {
-		switch event.(type) {
-		case *runtime.EventExecutionContextCreated, *runtime.EventExecutionContextDestroyed, *runtime.EventExecutionContextsCleared:
-		default:
-			return
-		}
+	err := ListenTargetFromAttach(ctx, targetID, func(event any) {
 		worlds.mu.Lock()
 		defer worlds.mu.Unlock()
 		switch event := event.(type) {
@@ -55,8 +50,11 @@ func trackFrameWorlds(ctx context.Context) context.Context {
 		case *runtime.EventExecutionContextsCleared:
 			clear(worlds.byFrame)
 		}
-	})
-	return context.WithValue(ctx, frameWorldsKey{}, worlds)
+	}, runtime.ExecutionContextCreated.Method, runtime.ExecutionContextDestroyed.Method, runtime.ExecutionContextsCleared.Method)
+	if err != nil {
+		return nil, err
+	}
+	return context.WithValue(ctx, frameWorldsKey{}, worlds), nil
 }
 
 func mainFrameWorld(ctx context.Context, id cdp.FrameID) (frameWorld, error) {

@@ -53,12 +53,15 @@ func (s *Session) SetDeviceMetrics(ctx context.Context, metrics DeviceMetrics) e
 		return &Error{Code: CodeInvalidArgument, Operation: "set device metrics", Message: "width, height, and device scale factor must be positive"}
 	}
 	return s.serial(ctx, "set device metrics", func(opCtx context.Context) error {
-		override := emulation.SetDeviceMetricsOverride(int64(metrics.Width), int64(metrics.Height), metrics.DeviceScaleFactor, metrics.Mobile)
+		override := emulation.SetDeviceMetricsOverrideParams{Width: int64(metrics.Width), Height: int64(metrics.Height), DeviceScaleFactor: metrics.DeviceScaleFactor, Mobile: metrics.Mobile}
 		if metrics.Landscape {
-			override = override.WithScreenOrientation(&emulation.ScreenOrientation{Type: emulation.OrientationTypeLandscapePrimary, Angle: 90})
+			override.ScreenOrientation = &emulation.ScreenOrientation{Type: emulation.ScreenOrientationTypeLandscapePrimary, Angle: 90}
 		}
 		s.emulated.deviceMetrics = true
-		return chromedp.Run(opCtx, override, emulation.SetTouchEmulationEnabled(metrics.Touch))
+		return chromedp.Do(opCtx,
+			Step(emulation.SetDeviceMetricsOverride, override),
+			Step(emulation.SetTouchEmulationEnabled, emulation.SetTouchEmulationEnabledParams{Enabled: metrics.Touch}),
+		)
 	})
 }
 
@@ -71,7 +74,10 @@ func (s *Session) ClearDeviceMetrics(ctx context.Context) error {
 	})
 }
 func clearDeviceMetrics(ctx context.Context) error {
-	return chromedp.Run(ctx, emulation.ClearDeviceMetricsOverride(), emulation.SetTouchEmulationEnabled(false))
+	return chromedp.Do(ctx,
+		Step(emulation.ClearDeviceMetricsOverride, cdp.Empty{}),
+		Step(emulation.SetTouchEmulationEnabled, emulation.SetTouchEmulationEnabledParams{Enabled: false}),
+	)
 }
 
 func (s *Session) SetGeolocation(ctx context.Context, location Geolocation) error {
@@ -97,16 +103,12 @@ func ValidateGeolocation(location Geolocation) error {
 
 // SetGeolocationContext overrides the position navigator.geolocation reports.
 func SetGeolocationContext(ctx context.Context, location Geolocation) error {
-	return chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		// Pointers preserve valid zero coordinates. The generated CDP params use omitzero and would
-		// otherwise turn latitude/longitude 0 into "position unavailable".
-		params := struct {
-			Latitude  *float64 `json:"latitude"`
-			Longitude *float64 `json:"longitude"`
-			Accuracy  *float64 `json:"accuracy"`
-		}{Latitude: &location.Latitude, Longitude: &location.Longitude, Accuracy: &location.Accuracy}
-		return cdp.Execute(runCtx, emulation.CommandSetGeolocationOverride, &params, nil)
-	}))
+	// Pointers send valid zero coordinates; a nil field would turn latitude/longitude 0 into
+	// "position unavailable".
+	_, err := chromedp.Call(ctx, emulation.SetGeolocationOverride, emulation.SetGeolocationOverrideParams{
+		Latitude: ptr(location.Latitude), Longitude: ptr(location.Longitude), Accuracy: ptr(location.Accuracy),
+	})
+	return err
 }
 
 func (s *Session) ClearGeolocation(ctx context.Context) error {
@@ -118,7 +120,8 @@ func (s *Session) ClearGeolocation(ctx context.Context) error {
 	})
 }
 func ClearGeolocationContext(ctx context.Context) error {
-	return chromedp.Run(ctx, emulation.ClearGeolocationOverride())
+	_, err := chromedp.Call(ctx, emulation.ClearGeolocationOverride, cdp.Empty{})
+	return err
 }
 
 func (s *Session) SetPermissions(ctx context.Context, origin string, permissions map[Permission]PermissionState) error {
@@ -151,10 +154,12 @@ func ValidatePermissions(permissions map[Permission]PermissionState) error {
 // SetPermissionsContext sets permissions for origin ("" for every origin).  Permissions belong to a
 // browser context, so every tab in browserContextID sees them.
 func SetPermissionsContext(ctx context.Context, browserContextID cdp.BrowserContextID, origin string, permissions map[Permission]PermissionState) error {
-	return withBrowserExecutor(ctx, func(browserCtx context.Context) error {
+	return withBrowserExecutor(ctx, func(browserCtx context.Context, browser cdp.Session) error {
 		for permission, state := range permissions {
 			descriptor := &cdpbrowser.PermissionDescriptor{Name: string(permission)}
-			if err := cdpbrowser.SetPermission(descriptor, cdpbrowser.PermissionSetting(state)).WithOrigin(origin).WithBrowserContextID(browserContextID).Do(browserCtx); err != nil {
+			if _, err := cdp.Call(browserCtx, browser, cdpbrowser.SetPermission, cdpbrowser.SetPermissionParams{
+				Permission: descriptor, Setting: cdpbrowser.PermissionSetting(state), Origin: origin, BrowserContextID: browserContextID,
+			}); err != nil {
 				return err
 			}
 		}
@@ -164,8 +169,9 @@ func SetPermissionsContext(ctx context.Context, browserContextID cdp.BrowserCont
 
 // ResetPermissionsContext removes every permission override in a browser context.
 func ResetPermissionsContext(ctx context.Context, browserContextID cdp.BrowserContextID) error {
-	return withBrowserExecutor(ctx, func(browserCtx context.Context) error {
-		return cdpbrowser.ResetPermissions().WithBrowserContextID(browserContextID).Do(browserCtx)
+	return withBrowserExecutor(ctx, func(browserCtx context.Context, browser cdp.Session) error {
+		_, err := cdp.Call(browserCtx, browser, cdpbrowser.ResetPermissions, cdpbrowser.ResetPermissionsParams{BrowserContextID: browserContextID})
+		return err
 	})
 }
 
@@ -209,7 +215,8 @@ func (s *Session) SetLocale(ctx context.Context, locale string) error {
 }
 func (s *Session) ClearLocale(ctx context.Context) error { return s.SetLocale(ctx, "") }
 func SetLocaleContext(ctx context.Context, locale string) error {
-	return chromedp.Run(ctx, emulation.SetLocaleOverride().WithLocale(locale))
+	_, err := chromedp.Call(ctx, emulation.SetLocaleOverride, emulation.SetLocaleOverrideParams{Locale: locale})
+	return err
 }
 
 func (s *Session) SetTimezone(ctx context.Context, timezone string) error {
@@ -222,7 +229,8 @@ func (s *Session) SetTimezone(ctx context.Context, timezone string) error {
 }
 func (s *Session) ClearTimezone(ctx context.Context) error { return s.SetTimezone(ctx, "") }
 func SetTimezoneContext(ctx context.Context, timezone string) error {
-	return chromedp.Run(ctx, emulation.SetTimezoneOverride(timezone))
+	_, err := chromedp.Call(ctx, emulation.SetTimezoneOverride, emulation.SetTimezoneOverrideParams{TimezoneID: timezone})
+	return err
 }
 
 func (s *Session) SetMedia(ctx context.Context, media Media) error {
@@ -251,7 +259,8 @@ func setMedia(ctx context.Context, media Media) error {
 	if media.ReducedMotion != "" {
 		features = append(features, &emulation.MediaFeature{Name: "prefers-reduced-motion", Value: media.ReducedMotion})
 	}
-	return chromedp.Run(ctx, emulation.SetEmulatedMedia().WithMedia(media.Type).WithFeatures(features))
+	_, err := chromedp.Call(ctx, emulation.SetEmulatedMedia, emulation.SetEmulatedMediaParams{Media: media.Type, Features: features})
+	return err
 }
 
 func (s *Session) SetUserAgent(ctx context.Context, userAgent string) error {
@@ -320,5 +329,6 @@ func (s *Session) resetEmulation(ctx context.Context) error {
 // SetUserAgentContext overrides the user agent the page reports (navigator.userAgent and the
 // User-Agent request header); the empty string removes the override.
 func SetUserAgentContext(ctx context.Context, userAgent string) error {
-	return chromedp.Run(ctx, emulation.SetUserAgentOverride(userAgent))
+	_, err := chromedp.Call(ctx, emulation.SetUserAgentOverride, emulation.SetUserAgentOverrideParams{UserAgent: userAgent})
+	return err
 }

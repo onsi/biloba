@@ -16,7 +16,7 @@ var _ = Describe("event conversions", Label("no-browser"), func() {
 				Text:       "Uncaught",
 				URL:        "http://example.com/app.js",
 				LineNumber: 4, ColumnNumber: 7,
-				Exception:  &runtime.RemoteObject{Type: runtime.TypeObject, Description: "TypeError: x is not a function\n    at go (http://example.com/app.js:5:8)"},
+				Exception:  &runtime.RemoteObject{Type: runtime.RemoteObjectTypeObject, Description: "TypeError: x is not a function\n    at go (http://example.com/app.js:5:8)"},
 				StackTrace: &runtime.StackTrace{CallFrames: []*runtime.CallFrame{{FunctionName: "go", URL: "http://example.com/app.js", LineNumber: 4, ColumnNumber: 7}}},
 			}})
 			Expect(pageError.Message).To(Equal("Uncaught TypeError: x is not a function"))
@@ -28,7 +28,7 @@ var _ = Describe("event conversions", Label("no-browser"), func() {
 
 		It("renders a thrown primitive, and does not repeat a description the text already carries", func() {
 			thrown := engine.NewPageError(&runtime.EventExceptionThrown{ExceptionDetails: &runtime.ExceptionDetails{
-				Text: "Uncaught (in promise)", Exception: &runtime.RemoteObject{Type: runtime.TypeNumber, Value: []byte("42")},
+				Text: "Uncaught (in promise)", Exception: &runtime.RemoteObject{Type: runtime.RemoteObjectTypeNumber, Value: []byte("42")},
 			}})
 			Expect(thrown.Message).To(Equal("Uncaught (in promise) 42"))
 
@@ -56,10 +56,10 @@ var _ = Describe("event conversions", Label("no-browser"), func() {
 	})
 
 	It("renders a console message's text from its arguments", func() {
-		message := engine.NewConsoleMessage(&runtime.EventConsoleAPICalled{Type: runtime.APITypeWarning, Args: []*runtime.RemoteObject{
-			{Type: runtime.TypeString, Value: []byte(`"careful"`)},
-			{Type: runtime.TypeNumber, Value: []byte("3")},
-			{Type: runtime.TypeObject, Description: "Object"},
+		message := engine.NewConsoleMessage(&runtime.EventConsoleAPICalled{Type: runtime.ConsoleAPICalledTypeWarning, Args: []*runtime.RemoteObject{
+			{Type: runtime.RemoteObjectTypeString, Value: []byte(`"careful"`)},
+			{Type: runtime.RemoteObjectTypeNumber, Value: []byte("3")},
+			{Type: runtime.RemoteObjectTypeObject, Description: "Object"},
 		}})
 		Expect(message.Type).To(Equal("warning"))
 		Expect(message.Text).To(Equal("careful 3 Object"))

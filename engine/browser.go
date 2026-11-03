@@ -171,15 +171,15 @@ func StartBrowser(ctx context.Context, config BrowserConfig) (*Browser, error) {
 		}
 		debug.logf("chrome sandbox disabled: %s", sandboxReason)
 	}
-	allocCtx, cancelAllocator := chromedp.NewExecAllocator(ctx, opts...)
-	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
+	allocCtx, cancelAllocator := NewExecAllocator(ctx, debug.slowListenerf(), opts...)
+	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx, debug.browserOptions()...)
 	cancel := func() {
 		debug.stop()
 		cancelBrowser()
 		cancelAllocator()
 		_ = os.RemoveAll(profile)
 	}
-	if err := allocateBrowserWithoutTab(browserCtx, debug); err != nil {
+	if err := allocateBrowserWithoutTab(browserCtx); err != nil {
 		cancel()
 		return nil, typedError(CodeBrowserStart, "start browser", err)
 	}
@@ -223,10 +223,10 @@ var validChromeArgumentName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*$`)
 
 func connectBrowser(ctx context.Context, config BrowserConfig) (*Browser, error) {
 	debug := newDebugDispatcher(config.DebugSink)
-	allocCtx, cancelAllocator := chromedp.NewRemoteAllocator(ctx, config.WebSocketURL, chromedp.NoModifyURL)
-	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
+	allocCtx, cancelAllocator := NewRemoteAllocator(ctx, config.WebSocketURL, false, debug.slowListenerf())
+	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx, debug.browserOptions()...)
 	cancel := func() { debug.stop(); cancelBrowser(); cancelAllocator() }
-	if err := allocateBrowserWithoutTab(browserCtx, debug); err != nil {
+	if err := allocateBrowserWithoutTab(browserCtx); err != nil {
 		cancel()
 		return nil, typedError(CodeBrowserStart, "connect browser", err)
 	}
@@ -244,18 +244,19 @@ func connectBrowser(ctx context.Context, config BrowserConfig) (*Browser, error)
 	return browser, nil
 }
 
+// listenForDestroyedTargets reconciles the targets Chrome destroys.  allocateBrowserWithoutTab has
+// already turned target discovery on; it reports targets being created, and a target this browser
+// drives is only destroyed after it has a session, which is later than this.
 func (b *Browser) listenForDestroyedTargets() error {
-	chromedp.ListenBrowser(b.ctx, func(event any) {
+	return ListenBrowser(b.ctx, func(event any) {
 		destroyed, ok := event.(*target.EventTargetDestroyed)
 		if !ok {
 			return
 		}
-		// Browser listeners run synchronously on chromedp's event loop. Target attachment holds b.mu,
-		// so reconciliation must not wait for that lock here or it can block the attach response itself.
+		// Listeners run on the connection's reader. Target attachment holds b.mu, so reconciliation
+		// must not wait for that lock here or it can block the attach response itself.
 		go b.removeDestroyedTarget(destroyed.TargetID)
-	})
-	chrome := chromedp.FromContext(b.ctx)
-	return target.SetDiscoverTargets(true).Do(cdp.WithExecutor(b.ctx, chrome.Browser))
+	}, target.TargetDestroyed.Method)
 }
 
 func (b *Browser) removeDestroyedTarget(targetID target.ID) {
@@ -310,35 +311,26 @@ func readWebSocketURL(profile string) (string, error) {
 
 // allocateBrowserWithoutTab brings the browser connection up on browserCtx without giving it a
 // target.  chromedp allocates lazily on the first chromedp.Run, and Run always pairs allocation
-// with a target: for a RemoteAllocator (a worker daemon attaching to an already-running Chrome)
+// with a target: for an attaching allocator (a worker daemon attaching to an already-running Chrome)
 // that means Target.createTarget, i.e. a real idle about:blank tab in the *default* browser
 // context that would then sit there for the daemon's whole life - N workers sharing one Chrome,
 // N stray tabs.  Every browser-scoped command we issue on this context (creating a session's
-// isolated browser context and target, disposing it again) is dispatched on the Browser executor
-// and needs no target at all, so we allocate explicitly and leave the browser tab-less.
-// Allocator/Browser are exported chromedp fields; this is what chromedp.Run itself does, minus
-// the target.
+// isolated browser context and target, disposing it again) is dispatched on the Browser session
+// and needs no target at all, so the browser stays tab-less.
 //
-// Explicit engine-owned browser options are passed directly to Allocate. Context browser options
-// and listeners remain inaccessible here; adding either requires preserving this tabless path.
-func allocateBrowserWithoutTab(browserCtx context.Context, debug *debugDispatcher) error {
-	chrome := chromedp.FromContext(browserCtx)
-	if chrome == nil {
+// chromedp.CallBrowser allocates the browser and stops there.  Its first command is the one this
+// browser needs anyway: target discovery, so destroyed targets are reported.  Allocating through
+// chromedp rather than calling the allocator directly matters: it is chromedp that releases an
+// attaching allocator's hold on the context (without which cancelling it waits for ever) and that
+// cancels the context when the connection to Chrome is lost.  Browser options go on the context
+// (WithBrowserOption).  The allocators are engine's, so the browser comes with the ordered event
+// stream ListenTarget reads; see events.go.
+func allocateBrowserWithoutTab(browserCtx context.Context) error {
+	if chromedp.FromContext(browserCtx) == nil {
 		return errors.New("not a chromedp context")
 	}
-	if chrome.Browser != nil {
-		return nil // already allocated; allocating again would leak the first browser
-	}
-	options := []chromedp.BrowserOption{}
-	if debug != nil {
-		options = append(options, chromedp.WithBrowserDebugf(debug.logf))
-	}
-	browser, err := chrome.Allocator.Allocate(browserCtx, options...)
-	if err != nil {
-		return err
-	}
-	chrome.Browser = browser
-	return nil
+	_, err := chromedp.CallBrowser(browserCtx, target.SetDiscoverTargets, target.SetDiscoverTargetsParams{Discover: true})
+	return err
 }
 
 func (b *Browser) OpenSession(ctx context.Context) (*Session, error) {
@@ -352,12 +344,12 @@ func (b *Browser) OpenSession(ctx context.Context) (*Session, error) {
 	// These are browser-scoped commands, so they go straight to the Browser executor rather than
 	// through chromedp.Run - Run would give this browser context a target of its own (see
 	// allocateBrowserWithoutTab); the only tab we want is the session's.
-	chrome := chromedp.FromContext(opCtx)
-	browserExecutor := cdp.WithExecutor(opCtx, chrome.Browser)
-	browserContextID, err := target.CreateBrowserContext().WithDisposeOnDetach(true).Do(browserExecutor)
+	browserSession := chromedp.FromContext(opCtx).Browser
+	created, err := cdp.Call(opCtx, browserSession, target.CreateBrowserContext, target.CreateBrowserContextParams{DisposeOnDetach: ptr(true)})
 	if err != nil {
 		return nil, contextError("open session", err)
 	}
+	browserContextID := created.BrowserContextID
 	keepBrowserContext := false
 	defer func() {
 		if keepBrowserContext {
@@ -368,10 +360,9 @@ func (b *Browser) OpenSession(ctx context.Context) (*Session, error) {
 		// browser context behind until the daemon disconnects from Chrome.
 		cleanupCtx, cleanupCancel := context.WithTimeout(b.ctx, 5*time.Second)
 		defer cleanupCancel()
-		cleanupExecutor := cdp.WithExecutor(cleanupCtx, chromedp.FromContext(b.ctx).Browser)
-		_ = target.DisposeBrowserContext(browserContextID).Do(cleanupExecutor)
+		_, _ = cdp.Call(cleanupCtx, chromedp.FromContext(b.ctx).Browser, target.DisposeBrowserContext, target.DisposeBrowserContextParams{BrowserContextID: browserContextID})
 	}()
-	session, err := b.openTabLocked(ctx, browserContextID, true, nil, browserExecutor)
+	session, err := b.openTabLocked(ctx, opCtx, browserContextID, true, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -387,25 +378,37 @@ func (b *Browser) openTab(ctx context.Context, browserContextID cdp.BrowserConte
 	}
 	opCtx, cancel := executorContext(b.ctx, ctx)
 	defer cancel()
-	chrome := chromedp.FromContext(opCtx)
-	return b.openTabLocked(ctx, browserContextID, ownsContext, root, cdp.WithExecutor(opCtx, chrome.Browser))
+	return b.openTabLocked(ctx, opCtx, browserContextID, ownsContext, root)
 }
 
-func (b *Browser) openTabLocked(ctx context.Context, browserContextID cdp.BrowserContextID, ownsContext bool, root *Session, browserExecutor context.Context) (*Session, error) {
-	targetID, err := target.CreateTarget("about:blank").
-		WithBrowserContextID(browserContextID).
-		WithNewWindow(true).
-		Do(browserExecutor)
+// openTabLocked creates and attaches a tab.  opCtx bounds the browser-scoped commands.
+func (b *Browser) openTabLocked(ctx, opCtx context.Context, browserContextID cdp.BrowserContextID, ownsContext bool, root *Session) (*Session, error) {
+	opened, err := cdp.Call(opCtx, chromedp.FromContext(opCtx).Browser, target.CreateTarget, target.CreateTargetParams{
+		URL:              "about:blank",
+		BrowserContextID: browserContextID,
+		NewWindow:        ptr(true),
+	})
 	if err != nil {
 		return nil, contextError("open tab", err)
 	}
-	tabCtx, cancelTab := chromedp.NewContext(b.ctx, chromedp.WithTargetID(targetID))
-	tabCtx = trackFrameWorlds(tabCtx)
+	targetID := opened.TargetID
+	attached, detachTab := newTabContext(b.ctx, targetID)
+	// A tab that fails to come up is closed, as it was when chromedp closed the targets of the
+	// contexts it cancelled.
+	cancelTab := func() {
+		detachTab()
+		b.discardTarget(targetID)
+	}
+	tabCtx, err := trackFrameWorlds(attached, targetID)
+	if err != nil {
+		cancelTab()
+		return nil, contextError("open tab", err)
+	}
 	attachDone := make(chan error, 1)
 	go func() {
 		// The first Run owns chromedp's target executor for the session lifetime. It must use the
 		// persistent tab context; binding it to a request deadline tears the executor down afterward.
-		attachDone <- chromedp.Run(tabCtx, chromedp.Evaluate("1", nil))
+		attachDone <- chromedp.Do(tabCtx, chromedp.Evaluate[chromedp.Void]("1"))
 	}()
 	select {
 	case err = <-attachDone:
@@ -418,7 +421,7 @@ func (b *Browser) openTabLocked(ctx context.Context, browserContextID cdp.Browse
 		return nil, contextError("open tab", err)
 	}
 	session := &Session{
-		browser: b, ctx: tabCtx, cancel: cancelTab, browserContextID: browserContextID,
+		browser: b, ctx: tabCtx, cancel: detachTab, browserContextID: browserContextID,
 		targetID: targetID, ownsContext: ownsContext, artifactDir: b.artifactDir, root: root,
 		initialWidth: b.windowWidth, initialHeight: b.windowHeight,
 		highFidelity: b.mode == ChromeModeHeadless, cacheEnabled: true,
@@ -439,7 +442,10 @@ func (b *Browser) openTabLocked(ctx context.Context, browserContextID cdp.Browse
 		session.root = session
 	}
 	session.eventsEnabled.Store(true)
-	b.listenToSession(session)
+	if err := b.listenToSession(session); err != nil {
+		cancelTab()
+		return nil, contextError("listen to tab", err)
+	}
 	if err := session.setupDownloads(tabCtx); err != nil {
 		cancelTab()
 		if ownsContext {
@@ -452,11 +458,26 @@ func (b *Browser) openTabLocked(ctx context.Context, browserContextID cdp.Browse
 	return session, nil
 }
 
-func (b *Browser) listenToSession(session *Session) {
+// sessionEvents are the events listenToSession handles.
+var sessionEvents = []string{
+	runtime.ExecutionContextCreated.Method, runtime.ExecutionContextDestroyed.Method, runtime.ExecutionContextsCleared.Method,
+	inspector.TargetCrashed.Method,
+	network.RequestWillBeSent.Method, network.ResponseReceived.Method, network.LoadingFinished.Method, network.LoadingFailed.Method,
+	page.FrameAttached.Method, page.FrameNavigated.Method, page.FrameDetached.Method,
+	fetch.RequestPaused.Method,
+	runtime.ConsoleAPICalled.Method, runtime.ExceptionThrown.Method, cdplog.EntryAdded.Method,
+	page.JavascriptDialogOpening.Method,
+	cdpbrowser.DownloadWillBegin.Method, cdpbrowser.DownloadProgress.Method,
+}
+
+// listenToSession records what a tab's page does.  It runs on the connection's reader goroutine (see
+// ListenTarget): everything it calls records under a lock no CDP caller holds, and the handlers that
+// answer Chrome (paused requests, dialogs) hand the answer to a goroutine.
+func (b *Browser) listenToSession(session *Session) error {
 	// Chrome announces a dead renderer once, on this target, and then goes quiet: subsequent CDP
 	// calls neither succeed nor fail, they simply never answer.  Catching the announcement is the
 	// only way to tell a crashed page from a slow one.
-	chromedp.ListenTarget(session.ctx, func(event any) {
+	return ListenTarget(session.ctx, func(event any) {
 		session.boundary.observe(event)
 		if _, ok := event.(*inspector.EventTargetCrashed); ok {
 			session.markCrashed()
@@ -521,7 +542,7 @@ func (b *Browser) listenToSession(session *Session) {
 		if progress, ok := event.(*cdpbrowser.EventDownloadProgress); ok {
 			session.handleDownloadProgress(progress)
 		}
-	})
+	}, sessionEvents...)
 }
 
 // listenToFrameDocument records a same-process frame's own console messages, page errors, and requests, so a frame
@@ -529,8 +550,8 @@ func (b *Browser) listenToSession(session *Session) {
 // listenToSession on its own target). The tab shares the renderer attachment and records these events
 // too; the handle keeps only its document's. Dialogs and downloads stay with the tab, as does
 // interception, which tabOnly rejects on frame handles.
-func (b *Browser) listenToFrameDocument(session *Session) {
-	chromedp.ListenTarget(session.ctx, func(event any) {
+func (b *Browser) listenToFrameDocument(session *Session) error {
+	return ListenTarget(session.ctx, func(event any) {
 		switch event := event.(type) {
 		case *runtime.EventConsoleAPICalled:
 			if session.acceptsConsoleEvent(event.ExecutionContextID) {
@@ -564,7 +585,41 @@ func (b *Browser) listenToFrameDocument(session *Session) {
 			session.inflight.Finish(event.RequestID)
 			session.recordRequestOutcome(event.RequestID, 0, RequestFailureText(event))
 		}
-	})
+	}, runtime.ConsoleAPICalled.Method, runtime.ExceptionThrown.Method,
+		network.RequestWillBeSent.Method, network.ResponseReceived.Method, network.LoadingFinished.Method, network.LoadingFailed.Method,
+		page.FrameAttached.Method, page.FrameNavigated.Method, page.FrameDetached.Method)
+}
+
+// newTabContext is a chromedp context for targetID that detaches from the target when it is
+// cancelled but leaves the target open.  Biloba closes the targets it owns itself: since v0.21
+// chromedp follows its own Target.closeTarget by polling Target.getTargets until the target is gone.
+func newTabContext(parent context.Context, targetID target.ID) (context.Context, context.CancelFunc) {
+	return chromedp.NewContext(parent, chromedp.WithTargetID(targetID), chromedp.WithDetachOnCancel())
+}
+
+// NewTabContext is newTabContext for the Go client's tabs: a chromedp context attached to targetID
+// whose cancellation detaches from the target and leaves it open (close it with CloseTargetContext).
+func NewTabContext(parent context.Context, targetID target.ID) (context.Context, context.CancelFunc) {
+	return newTabContext(parent, targetID)
+}
+
+// closeTargetTimeout is the budget chromedp gave the close of a target whose context was cancelled
+// before v0.21, which Biloba keeps for the closes it now sends itself.
+const closeTargetTimeout = time.Second
+
+// CloseTargetContext closes targetID through the browser of ctx (Target.closeTarget), as chromedp's
+// cancellation of the target's context did before v0.21.  It does not wait for the target to
+// disappear from Target.getTargets; callers that need that wait for it themselves.
+func CloseTargetContext(ctx context.Context, targetID target.ID) error {
+	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), closeTargetTimeout)
+	defer cancel()
+	_, err := chromedp.CallBrowser(closeCtx, target.CloseTarget, target.CloseTargetParams{TargetID: targetID})
+	return err
+}
+
+// discardTarget closes a target this browser created or attached and no longer wants.
+func (b *Browser) discardTarget(targetID target.ID) {
+	_ = CloseTargetContext(b.ctx, targetID)
 }
 
 // Sessions returns a stable snapshot of the targets this Browser currently owns or has discovered.

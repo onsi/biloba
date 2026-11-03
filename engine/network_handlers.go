@@ -348,7 +348,10 @@ func (s *Session) ensureInterception(ctx context.Context) error {
 		return nil
 	}
 	s.holdMu.Unlock()
-	if err := chromedp.Run(ctx, network.SetCacheDisabled(true), fetch.Enable().WithPatterns([]*fetch.RequestPattern{{URLPattern: "*", RequestStage: fetch.RequestStageRequest}})); err != nil {
+	if err := chromedp.Do(ctx,
+		Step(network.SetCacheDisabled, network.SetCacheDisabledParams{CacheDisabled: true}),
+		Step(fetch.Enable, fetch.EnableParams{Patterns: []*fetch.RequestPattern{{URLPattern: "*", RequestStage: fetch.RequestStageRequest}}}),
+	); err != nil {
 		return err
 	}
 	if err := AwaitInterceptionArmedContext(ctx); err != nil {
@@ -388,7 +391,7 @@ func (s *Session) disableInterceptionIfUnused(ctx context.Context) error {
 	if !enabled || hasHandlers || hasHolds || hasInterceptions {
 		return nil
 	}
-	return chromedp.Run(ctx, fetch.Disable(), network.SetCacheDisabled(!cacheEnabled))
+	return chromedp.Do(ctx, Step(fetch.Disable, cdp.Empty{}), Step(network.SetCacheDisabled, network.SetCacheDisabledParams{CacheDisabled: !cacheEnabled}))
 }
 func (s *Session) handlePausedEvent(event *fetch.EventRequestPaused) {
 	if !s.eventsEnabled.Load() {
@@ -426,7 +429,7 @@ func (s *Session) resolveRequest(event *fetch.EventRequestPaused) {
 	}
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(run context.Context) error {
+	err := chromedp.Do(ctx, chromedp.Func(func(run context.Context, t *chromedp.Target) error {
 		switch {
 		case h.options.Fulfill != nil:
 			o := h.options.Fulfill
@@ -438,30 +441,32 @@ func (s *Session) resolveRequest(event *fetch.EventRequestPaused) {
 			if o.Body != nil {
 				headers = stripEntityHeaderEntries(headers)
 			}
-			p := fetch.FulfillRequest(event.RequestID, int64(status)).WithResponseHeaders(fetchHeaderEntries(headers))
+			p := fetch.FulfillRequestParams{RequestID: event.RequestID, ResponseCode: int64(status), ResponseHeaders: fetchHeaderEntries(headers)}
 			if o.Body != nil {
-				p = p.WithBody(base64.StdEncoding.EncodeToString(*o.Body))
+				p.Body = *o.Body
 			}
-			return p.Do(run)
+			_, err := cdp.Call(run, t, fetch.FulfillRequest, p)
+			return err
 		case h.options.Abort:
 			// BlockedByClient, matching network.go: an aborted request was refused by the test, and
 			// that is what Network.loadingFailed's errorText should say.  ErrorReasonFailed reads as a
 			// transport fault, which is what the *internal* failure paths use.
-			return fetch.FailRequest(event.RequestID, network.ErrorReasonBlockedByClient).Do(run)
+			_, err := cdp.Call(run, t, fetch.FailRequest, fetch.FailRequestParams{RequestID: event.RequestID, ErrorReason: network.ErrorReasonBlockedByClient})
+			return err
 		case h.options.Request != nil:
 			o := h.options.Request
-			p := fetch.ContinueRequest(event.RequestID).WithInterceptResponse(true)
+			p := fetch.ContinueRequestParams{RequestID: event.RequestID, InterceptResponse: ptr(true)}
 			if o.URL != nil {
-				p = p.WithURL(*o.URL)
+				p.URL = *o.URL
 				if *o.URL != event.Request.URL {
 					s.recordRewrittenRequest(event.RequestID, event.Request.URL)
 				}
 			}
 			if o.Method != nil {
-				p = p.WithMethod(*o.Method)
+				p.Method = *o.Method
 			}
 			if o.Body != nil {
-				p = p.WithPostData(base64.StdEncoding.EncodeToString(*o.Body))
+				p.PostData = *o.Body
 			}
 			if o.Headers != nil {
 				headers := map[string]string{}
@@ -474,28 +479,29 @@ func (s *Session) resolveRequest(event *fetch.EventRequestPaused) {
 				if o.Body != nil {
 					stripEntityHeaders(headers)
 				}
-				p = p.WithHeaders(headerEntries(headers))
+				p.Headers = headerEntries(headers)
 			} else if o.Body != nil {
 				headers := map[string]string{}
 				for k, v := range event.Request.Headers {
 					headers[k] = fmt.Sprint(v)
 				}
 				stripEntityHeaders(headers)
-				p = p.WithHeaders(headerEntries(headers))
+				p.Headers = headerEntries(headers)
 			}
-			return p.Do(run)
+			_, err := cdp.Call(run, t, fetch.ContinueRequest, p)
+			return err
 		}
 		return nil
 	}))
 	if err != nil {
 		s.recordNetworkHandlerError(h, err)
-		_ = chromedp.Run(ctx, fetch.FailRequest(event.RequestID, network.ErrorReasonFailed))
+		_, _ = chromedp.Call(ctx, fetch.FailRequest, fetch.FailRequestParams{RequestID: event.RequestID, ErrorReason: network.ErrorReasonFailed})
 	}
 }
 func (s *Session) continueRequest(id fetch.RequestID) {
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
-	_ = chromedp.Run(ctx, fetch.ContinueRequest(id).WithInterceptResponse(true))
+	_, _ = chromedp.Call(ctx, fetch.ContinueRequest, fetch.ContinueRequestParams{RequestID: id, InterceptResponse: ptr(true)})
 }
 func (s *Session) handleResponseModification(event *fetch.EventRequestPaused, h *networkHandlerEntry) {
 	s.beginInterception()
@@ -608,20 +614,23 @@ func (s *Session) fulfillResponse(id fetch.RequestID, status int, headers []Head
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
 	headers = stripEntityHeaderEntries(headers)
-	return chromedp.Run(ctx, FulfillInterceptedResponse(id, status, fetchHeaderEntries(headers), body))
+	return chromedp.Do(ctx, FulfillInterceptedResponse(id, status, fetchHeaderEntries(headers), body))
 }
 
 // FulfillInterceptedResponse is the Fetch.fulfillRequest that answers a response paused at the
 // response stage once its body has been read (see fulfillWithExplicitBody).
-func FulfillInterceptedResponse(id fetch.RequestID, status int, headers []*fetch.HeaderEntry, body []byte) chromedp.Action {
+func FulfillInterceptedResponse(id fetch.RequestID, status int, headers []*fetch.HeaderEntry, body []byte) chromedp.Action[chromedp.Void] {
 	if headers == nil {
 		headers = []*fetch.HeaderEntry{}
 	}
-	return fulfillWithExplicitBody{
+	params := fulfillWithExplicitBody{
 		RequestID: id, ResponseCode: int64(status),
 		ResponseHeaders: headers,
 		Body:            base64.StdEncoding.EncodeToString(body),
 	}
+	return chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
+		return t.Call(ctx, fetch.CommandFulfillRequest, params, nil)
+	})
 }
 
 // fulfillWithExplicitBody is Fetch.fulfillRequest with the body always on the wire.  cdproto tags
@@ -634,10 +643,6 @@ type fulfillWithExplicitBody struct {
 	ResponseCode    int64                `json:"responseCode"`
 	ResponseHeaders []*fetch.HeaderEntry `json:"responseHeaders"`
 	Body            string               `json:"body"`
-}
-
-func (p fulfillWithExplicitBody) Do(ctx context.Context) error {
-	return cdp.Execute(ctx, fetch.CommandFulfillRequest, p, nil)
 }
 
 // recordRewrittenRequest remembers the URL the page asked for when a request override sends the
@@ -998,24 +1003,25 @@ func SetNetworkStateContext(ctx context.Context, state NetworkState) error {
 		upload = -1
 	}
 	latency := float64(state.Latency.Milliseconds())
-	action := network.OverrideNetworkState(state.Offline, latency, download, upload)
+	override := network.OverrideNetworkStateParams{Offline: state.Offline, Latency: latency, DownloadThroughput: download, UploadThroughput: upload}
 	conditions := []*network.Conditions{} // empty, not nil: Chrome wants a list
 	if state != (NetworkState{}) {
 		conditions = append(conditions, &network.Conditions{Offline: state.Offline, Latency: latency, DownloadThroughput: download, UploadThroughput: upload, ConnectionType: network.ConnectionType(state.ConnectionType)})
 	}
 	if state.ConnectionType != "" {
-		action = action.WithConnectionType(network.ConnectionType(state.ConnectionType))
+		override.ConnectionType = network.ConnectionType(state.ConnectionType)
 	}
-	return chromedp.Run(ctx, action, chromedp.ActionFunc(func(ctx context.Context) error {
-		_, err := network.EmulateNetworkConditionsByRule(conditions).Do(ctx)
-		return err
-	}))
+	return chromedp.Do(ctx,
+		Step(network.OverrideNetworkState, override),
+		Step(network.EmulateNetworkConditionsByRule, network.EmulateNetworkConditionsByRuleParams{MatchedNetworkConditions: conditions}),
+	)
 }
 
 // SetCacheDisabledContext turns the HTTP cache off or back on.  Request interception needs it off
 // (see EnableInterceptionContext), so callers keep it disabled while interception is on.
 func SetCacheDisabledContext(ctx context.Context, disabled bool) error {
-	return chromedp.Run(ctx, network.SetCacheDisabled(disabled))
+	_, err := chromedp.Call(ctx, network.SetCacheDisabled, network.SetCacheDisabledParams{CacheDisabled: disabled})
+	return err
 }
 
 func validNetworkConnectionType(connectionType NetworkConnectionType) bool {
@@ -1060,7 +1066,8 @@ func (s *Session) resetNetworkState(ctx context.Context) error {
 	if !emulating {
 		// the request conditions were never set, so only the navigator state needs the reset it always had
 		reset = func(ctx context.Context, _ NetworkState) error {
-			return chromedp.Run(ctx, network.OverrideNetworkState(false, 0, -1, -1))
+			_, err := chromedp.Call(ctx, network.OverrideNetworkState, network.OverrideNetworkStateParams{Offline: false, Latency: 0, DownloadThroughput: -1, UploadThroughput: -1})
+			return err
 		}
 	}
 	if err := reset(ctx, NetworkState{}); err != nil {

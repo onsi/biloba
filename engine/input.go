@@ -11,6 +11,7 @@ import (
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
+	"github.com/chromedp/chromedp/kb"
 )
 
 // The browser interactions that cannot be simulated in JavaScript and so have to go over CDP:
@@ -22,7 +23,7 @@ import (
 // EmulateViewportContext resizes the tab's emulated viewport.  Options are chromedp's, deliberately:
 // SetWindowSize takes them in its public signature, and Biloba does not hide chromedp from callers.
 func EmulateViewportContext(ctx context.Context, width, height int, opts ...chromedp.EmulateViewportOption) error {
-	return chromedp.Run(ctx, chromedp.EmulateViewport(int64(width), int64(height), opts...))
+	return chromedp.Do(ctx, chromedp.EmulateViewport(int64(width), int64(height), opts...))
 }
 
 // EmulateViewportMatchingScreenContext keeps full headless Chrome's compositor surface aligned
@@ -36,31 +37,60 @@ func EmulateViewportMatchingScreenContext(ctx context.Context, width, height int
 }
 
 // KeyEventContext dispatches keys as real keyboard events, so keydown/keypress/keyup all fire.
+//
+// It sends every event chromedp's encoder produces for a key, the char event included when Ctrl,
+// Alt, or Meta is held.  That is what chromedp.KeyEvent did before v0.18.0, which stopped sending
+// that char event; Biloba keeps the old behaviour until it decides to adopt the new one.
 func KeyEventContext(ctx context.Context, keys string, opts ...chromedp.KeyOption) error {
 	if keys == "" {
 		return nil
 	}
-	return chromedp.Run(ctx, chromedp.KeyEvent(keys, opts...))
+	return chromedp.Do(ctx, chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
+		for _, r := range keys {
+			for _, key := range kb.Encode(r) {
+				for _, o := range opts {
+					o(key)
+				}
+				if _, err := cdp.Call(ctx, t, input.DispatchKeyEvent, *key); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}))
 }
 
 // MouseClickContext dispatches a press/release pair at a point, with modifiers held, repeated for
 // each click count so a double click reports detail=1 then detail=2 the way a real one does.
-func MouseClickContext(ctx context.Context, x, y float64, button input.MouseButton, clickCount int, modifiers input.Modifier) error {
-	actions := []chromedp.Action{chromedp.MouseEvent(input.MouseMoved, x, y)}
+func MouseClickContext(ctx context.Context, x, y float64, button input.MouseButton, clickCount int, modifiers chromedp.Modifier) error {
+	actions := []chromedp.Action[chromedp.Void]{chromedp.MouseEvent(input.DispatchMouseEventTypeMouseMoved, x, y)}
 	for count := int64(1); count <= int64(clickCount); count++ {
-		actions = append(actions,
-			input.DispatchMouseEvent(input.MousePressed, x, y).WithButton(button).WithClickCount(count).WithModifiers(modifiers),
-			input.DispatchMouseEvent(input.MouseReleased, x, y).WithButton(button).WithClickCount(count).WithModifiers(modifiers),
-		)
+		for _, kind := range []input.DispatchMouseEventType{input.DispatchMouseEventTypeMousePressed, input.DispatchMouseEventTypeMouseReleased} {
+			actions = append(actions, dispatchMouse(input.DispatchMouseEventParams{Type: kind, X: x, Y: y, Button: button, ClickCount: count, Modifiers: int64(modifiers)}))
+		}
 	}
-	return chromedp.Run(ctx, actions...)
+	return chromedp.Do(ctx, actions...)
+}
+
+func dispatchMouse(params input.DispatchMouseEventParams) chromedp.Action[chromedp.Void] {
+	return chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
+		_, err := cdp.Call(ctx, t, input.DispatchMouseEvent, params)
+		return err
+	})
+}
+
+func dispatchTouch(kind input.DispatchTouchEventType, points []*input.TouchPoint) chromedp.Action[chromedp.Void] {
+	return chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
+		_, err := cdp.Call(ctx, t, input.DispatchTouchEvent, input.DispatchTouchEventParams{Type: kind, TouchPoints: points})
+		return err
+	})
 }
 
 // TapContext dispatches a touch start/end pair at a point.
 func TapContext(ctx context.Context, x, y float64) error {
-	return chromedp.Run(ctx,
-		input.DispatchTouchEvent(input.TouchStart, []*input.TouchPoint{{X: x, Y: y}}),
-		input.DispatchTouchEvent(input.TouchEnd, []*input.TouchPoint{}),
+	return chromedp.Do(ctx,
+		dispatchTouch(input.DispatchTouchEventTypeTouchStart, []*input.TouchPoint{{X: x, Y: y}}),
+		dispatchTouch(input.DispatchTouchEventTypeTouchEnd, []*input.TouchPoint{}),
 	)
 }
 
@@ -81,21 +111,23 @@ func SetFileInputFilesContext(ctx context.Context, nodeScript string, paths []st
 	}
 	paths = absolute
 	found := false
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		evaluate := runtime.Evaluate(nodeScript).WithUserGesture(true)
-		evaluate = scopeEvaluation(ctx, evaluate)
-		node, exception, evaluateErr := evaluate.Do(runCtx)
+	err := chromedp.Do(ctx, chromedp.Func(func(runCtx context.Context, t *chromedp.Target) error {
+		evaluate := scopeEvaluation(ctx, runtime.EvaluateParams{Expression: nodeScript, UserGesture: ptr(true)})
+		evaluated, evaluateErr := cdp.Call(runCtx, t, runtime.Evaluate, evaluate)
 		if evaluateErr != nil {
 			return evaluateErr
 		}
-		if exception != nil {
-			return exception
+		if evaluated.ExceptionDetails != nil {
+			return &chromedp.ExceptionError{ExceptionDetails: evaluated.ExceptionDetails}
 		}
+		node := evaluated.Result
 		if node == nil || node.ObjectID == "" {
 			return nil
 		}
-		defer func() { _ = runtime.ReleaseObject(node.ObjectID).Do(runCtx) }()
-		if setErr := dom.SetFileInputFiles(paths).WithObjectID(node.ObjectID).Do(runCtx); setErr != nil {
+		defer func() {
+			_, _ = cdp.Call(runCtx, t, runtime.ReleaseObject, runtime.ReleaseObjectParams{ObjectID: node.ObjectID})
+		}()
+		if _, setErr := cdp.Call(runCtx, t, dom.SetFileInputFiles, dom.SetFileInputFilesParams{Files: paths, ObjectID: node.ObjectID}); setErr != nil {
 			return setErr
 		}
 		found = true
@@ -110,25 +142,16 @@ func AccessibilityTreeContext(ctx context.Context) ([]*accessibility.Node, error
 }
 
 func accessibilityTreeContext(ctx context.Context, frameID cdp.FrameID) ([]*accessibility.Node, error) {
-	var nodes []*accessibility.Node
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		request := accessibility.GetFullAXTree()
-		if frameID != "" {
-			request = request.WithFrameID(frameID)
-		}
-		var readErr error
-		nodes, readErr = request.Do(runCtx)
-		return readErr
-	}))
+	tree, err := chromedp.Call(ctx, accessibility.GetFullAXTree, accessibility.GetFullAXTreeParams{FrameID: frameID})
 	if err != nil {
 		return nil, err
 	}
-	return nodes, nil
+	return tree.Nodes, nil
 }
 
 // MouseMoveContext moves the real pointer, which is what activates genuine CSS :hover.
 func MouseMoveContext(ctx context.Context, x, y float64) error {
-	return chromedp.Run(ctx, chromedp.MouseEvent(input.MouseMoved, x, y))
+	return chromedp.Do(ctx, chromedp.MouseEvent(input.DispatchMouseEventTypeMouseMoved, x, y))
 }
 
 // DispatchPointerContext dispatches one real pointer event - a move, a press, or a release of the
@@ -136,28 +159,28 @@ func MouseMoveContext(ctx context.Context, x, y float64) error {
 // button is down once the event is over: a move while held carries buttons=1 so the page sees a drag,
 // a press is always held, and a release never is.  A pen reports pressure 0.5 while it touches and 0
 // otherwise, the way a mouse does; Chrome derives a pen's pressure from force, which defaults to 0.
-func DispatchPointerContext(ctx context.Context, kind input.MouseType, x, y float64, held bool, pointerType input.DispatchMouseEventPointerType) error {
-	held = kind == input.MousePressed || (kind == input.MouseMoved && held)
-	event := input.DispatchMouseEvent(kind, x, y).WithPointerType(pointerType)
-	if kind != input.MouseMoved || held {
-		event = event.WithButton(input.Left)
+func DispatchPointerContext(ctx context.Context, kind input.DispatchMouseEventType, x, y float64, held bool, pointerType input.DispatchMouseEventPointerType) error {
+	held = kind == input.DispatchMouseEventTypeMousePressed || (kind == input.DispatchMouseEventTypeMouseMoved && held)
+	event := input.DispatchMouseEventParams{Type: kind, X: x, Y: y, PointerType: pointerType}
+	if kind != input.DispatchMouseEventTypeMouseMoved || held {
+		event.Button = input.MouseButtonLeft
 	}
-	if kind != input.MouseMoved {
-		event = event.WithClickCount(1)
+	if kind != input.DispatchMouseEventTypeMouseMoved {
+		event.ClickCount = 1
 	}
 	if held {
-		event = event.WithButtons(1)
-		if pointerType == input.Pen {
-			event = event.WithForce(0.5)
+		event.Buttons = 1
+		if pointerType == input.DispatchMouseEventPointerTypePen {
+			event.Force = 0.5
 		}
 	}
-	return chromedp.Run(ctx, event)
+	return chromedp.Do(ctx, dispatchMouse(event))
 }
 
 // ClickXYContext moves to a point and clicks it - the simple case, no modifiers or repeat counts.
 func ClickXYContext(ctx context.Context, x, y float64) error {
-	return chromedp.Run(ctx,
-		chromedp.MouseEvent(input.MouseMoved, x, y),
+	return chromedp.Do(ctx,
+		chromedp.MouseEvent(input.DispatchMouseEventTypeMouseMoved, x, y),
 		chromedp.MouseClickXY(x, y),
 	)
 }
@@ -165,24 +188,27 @@ func ClickXYContext(ctx context.Context, x, y float64) error {
 // TouchTapContext enables touch emulation and dispatches a tap.  Emulation is enabled per call
 // because a tap can be the first touch interaction a page ever sees.
 func TouchTapContext(ctx context.Context, x, y float64) error {
-	return chromedp.Run(ctx,
-		emulation.SetTouchEmulationEnabled(true),
-		input.DispatchTouchEvent(input.TouchStart, []*input.TouchPoint{{X: x, Y: y}}),
-		input.DispatchTouchEvent(input.TouchEnd, []*input.TouchPoint{}),
+	return chromedp.Do(ctx,
+		chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
+			_, err := cdp.Call(ctx, t, emulation.SetTouchEmulationEnabled, emulation.SetTouchEmulationEnabledParams{Enabled: true})
+			return err
+		}),
+		dispatchTouch(input.DispatchTouchEventTypeTouchStart, []*input.TouchPoint{{X: x, Y: y}}),
+		dispatchTouch(input.DispatchTouchEventTypeTouchEnd, []*input.TouchPoint{}),
 	)
 }
 
 // ScrollWheelContext dispatches a real wheel event at a point.
 func ScrollWheelContext(ctx context.Context, x, y, deltaX, deltaY float64) error {
-	return chromedp.Run(ctx, input.DispatchMouseEvent(input.MouseWheel, x, y).WithDeltaX(deltaX).WithDeltaY(deltaY))
+	return chromedp.Do(ctx, dispatchMouse(input.DispatchMouseEventParams{Type: input.DispatchMouseEventTypeMouseWheel, X: x, Y: y, DeltaX: deltaX, DeltaY: deltaY}))
 }
 
 // DragContext presses at src, moves to tgt in steps, and releases - the intermediate moves matter,
 // because a drag implementation watching mousemove needs to see the path, not just the endpoints.
 func DragContext(ctx context.Context, srcX, srcY, tgtX, tgtY float64, steps int) error {
-	actions := []chromedp.Action{
-		chromedp.MouseEvent(input.MouseMoved, srcX, srcY),
-		chromedp.MouseEvent(input.MousePressed, srcX, srcY, chromedp.ButtonType(input.Left), chromedp.ClickCount(1)),
+	actions := []chromedp.Action[chromedp.Void]{
+		chromedp.MouseEvent(input.DispatchMouseEventTypeMouseMoved, srcX, srcY),
+		chromedp.MouseEvent(input.DispatchMouseEventTypeMousePressed, srcX, srcY, chromedp.ButtonType(input.MouseButtonLeft), chromedp.ClickCount(1)),
 	}
 	// Inclusive of steps: the last interpolated point already lands on the target, and the explicit
 	// move below repeats it.  That duplicate is deliberate - it is what the Go API dispatched before
@@ -190,11 +216,11 @@ func DragContext(ctx context.Context, srcX, srcY, tgtX, tgtY float64, steps int)
 	for step := 1; step <= steps; step++ {
 		x := srcX + (tgtX-srcX)*float64(step)/float64(steps)
 		y := srcY + (tgtY-srcY)*float64(step)/float64(steps)
-		actions = append(actions, chromedp.MouseEvent(input.MouseMoved, x, y, chromedp.ButtonType(input.Left)))
+		actions = append(actions, chromedp.MouseEvent(input.DispatchMouseEventTypeMouseMoved, x, y, chromedp.ButtonType(input.MouseButtonLeft)))
 	}
 	actions = append(actions,
-		chromedp.MouseEvent(input.MouseMoved, tgtX, tgtY, chromedp.ButtonType(input.Left)),
-		chromedp.MouseEvent(input.MouseReleased, tgtX, tgtY, chromedp.ButtonType(input.Left), chromedp.ClickCount(1)),
+		chromedp.MouseEvent(input.DispatchMouseEventTypeMouseMoved, tgtX, tgtY, chromedp.ButtonType(input.MouseButtonLeft)),
+		chromedp.MouseEvent(input.DispatchMouseEventTypeMouseReleased, tgtX, tgtY, chromedp.ButtonType(input.MouseButtonLeft), chromedp.ClickCount(1)),
 	)
-	return chromedp.Run(ctx, actions...)
+	return chromedp.Do(ctx, actions...)
 }

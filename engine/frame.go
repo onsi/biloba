@@ -351,11 +351,11 @@ func (s *Session) frameTreeForTarget(ctx context.Context, targetID target.ID) (*
 func (s *Session) frameTargetInfos(ctx context.Context) ([]*target.Info, error) {
 	opCtx, cancel := executorContext(s.browser.ctx, ctx)
 	defer cancel()
-	chrome := chromedp.FromContext(opCtx)
-	infos, err := target.GetTargets().Do(cdp.WithExecutor(opCtx, chrome.Browser))
+	listed, err := cdp.Call(opCtx, chromedp.FromContext(opCtx).Browser, target.GetTargets, target.GetTargetsParams{})
 	if err != nil {
 		return nil, contextError("list frame targets", err)
 	}
+	infos := listed.TargetInfos
 	frames := make([]*target.Info, 0)
 	descendants := map[target.ID]bool{s.targetID: true}
 	for added := true; added; {
@@ -501,13 +501,8 @@ func (s *Session) validateFrameDocument(ctx context.Context) error {
 }
 
 func getFrameTree(ctx context.Context) (*page.FrameTree, error) {
-	var tree *page.FrameTree
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		var err error
-		tree, err = page.GetFrameTree().Do(runCtx)
-		return err
-	}))
-	return tree, err
+	result, err := chromedp.Call(ctx, page.GetFrameTree, cdp.Empty{})
+	return result.FrameTree, err
 }
 
 // tabOnly rejects a tab or browser-context control on a frame handle. A same-process frame shares its
@@ -595,20 +590,23 @@ func AttachFrameTargetContext(ctx, lifetime context.Context, targetID target.ID)
 	if err := ctx.Err(); err != nil {
 		return nil, nil, contextError("attach frame target", err)
 	}
-	// Keep chromedp's detach/close cleanup separate from execution cancellation. The first Run
-	// initializes Context.Target before issuing renderer commands, which may never answer. Cancel
-	// those commands first, wait for initialization to finish, and only then suppress target closure
-	// and let chromedp detach. Neither request nor lifetime cancellation may bypass that ordering.
-	chromeCtx, cancelChrome := chromedp.NewContext(context.WithoutCancel(lifetime), chromedp.WithTargetID(targetID))
-	chromeCtx = trackFrameWorlds(chromeCtx)
+	// Keep chromedp's detach cleanup separate from execution cancellation. The first Run initializes
+	// Context.Target before issuing renderer commands, which may never answer. Cancel those commands
+	// first, wait for initialization to finish, and only then let chromedp detach. Neither request nor
+	// lifetime cancellation may bypass that ordering.  The context detaches without closing the
+	// target (see newTabContext): it belongs to the page that embeds the frame.
+	chromeCtx, cancelChrome := newTabContext(context.WithoutCancel(lifetime), targetID)
+	chromeCtx, err := trackFrameWorlds(chromeCtx, targetID)
+	if err != nil {
+		cancelChrome()
+		return nil, nil, contextError("attach frame target", err)
+	}
 	targetCtx, stopExecution := context.WithCancel(chromeCtx)
 	stopLifetimeCancel := context.AfterFunc(lifetime, stopExecution)
 	attachDone := make(chan error, 1)
 	cleanupDone := make(chan struct{})
 	go func() {
-		var ready any
-		err := chromedp.Run(targetCtx, chromedp.Evaluate("1", &ready))
-		protectFrameTarget(chromeCtx)
+		_, err := chromedp.Run(targetCtx, chromedp.Evaluate[any]("1"))
 		attachDone <- err
 		<-targetCtx.Done()
 		stopLifetimeCancel()
@@ -619,7 +617,6 @@ func AttachFrameTargetContext(ctx, lifetime context.Context, targetID target.ID)
 		stopExecution()
 		<-cleanupDone
 	}
-	var err error
 	select {
 	case err = <-attachDone:
 	case <-ctx.Done():
@@ -631,14 +628,4 @@ func AttachFrameTargetContext(ctx, lifetime context.Context, targetID target.ID)
 		return nil, nil, contextError("attach frame target", err)
 	}
 	return targetCtx, cancelTarget, nil
-}
-
-func protectFrameTarget(frameCtx context.Context) {
-	frameContext := chromedp.FromContext(frameCtx)
-	if frameContext == nil || frameContext.Target == nil {
-		return
-	}
-	// chromedp closes any target it attached when its context is cancelled. This target belongs to
-	// the parent page, so retain the session ID for normal detachment but suppress target closure.
-	frameContext.Target.TargetID = ""
 }

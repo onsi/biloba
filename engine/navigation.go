@@ -33,7 +33,9 @@ func NavigateContext(ctx context.Context, destination string) (NavigationResult,
 	defer cancelListen()
 	var statusMu sync.Mutex
 	var status int
-	chromedp.ListenTarget(listenCtx, func(event any) {
+	// The listener sees every event before chromedp does (see ListenTarget), so by the time Navigate
+	// returns on the load event the document's response has been recorded.
+	if err := ListenTarget(listenCtx, func(event any) {
 		response, ok := event.(*network.EventResponseReceived)
 		if !ok || response.Type != network.ResourceTypeDocument {
 			return
@@ -41,8 +43,10 @@ func NavigateContext(ctx context.Context, destination string) (NavigationResult,
 		statusMu.Lock()
 		status = int(response.Response.Status)
 		statusMu.Unlock()
-	})
-	err := chromedp.Run(ctx, chromedp.Navigate(destination))
+	}, network.ResponseReceived.Method); err != nil {
+		return NavigationResult{}, err
+	}
+	err := chromedp.Do(ctx, chromedp.Navigate(destination))
 	statusMu.Lock()
 	result := NavigationResult{Status: status}
 	statusMu.Unlock()
@@ -63,8 +67,7 @@ func LocationContext(ctx context.Context) (string, error) {
 		err := EvaluateContext(ctx, "window.location.href", false, &location)
 		return location, err
 	}
-	err := chromedp.Run(ctx, chromedp.Location(&location))
-	return location, err
+	return chromedp.Run(ctx, chromedp.Location())
 }
 
 func TitleContext(ctx context.Context) (string, error) {
@@ -73,6 +76,5 @@ func TitleContext(ctx context.Context) (string, error) {
 		err := EvaluateContext(ctx, "document.title", false, &title)
 		return title, err
 	}
-	err := chromedp.Run(ctx, chromedp.Title(&title))
-	return title, err
+	return chromedp.Run(ctx, chromedp.Title())
 }

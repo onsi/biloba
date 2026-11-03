@@ -21,9 +21,9 @@ import (
 // EnableInterceptionContext turns on request interception after disabling the HTTP cache, and
 // returns once the page's renderer is intercepting (see AwaitInterceptionArmedContext).
 func EnableInterceptionContext(ctx context.Context) error {
-	if err := chromedp.Run(ctx,
-		network.SetCacheDisabled(true),
-		fetch.Enable().WithPatterns([]*fetch.RequestPattern{{URLPattern: "*"}}),
+	if err := chromedp.Do(ctx,
+		Step(network.SetCacheDisabled, network.SetCacheDisabledParams{CacheDisabled: true}),
+		Step(fetch.Enable, fetch.EnableParams{Patterns: []*fetch.RequestPattern{{URLPattern: "*"}}}),
 	); err != nil {
 		return err
 	}
@@ -39,10 +39,7 @@ func EnableInterceptionContext(ctx context.Context) error {
 // An evaluate that fails because the page is navigating is fine: the new document gets the
 // intercepting factory with its commit.  Only the context ending is an error.
 func AwaitInterceptionArmedContext(ctx context.Context) error {
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
-		_, _, err := runtime.Evaluate("0").Do(ctx)
-		return err
-	}))
+	_, err := chromedp.Call(ctx, runtime.Evaluate, runtime.EvaluateParams{Expression: "0"})
 	if err != nil && ctx.Err() != nil {
 		return err
 	}
@@ -50,8 +47,8 @@ func AwaitInterceptionArmedContext(ctx context.Context) error {
 }
 
 // RunActionContext dispatches one CDP action against the target executor carried by ctx.
-func RunActionContext(ctx context.Context, action chromedp.Action) error {
-	return chromedp.Run(ctx, action)
+func RunActionContext(ctx context.Context, action chromedp.Action[chromedp.Void]) error {
+	return chromedp.Do(ctx, action)
 }
 
 // ResponseAlreadyResolvedAction says how ReadInterceptedResponseBodyContext resolved a paused
@@ -92,12 +89,8 @@ func ReadInterceptedResponseBodyContext(ctx context.Context, requestID fetch.Req
 		resolvePausedResponse(ctx, requestID, action)
 		return resolved
 	}
-	var stream cdpio.StreamHandle
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		var takeErr error
-		stream, takeErr = fetch.TakeResponseBodyAsStream(requestID).Do(runCtx)
-		return takeErr
-	}))
+	taken, err := chromedp.Call(ctx, fetch.TakeResponseBodyAsStream, fetch.TakeResponseBodyAsStreamParams{RequestID: requestID})
+	stream := taken.Stream
 	if err != nil {
 		var protocolErr *cdproto.Error
 		if errors.As(err, &protocolErr) {
@@ -118,12 +111,10 @@ func resolvePausedResponse(ctx context.Context, requestID fetch.RequestID, actio
 	resolveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	if action == ResponseContinued {
-		_ = chromedp.Run(resolveCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
-			return fetch.ContinueResponse(requestID).Do(runCtx)
-		}))
+		_, _ = chromedp.Call(resolveCtx, fetch.ContinueResponse, fetch.ContinueResponseParams{RequestID: requestID})
 		return
 	}
-	_ = chromedp.Run(resolveCtx, fetch.FailRequest(requestID, network.ErrorReasonFailed))
+	_, _ = chromedp.Call(resolveCtx, fetch.FailRequest, fetch.FailRequestParams{RequestID: requestID, ErrorReason: network.ErrorReasonFailed})
 }
 
 func closeResponseStream(ctx context.Context, stream cdpio.StreamHandle) {
@@ -132,9 +123,7 @@ func closeResponseStream(ctx context.Context, stream cdpio.StreamHandle) {
 	}
 	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 	defer cancel()
-	_ = chromedp.Run(closeCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		return cdpio.Close(stream).Do(runCtx)
-	}))
+	_, _ = chromedp.Call(closeCtx, cdpio.Close, cdpio.CloseParams{Handle: stream})
 }
 
 type cdpStreamReader struct {
@@ -153,15 +142,13 @@ func (r *cdpStreamReader) Read(p []byte) (int, error) {
 	if r.eof {
 		return 0, io.EOF
 	}
-	params := cdpio.Read(r.handle).WithSize(int64(len(p)))
+	params := cdpio.ReadParams{Handle: r.handle, Size: int64(len(p))}
 	var result struct {
 		Base64Encoded bool   `json:"base64Encoded"`
 		Data          string `json:"data"`
 		EOF           bool   `json:"eof"`
 	}
-	if err := chromedp.Run(r.ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		return cdp.Execute(runCtx, cdpio.CommandRead, params, &result)
-	})); err != nil {
+	if err := callRaw(r.ctx, cdpio.CommandRead, params, &result); err != nil {
 		return 0, err
 	}
 	r.eof = result.EOF
@@ -595,9 +582,7 @@ func (s *Session) handlePausedResponse(event *fetch.EventRequestPaused, selected
 func (s *Session) continueResponse(id fetch.RequestID) {
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
-	_ = chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		return fetch.ContinueResponse(id).Do(runCtx)
-	}))
+	_, _ = chromedp.Call(ctx, fetch.ContinueResponse, fetch.ContinueResponseParams{RequestID: id})
 }
 
 // failFulfilledResponse fails a paused response whose body was read but whose fulfill failed: the body
@@ -605,7 +590,7 @@ func (s *Session) continueResponse(id fetch.RequestID) {
 func (s *Session) failFulfilledResponse(id fetch.RequestID) {
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
-	_ = chromedp.Run(ctx, fetch.FailRequest(id, network.ErrorReasonFailed))
+	_, _ = chromedp.Call(ctx, fetch.FailRequest, fetch.FailRequestParams{RequestID: id, ErrorReason: network.ErrorReasonFailed})
 }
 
 func (s *Session) beginInterception() {
@@ -655,7 +640,7 @@ func (s *Session) resetResponseHolds(ctx context.Context) error {
 	if !enabled {
 		return nil
 	}
-	return chromedp.Run(ctx, fetch.Disable(), network.SetCacheDisabled(false))
+	return chromedp.Do(ctx, Step(fetch.Disable, cdp.Empty{}), Step(network.SetCacheDisabled, network.SetCacheDisabledParams{CacheDisabled: false}))
 }
 
 func releaseHeldResponse(entry *heldResponseEntry) {

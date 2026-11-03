@@ -31,22 +31,23 @@ func SetCookiesContext(targetCtx context.Context, browserContextID cdp.BrowserCo
 			param.URL = location
 		}
 		if !cookie.Expires.IsZero() {
-			expires := cdp.TimeSinceEpoch(cookie.Expires)
-			param.Expires = &expires
+			// whole seconds, as cdproto sent a TimeSinceEpoch before it became a plain number
+			param.Expires = cdp.TimeSinceEpoch(cookie.Expires.Unix())
 		}
 		params[index] = param
 	}
-	return withBrowserExecutor(targetCtx, func(browserCtx context.Context) error {
-		return storage.SetCookies(params).WithBrowserContextID(browserContextID).Do(browserCtx)
+	return withBrowserExecutor(targetCtx, func(browserCtx context.Context, browser cdp.Session) error {
+		_, err := cdp.Call(browserCtx, browser, storage.SetCookies, storage.SetCookiesParams{Cookies: params, BrowserContextID: browserContextID})
+		return err
 	})
 }
 
 // GetCookiesContext reads every cookie in one isolated browser context.
 func GetCookiesContext(targetCtx context.Context, browserContextID cdp.BrowserContextID) ([]Cookie, error) {
 	var stored []*network.Cookie
-	err := withBrowserExecutor(targetCtx, func(browserCtx context.Context) error {
-		var readErr error
-		stored, readErr = storage.GetCookies().WithBrowserContextID(browserContextID).Do(browserCtx)
+	err := withBrowserExecutor(targetCtx, func(browserCtx context.Context, browser cdp.Session) error {
+		read, readErr := cdp.Call(browserCtx, browser, storage.GetCookies, storage.GetCookiesParams{BrowserContextID: browserContextID})
+		stored = read.Cookies
 		return readErr
 	})
 	if err != nil {
@@ -68,20 +69,20 @@ func GetCookiesContext(targetCtx context.Context, browserContextID cdp.BrowserCo
 }
 
 func ClearCookiesContext(targetCtx context.Context, browserContextID cdp.BrowserContextID) error {
-	return withBrowserExecutor(targetCtx, func(browserCtx context.Context) error {
-		return storage.ClearCookies().WithBrowserContextID(browserContextID).Do(browserCtx)
+	return withBrowserExecutor(targetCtx, func(browserCtx context.Context, browser cdp.Session) error {
+		_, err := cdp.Call(browserCtx, browser, storage.ClearCookies, storage.ClearCookiesParams{BrowserContextID: browserContextID})
+		return err
 	})
 }
 
 // withBrowserExecutor runs one browser-scoped CDP command (the storage cookie commands take a
 // BrowserContextID and so must be dispatched on the Browser connection rather than the target's).
-// It goes through chromedp.Run - rather than reaching for chromedp.FromContext(...).Browser
-// directly - because Run is what initializes the browser if this is the context's first command,
+// It goes through chromedp.Do - rather than reaching for chromedp.FromContext(...).Browser
+// directly - because Do is what initializes the browser if this is the context's first command,
 // and what turns a context that is not a chromedp context into an ErrInvalidContext *error*
 // instead of a nil-pointer dereference: these are library calls that report failures, never panic.
-func withBrowserExecutor(targetCtx context.Context, run func(context.Context) error) error {
-	return chromedp.Run(targetCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
-		chrome := chromedp.FromContext(runCtx)
-		return run(cdp.WithExecutor(runCtx, chrome.Browser))
+func withBrowserExecutor(targetCtx context.Context, run func(context.Context, cdp.Session) error) error {
+	return chromedp.Do(targetCtx, chromedp.Func(func(runCtx context.Context, _ *chromedp.Target) error {
+		return run(runCtx, chromedp.FromContext(runCtx).Browser)
 	}))
 }

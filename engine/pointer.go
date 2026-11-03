@@ -109,7 +109,7 @@ func (p *SessionPointer) move(ctx context.Context, x, y float64) error {
 		return err
 	}
 	state.x, state.y = x, y
-	return dispatchPointer(ctx, state, input.MouseMoved)
+	return dispatchPointer(ctx, state, input.DispatchMouseEventTypeMouseMoved)
 }
 
 // Down presses the pointer's primary button where it is.  Pressing a pressed pointer is an error.
@@ -122,7 +122,7 @@ func (p *SessionPointer) Down(ctx context.Context) error {
 		if state.pressed {
 			return invalidArgument("pointer down", "the pointer is already pressed - release it first")
 		}
-		if err := dispatchPointer(opCtx, state, input.MousePressed); err != nil {
+		if err := dispatchPointer(opCtx, state, input.DispatchMouseEventTypeMousePressed); err != nil {
 			return err
 		}
 		state.pressed = true
@@ -141,11 +141,11 @@ func (p *SessionPointer) Up(ctx context.Context) error {
 			return invalidArgument("pointer up", "the pointer is not pressed - press it first")
 		}
 		state.pressed = false
-		return dispatchPointer(opCtx, state, input.MouseReleased)
+		return dispatchPointer(opCtx, state, input.DispatchMouseEventTypeMouseReleased)
 	})
 }
 
-func dispatchPointer(ctx context.Context, state *pointerState, kind input.MouseType) error {
+func dispatchPointer(ctx context.Context, state *pointerState, kind input.DispatchMouseEventType) error {
 	return DispatchPointerContext(ctx, kind, state.x, state.y, state.pressed, input.DispatchMouseEventPointerType(state.pointerType))
 }
 
@@ -170,7 +170,7 @@ func (s *Session) releasePointers(ctx context.Context) {
 	for _, state := range s.pointers {
 		if state.pressed {
 			state.pressed = false
-			_ = dispatchPointer(ctx, state, input.MouseReleased)
+			_ = dispatchPointer(ctx, state, input.DispatchMouseEventTypeMouseReleased)
 		}
 	}
 	s.pointers = nil

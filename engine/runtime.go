@@ -23,10 +23,10 @@ func executionContext(ctx context.Context) runtime.ExecutionContextID {
 
 // Unique IDs cannot be reused after a renderer swap. Do not fall back to the
 // target's default world when a frame document disappears between validation and evaluation.
-func scopeEvaluation(ctx context.Context, params *runtime.EvaluateParams) *runtime.EvaluateParams {
+func scopeEvaluation(ctx context.Context, params runtime.EvaluateParams) runtime.EvaluateParams {
 	world, _ := ctx.Value(executionContextKey{}).(frameWorld)
 	if world.uniqueID != "" {
-		return params.WithUniqueContextID(world.uniqueID)
+		params.UniqueContextID = world.uniqueID
 	}
 	return params
 }
@@ -53,14 +53,12 @@ func EvaluateContext(ctx context.Context, script string, awaitPromise bool, resu
 
 // EvaluateRawContext evaluates JavaScript and returns its JSON encoding; undefined is empty bytes.
 func EvaluateRawContext(ctx context.Context, script string, awaitPromise bool) ([]byte, error) {
-	var encoded []byte
-	err := chromedp.Run(ctx, chromedp.EvaluateAsDevTools(script, &encoded, func(params *runtime.EvaluateParams) *runtime.EvaluateParams {
-		params = params.WithUserGesture(true)
-		params = scopeEvaluation(ctx, params)
+	encoded, err := chromedp.Run(ctx, chromedp.EvaluateAsDevTools[[]byte](script, func(params *runtime.EvaluateParams) {
+		params.UserGesture = ptr(true)
+		*params = scopeEvaluation(ctx, *params)
 		if awaitPromise {
-			params = params.WithAwaitPromise(true)
+			params.AwaitPromise = ptr(true)
 		}
-		return params
 	}))
 	if err != nil {
 		return nil, err

@@ -534,7 +534,7 @@ func (s *Session) ClickEach(ctx context.Context, selector Selector, mode Interac
 			if translateErr != nil {
 				return translateErr
 			}
-			if clickErr := MouseClickContext(opCtx, point.x, point.y, input.Left, 1, 0); clickErr != nil {
+			if clickErr := MouseClickContext(opCtx, point.x, point.y, input.MouseButtonLeft, 1, 0); clickErr != nil {
 				return clickErr
 			}
 		}
@@ -668,27 +668,27 @@ func pointerPayload(offset *Point, modifiers Modifier) map[string]any {
 func cdpButton(button MouseButton) input.MouseButton {
 	switch button {
 	case RightButton:
-		return input.Right
+		return input.MouseButtonRight
 	case MiddleButton:
-		return input.Middle
+		return input.MouseButtonMiddle
 	default:
-		return input.Left
+		return input.MouseButtonLeft
 	}
 }
 
-func cdpModifiers(modifiers Modifier) input.Modifier {
-	var result input.Modifier
+func cdpModifiers(modifiers Modifier) chromedp.Modifier {
+	var result chromedp.Modifier
 	if modifiers&AltModifier != 0 {
-		result |= input.ModifierAlt
+		result |= chromedp.ModifierAlt
 	}
 	if modifiers&ControlModifier != 0 {
-		result |= input.ModifierCtrl
+		result |= chromedp.ModifierCtrl
 	}
 	if modifiers&MetaModifier != 0 {
-		result |= input.ModifierMeta
+		result |= chromedp.ModifierMeta
 	}
 	if modifiers&ShiftModifier != 0 {
-		result |= input.ModifierShift
+		result |= chromedp.ModifierShift
 	}
 	return result
 }
