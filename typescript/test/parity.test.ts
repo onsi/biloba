@@ -522,16 +522,7 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
       const size = await tab.windowSize();
       frames.forEach((frame, index) => {
         expect([...frame.data.subarray(0, 2)]).toEqual([0xff, 0xd8]);
-        if (index === 0 && process.env.BILOBA_TEST_HIGH_FIDELITY === "true") {
-          // The first frame is the one already on screen. Full Chrome can have drawn it before it applied
-          // the tab's emulated size, so it can be the window's real viewport, shorter by the browser's toolbar.
-          expect(frame.deviceWidth).toBe(size.width);
-          expect(frame.deviceHeight).toBeGreaterThan(0);
-          expect(frame.deviceHeight).toBeLessThanOrEqual(size.height);
-          expect([frame.pageScaleFactor, frame.scrollOffsetY]).toEqual([1, 0]);
-        } else {
-          expect([frame.deviceWidth, frame.deviceHeight, frame.pageScaleFactor, frame.scrollOffsetY]).toEqual([size.width, size.height, 1, 0]);
-        }
+        expect([frame.deviceWidth, frame.deviceHeight, frame.pageScaleFactor, frame.scrollOffsetY]).toEqual([size.width, size.height, 1, 0]);
         // From Chrome 156 a frame is stamped with when Chrome expects to display it, about one frame
         // after it was drawn, so the last frame's timestamp can be later than stop() resolving.
         expect(frame.timestamp).toBeLessThanOrEqual(after + 50);
