@@ -387,6 +387,7 @@ func (b *Browser) openTabLocked(ctx, opCtx context.Context, browserContextID cdp
 		URL:              "about:blank",
 		BrowserContextID: browserContextID,
 		NewWindow:        ptr(true),
+		Focus:            ptr(false), // as cdproto's old constructor sent it: left out, Chrome focuses the new target
 	})
 	if err != nil {
 		return nil, contextError("open tab", err)

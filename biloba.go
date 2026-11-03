@@ -693,7 +693,9 @@ func ConnectToChrome(ginkgoT GinkgoTInterface, options ...BilobaConfigOption) *B
 	// so we can't use chromedp.WithNewBrowserContext() directly. Instead we bootstrap a throwaway
 	// default-context tab to initialize the Browser connection, then manually create the isolated
 	// browser context and target, and attach via WithTargetID.
-	var bootstrapOpts []chromedp.ContextOption
+	// The throwaway tab opens in the browser's window, not a new one, as chromedp created it before
+	// v0.18 made a window per tab its default.
+	bootstrapOpts := []chromedp.ContextOption{chromedp.WithNewWindow(false)}
 	if b.debugLogging {
 		bootstrapOpts = append(bootstrapOpts,
 			chromedp.WithDebugf(b.gt.Logf),

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -25,7 +26,7 @@ allocator drives it through the ordered event stream ListenTarget reads (see eve
 not nil, is told about listeners that hold the connection's reader too long.
 */
 func NewExecAllocator(parent context.Context, slowf func(string, ...any), opts ...chromedp.ExecAllocatorOption) (context.Context, context.CancelFunc) {
-	hub := newEventHub(slowf)
+	allocator := &hubAllocator{}
 	opts = append(opts, chromedp.WithDialer(func(ctx context.Context, wsURL string) (chromedp.Transport, error) {
 		dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
 		defer cancel()
@@ -33,28 +34,45 @@ func NewExecAllocator(parent context.Context, slowf func(string, ...any), opts .
 		if err != nil {
 			return nil, err
 		}
+		hub := newEventHub(slowf) // one per connection
+		allocator.mu.Lock()
+		allocator.dialed = hub
+		allocator.mu.Unlock()
 		return &orderedTransport{Transport: conn, hub: hub}, nil
 	}))
 	execCtx, cancelExec := chromedp.NewExecAllocator(parent, opts...)
-	allocCtx, cancelAlloc := chromedp.NewAllocatorContext(execCtx, &hubAllocator{Allocator: chromedp.FromContext(execCtx).Allocator, hub: hub})
+	allocator.Allocator = chromedp.FromContext(execCtx).Allocator
+	allocCtx, cancelAlloc := chromedp.NewAllocatorContext(execCtx, allocator)
 	return allocCtx, func() {
 		cancelAlloc()
 		cancelExec() // waits for the browser process, as chromedp.NewExecAllocator's cancel does
 	}
 }
 
-// hubAllocator registers the hub of the browser its allocator starts.
+// hubAllocator registers the hub of each browser its allocator starts: the hub the dialer made for
+// that browser's connection.
 type hubAllocator struct {
 	chromedp.Allocator
-	hub *eventHub
+	mu       sync.Mutex
+	allocate sync.Mutex // one Allocate at a time, so each picks up its own connection's hub
+	dialed   *eventHub
 }
 
 func (a *hubAllocator) Allocate(ctx context.Context, opts ...chromedp.BrowserOption) (*chromedp.Browser, error) {
+	a.allocate.Lock()
+	defer a.allocate.Unlock()
 	browser, err := a.Allocator.Allocate(ctx, opts...)
+	a.mu.Lock()
+	hub := a.dialed
+	a.dialed = nil
+	a.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
-	registerHub(browser, a.hub)
+	if hub == nil {
+		return nil, errors.New("the browser's connection did not go through Biloba's dialer")
+	}
+	registerHub(browser, hub)
 	return browser, nil
 }
 
@@ -65,15 +83,17 @@ event stream ListenTarget reads.  modifyURL resolves the address the way remote.
 address is used as given (remote.NoModifyURL).
 */
 func NewRemoteAllocator(parent context.Context, wsURL string, modifyURL bool, slowf func(string, ...any)) (context.Context, context.CancelFunc) {
-	return chromedp.NewAllocatorContext(parent, &attachAllocator{wsURL: wsURL, modifyURL: modifyURL, hub: newEventHub(slowf)})
+	return chromedp.NewAllocatorContext(parent, &attachAllocator{wsURL: wsURL, modifyURL: modifyURL, slowf: slowf})
 }
 
 // attachAllocator is remote.Allocator with the connection wrapped in an orderedTransport;
-// remote.Allocator dials inside Allocate, which leaves nowhere to wrap it.
+// remote.Allocator dials inside Allocate, which leaves nowhere to wrap it.  Each Allocate is a
+// connection of its own, with a hub of its own: a connection that goes away (a retried bootstrap's
+// first attempt) clears only its own listeners.
 type attachAllocator struct {
 	wsURL     string
 	modifyURL bool
-	hub       *eventHub
+	slowf     func(string, ...any)
 	wg        sync.WaitGroup
 }
 
@@ -101,11 +121,12 @@ func (a *attachAllocator) Allocate(ctx context.Context, opts ...chromedp.Browser
 	if err != nil {
 		return nil, fmt.Errorf("could not dial %q: %w", wsURL, err)
 	}
-	browser, err := chromedp.NewBrowserTransport(wctx, &orderedTransport{Transport: conn, hub: a.hub}, opts...)
+	hub := newEventHub(a.slowf)
+	browser, err := chromedp.NewBrowserTransport(wctx, &orderedTransport{Transport: conn, hub: hub}, opts...)
 	if err != nil {
 		return nil, err
 	}
-	registerHub(browser, a.hub)
+	registerHub(browser, hub)
 	return browser, nil
 }
 

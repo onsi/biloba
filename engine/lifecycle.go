@@ -108,6 +108,7 @@ func NewIsolatedTargetContext(ctx context.Context) (cdp.BrowserContextID, target
 			URL:              "about:blank",
 			BrowserContextID: browserContextID,
 			NewWindow:        ptr(true),
+			Focus:            ptr(false), // as cdproto's old constructor sent it: left out, Chrome focuses the new target
 		})
 		targetID = opened.TargetID
 		return createErr

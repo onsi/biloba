@@ -1509,19 +1509,15 @@ func (b *Biloba) handleRequestStagePause(ev *fetch.EventRequestPaused) {
 		}
 		var action chromedp.Action[chromedp.Void]
 		switch {
+		// interceptResponse always goes on the wire, false included: left out, Chrome falls back to the
+		// enabled patterns and would pause this request again at the response stage.
 		case handler == nil:
-			cr := fetch.ContinueRequestParams{RequestID: ev.RequestID}
-			if interceptResponse {
-				cr.InterceptResponse = new(true)
-			}
-			action = engine.Step(fetch.ContinueRequest, cr)
+			action = engine.Step(fetch.ContinueRequest, fetch.ContinueRequestParams{RequestID: ev.RequestID, InterceptResponse: new(interceptResponse)})
 		case handler.abort:
 			action = engine.Step(fetch.FailRequest, fetch.FailRequestParams{RequestID: ev.RequestID, ErrorReason: network.ErrorReasonBlockedByClient})
 		case handler.modify != nil:
 			cr := handler.modify.apply(ev.RequestID)
-			if interceptResponse {
-				cr.InterceptResponse = new(true)
-			}
+			cr.InterceptResponse = new(interceptResponse)
 			action = engine.Step(fetch.ContinueRequest, cr)
 		case handler.stub != nil:
 			params := fetch.FulfillRequestParams{RequestID: ev.RequestID, ResponseCode: int64(handler.stub.Status), Body: []byte(handler.stub.Body)}
@@ -1530,7 +1526,7 @@ func (b *Biloba) handleRequestStagePause(ev *fetch.EventRequestPaused) {
 			}
 			action = engine.Step(fetch.FulfillRequest, params)
 		default:
-			action = engine.Step(fetch.ContinueRequest, fetch.ContinueRequestParams{RequestID: ev.RequestID})
+			action = engine.Step(fetch.ContinueRequest, fetch.ContinueRequestParams{RequestID: ev.RequestID, InterceptResponse: new(false)})
 		}
 		_ = b.runEngine("answer a paused network request", func(ctx context.Context) error {
 			return engine.RunActionContext(ctx, action)
