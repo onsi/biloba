@@ -8,7 +8,6 @@ import (
 	"maps"
 	"net/http"
 	"reflect"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -1268,14 +1267,14 @@ func (b *Biloba) ensureFetchEnabled() {
 // the loop no longer short-circuits only so it can note which later handlers ALSO matched and were
 // therefore shadowed (see handlerProvenance).  That costs a handful of matcher calls per request on
 // a tab that has request handlers at all - we bail before evaluating anything when it has none.
-func (b *Biloba) requestHandlerFor(handlers []*requestHandler, url string) *requestHandler {
+func (b *Biloba) requestHandlerFor(url string) *requestHandler {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	if len(handlers) == 0 {
+	if len(b.state.requestHandlers) == 0 {
 		return nil
 	}
 	var winner *requestHandler
-	for _, h := range handlers {
+	for _, h := range b.state.requestHandlers {
 		if match, _ := h.matcher.Match(url); match {
 			if winner == nil {
 				winner = h
@@ -1296,14 +1295,14 @@ func (b *Biloba) requestHandlerFor(handlers []*requestHandler, url string) *requ
 //
 // urls holds the URL the page requested and, for a request a ModifyRequest rewrote, the URL it was
 // rewritten to; a handler claims the response if it matches either.
-func (b *Biloba) responseHandlerFor(handlers []*ResponseModification, urls ...string) *ResponseModification {
+func (b *Biloba) responseHandlerFor(urls ...string) *ResponseModification {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	if len(handlers) == 0 {
+	if len(b.state.responseHandlers) == 0 {
 		return nil
 	}
 	var winner *ResponseModification
-	for _, h := range handlers {
+	for _, h := range b.state.responseHandlers {
 		if matchesAnyURL(h.matcher, urls) {
 			if winner == nil {
 				winner = h
@@ -1489,19 +1488,8 @@ func (b *Biloba) handleEventRequestPaused(ev *fetch.EventRequestPaused) {
 }
 
 func (b *Biloba) handleRequestStagePause(ev *fetch.EventRequestPaused) {
-	// The handlers' matchers are the spec's code, so they run on the tab's callback queue rather than
-	// the connection's reader (see orderedCallbacks); the registered handlers are taken as of the event.
-	b.lock.Lock()
-	handlers := slices.Clone(b.state.requestHandlers)
-	b.lock.Unlock()
-	b.callbacks.push(func() {
-		handler := b.requestHandlerFor(handlers, ev.Request.URL)
-		go b.answerRequestStagePause(ev, handler)
-	})
-}
-
-func (b *Biloba) answerRequestStagePause(ev *fetch.EventRequestPaused, handler *requestHandler) {
-	func() {
+	handler := b.requestHandlerFor(ev.Request.URL)
+	go func() {
 		// When a response handler matches this URL, the request-stage continue must opt into
 		// response interception so the request pauses again at the response stage.  (A request-stage
 		// "*" pattern matches first and would otherwise consume the request before the response-stage
@@ -1547,18 +1535,8 @@ func (b *Biloba) answerRequestStagePause(ev *fetch.EventRequestPaused, handler *
 }
 
 func (b *Biloba) handleResponseStagePause(ev *fetch.EventRequestPaused) {
-	// as handleRequestStagePause: the matchers run on the tab's callback queue, not the reader
-	b.lock.Lock()
-	handlers := slices.Clone(b.state.responseHandlers)
-	b.lock.Unlock()
-	b.callbacks.push(func() {
-		handler := b.responseHandlerFor(handlers, b.requestedURLs(ev)...)
-		go b.answerResponseStagePause(ev, handler)
-	})
-}
-
-func (b *Biloba) answerResponseStagePause(ev *fetch.EventRequestPaused, handler *ResponseModification) {
-	func() {
+	handler := b.responseHandlerFor(b.requestedURLs(ev)...)
+	go func() {
 		if handler == nil {
 			// Not ours to modify: hand the real response straight back to the page.
 			_ = b.runEngine("continue an unmodified network response", func(ctx context.Context) error {

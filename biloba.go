@@ -1027,10 +1027,6 @@ type Biloba struct {
 	// (see setUpListeners).  Only the root tab's is ever reset: Prepare closes every other tab.
 	boundary *engine.DocumentBoundary
 
-	// callbacks runs this tab's event work that calls the spec's own code (handler matchers) off the
-	// connection's reader, in event order (see orderedCallbacks).
-	callbacks *orderedCallbacks
-
 	// pollTrajectory opts a suite into recording the (elapsed, value) trajectory of polled reads and
 	// attaching the failing read's series on failure (see BilobaConfigPollTrajectory).  On by default.
 	pollTrajectory bool
@@ -1086,7 +1082,6 @@ func newBiloba(ginkgoT GinkgoTInterface) *Biloba {
 		inlineScreenshots:         true,
 		pollTrajectory:            true,
 		probes:                    &probeRecorder{},
-		callbacks:                 &orderedCallbacks{},
 		occlusions:                &occlusionRecorder{},
 		unreadableResponseBodies:  &unreadableResponseBodyRecorder{},
 		media:                     &mediaEmulation{},

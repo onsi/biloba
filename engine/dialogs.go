@@ -277,8 +277,8 @@ func (s *Session) handleDialog(event *page.EventJavascriptDialogOpening) {
 	go s.answerDialog(answer)
 }
 
-// answerDialog runs on its own goroutine: the event that asks for it is handled on the connection's
-// reader, which also delivers the answer's reply.
+// answerDialog runs on its own goroutine: the event that asks for it is handled on the session's
+// worker, which also delivers the answer's reply.
 func (s *Session) answerDialog(answer page.HandleJavaScriptDialogParams) {
 	_, _ = chromedp.Call(s.ctx, page.HandleJavaScriptDialog, answer)
 }

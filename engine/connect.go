@@ -23,7 +23,7 @@ const dialTimeout = 10 * time.Second
 NewExecAllocator is chromedp.NewExecAllocator for a Chrome that other processes attach to: Chrome
 opens a debugging port (and writes DevToolsActivePort) rather than talking over a pipe, and the
 allocator drives it through the ordered event stream ListenTarget reads (see events.go).  slowf, when
-not nil, is told about listeners that hold the connection's reader too long.
+not nil, is told about listeners that hold their session's worker too long.
 */
 func NewExecAllocator(parent context.Context, slowf func(string, ...any), opts ...chromedp.ExecAllocatorOption) (context.Context, context.CancelFunc) {
 	allocator := &hubAllocator{}
@@ -38,7 +38,7 @@ func NewExecAllocator(parent context.Context, slowf func(string, ...any), opts .
 		allocator.mu.Lock()
 		allocator.dialed = hub
 		allocator.mu.Unlock()
-		return &orderedTransport{Transport: conn, hub: hub}, nil
+		return newOrderedTransport(conn, hub), nil
 	}))
 	execCtx, cancelExec := chromedp.NewExecAllocator(parent, opts...)
 	allocator.Allocator = chromedp.FromContext(execCtx).Allocator
@@ -122,7 +122,7 @@ func (a *attachAllocator) Allocate(ctx context.Context, opts ...chromedp.Browser
 		return nil, fmt.Errorf("could not dial %q: %w", wsURL, err)
 	}
 	hub := newEventHub(a.slowf)
-	browser, err := chromedp.NewBrowserTransport(wctx, &orderedTransport{Transport: conn, hub: hub}, opts...)
+	browser, err := chromedp.NewBrowserTransport(wctx, newOrderedTransport(conn, hub), opts...)
 	if err != nil {
 		return nil, err
 	}

@@ -2,7 +2,6 @@ package biloba
 
 import (
 	"context"
-	"slices"
 
 	"github.com/chromedp/cdproto/page"
 	"github.com/onsi/biloba/engine"
@@ -132,36 +131,26 @@ func (d Dialogs) MatchingMessage(message any) Dialogs {
 }
 
 func (b *Biloba) handleEventJavascriptDialogOpening(ev *page.EventJavascriptDialogOpening) {
+	defer b.gt.GinkgoRecover()
 	d := &Dialog{
 		Type:          ev.Type,
 		Message:       ev.Message,
 		DefaultPrompt: ev.DefaultPrompt,
 	}
 	response := d.Type == DialogTypeBeforeunload
+	text := ""
+	var handler *DialogHandler
 	b.lock.Lock()
 	if b.state.resetting {
 		// Prepare is unloading the previous spec's page.  Its beforeunload belongs to that spec, not to
 		// the one whose BeforeEach we are in: dismiss it without recording it or warning about it.
 		b.lock.Unlock()
-		b.dismissDialog(response, "")
+		b.dismissDialog(response, text)
 		return
 	}
-	handlers := slices.Clone(b.state.dialogHandlers)
-	b.lock.Unlock()
-	// The handlers' matchers are the spec's code, so they run on the tab's callback queue rather than
-	// the connection's reader (see orderedCallbacks); the registered handlers are taken as of the event.
-	b.callbacks.push(func() { b.answerDialog(d, handlers) })
-}
-
-func (b *Biloba) answerDialog(d *Dialog, handlers []*DialogHandler) {
-	defer b.gt.GinkgoRecover()
-	response := d.Type == DialogTypeBeforeunload
-	text := ""
-	var handler *DialogHandler
-	b.lock.Lock()
-	for i := len(handlers) - 1; i >= 0; i-- {
-		if handlers[i].match(d) {
-			handler = handlers[i]
+	for i := len(b.state.dialogHandlers) - 1; i >= 0; i-- {
+		if b.state.dialogHandlers[i].match(d) {
+			handler = b.state.dialogHandlers[i]
 			break
 		}
 	}

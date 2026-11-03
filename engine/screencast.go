@@ -60,10 +60,10 @@ arrives - Chrome sends no further frames while one is unacknowledged.
 The listener and the acknowledgements outlive ctx, which only bounds the start command: they run on
 ctx's values without its deadline until stop.  stop sends Page.stopScreencast and, once Chrome has
 answered, guarantees onFrame is not called again.  Every frame Chrome sent before answering has been
-handed to onFrame by the time stop returns: the connection's reader queues each frame before it reads
-the answer (see ListenTarget), and stop waits for the queue to drain.
+handed to onFrame by the time stop returns: the tab.s session worker queues each frame before chromedp
+sees the answer (see ListenTarget), and stop waits for the queue to drain.
 
-A frame is large, so the reader only queues its raw params; one goroutine per screencast decodes
+A frame is large, so the session worker only queues its raw params; one goroutine per screencast decodes
 them, acknowledges the frame, and calls onFrame, in arrival order.
 */
 func StartScreencastContext(ctx context.Context, params ScreencastParams, onFrame func(ScreencastFrame)) (stop func(context.Context) error, err error) {
@@ -123,8 +123,8 @@ func StartScreencastContext(ctx context.Context, params ScreencastParams, onFram
 	}, nil
 }
 
-// screencastQueue hands a screencast's frames from the connection's reader to the goroutine that
-// delivers them, without a bound: the reader must never wait on it.
+// screencastQueue hands a screencast's frames from the session worker to the goroutine that
+// delivers them, without a bound: the worker must never wait on it.
 type screencastQueue struct {
 	mu        sync.Mutex
 	pending   []jsonv2.Value

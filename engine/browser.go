@@ -253,8 +253,8 @@ func (b *Browser) listenForDestroyedTargets() error {
 		if !ok {
 			return
 		}
-		// Listeners run on the connection's reader. Target attachment holds b.mu, so reconciliation
-		// must not wait for that lock here or it can block the attach response itself.
+		// Listeners run on their session's worker, here the browser's. Target attachment holds b.mu,
+		// so reconciliation must not wait for that lock here or it can block the attach response itself.
 		go b.removeDestroyedTarget(destroyed.TargetID)
 	}, target.TargetDestroyed.Method)
 }
@@ -471,9 +471,10 @@ var sessionEvents = []string{
 	cdpbrowser.DownloadWillBegin.Method, cdpbrowser.DownloadProgress.Method,
 }
 
-// listenToSession records what a tab's page does.  It runs on the connection's reader goroutine (see
-// ListenTarget): everything it calls records under a lock no CDP caller holds, and the handlers that
-// answer Chrome (paused requests, dialogs) hand the answer to a goroutine.
+// listenToSession records what a tab's page does.  It runs on the tab's session worker (see
+// ListenTarget), which also delivers the tab's replies: everything it calls records under a lock no
+// CDP caller holds, and the handlers that answer Chrome (paused requests, dialogs) hand the answer to
+// a goroutine.
 func (b *Browser) listenToSession(session *Session) error {
 	// Chrome announces a dead renderer once, on this target, and then goes quiet: subsequent CDP
 	// calls neither succeed nor fail, they simply never answer.  Catching the announcement is the

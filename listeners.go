@@ -2,7 +2,6 @@ package biloba
 
 import (
 	"context"
-	"sync"
 
 	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
@@ -15,46 +14,6 @@ import (
 	"github.com/chromedp/cdproto/target"
 	"github.com/onsi/biloba/engine"
 )
-
-/*
-orderedCallbacks runs a tab's event work that calls the spec's own code - the matchers of request,
-response, and dialog handlers - off the connection's reader goroutine and in the order the events
-arrived.  The reader is shared by every tab on the connection and must never wait, and a matcher may
-call back into Biloba (another tab's Run, say), whose reply only that reader can deliver.  push never
-blocks; one goroutine drains the queue while it has work.
-*/
-type orderedCallbacks struct {
-	mu      sync.Mutex
-	queue   []func()
-	running bool
-}
-
-func (o *orderedCallbacks) push(work func()) {
-	o.mu.Lock()
-	o.queue = append(o.queue, work)
-	if o.running {
-		o.mu.Unlock()
-		return
-	}
-	o.running = true
-	o.mu.Unlock()
-	go o.drain()
-}
-
-func (o *orderedCallbacks) drain() {
-	for {
-		o.mu.Lock()
-		if len(o.queue) == 0 {
-			o.running = false
-			o.mu.Unlock()
-			return
-		}
-		work := o.queue[0]
-		o.queue = o.queue[1:]
-		o.mu.Unlock()
-		work()
-	}
-}
 
 func (b *Biloba) configureDownloadBehaviorForAllTabsWithBrowserContextID(browserContextId cdp.BrowserContextID) {
 	for _, tab := range b.AllTabs() {
@@ -141,9 +100,10 @@ var tabEvents = []string{
 	inspector.TargetCrashed.Method,
 }
 
-// setUpListeners wires the tab's event handlers.  They run on the connection's reader goroutine, in
-// the order Chrome sent the events (see engine.ListenTarget), so none of them may wait on Chrome:
-// the handlers that answer it (paused requests, dialogs) do so from a goroutine.
+// setUpListeners wires the tab's event handlers.  They run on the tab's session worker, in the order
+// Chrome sent the events (see engine.ListenTarget), which also delivers the tab's replies, so none of
+// them may wait on the tab's own commands: the handlers that answer Chrome (paused requests,
+// dialogs) do so from a goroutine.
 func (b *Biloba) setUpListeners() {
 	b.configureDownloadBehavior()
 	b.enableCrashReporting()
