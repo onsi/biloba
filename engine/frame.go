@@ -596,11 +596,6 @@ func AttachFrameTargetContext(ctx, lifetime context.Context, targetID target.ID)
 	// lifetime cancellation may bypass that ordering.  The context detaches without closing the
 	// target (see newTabContext): it belongs to the page that embeds the frame.
 	chromeCtx, cancelChrome := newTabContext(context.WithoutCancel(lifetime), targetID)
-	chromeCtx, err := trackFrameWorlds(chromeCtx, targetID)
-	if err != nil {
-		cancelChrome()
-		return nil, nil, contextError("attach frame target", err)
-	}
 	targetCtx, stopExecution := context.WithCancel(chromeCtx)
 	stopLifetimeCancel := context.AfterFunc(lifetime, stopExecution)
 	attachDone := make(chan error, 1)
@@ -617,6 +612,7 @@ func AttachFrameTargetContext(ctx, lifetime context.Context, targetID target.ID)
 		stopExecution()
 		<-cleanupDone
 	}
+	var err error
 	select {
 	case err = <-attachDone:
 	case <-ctx.Done():
@@ -627,6 +623,10 @@ func AttachFrameTargetContext(ctx, lifetime context.Context, targetID target.ID)
 		cancelTarget()
 		return nil, nil, contextError("attach frame target", err)
 	}
-	ConfirmAttached(chromeCtx) // the attach ran before attachDone delivered its result
-	return targetCtx, cancelTarget, nil
+	tracked, err := trackFrameWorlds(targetCtx, ctx)
+	if err != nil {
+		cancelTarget()
+		return nil, nil, contextError("attach frame target", err)
+	}
+	return tracked, cancelTarget, nil
 }

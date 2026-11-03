@@ -15,6 +15,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	ginkgotypes "github.com/onsi/ginkgo/v2/types"
 	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega/gcustom"
 	"github.com/onsi/gomega/ghttp"
 )
 
@@ -147,6 +148,22 @@ var _ = Describe("Observing the network", func() {
 	})
 
 	Describe("StubRequest", func() {
+		It("lets a handler's matcher call into another tab without stalling the browser connection", func() {
+			other := b.NewTab().Navigate(fixtureServer + "/dom.html")
+			Eventually("#hello").Should(other.Exist())
+			// the matcher runs while the request is paused, and needs a reply from Chrome to decide
+			callsAnotherTab := gcustom.MakeMatcher(func(url string) (bool, error) {
+				if !strings.Contains(url, "/api/users") {
+					return false, nil
+				}
+				answer, err := other.RunErr("1 + 1")
+				return err == nil && answer == 2.0, err
+			})
+			b.StubRequest(callsAnotherTab, biloba.StubResponse{Body: `{"stubbed": true}`})
+			b.Click("#fetch-users")
+			Eventually("#result").Should(b.HaveInnerText(ContainSubstring("stubbed")))
+		})
+
 		It("fulfills matching requests with the stubbed response instead of hitting the network", func() {
 			b.StubRequest(ContainSubstring("/api/users"), biloba.StubResponse{
 				Body:    `{"stubbed": true}`,

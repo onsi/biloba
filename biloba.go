@@ -693,9 +693,7 @@ func ConnectToChrome(ginkgoT GinkgoTInterface, options ...BilobaConfigOption) *B
 	// so we can't use chromedp.WithNewBrowserContext() directly. Instead we bootstrap a throwaway
 	// default-context tab to initialize the Browser connection, then manually create the isolated
 	// browser context and target, and attach via WithTargetID.
-	// The throwaway tab opens in the browser's window, not a new one, as chromedp created it before
-	// v0.18 made a window per tab its default.
-	bootstrapOpts := []chromedp.ContextOption{chromedp.WithNewWindow(false)}
+	var bootstrapOpts []chromedp.ContextOption
 	if b.debugLogging {
 		bootstrapOpts = append(bootstrapOpts,
 			chromedp.WithDebugf(b.gt.Logf),
@@ -757,14 +755,28 @@ func (b *Biloba) bootstrapIsolatedTab(allocatorContext context.Context, bootstra
 			time.Sleep(time.Duration(rand.Int64N(int64(ceiling))))
 		}
 
-		bootstrapCtx, cancelBootstrap := chromedp.NewContext(allocatorContext, bootstrapOpts...)
-		if err := engine.PingContext(bootstrapCtx); err != nil {
+		// The throwaway tab is Biloba's to create, so it goes in the browser's window and takes no
+		// focus, as cdproto's old constructor had it: chromedp now opens a window per tab, and leaves
+		// focus to Chrome, which focuses a new target.  Creating it is also what brings the connection up.
+		bootstrapCtx, cancelConnection := chromedp.NewContext(allocatorContext, bootstrapOpts...)
+		created, err := chromedp.CallBrowser(bootstrapCtx, target.CreateTarget, target.CreateTargetParams{
+			URL: "about:blank", NewWindow: new(false), Focus: new(false),
+		})
+		if err != nil {
+			cancelConnection()
+			lastErr = err
+			continue
+		}
+		bootstrapTab, cancelBootstrapTab := chromedp.NewContext(bootstrapCtx, chromedp.WithTargetID(created.TargetID))
+		// the tab closes (and chromedp waits for it) before the connection goes
+		cancelBootstrap := func() { cancelBootstrapTab(); cancelConnection() }
+		if err := engine.PingContext(bootstrapTab); err != nil {
 			cancelBootstrap()
 			lastErr = err
 			continue
 		}
 
-		browserContextID, isolatedTargetID, err := newIsolatedBrowserContextAndTarget(bootstrapCtx)
+		browserContextID, isolatedTargetID, err := newIsolatedBrowserContextAndTarget(bootstrapTab)
 		if err != nil {
 			cancelBootstrap()
 			lastErr = err
@@ -772,9 +784,16 @@ func (b *Biloba) bootstrapIsolatedTab(allocatorContext context.Context, bootstra
 		}
 
 		tabCtx, cancelTab := tabContextFor(bootstrapCtx, isolatedTargetID)
-		// Frame handles look their documents up in this registry, and it has to be listening before the
-		// target's first Run, when Chrome announces the documents that already exist.
-		tracked, err := engine.TrackFrameWorlds(tabCtx, isolatedTargetID)
+		b.Context = tabCtx
+		if _, err := b.RunErr("1"); err != nil {
+			cancelTab()
+			cancelBootstrap()
+			lastErr = err
+			continue
+		}
+		// Frame handles look their documents up in this registry; it starts from the documents the
+		// target has now (see engine.TrackFrameWorlds), before anything else listens to the tab.
+		tracked, err := engine.TrackFrameWorlds(tabCtx)
 		if err != nil {
 			cancelTab()
 			cancelBootstrap()
@@ -782,14 +801,6 @@ func (b *Biloba) bootstrapIsolatedTab(allocatorContext context.Context, bootstra
 			continue
 		}
 		b.Context = tracked
-		if _, err := b.RunErr("1"); err != nil {
-			cancelTab()
-			cancelBootstrap()
-			lastErr = err
-			continue
-		}
-
-		engine.ConfirmAttached(b.Context) // hands the frame-world registry what the attach announced
 
 		// success - keep the bootstrap connection and isolated tab alive for the life of the spec
 		// (LIFO cleanup: tab detaches first, then the bootstrap connection tears down)
@@ -1016,6 +1027,10 @@ type Biloba struct {
 	// (see setUpListeners).  Only the root tab's is ever reset: Prepare closes every other tab.
 	boundary *engine.DocumentBoundary
 
+	// callbacks runs this tab's event work that calls the spec's own code (handler matchers) off the
+	// connection's reader, in event order (see orderedCallbacks).
+	callbacks *orderedCallbacks
+
 	// pollTrajectory opts a suite into recording the (elapsed, value) trajectory of polled reads and
 	// attaching the failing read's series on failure (see BilobaConfigPollTrajectory).  On by default.
 	pollTrajectory bool
@@ -1071,6 +1086,7 @@ func newBiloba(ginkgoT GinkgoTInterface) *Biloba {
 		inlineScreenshots:         true,
 		pollTrajectory:            true,
 		probes:                    &probeRecorder{},
+		callbacks:                 &orderedCallbacks{},
 		occlusions:                &occlusionRecorder{},
 		unreadableResponseBodies:  &unreadableResponseBodyRecorder{},
 		media:                     &mediaEmulation{},
@@ -1580,13 +1596,8 @@ func tabContextFor(parent context.Context, targetID target.ID) (context.Context,
 func (b *Biloba) registerTabFor(targetID target.ID, parent context.Context) *Biloba {
 	b.gt.Helper()
 	c, cancel := tabContextFor(parent, targetID)
-	tracked, err := engine.TrackFrameWorlds(c, targetID) // before the probe below: see bootstrapIsolatedTab
-	if err != nil {
-		cancel()
-		return nil
-	}
 	newG := newBiloba(b.gt)
-	newG.Context = tracked
+	newG.Context = c
 	newG.ChromeConnection = b.ChromeConnection
 	newG.downloadDir = b.downloadDir
 	newG.root = b.root
@@ -1630,7 +1641,13 @@ func (b *Biloba) registerTabFor(targetID target.ID, parent context.Context) *Bil
 		cancel()
 		return nil
 	}
-	engine.ConfirmAttached(newG.Context) // the probe's attach ran before probeDone delivered its result
+	// the frame-world registry starts from the documents the tab has now (see bootstrapIsolatedTab)
+	tracked, err := engine.TrackFrameWorlds(c)
+	if err != nil {
+		cancel()
+		return nil
+	}
+	newG.Context = tracked
 	newG.targetID = chromedp.FromContext(newG.Context).Target.TargetID
 
 	var browserContextID cdp.BrowserContextID

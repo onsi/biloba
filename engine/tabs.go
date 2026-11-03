@@ -82,12 +82,7 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 		detachTab()
 		b.discardTarget(targetID)
 	}
-	tabCtx, err := trackFrameWorlds(attached, targetID)
-	if err != nil {
-		detachTab()
-		return nil, contextError("attach tab", err)
-	}
-	if !attachProbeSucceeds(ctx, tabCtx) {
+	if !attachProbeSucceeds(ctx, attached) {
 		cancelTab()
 		// A target that will not attach is skipped - it is almost always one Chrome is still
 		// reporting while it tears down.  The caller giving up is a different thing and stays an
@@ -97,7 +92,11 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 		}
 		return nil, nil
 	}
-	ConfirmAttached(tabCtx) // the probe's attach ran before it reported success
+	tabCtx, err := trackFrameWorlds(attached, ctx)
+	if err != nil {
+		cancelTab()
+		return nil, contextError("attach tab", err)
+	}
 	b.mu.Lock()
 	// Re-check under the lock: the browser may have closed, the target may have been destroyed, or
 	// another goroutine may have attached to it while we were probing.

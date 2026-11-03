@@ -1,10 +1,13 @@
 package biloba_test
 
 import (
+	"strings"
+
 	"github.com/onsi/biloba"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/gbytes"
+	"github.com/onsi/gomega/gcustom"
 )
 
 var _ = Describe("DialogHandling", func() {
@@ -68,6 +71,19 @@ var _ = Describe("DialogHandling", func() {
 			gt.buffer.Clear()
 		})
 		Context("handling alerts", func() {
+			It("lets a handler's matcher call into another tab without stalling the browser connection", func() {
+				other := b.NewTab().Navigate(fixtureServer + "/dom.html")
+				Eventually("#hello").Should(other.Exist())
+				callsAnotherTab := gcustom.MakeMatcher(func(message string) (bool, error) {
+					answer, err := other.RunErr("1 + 1")
+					return err == nil && answer == 2.0 && strings.Contains(message, "Red"), err
+				})
+				b.HandleAlertDialogs().MatchingMessage(callsAnotherTab)
+				b.Click(b.XPath("button").WithText("Red Alert"))
+				Eventually("#status").Should(b.HaveInnerText("Red Alert!"))
+				Ω(gt.buffer.Contents()).Should(BeEmpty(), "the handler matched, so nothing was autohandled")
+			})
+
 			It("can handle alerts", func() {
 				b.HandleAlertDialogs().MatchingMessage(ContainSubstring("Red"))
 				b.Click(b.XPath("button").WithText("Red Alert"))

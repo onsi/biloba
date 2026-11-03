@@ -400,16 +400,11 @@ func (b *Browser) openTabLocked(ctx, opCtx context.Context, browserContextID cdp
 		detachTab()
 		b.discardTarget(targetID)
 	}
-	tabCtx, err := trackFrameWorlds(attached, targetID)
-	if err != nil {
-		cancelTab()
-		return nil, contextError("open tab", err)
-	}
 	attachDone := make(chan error, 1)
 	go func() {
 		// The first Run owns chromedp's target executor for the session lifetime. It must use the
 		// persistent tab context; binding it to a request deadline tears the executor down afterward.
-		attachDone <- chromedp.Do(tabCtx, chromedp.Evaluate[chromedp.Void]("1"))
+		attachDone <- chromedp.Do(attached, chromedp.Evaluate[chromedp.Void]("1"))
 	}()
 	select {
 	case err = <-attachDone:
@@ -421,7 +416,11 @@ func (b *Browser) openTabLocked(ctx, opCtx context.Context, browserContextID cdp
 		cancelTab()
 		return nil, contextError("open tab", err)
 	}
-	ConfirmAttached(tabCtx) // the attach ran before attachDone delivered its result
+	tabCtx, err := trackFrameWorlds(attached, ctx)
+	if err != nil {
+		cancelTab()
+		return nil, contextError("open tab", err)
+	}
 	session := &Session{
 		browser: b, ctx: tabCtx, cancel: detachTab, browserContextID: browserContextID,
 		targetID: targetID, ownsContext: ownsContext, artifactDir: b.artifactDir, root: root,
