@@ -2,6 +2,7 @@ package biloba_test
 
 import (
 	"bytes"
+	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -58,9 +59,20 @@ var _ = Describe("Screencasts", func() {
 		for i, frame := range frames {
 			img, err := jpeg.Decode(bytes.NewReader(frame.Data))
 			Ω(err).ShouldNot(HaveOccurred())
-			Ω(img.Bounds().Size()).Should(Equal(image.Pt(width, height)))
-			Ω(frame.DeviceWidth).Should(BeNumerically("==", width))
-			Ω(frame.DeviceHeight).Should(BeNumerically("==", height))
+			desc := fmt.Sprintf("frame %d of %d (device %vx%v)", i, len(frames), frame.DeviceWidth, frame.DeviceHeight)
+			if i == 0 && b.ChromeConnection.HighFidelity {
+				// The first frame is the one already on screen. Full Chrome can have drawn it before it
+				// applied the tab's emulated size, so it can be the window's real viewport: the same
+				// width, shorter by the browser's toolbar.
+				Ω(img.Bounds().Dx()).Should(Equal(width), desc)
+				Ω(img.Bounds().Dy()).Should(SatisfyAll(BeNumerically(">", 0), BeNumerically("<=", height)), desc)
+				Ω(frame.DeviceWidth).Should(BeNumerically("==", width), desc)
+				Ω(frame.DeviceHeight).Should(SatisfyAll(BeNumerically(">", 0), BeNumerically("<=", height)), desc)
+			} else {
+				Ω(img.Bounds().Size()).Should(Equal(image.Pt(width, height)), desc)
+				Ω(frame.DeviceWidth).Should(BeNumerically("==", width), desc)
+				Ω(frame.DeviceHeight).Should(BeNumerically("==", height), desc)
+			}
 			Ω(frame.PageScaleFactor).Should(BeNumerically("==", 1))
 			Ω(frame.ScrollOffsetY).Should(BeZero())
 			// From Chrome 156 a frame is stamped with when Chrome expects to display it, about one frame
