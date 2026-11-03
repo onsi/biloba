@@ -282,7 +282,7 @@ BeNetworkIdle() is a matcher that passes when this tab has no in-flight requests
 
 Note: Biloba considers a tab idle the instant its in-flight request count reaches zero - it does not wait for a quiet period.  This is a deliberately pragmatic definition; if you need to wait for a specific request to complete, assert on it directly.
 
-A request stops counting when the page that made it navigates away or its iframe is removed: Chrome cancels it without reporting a finish or a failure.  A keepalive fetch or sendBeacon, which can outlive its page, stops counting then too.
+A request stops counting when the page that made it navigates away: Chrome cancels it without reporting a finish or a failure.  A keepalive fetch or sendBeacon, which can outlive its page, stops counting then too.
 
 Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
 */

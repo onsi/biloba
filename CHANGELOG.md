@@ -4,7 +4,7 @@
 
 ### Fixes
 
-- `BeNetworkIdle` (Go) and `expectNetworkIdle()` (TypeScript) now become idle after the page navigates away from requests in flight, or after an iframe with requests in flight is removed. Chrome cancels those requests without reporting a finish or failure, so they used to count forever. Both clients now share one in-flight tracker in `engine`. A `keepalive` fetch or `sendBeacon` that outlives its page stops counting once the page navigates.
+- `BeNetworkIdle` (Go) and `expectNetworkIdle()` (TypeScript) no longer wait forever on requests a page left in flight when it navigated away. Chrome cancels them without reporting a finish or a failure. A `keepalive` fetch or `sendBeacon` that outlives its page now stops counting when the page navigates.
 
 ## 0.20.0
 

@@ -54,7 +54,7 @@ Install `installBilobaVitestHooks` from `biloba/vitest` in a Vitest setup file. 
 - Use `consoleMessages()`/`onConsoleMessage()`, `pageErrors()`/`onPageError()`, and `warnings()`/`onWarning()` for history and live events; `expectPageError(expected)` waits for an uncaught exception or unhandled rejection.
 - `consoleMessages()` also holds the messages Chrome logs itself (a failed resource load, an intervention, a violation), marked by a non-empty `source`. They are not replayed by the hooks; look there when a resource failed to load. The `line`/`column` fields of page errors and stack frames are zero-based, as Chrome reports them.
 - A request's `status` and `failure` (`net::ERR_...`) say how it ended; `requests({failed: true})` lists the ones that failed.
-- A timed-out `expectNetworkIdle()` names each request still in flight (method, URL, resource type, age). The one that never finishes is usually a long poll, a stream, or a request the app abandoned. A request of a page that has navigated away, or of a removed iframe, no longer counts.
+- A timed-out `expectNetworkIdle()` names each request still in flight (method, URL, resource type, age). The one that never finishes is usually a long poll, a stream, or a request the app abandoned. A request of a page that has navigated away no longer counts.
 - Pass `debugLog` to `connect` for bounded structured daemon/CDP records.
 - Configure screenshots, outlines, artifact paths, inline output, viewport, byte limits, and trajectories under `diagnostics`.
 

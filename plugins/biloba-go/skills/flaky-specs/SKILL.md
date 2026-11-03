@@ -283,7 +283,7 @@ Eventually("#published-list").Should(b.Exist())
 Consistently(b.ByTextContains("Draft").Within("#published-list")).ShouldNot(b.Exist())
 ```
 
-**`BeNetworkIdle` means "zero in flight right now"** — no quiet period — so it passes at t=0, before your click's fetch has left the page. When it times out, its failure message names each request still in flight (method, URL, resource type, and how long it has been in flight) as of the last attempt — read that before guessing. A request the page abandoned by navigating away (or by removing an iframe) no longer counts, so a stuck idle means a request of the current page. Anchor on the request first:
+**`BeNetworkIdle` means "zero in flight right now"** — no quiet period — so it passes at t=0, before your click's fetch has left the page. When it times out, its failure message names each request still in flight (method, URL, resource type, and how long it has been in flight) as of the last attempt — read that before guessing. A request the page abandoned by navigating away no longer counts, so a stuck idle means a request of the current page. Anchor on the request first:
 
 ```go
 b.Click("#refresh")

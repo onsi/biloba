@@ -1638,8 +1638,8 @@ func (b *Biloba) handleEventFrameAttached(ev *page.EventFrameAttached) {
 	b.state.inflight.FrameAttached(ev.FrameID, ev.ParentFrameID)
 }
 
-// handleEventFrameDetached drops the requests of a frame that is gone (an iframe removed while a
-// request was in flight); Chrome never reports those either.
+// handleEventFrameDetached drops the requests of a frame that is gone.  Chrome reports the requests of
+// a removed iframe as failed, so this is a backstop rather than the fix a navigation needs.
 func (b *Biloba) handleEventFrameDetached(ev *page.EventFrameDetached) {
 	b.lock.Lock()
 	defer b.lock.Unlock()

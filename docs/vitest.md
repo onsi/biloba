@@ -388,7 +388,7 @@ const broken = await session.requests({failed: true});
 const serverErrors = await session.requests({url: contains("/api/"), status: numeric(">=", 500)});
 ```
 
-`expectNetworkIdle()` waits for the session's in-flight requests to finish.  When it times out, its message names each request still in flight as of its last attempt - method, URL, resource type, and how long it had been in flight - oldest first.  A request stops counting when the page that made it navigates away or its iframe is removed: Chrome cancels such requests without reporting a finish or a failure, so the session drops them.  A `keepalive` fetch or `sendBeacon`, which can outlive its page, stops counting at that point too.
+`expectNetworkIdle()` waits for the session's in-flight requests to finish.  When it times out, its message names each request still in flight as of its last attempt - method, URL, resource type, and how long it had been in flight - oldest first.  A request stops counting when the page that made it navigates away: Chrome cancels such requests without reporting a finish or a failure, so the session drops them.  A `keepalive` fetch or `sendBeacon`, which can outlive its page, stops counting at that point too.
 
 Import `endsWith` (or another Biloba expectation) from the package.  Always release a hold.  Network handlers are first-match-wins; use each handler's `count()` or `stats()` and `networkShadowDiagnostics()` to prove that the intended handler claimed the request.  A request that `modifyRequest()` sends to another `url` still reaches `modifyResponse()`, `routeResponse()`, and `holdResponse()`: they match its response under the URL the page requested and under the URL it was sent to.
 
