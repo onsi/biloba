@@ -27,7 +27,7 @@ type LaunchOptions struct {
 	Allocator []chromedp.ExecAllocatorOption
 	// Browser holds the options for the browser context Start runs on.
 	Browser []chromedp.ContextOption
-	// Slowf, when not nil, is told about listeners that hold their session's worker too long.
+	// Slowf, when not nil, is told about listeners that hold their target's messages too long.
 	Slowf func(string, ...any)
 	// Logf, when not nil, is told when an attempt fails and LaunchChrome tries again.
 	Logf func(string, ...any)

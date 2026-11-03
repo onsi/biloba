@@ -17,8 +17,8 @@ import (
 	"github.com/onsi/biloba/engine"
 )
 
-// The frame-world registry a frame handle looks its document up in is kept by the event hub for every
-// session from the session's first message, so attaching a tab costs no extra commands.
+// The frame-world registry a frame handle looks its document up in starts from what the connection
+// recorded from the session's first message, so attaching a tab costs no extra commands.
 var _ = Describe("frame-world registries", func() {
 	var root *engine.Session
 	var rootCtx context.Context
@@ -174,9 +174,11 @@ var _ = Describe("frame-world registries", func() {
 		DeferCleanup(release)
 
 		gaveUp, cancel := context.WithCancel(ctx)
+		recordedWhileStalled := make(chan bool, 1)
 		go func() {
 			select {
 			case <-stalled:
+				recordedWhileStalled <- engine.HasFrameWorldsForTest(root, held())
 			case <-ctx.Done():
 			}
 			cancel()
@@ -185,6 +187,7 @@ var _ = Describe("frame-world registries", func() {
 		Expect(tab).To(BeNil())
 		Expect(err).To(HaveOccurred())
 		Expect(stalled).To(BeClosed(), "the attach got through and had a session")
+		Expect(recordedWhileStalled).To(Receive(BeTrue()), "the attach had Chrome announce the tab's contexts before it stalled")
 		release()
 
 		session := held()

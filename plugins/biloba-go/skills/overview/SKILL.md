@@ -71,7 +71,7 @@ defer cancel()
 _, err := chromedp.Call(ctx, emulation.SetCPUThrottlingRate, emulation.SetCPUThrottlingRateParams{Rate: 4})
 ```
 
-Biloba uses chromedp v0.21, whose API changed in v0.17: `chromedp.Run(ctx, actions...)` is now `chromedp.Do`, a cdproto command is called as `chromedp.Call(ctx, page.Navigate, page.NavigateParams{...})` (browser-level ones with `chromedp.CallBrowser`), `ActionFunc` is `chromedp.Func`, and `ListenTarget` is `chromedp.Events(ctx, network.ResponseReceived)`, one event type per iterator. The docs' chromedp section lists the old and new forms.
+Biloba uses chromedp v0.22, whose API changed in v0.17: `chromedp.Run(ctx, actions...)` is now `chromedp.Do`, a cdproto command is called as `chromedp.Call(ctx, page.Navigate, page.NavigateParams{...})` (browser-level ones with `chromedp.CallBrowser`), `ActionFunc` is `chromedp.Func`, and `ListenTarget` is `chromedp.Listen(ctx, fn)` (every event, in order, and it returns an error) or `chromedp.Events(ctx, network.ResponseReceived)` (one event type per iterator). The docs' chromedp section lists the old and new forms.
 
 An override set this way is yours to undo — `Prepare()` doesn't know about it.
 

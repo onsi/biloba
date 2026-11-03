@@ -75,8 +75,8 @@ func (d *debugDispatcher) browserOptions() []chromedp.ContextOption {
 	return []chromedp.ContextOption{chromedp.WithBrowserOption(chromedp.WithBrowserDebugf(d.logf))}
 }
 
-// slowListenerf is where the event hub reports a listener that held its session's worker too
-// long.  It is nil when debugging is off, so the hub does not time listeners at all.
+// slowListenerf is where a connection reports a listener that held its target's messages too long.
+// It is nil when debugging is off, so listeners are not timed at all.
 func (d *debugDispatcher) slowListenerf() func(string, ...any) {
 	if d == nil {
 		return nil

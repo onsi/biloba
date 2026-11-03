@@ -144,13 +144,14 @@ var _ = Describe("Session screencasts", func() {
 		Expect(pointerErrorCode(err)).To(Equal(engine.CodeNotFound))
 	})
 
-	It("ends a recording's delivery when its tab goes away without a stop or a close", func(ctx SpecContext) {
+	It("leaves no delivery goroutine behind when its tab goes away without a stop or a close", func(ctx SpecContext) {
 		before := engine.LiveScreencastWorkersForTest()
 		tab, err := session.NewTab(ctx)
 		Expect(err).NotTo(HaveOccurred())
-		_, err = tab.StartScreencast(ctx, engine.ScreencastParams{})
+		id, err := tab.StartScreencast(ctx, engine.ScreencastParams{})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(engine.LiveScreencastWorkersForTest()).To(Equal(before + 1))
+		// a frame was delivered, so a delivery goroutine ran
+		Eventually(engine.ScreencastFramesSoFarForTest(tab, id)).Should(BeNumerically(">", 0))
 
 		// as a popup closing itself would: nothing in Biloba stops or closes the recording
 		_, err = chromedp.CallBrowser(engine.SessionContextForTest(session), target.CloseTarget, target.CloseTargetParams{TargetID: tab.TargetID()})

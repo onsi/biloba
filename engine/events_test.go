@@ -2,9 +2,13 @@ package engine_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	. "github.com/onsi/ginkgo/v2"
@@ -59,6 +63,55 @@ var _ = Describe("two attachments to one target", func() {
 	})
 })
 
+// Biloba's listeners rely on two things chromedp.Listen promises: the events of a target in the order
+// Chrome sent them, across event types, and every event that arrived before a command's answer handed
+// over by the time the command returns.
+var _ = Describe("a target's listeners", func() {
+	It("have seen, in wire order, every event that arrived before the command that returns", func(ctx SpecContext) {
+		site := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			response.Header().Set("Content-Type", "text/html")
+			_, _ = response.Write([]byte(`<!doctype html><script>console.log("loading")</script>`))
+		}))
+		DeferCleanup(site.Close)
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+
+		var lock sync.Mutex
+		var seen []string
+		Expect(engine.ListenTarget(engine.SessionContextForTest(session), func(ev any) {
+			lock.Lock()
+			defer lock.Unlock()
+			switch ev := ev.(type) {
+			case *network.EventRequestWillBeSent:
+				if ev.Type == network.ResourceTypeDocument {
+					seen = append(seen, "request")
+				}
+			case *network.EventResponseReceived:
+				if ev.Type == network.ResourceTypeDocument {
+					seen = append(seen, "response")
+				}
+			case *runtime.EventConsoleAPICalled:
+				if len(ev.Args) > 0 {
+					seen = append(seen, string(ev.Args[0].Value))
+				}
+			}
+		})).To(Succeed())
+
+		Expect(session.Navigate(ctx, site.URL)).To(Succeed())
+		lock.Lock()
+		Expect(seen).To(Equal([]string{"request", "response", `"loading"`}), "the load event Navigate waits for came after these")
+		lock.Unlock()
+
+		_, err = session.Evaluate(ctx, `console.log("evaluated"), 1`)
+		Expect(err).NotTo(HaveOccurred())
+		lock.Lock()
+		defer lock.Unlock()
+		Expect(seen).To(HaveLen(4), "the console call came before the evaluation's answer")
+		Expect(seen[3]).To(Equal(`"evaluated"`))
+	})
+})
+
 var _ = Describe("event listeners on an allocator's connections", func() {
 	It("keep a connection's listeners when another connection from the same allocator goes away", func() {
 		// A retried bootstrap is the case: one allocator, a first connection given up on, a second kept.
@@ -76,7 +129,7 @@ var _ = Describe("event listeners on an allocator's connections", func() {
 			if called, ok := ev.(*runtime.EventConsoleAPICalled); ok && len(called.Args) > 0 {
 				seen <- string(called.Args[0].Value)
 			}
-		}, runtime.ConsoleAPICalled.Method)).To(Succeed())
+		})).To(Succeed())
 
 		lost := chromedp.FromContext(first).Browser.LostConnection
 		cancelFirst()

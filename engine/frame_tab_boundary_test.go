@@ -193,7 +193,7 @@ var _ = Describe("frame handles and their tab", func() {
 			}
 		}
 		Eventually(messages(root)).Should(ContainElements("Uncaught Error: parent-boom", "Uncaught Error: frame-boom"))
-		// The tab's listener runs before the frame's, one after the other on the same session worker, so
+		// The tab's listener runs before the frame's, one after the other on the tab's goroutine, so
 		// the frame can record its error just after the tab does.  Once it has, it must keep exactly its
 		// own: parent-boom reaches the frame's listener too, and must stay out.
 		Eventually(messages(frame.Session)).Should(Equal([]string{"Uncaught Error: frame-boom"}))

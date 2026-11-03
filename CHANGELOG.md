@@ -2,6 +2,8 @@
 
 ### Features
 
+- Go: Biloba now uses chromedp v0.22.0, so code that drops to chromedp needs v0.22.0 or later. v0.22.0 brings back an ordered listener, `chromedp.Listen(b.Context, fn)`, the replacement for `ListenTarget` when you need events in order across types. Biloba's behavior does not change; it now uses that listener in place of its own.
+
 ### Fixes
 
 - Go: once Chrome announces that a tab's renderer crashed, every command on that tab except a navigation fails at once with `page_crashed`, and a command already waiting on the dead renderer is interrupted. They used to wait out the 30s backstop. `Prepare` navigates a crashed root tab before resetting it, instead of sending its reset commands to the dead renderer.

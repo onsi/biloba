@@ -33,8 +33,8 @@ func NavigateContext(ctx context.Context, destination string) (NavigationResult,
 	defer cancelListen()
 	var statusMu sync.Mutex
 	var status int
-	// The listener sees every event before chromedp does (see ListenTarget), so by the time Navigate
-	// returns on the load event the document's response has been recorded.
+	// The listener sees every event before chromedp acts on a later message (see ListenTarget), so by
+	// the time Navigate returns on the load event the document's response has been recorded.
 	if err := ListenTarget(listenCtx, func(event any) {
 		response, ok := event.(*network.EventResponseReceived)
 		if !ok || response.Type != network.ResourceTypeDocument {
@@ -43,7 +43,7 @@ func NavigateContext(ctx context.Context, destination string) (NavigationResult,
 		statusMu.Lock()
 		status = int(response.Response.Status)
 		statusMu.Unlock()
-	}, network.ResponseReceived.Method); err != nil {
+	}); err != nil {
 		return NavigationResult{}, err
 	}
 	err := chromedp.Do(ctx, chromedp.Navigate(destination))

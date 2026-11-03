@@ -24,10 +24,10 @@ frameWorlds is the frame-world registry of one session: the page JavaScript cont
 document, as the session announces them.  It belongs to the renderer attachment, not to any one frame
 handle.
 
-The event hub keeps one for every session, from the session's first message, and updates it before
-any listener runs (see eventHub.dispatch).  So it sees every context the session announces, the ones
-Chrome reports when chromedp enables Runtime during its attach included, without asking Chrome to
-announce them again.
+A listener on the session's target keeps it, so the session's other listeners see it as of the event
+they are handed.  connection.worldsFor registers that listener and seeds the registry with the
+contexts the target announced while chromedp attached it, so nothing asks Chrome to announce them
+again.
 */
 type frameWorlds struct {
 	mu      sync.RWMutex
@@ -47,58 +47,60 @@ func frameWorldEvent(method string) bool {
 	return false
 }
 
-// observe applies one context event, from its undecoded params, to the registry.
-func (w *frameWorlds) observe(method string, params jsonv2.Value) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	switch method {
-	case runtime.ExecutionContextCreated.Method:
-		var created struct {
-			Context struct {
-				ID       runtime.ExecutionContextID `json:"id"`
-				UniqueID string                     `json:"uniqueId"`
-				AuxData  struct {
-					FrameID   cdp.FrameID `json:"frameId"`
-					IsDefault bool        `json:"isDefault"`
-				} `json:"auxData"`
-			} `json:"context"`
-		}
-		if jsonv2.Unmarshal(params, &created, chromedp.DefaultUnmarshalOptions) != nil {
-			return
-		}
-		if aux := created.Context.AuxData; aux.IsDefault && aux.FrameID != "" {
-			w.byFrame[aux.FrameID] = frameWorld{id: created.Context.ID, uniqueID: created.Context.UniqueID}
-		}
-	case runtime.ExecutionContextDestroyed.Method:
-		var destroyed struct {
-			UniqueID string `json:"executionContextUniqueId"`
-		}
-		if jsonv2.Unmarshal(params, &destroyed, chromedp.DefaultUnmarshalOptions) != nil {
-			return
-		}
-		for id, world := range w.byFrame {
-			if world.uniqueID == destroyed.UniqueID {
-				delete(w.byFrame, id)
-			}
-		}
-	case runtime.ExecutionContextsCleared.Method:
-		clear(w.byFrame)
+// apply is the registry's listener.
+func (w *frameWorlds) apply(ev any) {
+	switch ev.(type) {
+	case *runtime.EventExecutionContextCreated, *runtime.EventExecutionContextDestroyed, *runtime.EventExecutionContextsCleared:
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		applyFrameWorldEvent(w.byFrame, ev)
 	}
 }
 
-// trackFrameWorlds gives an attached target's context its session's frame-world registry, which the
-// event hub has kept since the session's first message.  It sends no command.  Call it after the
-// first Run on ctx, on the goroutine that ran it or after it, since that Run sets the context's
-// target.
+// applyFrameWorldEvent applies one context event to a registry's frames.
+func applyFrameWorldEvent(byFrame map[cdp.FrameID]frameWorld, ev any) {
+	switch ev := ev.(type) {
+	case *runtime.EventExecutionContextCreated:
+		if ev.Context == nil {
+			return
+		}
+		var aux struct {
+			FrameID   cdp.FrameID `json:"frameId"`
+			IsDefault bool        `json:"isDefault"`
+		}
+		if jsonv2.Unmarshal(ev.Context.AuxData, &aux, chromedp.DefaultUnmarshalOptions) != nil {
+			return
+		}
+		if aux.IsDefault && aux.FrameID != "" {
+			byFrame[aux.FrameID] = frameWorld{id: ev.Context.ID, uniqueID: ev.Context.UniqueID}
+		}
+	case *runtime.EventExecutionContextDestroyed:
+		for id, world := range byFrame {
+			if world.uniqueID == ev.ExecutionContextUniqueID {
+				delete(byFrame, id)
+			}
+		}
+	case *runtime.EventExecutionContextsCleared:
+		clear(byFrame)
+	}
+}
+
+// trackFrameWorlds gives an attached target's context its session's frame-world registry (see
+// connection.worldsFor).  It sends no command.  Call it after the first Run on ctx, on the goroutine
+// that ran it or after it, since that Run sets the context's target.
 func trackFrameWorlds(ctx context.Context) (context.Context, error) {
-	hub, c, err := hubFor(ctx)
+	conn, c, err := connectionFor(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if c.Target == nil {
 		return nil, errors.New("tracking frame worlds needs an attached target: run the context once first")
 	}
-	return context.WithValue(ctx, frameWorldsKey{}, hub.worldsFor(c.Target.SessionID)), nil
+	worlds, err := conn.worldsFor(ctx, c.Target.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	return context.WithValue(ctx, frameWorldsKey{}, worlds), nil
 }
 
 func mainFrameWorld(ctx context.Context, id cdp.FrameID) (frameWorld, error) {

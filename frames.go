@@ -527,7 +527,7 @@ func (b *Biloba) frameTargetContext(id target.ID) (context.Context, error) {
 		case *cdplog.EventEntryAdded:
 			owner.handleEventLogEntryAdded(ev)
 		}
-	}, runtime.ConsoleAPICalled.Method, runtime.ExceptionThrown.Method, cdplog.EntryAdded.Method); err != nil {
+	}); err != nil {
 		b.detachFrameTarget(id)
 		return nil, err
 	}
@@ -631,8 +631,7 @@ func (b *Biloba) listenForFrameRequests() {
 		case *network.EventLoadingFailed:
 			b.handleEventLoadingFailed(ev)
 		}
-	}, network.RequestWillBeSent.Method, network.ResponseReceived.Method, runtime.ConsoleAPICalled.Method,
-		runtime.ExceptionThrown.Method, network.LoadingFinished.Method, network.LoadingFailed.Method)
+	})
 }
 
 // frameURL is the frame's URL as of the most recent discovery.

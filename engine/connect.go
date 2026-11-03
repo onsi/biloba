@@ -22,23 +22,23 @@ const dialTimeout = 10 * time.Second
 /*
 NewExecAllocator is chromedp.NewExecAllocator for a Chrome that other processes attach to: Chrome
 opens a debugging port (and writes DevToolsActivePort) rather than talking over a pipe, and the
-allocator drives it through the ordered event stream ListenTarget reads (see events.go).  slowf, when
-not nil, is told about listeners that hold their session's worker too long.
+allocator drives it through a Biloba connection (see transport.go).  slowf, when not nil, is told
+about listeners that hold their target's messages too long.
 */
 func NewExecAllocator(parent context.Context, slowf func(string, ...any), opts ...chromedp.ExecAllocatorOption) (context.Context, context.CancelFunc) {
-	allocator := &hubAllocator{}
+	allocator := &connectionAllocator{}
 	opts = append(opts, chromedp.WithDialer(func(ctx context.Context, wsURL string) (chromedp.Transport, error) {
 		dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
 		defer cancel()
-		conn, err := remote.DialContext(dialCtx, wsURL)
+		ws, err := remote.DialContext(dialCtx, wsURL)
 		if err != nil {
 			return nil, err
 		}
-		hub := newEventHub(slowf) // one per connection
+		conn := newConnection(ws, slowf)
 		allocator.mu.Lock()
-		allocator.dialed = hub
+		allocator.dialed = conn
 		allocator.mu.Unlock()
-		return newOrderedTransport(conn, hub), nil
+		return conn, nil
 	}))
 	execCtx, cancelExec := chromedp.NewExecAllocator(parent, opts...)
 	allocator.Allocator = chromedp.FromContext(execCtx).Allocator
@@ -49,36 +49,36 @@ func NewExecAllocator(parent context.Context, slowf func(string, ...any), opts .
 	}
 }
 
-// hubAllocator registers the hub of each browser its allocator starts: the hub the dialer made for
-// that browser's connection.
-type hubAllocator struct {
+// connectionAllocator registers each browser its allocator starts with the connection the dialer made
+// for it.
+type connectionAllocator struct {
 	chromedp.Allocator
 	mu       sync.Mutex
-	allocate sync.Mutex // one Allocate at a time, so each picks up its own connection's hub
-	dialed   *eventHub
+	allocate sync.Mutex // one Allocate at a time, so each picks up its own connection
+	dialed   *connection
 }
 
-func (a *hubAllocator) Allocate(ctx context.Context, opts ...chromedp.BrowserOption) (*chromedp.Browser, error) {
+func (a *connectionAllocator) Allocate(ctx context.Context, opts ...chromedp.BrowserOption) (*chromedp.Browser, error) {
 	a.allocate.Lock()
 	defer a.allocate.Unlock()
 	browser, err := a.Allocator.Allocate(ctx, opts...)
 	a.mu.Lock()
-	hub := a.dialed
+	conn := a.dialed
 	a.dialed = nil
 	a.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
-	if hub == nil {
+	if conn == nil {
 		return nil, errors.New("the browser's connection did not go through Biloba's dialer")
 	}
-	registerHub(browser, hub)
+	registerConnection(browser, conn)
 	return browser, nil
 }
 
 /*
-NewRemoteAllocator is remote.NewAllocator, attaching to a running Chrome at wsURL through the ordered
-event stream ListenTarget reads.  modifyURL resolves the address the way remote.NewAllocator does
+NewRemoteAllocator is remote.NewAllocator, attaching to a running Chrome at wsURL through a Biloba
+connection (see transport.go).  modifyURL resolves the address the way remote.NewAllocator does
 (an IP for the host, and /json/version for an address without /devtools/browser/); without it the
 address is used as given (remote.NoModifyURL).
 */
@@ -86,10 +86,10 @@ func NewRemoteAllocator(parent context.Context, wsURL string, modifyURL bool, sl
 	return chromedp.NewAllocatorContext(parent, &attachAllocator{wsURL: wsURL, modifyURL: modifyURL, slowf: slowf})
 }
 
-// attachAllocator is remote.Allocator with the connection wrapped in an orderedTransport;
+// attachAllocator is remote.Allocator with the websocket wrapped in a Biloba connection;
 // remote.Allocator dials inside Allocate, which leaves nowhere to wrap it.  Each Allocate is a
-// connection of its own, with a hub of its own: a connection that goes away (a retried bootstrap's
-// first attempt) clears only its own listeners.
+// connection of its own: one that goes away (a retried bootstrap's first attempt) takes only its own
+// state with it.
 type attachAllocator struct {
 	wsURL     string
 	modifyURL bool
@@ -117,16 +117,16 @@ func (a *attachAllocator) Allocate(ctx context.Context, opts ...chromedp.Browser
 	})
 	dialCtx, dialCancel := context.WithTimeout(wctx, dialTimeout)
 	defer dialCancel()
-	conn, err := remote.DialContext(dialCtx, wsURL)
+	ws, err := remote.DialContext(dialCtx, wsURL)
 	if err != nil {
 		return nil, fmt.Errorf("could not dial %q: %w", wsURL, err)
 	}
-	hub := newEventHub(a.slowf)
-	browser, err := chromedp.NewBrowserTransport(wctx, newOrderedTransport(conn, hub), opts...)
+	conn := newConnection(ws, a.slowf)
+	browser, err := chromedp.NewBrowserTransport(wctx, conn, opts...)
 	if err != nil {
 		return nil, err
 	}
-	registerHub(browser, hub)
+	registerConnection(browser, conn)
 	return browser, nil
 }
 

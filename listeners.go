@@ -85,25 +85,13 @@ func (b *Biloba) listenForCrashOnTheBrowser() error {
 		if crashed, ok := ev.(*target.EventTargetCrashed); ok && crashed.TargetID == b.targetID {
 			b.handleEventTargetCrashed(nil)
 		}
-	}, target.TargetCrashed.Method)
+	})
 }
 
-// tabEvents are the events setUpListeners handles, and the ones b.boundary has to see.
-var tabEvents = []string{
-	runtime.ExecutionContextCreated.Method, runtime.ExecutionContextDestroyed.Method, runtime.ExecutionContextsCleared.Method,
-	page.JavascriptDialogOpening.Method,
-	runtime.ConsoleAPICalled.Method, runtime.ExceptionThrown.Method, cdplog.EntryAdded.Method,
-	page.FrameAttached.Method, page.FrameNavigated.Method, page.FrameDetached.Method,
-	browser.DownloadWillBegin.Method, browser.DownloadProgress.Method,
-	network.RequestWillBeSent.Method, network.ResponseReceived.Method, network.LoadingFinished.Method, network.LoadingFailed.Method,
-	fetch.RequestPaused.Method,
-	inspector.TargetCrashed.Method,
-}
-
-// setUpListeners wires the tab's event handlers.  They run on the tab's session worker, in the order
-// Chrome sent the events (see engine.ListenTarget), which also delivers the tab's replies, so none of
-// them may wait on the tab's own commands: the handlers that answer Chrome (paused requests,
-// dialogs) do so from a goroutine.
+// setUpListeners wires the tab's event handlers.  They run on the goroutine that reads the tab's
+// messages, in the order Chrome sent the events (see engine.ListenTarget), which also delivers the
+// tab's replies, so none of them may wait on the tab's own commands: the handlers that answer Chrome
+// (paused requests, dialogs) do so from a goroutine.
 func (b *Biloba) setUpListeners() {
 	b.configureDownloadBehavior()
 	b.enableCrashReporting()
@@ -150,7 +138,7 @@ func (b *Biloba) setUpListeners() {
 		case *inspector.EventTargetCrashed:
 			b.handleEventTargetCrashed(ev)
 		}
-	}, tabEvents...)
+	})
 	if err != nil {
 		b.gt.Fatalf("failed to listen for tab events: %s", err)
 	}

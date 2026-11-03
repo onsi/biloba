@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/chromedp/cdproto"
@@ -175,54 +174,95 @@ func SessionBrowserContextForTest(session *Session) cdp.BrowserContextID {
 	return session.browserContextID
 }
 
-// StallAttachForTest holds the first message Chrome sends on the next session attached to targetID,
-// and with it every reply behind it on that session's worker, until release is called.  An attach
-// therefore gets through (Target.attachToTarget answers on the browser's session) and then stalls in
-// chromedp's setup.  stalled is closed once a message is held; held then reports its session.
+// StallAttachForTest holds back every command sent on the next session attached to targetID after its
+// first (the Runtime.enable chromedp's attach starts with), until release is called.  An attach
+// therefore gets through (Target.attachToTarget answers on the browser's session), has Chrome announce
+// the target's contexts, and then stalls in chromedp's setup.  stalled is closed once a command is
+// held; held then reports its session.  release sends the held commands.
 func StallAttachForTest(ctx context.Context, root *Session, targetID target.ID) (stalled <-chan struct{}, held func() target.SessionID, release func(), err error) {
-	hub, _, err := hubFor(root.ctx)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	// the listeners live as long as ctx, on root's browser
+	// the listener lives as long as ctx, on root's browser
 	listenCtx, stop := context.WithCancel(root.ctx)
 	context.AfterFunc(ctx, stop)
-	ctx = listenCtx
-	holding, releasing := make(chan struct{}), make(chan struct{})
-	var heldSession atomic.Value
-	var holdOnce, releaseOnce sync.Once
-	release = func() { releaseOnce.Do(func() { close(releasing) }) }
-	err = ListenBrowser(ctx, func(event any) {
+	holding := make(chan struct{})
+	var lock sync.Mutex
+	var session target.SessionID
+	var sent int
+	var heldOn *connection
+	var commands []*cdproto.Message
+	released := false
+	err = ListenBrowser(listenCtx, func(event any) {
 		attached, ok := event.(*target.EventAttachedToTarget)
 		if !ok || attached.TargetInfo == nil || attached.TargetInfo.TargetID != targetID {
 			return
 		}
-		session := attached.SessionID
-		hub.add(session, &eventListener{ctx: ctx, fn: func(any) {
-			holdOnce.Do(func() {
-				heldSession.Store(session)
-				close(holding)
-				<-releasing
-			})
-		}})
-	}, target.AttachedToTarget.Method)
+		lock.Lock()
+		defer lock.Unlock()
+		if session == "" {
+			session = attached.SessionID
+		}
+	})
+	if err != nil {
+		stop()
+		return nil, nil, nil, err
+	}
+	hook := func(conn *connection, msg *cdproto.Message) bool {
+		lock.Lock()
+		defer lock.Unlock()
+		if released || session == "" || msg.SessionID != session {
+			return false
+		}
+		if sent++; sent == 1 {
+			return false
+		}
+		if heldOn == nil {
+			heldOn = conn
+			close(holding)
+		}
+		commands = append(commands, msg)
+		return true
+	}
+	previous := writeHook.Swap(&hook)
+	release = sync.OnceFunc(func() {
+		stop()
+		writeHook.CompareAndSwap(&hook, previous)
+		lock.Lock()
+		conn := heldOn
+		lock.Unlock()
+		if conn == nil {
+			lock.Lock()
+			released = true
+			lock.Unlock()
+			return
+		}
+		// under the connection's write lock, so a command sent on the session after this goes after them
+		conn.sendHeld(context.Background(), func() []*cdproto.Message {
+			lock.Lock()
+			defer lock.Unlock()
+			released = true
+			return commands
+		})
+	})
 	held = func() target.SessionID {
-		session, _ := heldSession.Load().(target.SessionID)
+		lock.Lock()
+		defer lock.Unlock()
+		if heldOn == nil {
+			return ""
+		}
 		return session
 	}
-	return holding, held, release, err
+	return holding, held, release, nil
 }
 
-// HasFrameWorldsForTest reports whether root's connection still keeps a frame-world registry for
+// HasFrameWorldsForTest reports whether root's connection still keeps a frame-world record for
 // session.
 func HasFrameWorldsForTest(root *Session, session target.SessionID) bool {
-	hub, _, err := hubFor(root.ctx)
+	conn, _, err := connectionFor(root.ctx)
 	if err != nil {
 		return false
 	}
-	hub.mu.Lock()
-	defer hub.mu.Unlock()
-	_, ok := hub.worlds[session]
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	_, ok := conn.sessions[session]
 	return ok
 }
 
@@ -235,9 +275,12 @@ func FrameWorldForTest(ctx context.Context, frameID cdp.FrameID) (string, error)
 // ObserveWritesForTest calls observe with the method and session of every command this process sends
 // Chrome, until the returned func is called.
 func ObserveWritesForTest(observe func(method string, session target.SessionID)) func() {
-	fn := func(msg *cdproto.Message) { observe(string(msg.Method), msg.SessionID) }
-	observeWrite.Store(&fn)
-	return func() { observeWrite.Store(nil) }
+	hook := func(_ *connection, msg *cdproto.Message) bool {
+		observe(string(msg.Method), msg.SessionID)
+		return false
+	}
+	previous := writeHook.Swap(&hook)
+	return func() { writeHook.CompareAndSwap(&hook, previous) }
 }
 
 // SetAttachAttemptReturnedForTest runs hook as each attach attempt returns, before the probe records

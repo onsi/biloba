@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
-	jsonv2 "github.com/chromedp/cdproto/cdp/jsonv2"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
@@ -60,20 +59,16 @@ arrives - Chrome sends no further frames while one is unacknowledged.
 The listener and the acknowledgements outlive ctx, which only bounds the start command: they run on
 ctx's values without its deadline until stop.  stop sends Page.stopScreencast and, once Chrome has
 answered, guarantees onFrame is not called again.  Every frame Chrome sent before answering has been
-handed to onFrame by the time stop returns: the tab.s session worker queues each frame before chromedp
-sees the answer (see ListenTarget), and stop waits for the queue to drain.
+handed to onFrame by the time stop returns: the tab's listeners queue each frame before chromedp
+hands over the answer (see ListenTarget), and stop waits for the queue to drain.
 
-A frame is large, so the session worker only queues its raw params; one goroutine per screencast decodes
-them, acknowledges the frame, and calls onFrame, in arrival order.
+The listener only queues a frame (chromedp has decoded it already); a goroutine acknowledges it and
+calls onFrame, in arrival order.  That goroutine runs only while frames are queued, so a recording
+whose tab goes away without a stop (a popup closing itself) leaves none behind.
 */
 func StartScreencastContext(ctx context.Context, params ScreencastParams, onFrame func(ScreencastFrame)) (stop func(context.Context) error, err error) {
 	listenCtx, cancelListen := context.WithCancel(context.WithoutCancel(ctx))
-	frames := newScreencastQueue()
-	go frames.deliver(func(raw jsonv2.Value) {
-		var event page.EventScreencastFrame
-		if jsonv2.Unmarshal(raw, &event, chromedp.DefaultUnmarshalOptions) != nil {
-			return
-		}
+	frames := newScreencastQueue(func(event *page.EventScreencastFrame) {
 		// The acknowledgement waits on a reply, so it can't hold up the frames behind this one.
 		go func() {
 			ackCtx, cancel := context.WithTimeout(listenCtx, screencastAckTimeout)
@@ -90,9 +85,11 @@ func StartScreencastContext(ctx context.Context, params ScreencastParams, onFram
 		}
 		onFrame(frame)
 	})
-	// A tab that goes away without a stop (a popup closing itself) ends the session's events: the
-	// queue ends then too, so its goroutine does not wait for a stop that never comes.
-	if err := listenRaw(listenCtx, func(_ string, raw jsonv2.Value) { frames.push(raw) }, frames.end, page.ScreencastFrame.Method); err != nil {
+	if err := ListenTarget(listenCtx, func(ev any) {
+		if frame, ok := ev.(*page.EventScreencastFrame); ok {
+			frames.push(frame)
+		}
+	}); err != nil {
 		cancelListen()
 		frames.close()
 		return nil, err
@@ -123,69 +120,73 @@ func StartScreencastContext(ctx context.Context, params ScreencastParams, onFram
 	}, nil
 }
 
-// screencastQueue hands a screencast's frames from the session worker to the goroutine that
-// delivers them, without a bound: the worker must never wait on it.
+// screencastQueue hands a screencast's frames from the tab's listener to a goroutine that delivers
+// them, without a bound: the listener must never wait on it.  The goroutine runs only while frames
+// are queued.
 type screencastQueue struct {
-	mu        sync.Mutex
-	pending   []jsonv2.Value
-	closed    bool
-	wake      chan struct{}
-	delivered chan struct{}
+	handle  func(*page.EventScreencastFrame)
+	mu      sync.Mutex
+	pending []*page.EventScreencastFrame
+	running bool
+	closed  bool
+	idle    chan struct{} // made by close while a delivery runs, closed when it ends
 }
 
-func newScreencastQueue() *screencastQueue {
-	return &screencastQueue{wake: make(chan struct{}, 1), delivered: make(chan struct{})}
+func newScreencastQueue(handle func(*page.EventScreencastFrame)) *screencastQueue {
+	return &screencastQueue{handle: handle}
 }
 
-func (q *screencastQueue) push(raw jsonv2.Value) {
+func (q *screencastQueue) push(frame *page.EventScreencastFrame) {
 	q.mu.Lock()
-	if !q.closed {
-		q.pending = append(q.pending, raw)
+	defer q.mu.Unlock()
+	if q.closed {
+		return
 	}
-	q.mu.Unlock()
-	select {
-	case q.wake <- struct{}{}:
-	default:
+	q.pending = append(q.pending, frame)
+	if !q.running {
+		q.running = true
+		go q.deliver()
 	}
 }
 
 // close stops accepting frames and returns once every frame accepted before it has been delivered.
 func (q *screencastQueue) close() {
-	q.end()
-	<-q.delivered
-}
-
-// end stops accepting frames without waiting for the ones already accepted to be delivered.
-func (q *screencastQueue) end() {
 	q.mu.Lock()
 	q.closed = true
-	q.mu.Unlock()
-	select {
-	case q.wake <- struct{}{}:
-	default:
+	if !q.running {
+		q.mu.Unlock()
+		return
 	}
+	if q.idle == nil {
+		q.idle = make(chan struct{})
+	}
+	idle := q.idle
+	q.mu.Unlock()
+	<-idle
 }
 
 // liveScreencastWorkers counts the screencast delivery goroutines running, for specs.
 var liveScreencastWorkers atomic.Int64
 
-func (q *screencastQueue) deliver(handle func(jsonv2.Value)) {
+func (q *screencastQueue) deliver() {
 	liveScreencastWorkers.Add(1)
 	defer liveScreencastWorkers.Add(-1)
-	defer close(q.delivered)
 	for {
 		q.mu.Lock()
-		batch, closed := q.pending, q.closed
+		batch := q.pending
 		q.pending = nil
-		q.mu.Unlock()
-		for _, raw := range batch {
-			handle(raw)
-		}
-		if closed && len(batch) == 0 {
+		if len(batch) == 0 {
+			q.running = false
+			if q.idle != nil {
+				close(q.idle)
+				q.idle = nil
+			}
+			q.mu.Unlock()
 			return
 		}
-		if len(batch) == 0 {
-			<-q.wake
+		q.mu.Unlock()
+		for _, frame := range batch {
+			q.handle(frame)
 		}
 	}
 }

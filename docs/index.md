@@ -585,14 +585,14 @@ _, err := chromedp.Call(ctx, emulation.SetCPUThrottlingRate, emulation.SetCPUThr
 
 Derive it from `b.Context` (not `context.Background()`) so chromedp's session for this tab stays in the chain.
 
-Biloba uses chromedp v0.21 and cdproto v0.159.  chromedp changed its API in v0.17, so escape-hatch code written against earlier versions needs updating.  The common patterns, old and new (chromedp's [migration guide](https://github.com/chromedp/chromedp/blob/main/docs/MIGRATION.md) has the rest):
+Biloba uses chromedp v0.22 and cdproto v0.159.  chromedp changed its API in v0.17, so escape-hatch code written against earlier versions needs updating.  The common patterns, old and new (chromedp's [migration guide](https://github.com/chromedp/chromedp/blob/main/docs/MIGRATION.md) has the rest):
 
 - `chromedp.Run(b.Context, actions...)` becomes `chromedp.Do(b.Context, actions...)`.  `chromedp.Run` now runs one action and returns its value: `title, err := chromedp.Run(b.Context, chromedp.Title())`.
 - A command is a value, not a function: `page.Navigate(url).Do(ctx)` becomes `chromedp.Call(b.Context, page.Navigate, page.NavigateParams{URL: url})`, which returns the result struct.  The `With...` setters are gone; set the params fields, and an optional field is a pointer (`new(true)`).
 - `chromedp.ActionFunc(func(ctx context.Context) error {...})` becomes `chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {...})`, which sends commands with `cdp.Call(ctx, t, command, params)`.
 - A browser-level command, `cmd.Do(cdp.WithExecutor(ctx, chromedp.FromContext(ctx).Browser))`, becomes `chromedp.CallBrowser(b.Context, command, params)`.
 - `chromedp.Evaluate(expr, &result)` becomes `result, err := chromedp.Run(b.Context, chromedp.Evaluate[T](expr))`.  A JavaScript `null` is now an error for a `T` that can't be nil; use a pointer type.
-- `chromedp.ListenTarget(b.Context, func(ev any) {...})` becomes `for ev, err := range chromedp.Events(b.Context, network.ResponseReceived) {...}`.  It delivers one event type per iterator, so there is no order across event types.  It subscribes when `Events` returns, so call it before you trigger the events.
+- `chromedp.ListenTarget(b.Context, func(ev any) {...})` becomes `err := chromedp.Listen(b.Context, func(ev any) {...})`, which calls the func for every event in the order Chrome sent them, as `ListenTarget` did; the func must return fast and must not run a command.  When one event type is all you need, `for ev, err := range chromedp.Events(b.Context, network.ResponseReceived) {...}` delivers it on an iterator, with no order across event types.  Both start listening when they return, so call them before you trigger the events.
 
 Multi-browser (Firefox/WebKit) is a deliberate non-goal - Biloba is Chrome-only by design.
 
