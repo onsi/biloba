@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hang in a frame</title>
+    <link rel="icon" href="data:,">
+</head>
+<body>
+    <h1 id="hello">Hang in a frame</h1>
+    <!-- the frame's script starts a request the suite server holds for 10s -->
+    <iframe id="child" srcdoc="&lt;script&gt;fetch('/hang?child')&lt;/script&gt;"></iframe>
+</body>
+</html>

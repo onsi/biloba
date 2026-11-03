@@ -91,7 +91,7 @@ type Session struct {
 	interceptionMu        sync.Mutex
 	interceptionSeq       uint64
 	responses             []Response
-	inflight              map[network.RequestID]InflightRequest
+	inflight              InflightTracker
 	cacheEnabled          bool
 	networkState          NetworkState
 	networkShadows        []NetworkShadowDiagnostic

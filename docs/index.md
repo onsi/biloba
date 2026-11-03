@@ -3762,6 +3762,8 @@ In keeping with Biloba's pragmatism, "idle" means the in-flight count has reache
 
 `BeNetworkIdle` tracks **HTTP** requests only - its in-flight count is keyed on the `Network.requestWillBeSent`/`Network.loadingFinished` request IDs Chrome reports.  A long-lived **WebSocket** does not register as an in-flight request, so it will not keep `BeNetworkIdle` perpetually busy (nor will `BeNetworkIdle` wait for a particular WS frame to arrive - wait on that frame's observable effect instead).
 
+A request also stops counting when the page that made it goes away.  Chrome cancels a document's pending requests when the tab navigates, and when an iframe is navigated or removed, but it reports neither a finish nor a failure for them, so Biloba drops them at that point.  Navigating away from a page with a fetch in flight leaves the tab idle (once the new page's own requests settle).  The one thing this gives up is a `keepalive` fetch or `sendBeacon`, which can outlive its page: it stops counting once the page navigates.
+
 ## Window Size, Screenshots, Configuration, and Debugging
 
 There are a few other odds and ends to cover, let's dive in

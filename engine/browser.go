@@ -464,7 +464,7 @@ func (b *Browser) listenToSession(session *Session) {
 			if session.acceptsDocumentEvent(request.FrameID, request.LoaderID) && !session.boundary.staleRequest(request.LoaderID, request.RequestID) {
 				session.recordRequest(request)
 				if request.Type != network.ResourceTypeWebSocket {
-					session.trackRequest(request)
+					session.inflight.Track(request)
 				}
 			}
 		}
@@ -474,11 +474,22 @@ func (b *Browser) listenToSession(session *Session) {
 			}
 			session.recordResponseStatus(response)
 		}
+		// Chrome reports nothing for the requests a navigation cancels, so the in-flight set learns of
+		// them from the frame events (see InflightTracker)
+		if attached, ok := event.(*page.EventFrameAttached); ok {
+			session.inflight.FrameAttached(attached.FrameID, attached.ParentFrameID)
+		}
+		if navigated, ok := event.(*page.EventFrameNavigated); ok {
+			session.inflight.FrameNavigated(navigated.Frame)
+		}
+		if detached, ok := event.(*page.EventFrameDetached); ok {
+			session.inflight.FrameDetached(detached.FrameID)
+		}
 		if finished, ok := event.(*network.EventLoadingFinished); ok {
-			session.finishRequest(finished.RequestID)
+			session.inflight.Finish(finished.RequestID)
 		}
 		if failed, ok := event.(*network.EventLoadingFailed); ok {
-			session.finishRequest(failed.RequestID)
+			session.inflight.Finish(failed.RequestID)
 			session.recordRequestOutcome(failed.RequestID, 0, RequestFailureText(failed))
 		}
 		if paused, ok := event.(*fetch.EventRequestPaused); ok {
@@ -532,7 +543,7 @@ func (b *Browser) listenToFrameDocument(session *Session) {
 			if session.acceptsDocumentEvent(event.FrameID, event.LoaderID) {
 				session.recordRequest(event)
 				if event.Type != network.ResourceTypeWebSocket {
-					session.trackRequest(event)
+					session.inflight.Track(event)
 				}
 			}
 		case *network.EventResponseReceived:
@@ -540,10 +551,16 @@ func (b *Browser) listenToFrameDocument(session *Session) {
 				session.recordResponse(event)
 			}
 			session.recordResponseStatus(event)
+		case *page.EventFrameAttached:
+			session.inflight.FrameAttached(event.FrameID, event.ParentFrameID)
+		case *page.EventFrameNavigated:
+			session.inflight.FrameNavigated(event.Frame)
+		case *page.EventFrameDetached:
+			session.inflight.FrameDetached(event.FrameID)
 		case *network.EventLoadingFinished:
-			session.finishRequest(event.RequestID)
+			session.inflight.Finish(event.RequestID)
 		case *network.EventLoadingFailed:
-			session.finishRequest(event.RequestID)
+			session.inflight.Finish(event.RequestID)
 			session.recordRequestOutcome(event.RequestID, 0, RequestFailureText(event))
 		}
 	})

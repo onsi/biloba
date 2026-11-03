@@ -9,7 +9,6 @@ import (
 	"maps"
 	"net/http"
 	"reflect"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -283,6 +282,8 @@ BeNetworkIdle() is a matcher that passes when this tab has no in-flight requests
 
 Note: Biloba considers a tab idle the instant its in-flight request count reaches zero - it does not wait for a quiet period.  This is a deliberately pragmatic definition; if you need to wait for a specific request to complete, assert on it directly.
 
+A request stops counting when the page that made it navigates away or its iframe is removed: Chrome cancels it without reporting a finish or a failure.  A keepalive fetch or sendBeacon, which can outlive its page, stops counting then too.
+
 Read https://onsi.github.io/biloba/#stubbing-and-observing-the-network to learn more about working with the network in Biloba
 */
 func (b *Biloba) BeNetworkIdle() types.GomegaMatcher {
@@ -296,8 +297,9 @@ func (b *Biloba) BeNetworkIdle() types.GomegaMatcher {
 		}
 		b.lock.Lock()
 		defer b.lock.Unlock()
-		report.record(b.state.inflightRequests)
-		return len(b.state.inflightRequests) == 0, nil
+		inflight := b.state.inflight.Snapshot()
+		report.record(inflight)
+		return len(inflight) == 0, nil
 	}).WithTemplate("Expected the tab to be network idle, but it has {{.Data.Describe}}", report)
 }
 
@@ -1632,12 +1634,7 @@ func (b *Biloba) handleEventRequestWillBeSent(ev *network.EventRequestWillBeSent
 	req := newRequest(ev.Request, ev.Type)
 	b.state.requests = append(b.state.requests, req)
 	b.state.requestsByID[ev.RequestID] = req
-	started := time.Now()
-	// a redirect replaces the entry with the next hop, keeping the original start
-	if hop, ok := b.state.inflightRequests[ev.RequestID]; ok {
-		started = hop.Started
-	}
-	b.state.inflightRequests[ev.RequestID] = engine.InflightRequest{Method: req.Method, URL: req.URL, ResourceType: req.ResourceType, Started: started}
+	b.state.inflight.Track(ev)
 }
 
 // networkIdleReport is what BeNetworkIdle's failure message describes: the requests its most recent
@@ -1650,14 +1647,10 @@ type networkIdleReport struct {
 	at       time.Time
 }
 
-func (r *networkIdleReport) record(inflight map[network.RequestID]engine.InflightRequest) {
+func (r *networkIdleReport) record(inflight []engine.InflightRequest) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
-	r.inflight = r.inflight[:0]
-	for _, req := range inflight {
-		r.inflight = append(r.inflight, req)
-	}
-	sort.Slice(r.inflight, func(i, j int) bool { return r.inflight[i].Started.Before(r.inflight[j].Started) })
+	r.inflight = inflight
 	r.at = time.Now()
 }
 
@@ -1682,13 +1675,13 @@ func (b *Biloba) handleEventResponseReceived(ev *network.EventResponseReceived) 
 func (b *Biloba) handleEventLoadingFinished(ev *network.EventLoadingFinished) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	delete(b.state.inflightRequests, ev.RequestID)
+	b.state.inflight.Finish(ev.RequestID)
 }
 
 func (b *Biloba) handleEventLoadingFailed(ev *network.EventLoadingFailed) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	delete(b.state.inflightRequests, ev.RequestID)
+	b.state.inflight.Finish(ev.RequestID)
 	if req := b.state.requestsByID[ev.RequestID]; req != nil {
 		req.Failure = engine.RequestFailureText(ev)
 	}

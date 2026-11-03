@@ -70,6 +70,64 @@ var _ = Describe("what a session observes", func() {
 		Expect(err).NotTo(HaveOccurred())
 	})
 
+	// Chrome cancels the old document's requests when a navigation commits and never reports them as
+	// finished or failed, so the session drops them when the frame navigates.
+	Describe("navigating away from requests in flight", func() {
+		idle := engine.PollPolicy{Timeout: 3 * time.Second}
+		startHangingRequests := func(ctx SpecContext) {
+			_, err := session.Evaluate(ctx, `fetch("/hang").then(r => r.text()); fetch("/hang?second"); void 0`)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(session.InflightRequestCount).Should(Equal(2))
+		}
+		frameWithHangingRequest := `new Promise(resolve => { const frame = document.createElement("iframe"); frame.id = "child"; frame.srcdoc = "<script>fetch('/hang?child')</script>"; frame.onload = () => resolve(true); document.body.append(frame) })`
+		inflightURLs := func() []string {
+			urls := []string{}
+			for _, request := range session.InflightRequests() {
+				urls = append(urls, request.URL)
+			}
+			return urls
+		}
+
+		DescribeTable("becomes idle", func(ctx SpecContext, destination string) {
+			startHangingRequests(ctx)
+			if strings.HasPrefix(destination, "/") {
+				destination = server.URL + destination
+			}
+			Expect(session.Navigate(ctx, destination)).To(Succeed())
+			_, err := session.WaitForNetworkIdle(ctx, idle)
+			Expect(err).NotTo(HaveOccurred())
+		},
+			Entry("on about:blank", "about:blank"),
+			Entry("on another page", "/destination"),
+		)
+
+		It("keeps counting a request the new page has made", func(ctx SpecContext) {
+			startHangingRequests(ctx)
+			Expect(session.Navigate(ctx, server.URL+"/hang-page")).To(Succeed())
+			Eventually(inflightURLs).Should(ConsistOf(HaveSuffix("/hang?new-page")))
+			Consistently(inflightURLs, 500*time.Millisecond).Should(ConsistOf(HaveSuffix("/hang?new-page")))
+		})
+
+		It("becomes idle when an iframe is removed while its request is in flight", func(ctx SpecContext) {
+			_, err := session.EvaluateAsync(ctx, frameWithHangingRequest)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(inflightURLs).Should(ConsistOf(HaveSuffix("/hang?child")))
+			_, err = session.Evaluate(ctx, `document.querySelector("#child").remove(); void 0`)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = session.WaitForNetworkIdle(ctx, idle)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("becomes idle when the page that embeds the iframe navigates away", func(ctx SpecContext) {
+			_, err := session.EvaluateAsync(ctx, frameWithHangingRequest)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(inflightURLs).Should(ConsistOf(HaveSuffix("/hang?child")))
+			Expect(session.Navigate(ctx, server.URL+"/destination")).To(Succeed())
+			_, err = session.WaitForNetworkIdle(ctx, idle)
+			Expect(err).NotTo(HaveOccurred())
+		})
+	})
+
 	It("records uncaught exceptions and unhandled rejections as page errors, and delivers them live", func(ctx SpecContext) {
 		subscription, err := session.SubscribePageErrors(8)
 		Expect(err).NotTo(HaveOccurred())

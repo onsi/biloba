@@ -911,48 +911,11 @@ func (s *Session) Responses(q ResponseQuery) []Response {
 	return out
 }
 
-// InflightRequest is a request Chrome announced and has not yet finished or failed: what
-// WaitForNetworkIdle names when it times out.  A redirect replaces it with the next hop and keeps the
-// original Started.
-type InflightRequest struct {
-	Method, URL, ResourceType string
-	Started                   time.Time
-}
-
-func (s *Session) trackRequest(event *network.EventRequestWillBeSent) {
-	s.networkMu.Lock()
-	if s.inflight == nil {
-		s.inflight = map[network.RequestID]InflightRequest{}
-	}
-	started := time.Now()
-	if hop, ok := s.inflight[event.RequestID]; ok {
-		started = hop.Started
-	}
-	s.inflight[event.RequestID] = InflightRequest{Method: event.Request.Method, URL: event.Request.URL, ResourceType: event.Type.String(), Started: started}
-	s.networkMu.Unlock()
-}
-func (s *Session) finishRequest(id network.RequestID) {
-	s.networkMu.Lock()
-	delete(s.inflight, id)
-	s.networkMu.Unlock()
-}
-func (s *Session) InflightRequestCount() int {
-	s.networkMu.Lock()
-	defer s.networkMu.Unlock()
-	return len(s.inflight)
-}
+// InflightRequestCount returns the number of requests in flight.
+func (s *Session) InflightRequestCount() int { return s.inflight.Count() }
 
 // InflightRequests returns the requests in flight, oldest first.
-func (s *Session) InflightRequests() []InflightRequest {
-	s.networkMu.Lock()
-	out := make([]InflightRequest, 0, len(s.inflight))
-	for _, request := range s.inflight {
-		out = append(out, request)
-	}
-	s.networkMu.Unlock()
-	sort.Slice(out, func(i, j int) bool { return out[i].Started.Before(out[j].Started) })
-	return out
-}
+func (s *Session) InflightRequests() []InflightRequest { return s.inflight.Snapshot() }
 
 // WaitForNetworkIdle polls until no request is in flight.  When the poll times out, its error names
 // each request its last attempt saw in flight (method, URL, resource type, and how long it had been
@@ -1115,7 +1078,7 @@ func (s *Session) clearNetworkBookkeeping() {
 	s.networkHandlers = nil
 	s.networkOrder = nil
 	s.responses = nil
-	s.inflight = nil
+	s.inflight.Reset()
 	s.cacheEnabled = true
 	s.networkState = NetworkState{}
 	s.networkShadows, s.networkShadowsDropped = nil, 0

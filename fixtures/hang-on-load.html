@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hang on load</title>
+    <link rel="icon" href="data:,">
+</head>
+<body>
+    <h1 id="hello">Hang on load</h1>
+    <!-- the suite server holds /hang for 10s, so this request is still pending while a spec looks -->
+    <script>fetch("/hang?new-page")</script>
+</body>
+</html>

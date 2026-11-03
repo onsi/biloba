@@ -431,6 +431,10 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 			response.WriteHeader(http.StatusNotFound)
 			return
 		}
+		if request.URL.Path == "/hang-page" {
+			fmt.Fprint(response, `<!doctype html><h1>hangs</h1><script>fetch("/hang?new-page")</script>`)
+			return
+		}
 		if request.URL.Path == "/destination" {
 			fmt.Fprint(response, `<!doctype html><h1 data-testid="destination">arrived</h1>`)
 			return

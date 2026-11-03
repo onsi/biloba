@@ -897,8 +897,10 @@ type tabState struct {
 	requests []*Request
 	// requestsByID points at the latest record for each request ID (a redirect reuses the ID for its
 	// next hop), so response and failure events can fill in that record's Status and Failure.
-	requestsByID     map[network.RequestID]*Request
-	inflightRequests map[network.RequestID]engine.InflightRequest
+	requestsByID map[network.RequestID]*Request
+	// inflight is the requests this tab has announced and not yet ended, shared with the engine so both
+	// clients agree on what network idle means (including what a navigation cancels).
+	inflight         engine.InflightTracker
 	requestHandlers  []*requestHandler       // ordered, first-match-wins: stub / abort / modify-request
 	responseHandlers []*ResponseModification // ordered, first-match-wins: modify-response (response stage)
 	// rewrittenRequests maps a paused request whose URL a ModifyRequest rewrote to the URL the page
@@ -916,7 +918,6 @@ func newTabState() *tabState {
 		dialogHandlers:    []*DialogHandler{},
 		dialogs:           Dialogs{},
 		requestsByID:      map[network.RequestID]*Request{},
-		inflightRequests:  map[network.RequestID]engine.InflightRequest{},
 		rewrittenRequests: map[fetch.RequestID]string{},
 	}
 }
@@ -1614,9 +1615,11 @@ func (b *Biloba) registerTabFor(c context.Context, cancel context.CancelFunc) *B
 //go:embed biloba.js
 var bilobaJS string
 
-func (b *Biloba) handleEventFrameNavigated(_ *page.EventFrameNavigated) {
+func (b *Biloba) handleEventFrameNavigated(ev *page.EventFrameNavigated) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
+	// Chrome never reports the requests a navigation cancels, so they leave the in-flight set here
+	b.state.inflight.FrameNavigated(ev.Frame)
 	// The new document already has _biloba when Chrome is running it at document start for us, so the
 	// install survives the navigation and re-sending the script would be pure waste.  Only a tab whose
 	// registration did not take has to reinstall.
@@ -1625,6 +1628,22 @@ func (b *Biloba) handleEventFrameNavigated(_ *page.EventFrameNavigated) {
 	}
 	// A frame navigated, so this target has a live renderer again - whatever crash we recorded is over.
 	b.state.targetCrashed = false
+}
+
+// handleEventFrameAttached tells the in-flight set where a frame sits, so a navigation of its parent
+// can drop the frame's requests too.
+func (b *Biloba) handleEventFrameAttached(ev *page.EventFrameAttached) {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	b.state.inflight.FrameAttached(ev.FrameID, ev.ParentFrameID)
+}
+
+// handleEventFrameDetached drops the requests of a frame that is gone (an iframe removed while a
+// request was in flight); Chrome never reports those either.
+func (b *Biloba) handleEventFrameDetached(ev *page.EventFrameDetached) {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	b.state.inflight.FrameDetached(ev.FrameID)
 }
 
 // handleEventTargetCrashed records that this tab's renderer died so the next command that fails can

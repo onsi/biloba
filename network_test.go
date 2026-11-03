@@ -1281,5 +1281,60 @@ var _ = Describe("Observing the network", func() {
 			hold.Release()
 			Eventually(b).Should(b.BeNetworkIdle())
 		})
+
+		// Chrome cancels the old document's requests when a navigation commits and never reports them as
+		// finished or failed, so Biloba drops them when the frame navigates.
+		Describe("when the page navigates away from requests in flight", func() {
+			inflight := func() string {
+				idle := b.BeNetworkIdle()
+				if ok, _ := idle.Match(b); ok {
+					return ""
+				}
+				return idle.FailureMessage(b)
+			}
+
+			startHangingRequests := func() {
+				b.Navigate(fixtureServer + "/stragglers.html")
+				Eventually("#hello").Should(b.Exist())
+				b.Run(`void window.hang(); void fetch("/hang?second")`)
+				Eventually(b).ShouldNot(b.BeNetworkIdle())
+			}
+
+			DescribeTable("becomes idle", func(destination string) {
+				startHangingRequests()
+				if strings.HasPrefix(destination, "/") {
+					destination = fixtureServer + destination
+				}
+				b.Navigate(destination)
+				// well under the 10s the server holds /hang
+				Eventually(b, 3*time.Second).Should(b.BeNetworkIdle())
+			},
+				Entry("on about:blank", "about:blank"),
+				Entry("on another page", "/dom.html"),
+			)
+
+			It("keeps counting a request the new page has made", func() {
+				startHangingRequests()
+				b.Navigate(fixtureServer + "/hang-on-load.html")
+				Eventually(inflight).Should(And(ContainSubstring("1 in-flight request(s)"), ContainSubstring("/hang?new-page")))
+				Consistently(inflight, 500*time.Millisecond).Should(And(ContainSubstring("1 in-flight request(s)"), ContainSubstring("/hang?new-page")))
+			})
+
+			It("becomes idle when an iframe is removed while its request is in flight", func() {
+				b.Navigate(fixtureServer + "/hang-in-frame.html")
+				Eventually("#hello").Should(b.Exist())
+				Eventually(inflight).Should(ContainSubstring("/hang?child"))
+				b.Run(`document.querySelector("#child").remove()`)
+				Eventually(b, 3*time.Second).Should(b.BeNetworkIdle())
+			})
+
+			It("becomes idle when the page that embeds the iframe navigates away", func() {
+				b.Navigate(fixtureServer + "/hang-in-frame.html")
+				Eventually("#hello").Should(b.Exist())
+				Eventually(inflight).Should(ContainSubstring("/hang?child"))
+				b.Navigate(fixtureServer + "/dom.html")
+				Eventually(b, 3*time.Second).Should(b.BeNetworkIdle())
+			})
+		})
 	})
 })
