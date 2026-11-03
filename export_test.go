@@ -315,3 +315,16 @@ func (rec *ScreencastRecording) FramesSoFarForTest() []ScreencastFrame {
 
 // PausedClockReportForTest is the paused-clock entry a failure report would add for this tab now.
 func (b *Biloba) PausedClockReportForTest() string { return b.pausedClockReport() }
+
+// SetBilobaRegistrationForTest replaces the call that registers biloba.js to run at the start of
+// every new document, so a spec can make the registration fail.  Returns a restore func.
+func SetBilobaRegistrationForTest(register func(context.Context, string) error) func() {
+	previous := registerBilobaOnNewDocument
+	registerBilobaOnNewDocument = register
+	return func() { registerBilobaOnNewDocument = previous }
+}
+
+// BilobaReloadsForTest is how many times biloba.js has been sent whole into a page by this process
+// (reloadBiloba).  A spec reads it before and after a navigation and query to pin that the
+// document-start registration, not a re-send, put _biloba there.
+func BilobaReloadsForTest() int64 { return bilobaReloads.Load() }

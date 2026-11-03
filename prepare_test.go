@@ -1,6 +1,8 @@
 package biloba_test
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"sync/atomic"
 
@@ -212,5 +214,53 @@ var _ = Describe("Prepare resets per-spec state so it does not leak between spec
 		b.Click("#fetch-users")
 		Eventually("#result").Should(b.HaveInnerText(ContainSubstring("/api/users")))
 		Expect("#result").NotTo(b.HaveInnerText(ContainSubstring("stubbed")))
+	})
+})
+
+var _ = Describe("biloba.js is not re-sent after a navigation", func() {
+	// Chrome runs biloba.js at the start of every document (installBilobaOnEveryDocument), so a
+	// navigation must not make the next query send the whole script again.  The first query on a tab
+	// does send it once, for the document that was open before the registration; these start after it.
+	It("on the root tab, after Prepare", func() {
+		b.Navigate(fixtureServer + "/dom.html")
+		Expect(b.HasElement("#hello")).To(BeTrue())
+
+		b.Prepare()
+		before := biloba.BilobaReloadsForTest()
+
+		b.Navigate(fixtureServer + "/dom.html")
+		Expect(b.HasElement("#hello")).To(BeTrue())
+		b.Navigate(fixtureServer + "/dom.html")
+		Expect(b.HasElement("#hello")).To(BeTrue())
+
+		Expect(biloba.BilobaReloadsForTest()).To(Equal(before))
+	})
+
+	It("only when Chrome took the registration: otherwise each navigation costs a re-send", func() {
+		restore := biloba.SetBilobaRegistrationForTest(func(context.Context, string) error { return errors.New("registration refused") })
+		tab := b.NewTab()
+		restore()
+		tab.Navigate(fixtureServer + "/dom.html")
+		Expect(tab.HasElement("#hello")).To(BeTrue())
+		before := biloba.BilobaReloadsForTest()
+
+		tab.Navigate(fixtureServer + "/dom.html")
+		Expect(tab.HasElement("#hello")).To(BeTrue())
+		tab.Navigate(fixtureServer + "/dom.html")
+		Expect(tab.HasElement("#hello")).To(BeTrue())
+
+		Expect(biloba.BilobaReloadsForTest()).To(Equal(before + 2))
+	})
+
+	It("on a new tab", func() {
+		tab := b.NewTab()
+		tab.Navigate(fixtureServer + "/dom.html")
+		Expect(tab.HasElement("#hello")).To(BeTrue())
+		before := biloba.BilobaReloadsForTest()
+
+		tab.Navigate(fixtureServer + "/dom.html")
+		Expect(tab.HasElement("#hello")).To(BeTrue())
+
+		Expect(biloba.BilobaReloadsForTest()).To(Equal(before))
 	})
 })

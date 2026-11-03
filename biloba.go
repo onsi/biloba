@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "embed"
@@ -833,7 +834,8 @@ reason; these fields simply hadn't followed it.  Note that go vet cannot catch a
 copylocks check is what would otherwise flag `nb := *b`, and the pointer-valued mutex keeps it quiet.
 
 Membership rule: this is what [Biloba.Prepare] resets - the per-spec state of one tab - plus
-bilobaIsInstalled, which tracks page loads rather than specs and so survives Prepare.
+bilobaIsInstalled and bilobaAutoInstalled, which describe the tab and its page rather than the spec
+and so survive Prepare.
 */
 type tabState struct {
 	// bilobaIsInstalled tracks whether window._biloba survives in the current page.  Not reset by
@@ -844,7 +846,8 @@ type tabState struct {
 	// every document" registration (see installBilobaOnEveryDocument), which is what lets a navigation
 	// STOP invalidating bilobaIsInstalled: the next document already has _biloba before its own scripts
 	// run.  False means the registration did not take, and the tab falls back to reinstalling after
-	// each navigation.  Set once per tab, at setup.
+	// each navigation.  Set once per tab, at setup, and carried through Prepare: the registration
+	// belongs to the tab, not the spec.
 	bilobaAutoInstalled bool
 
 	// targetCrashed records that Chrome told us this tab's renderer died (Inspector.targetCrashed), so
@@ -1114,10 +1117,15 @@ func (b *Biloba) Prepare() {
 	wasFetchEnabled := b.state.fetchEnabled
 	// Reset through the shared pointer, not by replacing it: every view of this tab holds the same
 	// *tabState, and swapping in a new one would leave the views pointing at the old.  bilobaIsInstalled
-	// is carried over deliberately - it tracks the page, and Prepare does not navigate.
-	installed, emulation, permissions, clock := b.state.bilobaIsInstalled, b.state.emulation, b.state.permissions, b.state.clock
+	// and bilobaAutoInstalled are carried over deliberately: they describe the tab and its page, not the
+	// spec.  Prepare navigates to about:blank, but the standing document-start registration survives it
+	// (Prepare only removes the clock's script), so that page has _biloba too - and dropping
+	// bilobaAutoInstalled would make every later navigation clear bilobaIsInstalled and re-send all of
+	// biloba.js for nothing.
+	installed, autoInstalled := b.state.bilobaIsInstalled, b.state.bilobaAutoInstalled
+	emulation, permissions, clock := b.state.emulation, b.state.permissions, b.state.clock
 	*b.state = *newTabState()
-	b.state.bilobaIsInstalled = installed
+	b.state.bilobaIsInstalled, b.state.bilobaAutoInstalled = installed, autoInstalled
 	// carried over so resetBrowsingState can clear whatever emulation the previous spec leaked
 	b.state.emulation, b.state.permissions = emulation, permissions
 	b.lock.Unlock()
@@ -1615,6 +1623,10 @@ func (b *Biloba) registerTabFor(c context.Context, cancel context.CancelFunc) *B
 //go:embed biloba.js
 var bilobaJS string
 
+// bilobaReloads counts full sends of biloba.js into a page (reloadBiloba), so a spec can pin that a
+// navigation does not cost one.  See BilobaReloadsForTest.
+var bilobaReloads atomic.Int64
+
 func (b *Biloba) handleEventFrameNavigated(ev *page.EventFrameNavigated) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
@@ -1667,6 +1679,7 @@ func (b *Biloba) ensureBiloba() {
 }
 
 func (b *Biloba) reloadBiloba() {
+	bilobaReloads.Add(1)
 	b.run(bilobaJS)
 	b.lock.Lock()
 	b.state.bilobaIsInstalled = true

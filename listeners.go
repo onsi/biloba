@@ -30,6 +30,9 @@ func (b *Biloba) configureDownloadBehavior() {
 	})
 }
 
+// registerBilobaOnNewDocument is how installBilobaOnEveryDocument hands Chrome the script.
+var registerBilobaOnNewDocument = engine.InstallScriptOnNewDocumentContext
+
 // enableCrashReporting turns on the Inspector domain, which is one of the two ways Chrome announces a
 // dead renderer.  chromedp enables Page/Runtime/Network/DOM on its own but not this one.
 func (b *Biloba) enableCrashReporting() {
@@ -60,8 +63,9 @@ func (b *Biloba) enableCrashReporting() {
 // not.  Nothing about this may become load-bearing without a fallback - a silent failure would
 // otherwise turn every command after a navigation into a "_biloba is not defined" round trip.
 func (b *Biloba) installBilobaOnEveryDocument() {
+	// (registerBilobaOnNewDocument is a variable so a spec can make the registration fail.)
 	err := b.runEngine("install biloba.js on every new document", func(ctx context.Context) error {
-		return engine.InstallScriptOnNewDocumentContext(ctx, bilobaJS)
+		return registerBilobaOnNewDocument(ctx, bilobaJS)
 	})
 	b.lock.Lock()
 	defer b.lock.Unlock()
