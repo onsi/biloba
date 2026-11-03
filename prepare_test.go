@@ -92,8 +92,12 @@ var _ = Describe("Prepare resets per-spec state so it does not leak between spec
 		Eventually(b).ShouldNot(b.BeNetworkIdle())
 
 		b.Prepare()
-		// the page logs, throws, and sends a request as Prepare navigates it away, and Chrome then
-		// aborts its two requests
+		// The page logs, throws, and sends a request as Prepare navigates it away.  Chrome may or may
+		// not report the abort of /hang (it sends that event from a renderer task that usually lands
+		// just before the about:blank commit, and under load the commit wins), and it never reports
+		// the requests the navigation itself cancels.  So the wait is on what the page does, not on
+		// how its requests end.  An abort Chrome did report was delivered before Prepare returned, so
+		// nothing can arrive later.
 		var events []string
 		Eventually(func() []string {
 			for {
@@ -104,7 +108,7 @@ var _ = Describe("Prepare resets per-spec state so it does not leak between spec
 					return events
 				}
 			}
-		}).Should(ContainElements("console", "thrown", "request", "hang ended"))
+		}).Should(ContainElements("console", "thrown", "request"))
 
 		Ω(b.AllPageErrors()).Should(BeEmpty())
 		Ω(b.AllConsoleMessages()).Should(BeEmpty())
