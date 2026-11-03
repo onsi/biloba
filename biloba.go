@@ -1370,8 +1370,14 @@ const (
 // discarded, and once all newTabAttempts are spent NewTab hands back the nil tab its own comment
 // promises never to return, so b.NewTab().Navigate(...) panics on a nil receiver instead of failing
 // with a message.  A true wedge still cannot be unblocked by a context timeout, so the watchdog has
-// to stay - it just needs to be slow enough that only a real wedge trips it.
-const tabAttachTimeout = 20 * time.Second
+// to stay - it just needs to be slow enough that only a real wedge trips it.  A var only so a spec can
+// shrink it.
+var tabAttachTimeout = 20 * time.Second
+
+// attachAttemptReturned, when set, runs as an attach attempt in registerTabFor returns, before the
+// probe records whether it attached.  It is the seam a spec uses to hold an attempt there while the
+// watchdog gives up on it.
+var attachAttemptReturned func()
 
 // NewTab re-creates the target from scratch this many times if registration can't attach to it, so it
 // never hands the caller a nil tab (which b.NewTab().Navigate(...) would panic on).
@@ -1576,18 +1582,24 @@ func newIsolatedBrowserContextAndTarget(ctx context.Context) (cdp.BrowserContext
 // its close by polling Target.getTargets; Close and Prepare do their own waiting, see
 // waitUntilTargetGone).
 //
-// shouldClose, when not nil, decides at that moment whether the target is this context's to close: a
-// popup is closed only if this context got as far as attaching it, as chromedp's own cancellation did.
-// A target Biloba created itself (nil) is always closed.
-func tabContextFor(parent context.Context, targetID target.ID, shouldClose func() bool) (context.Context, context.CancelFunc) {
+// probe, when not nil, decides whether the target is this context's to close: a popup is closed only
+// if one of the probe's attempts got as far as attaching it, as chromedp's own cancellation did.  A
+// target Biloba created itself (nil) is always closed.
+func tabContextFor(parent context.Context, targetID target.ID, probe *engine.AttachProbe) (context.Context, context.CancelFunc) {
 	ctx, detach := engine.NewTabContext(parent, targetID)
 	var once sync.Once
 	closeTab := func() {
 		once.Do(func() {
 			detach() // waits for chromedp's detach, so the close follows it as it did
-			if shouldClose == nil || shouldClose() {
+			if probe == nil {
 				_ = engine.CloseTargetContext(parent, targetID)
+				return
 			}
+			probe.Settle(func(attached bool) {
+				if attached {
+					_ = engine.CloseTargetContext(parent, targetID)
+				}
+			})
 		})
 	}
 	context.AfterFunc(ctx, closeTab)
@@ -1598,13 +1610,13 @@ func tabContextFor(parent context.Context, targetID target.ID, shouldClose func(
 // is closed whatever happens; a tab the page spawned is closed only once it has been attached.
 func (b *Biloba) registerTabFor(targetID target.ID, parent context.Context, created bool) *Biloba {
 	b.gt.Helper()
-	// set by the probe below, on the goroutine whose Run attached the target
-	var attachedThrough atomic.Bool
-	shouldClose := attachedThrough.Load
+	// runs the attempts below and records whether one attached the target
+	probe := &engine.AttachProbe{}
+	closeOnlyIfAttached := probe
 	if created {
-		shouldClose = nil
+		closeOnlyIfAttached = nil
 	}
-	c, cancel := tabContextFor(parent, targetID, shouldClose)
+	c, cancel := tabContextFor(parent, targetID, closeOnlyIfAttached)
 	newG := newBiloba(b.gt)
 	newG.Context = c
 	newG.ChromeConnection = b.ChromeConnection
@@ -1629,14 +1641,13 @@ func (b *Biloba) registerTabFor(targetID target.ID, parent context.Context, crea
 		if attempt > 0 {
 			time.Sleep(tabProbeRetryBackoff)
 		}
-		probeDone := make(chan error, 1)
-		go func() {
+		probeDone := probe.Try(c, func() error {
 			_, err := newG.RunErr("1")
-			if c := chromedp.FromContext(newG.Context); c != nil && c.Target != nil {
-				attachedThrough.Store(true)
+			if attachAttemptReturned != nil {
+				attachAttemptReturned()
 			}
-			probeDone <- err
-		}()
+			return err
+		})
 		select {
 		case probeErr = <-probeDone:
 			// got a result: nil => attached; non-nil => transient, retry on the same context

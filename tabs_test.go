@@ -5,6 +5,7 @@ import (
 
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
+	"github.com/onsi/biloba"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/gbytes"
@@ -85,6 +86,41 @@ var _ = Describe("Tabs", func() {
 					}
 					return ids
 				}).ShouldNot(ContainElement(popupID))
+			})
+		})
+
+		Context("when the watchdog gives up on an attach that got through", func() {
+			It("closes the tab rather than leaving it open and unattached", func() {
+				// this process's tabs, which open in the root's browser context
+				targetIDs := func() []target.ID {
+					targets, err := chromedp.Targets(b.Context)
+					Ω(err).ShouldNot(HaveOccurred())
+					ids := []target.ID{}
+					for _, info := range targets {
+						if info.Type == "page" && info.BrowserContextID == b.BrowserContextID() {
+							ids = append(ids, info.TargetID)
+						}
+					}
+					return ids
+				}
+				rootID := chromedp.FromContext(b.Context).Target.TargetID
+				b.Navigate(fixtureServer + "/auto-open.html")
+				Eventually(targetIDs).Should(HaveLen(2))
+				var popupID target.ID
+				for _, id := range targetIDs() {
+					if id != rootID {
+						popupID = id
+					}
+				}
+
+				// The attempt attaches the popup and then outlives the watchdog, so the cleanup only
+				// sees the attach if it waits for the attempt.
+				restore := biloba.SetTabAttachProbeForTest(200*time.Millisecond, func() { time.Sleep(600 * time.Millisecond) })
+				tabs := b.AllTabs()
+				restore()
+				Ω(tabs).Should(HaveLen(1), "the popup's attach was given up on")
+
+				Eventually(targetIDs).ShouldNot(ContainElement(popupID), "the attach got through, so giving up on it closes the popup")
 			})
 		})
 

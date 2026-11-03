@@ -328,3 +328,11 @@ func SetBilobaRegistrationForTest(register func(context.Context, string) error) 
 // (reloadBiloba).  A spec reads it before and after a navigation and query to pin that the
 // document-start registration, not a re-send, put _biloba there.
 func BilobaReloadsForTest() int64 { return bilobaReloads.Load() }
+
+// SetTabAttachProbeForTest shrinks registerTabFor's attach watchdog to timeout and runs returned as
+// each attach attempt returns, before the probe records whether it attached.  Returns a restore func.
+func SetTabAttachProbeForTest(timeout time.Duration, returned func()) func() {
+	previousTimeout, previousReturned := tabAttachTimeout, attachAttemptReturned
+	tabAttachTimeout, attachAttemptReturned = timeout, returned
+	return func() { tabAttachTimeout, attachAttemptReturned = previousTimeout, previousReturned }
+}

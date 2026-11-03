@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/accessibility"
@@ -162,4 +163,43 @@ func AttachSpawnedTabForTest(ctx context.Context, root *Session, targetID target
 
 func SessionBrowserContextForTest(session *Session) cdp.BrowserContextID {
 	return session.browserContextID
+}
+
+// StallAttachForTest holds the first message Chrome sends on the next session attached to targetID,
+// and with it every reply behind it on that session's worker, until release is called.  An attach
+// therefore gets through (Target.attachToTarget answers on the browser's session) and then stalls in
+// chromedp's setup.  stalled is closed once a message is held.
+func StallAttachForTest(ctx context.Context, root *Session, targetID target.ID) (stalled <-chan struct{}, release func(), err error) {
+	hub, _, err := hubFor(root.ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	// the listeners live as long as ctx, on root's browser
+	listenCtx, stop := context.WithCancel(root.ctx)
+	context.AfterFunc(ctx, stop)
+	ctx = listenCtx
+	held, releasing := make(chan struct{}), make(chan struct{})
+	var holdOnce, releaseOnce sync.Once
+	release = func() { releaseOnce.Do(func() { close(releasing) }) }
+	err = ListenBrowser(ctx, func(event any) {
+		attached, ok := event.(*target.EventAttachedToTarget)
+		if !ok || attached.TargetInfo == nil || attached.TargetInfo.TargetID != targetID {
+			return
+		}
+		hub.add(attached.SessionID, &eventListener{ctx: ctx, fn: func(any) {
+			holdOnce.Do(func() {
+				close(held)
+				<-releasing
+			})
+		}})
+	}, target.AttachedToTarget.Method)
+	return held, release, err
+}
+
+// SetAttachAttemptReturnedForTest runs hook as each attach attempt returns, before the probe records
+// whether it attached.  Returns a restore func.
+func SetAttachAttemptReturnedForTest(hook func()) func() {
+	previous := attachAttemptReturned
+	attachAttemptReturned = hook
+	return func() { attachAttemptReturned = previous }
 }
