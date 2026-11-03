@@ -21,6 +21,17 @@ func executionContext(ctx context.Context) runtime.ExecutionContextID {
 	return world.id
 }
 
+// evaluateParams is Runtime.evaluate's params as cdproto's old runtime.Evaluate constructor built
+// them: allowUnsafeEvalBlockedByCSP is sent, as true, rather than left to Chrome's default.
+func evaluateParams(expression string) runtime.EvaluateParams {
+	return runtime.EvaluateParams{Expression: expression, AllowUnsafeEvalBlockedByCSP: ptr(true)}
+}
+
+func withUserGesture(params runtime.EvaluateParams) runtime.EvaluateParams {
+	params.UserGesture = ptr(true)
+	return params
+}
+
 // Unique IDs cannot be reused after a renderer swap. Do not fall back to the
 // target's default world when a frame document disappears between validation and evaluation.
 func scopeEvaluation(ctx context.Context, params runtime.EvaluateParams) runtime.EvaluateParams {
@@ -54,6 +65,7 @@ func EvaluateContext(ctx context.Context, script string, awaitPromise bool, resu
 // EvaluateRawContext evaluates JavaScript and returns its JSON encoding; undefined is empty bytes.
 func EvaluateRawContext(ctx context.Context, script string, awaitPromise bool) ([]byte, error) {
 	encoded, err := chromedp.Run(ctx, chromedp.EvaluateAsDevTools[[]byte](script, func(params *runtime.EvaluateParams) {
+		params.AllowUnsafeEvalBlockedByCSP = ptr(true) // as cdproto's old constructor sent it
 		params.UserGesture = ptr(true)
 		*params = scopeEvaluation(ctx, *params)
 		if awaitPromise {

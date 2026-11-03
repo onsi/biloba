@@ -112,7 +112,7 @@ func SetFileInputFilesContext(ctx context.Context, nodeScript string, paths []st
 	paths = absolute
 	found := false
 	err := chromedp.Do(ctx, chromedp.Func(func(runCtx context.Context, t *chromedp.Target) error {
-		evaluate := scopeEvaluation(ctx, runtime.EvaluateParams{Expression: nodeScript, UserGesture: ptr(true)})
+		evaluate := scopeEvaluation(ctx, withUserGesture(evaluateParams(nodeScript)))
 		evaluated, evaluateErr := cdp.Call(runCtx, t, runtime.Evaluate, evaluate)
 		if evaluateErr != nil {
 			return evaluateErr
@@ -200,7 +200,21 @@ func TouchTapContext(ctx context.Context, x, y float64) error {
 
 // ScrollWheelContext dispatches a real wheel event at a point.
 func ScrollWheelContext(ctx context.Context, x, y, deltaX, deltaY float64) error {
-	return chromedp.Do(ctx, dispatchMouse(input.DispatchMouseEventParams{Type: input.DispatchMouseEventTypeMouseWheel, X: x, Y: y, DeltaX: deltaX, DeltaY: deltaY}))
+	params := wheelEventParams{Type: input.DispatchMouseEventTypeMouseWheel, X: x, Y: y, DeltaX: deltaX, DeltaY: deltaY}
+	return chromedp.Do(ctx, chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
+		return t.Call(ctx, input.CommandDispatchMouseEvent, params, nil)
+	}))
+}
+
+// wheelEventParams is Input.dispatchMouseEvent for a wheel event with both deltas always on the wire.
+// Chrome rejects a mouseWheel that lacks either one, and cdproto leaves a zero delta out, so a purely
+// vertical scroll (deltaX 0) would never reach the page.
+type wheelEventParams struct {
+	Type   input.DispatchMouseEventType `json:"type"`
+	X      float64                      `json:"x"`
+	Y      float64                      `json:"y"`
+	DeltaX float64                      `json:"deltaX"`
+	DeltaY float64                      `json:"deltaY"`
 }
 
 // DragContext presses at src, moves to tgt in steps, and releases - the intermediate moves matter,

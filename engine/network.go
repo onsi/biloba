@@ -39,7 +39,7 @@ func EnableInterceptionContext(ctx context.Context) error {
 // An evaluate that fails because the page is navigating is fine: the new document gets the
 // intercepting factory with its commit.  Only the context ending is an error.
 func AwaitInterceptionArmedContext(ctx context.Context) error {
-	_, err := chromedp.Call(ctx, runtime.Evaluate, runtime.EvaluateParams{Expression: "0"})
+	_, err := chromedp.Call(ctx, runtime.Evaluate, evaluateParams("0"))
 	if err != nil && ctx.Err() != nil {
 		return err
 	}

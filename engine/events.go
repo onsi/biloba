@@ -29,6 +29,12 @@ synchronously, on chromedp's reader goroutine:
     has been handled by the time chromedp acts on that later message, so a Navigate that returns has
     its events recorded.
 
+A listener registered before its target is attached (ListenTargetFromAttach) is bound to the session
+of Biloba's own Target.attachToTarget, and never to a session chromedp's flatten auto-attach opens
+under a page: no chromedp context owns those, Runtime is not enabled on them, and Biloba never
+listened to them under chromedp.ListenTarget either.  Biloba's own out-of-process frame attachments
+go through attachToTarget, so they are bound.
+
 Running on the reader goroutine means a listener must not block - not on a CDP reply, and not on a
 lock that code waiting on one holds - or the whole connection stalls with it, every tab of the
 worker included.  Hand slow work to a goroutine (listenRaw exists for events with big payloads).

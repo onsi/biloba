@@ -179,11 +179,9 @@ func FrameOriginBoundaryContext(ctx context.Context, frameID cdp.FrameID) (bool,
 		if err != nil {
 			return err
 		}
-		evaluated, err := cdp.Call(runCtx, t, runtime.Evaluate, runtime.EvaluateParams{
-			Expression:    `(() => { try { void parent.document; return false; } catch (error) { if (error.name === 'SecurityError') return true; throw error; } })()`,
-			ContextID:     world.ExecutionContextID,
-			ReturnByValue: ptr(true),
-		})
+		check := evaluateParams(`(() => { try { void parent.document; return false; } catch (error) { if (error.name === 'SecurityError') return true; throw error; } })()`)
+		check.ContextID, check.ReturnByValue = world.ExecutionContextID, ptr(true)
+		evaluated, err := cdp.Call(runCtx, t, runtime.Evaluate, check)
 		if err != nil {
 			return err
 		}

@@ -137,6 +137,8 @@ var _ = Describe("typed DOM engine surface", func() {
 		Expect(session.Tap(ctx, engine.CSS("#action"), engine.PointerOptions{Mode: engine.Fast})).To(Succeed())
 		Expect(session.ScrollIntoView(ctx, engine.CSS("#target"), engine.ScrollIntoViewOptions{Container: engine.CSS("#scroll"), TopOffset: 5, HasTopOffset: true})).To(Succeed())
 		Expect(session.ScrollWheel(ctx, engine.CSS("#scroll"), 0, 10, engine.Fast)).To(Succeed())
+		// a zero deltaX still goes on the wire: Chrome rejects a mouseWheel without both deltas
+		Expect(session.ScrollWheel(ctx, engine.CSS("#scroll"), 0, 10, engine.Realistic)).To(Succeed())
 		Expect(session.Select(ctx, engine.CSS("#selection"), engine.Selection{Substring: "alpha", Occurrence: 2})).To(Succeed())
 		selected, err := session.Evaluate(ctx, `window.getSelection().toString()`)
 		Expect(err).NotTo(HaveOccurred())
