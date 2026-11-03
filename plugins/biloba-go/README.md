@@ -28,6 +28,7 @@ All skills are namespaced under `biloba-go:` and cover Biloba's Go API in Ginkgo
 | `biloba-go:look-at-pages` | You want to see your own UI while you build it — screenshots across light/dark and phone/desktop, the text views, the states worth capturing. |
 | `biloba-go:debug-failures` | A spec failed and you want the DOM outline, a11y tree, and screenshots — and the env knobs that surface them. |
 | `biloba-go:flaky-specs` | A spec is flaky, order-dependent, or only fails under `-p`/CI — the single-shot-read and racing-interaction smells, and their polling fixes. |
+| `biloba-go:flake-hunt` | You want a failure rate per spec, or to confirm a flake fix, by running the suite many times and reading the reports. Also yields a performance record. |
 
 ## Versioning
 

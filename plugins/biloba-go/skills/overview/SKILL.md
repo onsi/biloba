@@ -19,7 +19,7 @@ Biloba is a browser-testing framework for Go, built on [chromedp](https://github
 - **Visibility = non-zero `offsetWidth`/`offsetHeight`.** The fast track won't catch an element hidden *behind* another or off-screen. Use `b.HaveComputedStyle` for explicit style assertions, or `b.BeClickable()` to assert topmost-at-its-center.
 - **`b.SetValue` sets the value and fires `input`/`change` — it does not type.** Apps wired to real key events (search-as-you-type, rich text, hotkeys) need `b.Type`.
 - **`b.Hover` fires pointer/mouse events but does not activate CSS `:hover`.**
-- **There are two interaction tracks.** For the handful of specs that need real clicks through occlusion, scroll-into-view, CSS `:hover`, or drags, opt into `b.Realistic()` — a view of the *same tab* routed through real Chrome DevTools Protocol input. Per-spec opt-in (it costs round-trips and can reintroduce timing flake). → `realistic-mode`
+- **There are two interaction tracks.** For the handful of specs that need occlusion checks, scroll-into-view, CSS `:hover`, or real drags, opt into `b.Realistic()` — a view of the *same tab* routed through real Chrome DevTools Protocol input. Per-spec opt-in (it costs round-trips and can reintroduce timing flake). → `realistic-mode`
 
 **3. Conciseness via Ginkgo and Gomega.**
 
@@ -73,7 +73,7 @@ _, err := chromedp.Call(ctx, emulation.SetCPUThrottlingRate, emulation.SetCPUThr
 
 Biloba uses chromedp v0.21, whose API changed in v0.17: `chromedp.Run(ctx, actions...)` is now `chromedp.Do`, a cdproto command is called as `chromedp.Call(ctx, page.Navigate, page.NavigateParams{...})` (browser-level ones with `chromedp.CallBrowser`), `ActionFunc` is `chromedp.Func`, and `ListenTarget` is `chromedp.Events(ctx, network.ResponseReceived)`, one event type per iterator. The docs' chromedp section lists the old and new forms.
 
-An override set this way is yours to undo — `Prepare()` doesn't know about it. (Cross-origin iframes have a native wrapper: `b.Frame`.) (For real `:hover`/occlusion/scroll, prefer `b.Realistic()`.)
+An override set this way is yours to undo — `Prepare()` doesn't know about it.
 
 ## Where to go next
 

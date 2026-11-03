@@ -42,7 +42,7 @@ Also common: a `Get*`/`Current*ForEach`/`*Immediately` family — `Get*` (singul
 
 ## Testing
 
-**Every Go test is a Ginkgo spec** (the TypeScript client's tests under `typescript/` are Vitest). The `Makefile` wraps the canonical invocations: `make test` (standard headless parallel run — `ginkgo -r -p --randomize-all --randomize-suites`), `make test-all` (also runs the high-fidelity google-chrome lane CI uses), and `make stress-test` (6 procs under `stress` load, 41 repeats — for flushing out timing/concurrency races). `make driver-test`, `driver-parity`, `driver-e2e`, and `packaging-check` cover `engine/`, `protocol/`, `bilobad`, the TypeScript client, and the npm packages. Run `make stress-test` only periodically or when you suspect a change might be flaky; see the `biloba-testing` skill for details.
+**Every Go test is a Ginkgo spec** (the TypeScript client's tests under `typescript/` are Vitest). The `Makefile` wraps the canonical invocations: `make test` (standard headless parallel run — `ginkgo -r -p --randomize-all --randomize-suites`), `make test-all` (also runs the high-fidelity google-chrome lane CI uses), and `make stress-test` (6 procs under `stress` load, 41 runs — for flushing out timing/concurrency races). `make driver-test`, `driver-parity`, `driver-e2e`, and `packaging-check` cover `engine/`, `protocol/`, `bilobad`, the TypeScript client, and the npm packages. Run `make stress-test` only periodically or when you suspect a change might be flaky; see the `biloba-testing` skill for details.
 
 ```
 make test     # or: ginkgo -r -p --randomize-all --randomize-suites

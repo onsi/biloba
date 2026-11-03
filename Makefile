@@ -90,7 +90,7 @@ driver-e2e:
 update-chrome:
 	npx -y @puppeteer/browsers install chrome-headless-shell@stable --path "$$HOME/.cache/puppeteer"
 
-## stress-test: flake hunt - 6 procs under moderate CPU/IO load, 41 repeats, generous total budget
+## stress-test: flake hunt - 6 procs under moderate CPU/IO load, 41 runs, generous total budget
 ## so a wedge surfaces as a TIMEDOUT (with a goroutine dump) rather than a false budget-exhaustion.
 ## Slow; run periodically or when you suspect a change might be flaky. Needs `stress` (brew install stress).
 ## Cleanup reaps stress's worker children (pkill -P) before the launcher - SIGTERMing only the launcher

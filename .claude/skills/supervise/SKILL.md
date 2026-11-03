@@ -122,11 +122,8 @@ ends at entries under `## Unreleased` in `CHANGELOG.md`.
 ## Keep the skills in sync
 
 Whenever a landed change adds or alters a method family, an option, a convention, or an env
-knob, confirm the relevant skill was updated in the *same* change — both the repo skills under
-`.claude/skills/` (which teach future work *on* Biloba) and, if the change is user-visible, the
-shipped plugin skills (which teach users' agents how to *write tests with* Biloba):
-`plugins/biloba-go/skills/` for the Go API, `plugins/biloba-vitest/skills/` for the TypeScript
-client. A fact stated in one skill should agree with the others that touch it; `make
+knob, confirm the affected skill surfaces (CLAUDE.md, "Three skill surfaces") were updated in the
+*same* change. A fact stated in one skill should agree with the others that touch it; `make
 check-plugins` checks the mechanical parts.
 
 **At the end of a session, ask the owner whether they'd like to perform a prompt audit.** Ask —

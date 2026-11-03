@@ -233,8 +233,6 @@ Works for every decode target (`.Capture` and the getters' trailing pointer), an
 
 `GetValue`/`GetInnerText`/`GetTextContent` have no "defined" axis (empty string is a valid value) — they poll on presence only and never need `AllowMissing`.
 
-**The `Each*` matchers fail on zero matches** (`EachBeVisible`/`EachBeEnabled`/`EachHaveClass`/`EachHaveInnerText`/`EachHaveProperty`/…): "≥1 match AND all satisfy", so they wait for elements to appear instead of passing vacuously. To assert nothing matches, use `Eventually(sel).Should(b.HaveCount(0))` or `ShouldNot(b.Exist())` — **not** the no-arg `EachHaveInnerText()`/`EachHaveTextContent()`, which assert the property is *defined* on every match (and capture the slice).
-
 ## 6. Network handlers in an `Ordered` container
 
 Handlers (`StubRequest`/`AbortRequest`/`ModifyRequest`/`ModifyResponse`/`HoldResponse`) are first-match-wins in registration order, and `Prepare()` is what clears them. With `BeforeEach(func(){ b.Prepare() }, OncePerOrdered)`, `Prepare()` does **not** run between the `It`s — so handlers accumulate and a later identical handler is **silent dead code**.
@@ -298,7 +296,7 @@ Eventually(".row").Should(b.HaveCount(3))
 Ω(b.CurrentInnerTextForEach(".row")).ShouldNot(ContainElement("Draft"))
 ```
 
-(Positive collection assertions are safer: Gomega's `HaveEach` errors on an empty slice, and the `Each*` matchers fail on zero matches.)
+Positive collection assertions are safer: Gomega's `HaveEach` errors on an empty slice, and **the `Each*` matchers fail on zero matches** (`EachBeVisible`/`EachBeEnabled`/`EachHaveClass`/`EachHaveInnerText`/`EachHaveProperty`/…): "≥1 match AND all satisfy", so they wait for elements to appear instead of passing vacuously. To assert nothing matches, use `Eventually(sel).Should(b.HaveCount(0))` or `ShouldNot(b.Exist())` — **not** the no-arg `EachHaveInnerText()`/`EachHaveTextContent()`, which assert the property is *defined* on every match (and capture the slice).
 
 **Two vacuous negations Biloba makes loud** — both would otherwise be satisfied by an element that wasn't there:
 - `ShouldNot(b.BeChecked())` on the wrapping `<label>`/`<div>` instead of the `<input>`: an element with no `checked` property is an **error**.

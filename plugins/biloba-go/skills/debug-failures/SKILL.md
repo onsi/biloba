@@ -66,7 +66,7 @@ When an `Eventually` over a read that observes and compares a value (`b.HaveInne
 
 **No entry is a normal outcome, not a bug.** The series is claimed by the matcher Gomega asked for a failure message, so an entry always describes the read you failed on. Reads that passed, `b.Run` setup lines, and failures with no value read underneath (a `b.Click` whose selector never matched, a getter whose value was never there — that one gets the `AllowMissing` enrichment instead) simply produce nothing. Don't read a missing trajectory as a signal; go to the outline and the screenshot. To get a trajectory for an arbitrary expression, poll it with `b.EvaluateTo`/`b.GetJSValue` rather than wrapping `b.Run` in your own `Eventually` — Biloba only records reads it owns.
 
-On by default; `BilobaConfigPollTrajectory(false)` disables it (and the detached-node signal). **Don't disable it for speed.** Recording takes a lock and renders the value per poll sample, so it isn't free — but measured on a 1,558-spec suite with 2,470 call sites across the instrumented matchers (including gates asserting on whole paragraphs of prose), turning it off saved under a second across the whole run, inside that suite's own run-to-run spread.
+On by default; `BilobaConfigPollTrajectory(false)` disables it (and the detached-node signal). **Don't disable it for speed.** Recording takes a lock and renders the value per poll sample, so it isn't free — but on a 1,558-spec suite that leans hard on the instrumented matchers, turning it off saved under a second across the whole run, inside that suite's own run-to-run spread.
 
 ### Visual diagnosis (a failed `b.HaveScreenshot`) → `visual-assertions`
 
@@ -126,7 +126,7 @@ The same note reports a handler whose resolved response Chrome refused (an out-o
 
 ### When the failure is Chrome itself
 
-Every command Biloba sends Chrome runs under a deadline, so an unresponsive browser produces a failing spec instead of a hung suite. Three shapes, each naming its cause on the first line:
+Every command Biloba sends Chrome runs under a deadline, so an unresponsive browser produces a failing spec instead of a hung suite. Each of these failures names its cause on the first line:
 
 | First line | Means | Do |
 |---|---|---|

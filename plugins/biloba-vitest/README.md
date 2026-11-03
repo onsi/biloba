@@ -23,6 +23,7 @@ All skills are namespaced under `biloba-vitest:` and use the TypeScript client A
 | `biloba-vitest:visual-assertions` | You're creating or diagnosing screenshot baselines, masks, tolerances, and color schemes. |
 | `biloba-vitest:debug-failures` | A test failed and you need `BilobaError`, trajectories, context-wide artifacts, console output, or crash codes. |
 | `biloba-vitest:flaky-tests` | A test is intermittent, load-sensitive, order-dependent, or contains redundant client-side polling. |
+| `biloba-vitest:flake-hunt` | You want a failure rate per test, or to confirm a flake fix, by running the suite many times and reading the reports. Also yields a performance record. |
 
 ## Versioning
 

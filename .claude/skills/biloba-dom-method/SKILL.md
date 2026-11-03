@@ -175,7 +175,7 @@ Record only where there is a *value trajectory* to show: a matcher that read a v
 
 That sharp edge is **self-explaining**, and a new two-axis getter must keep it that way. The JS handler's not-ready return carries a diagnostic instead of a value — `{success:false, result:{element, undefined:[names]}}` — and the Go side folds it in with `noteUndefinedAxis` + `undefinedAxisTemplate` (`dom.go`), swapping `.WithMessage` for `.WithTemplate`. The timeout then says the element was present the whole time, that it was the *property* that never appeared, and names the exact `b.AllowMissing("...")` call to copy. `{success:false}` still means "retry" — nothing branches on the diagnostic.
 
-**A polling getter doesn't have to be about an element.** `GetLocation`/`GetTitle` (`navigation.go`) and `GetJSValue` (`javascript.go`) are `Get*` getters that poll the *tab*: build the gcustom matcher over `*Biloba` (or over the expression string) and hand `b` itself to `pollOrImmediate` as the actual. The `Get` prefix tracks "polls and returns a value", not "takes a selector". Crucially, these read through CDP, and **a transient CDP error must be a retryable miss** — returning `(false, err)` — never a `Fatalf`. A `Fatalf` inside a poll is a Ginkgo `Fail`, which *panics out* of the surrounding `Eventually` instead of counting as a failed attempt; that bug is what made `Eventually(b.Location)` unpollable. Any internal caller that needs a single-shot read gets an unguarded `location()`/`title()`-style substrate (cf. `Run`/`run`) so snapshot and failure-rendering paths never poll or fail.
+**A polling getter doesn't have to be about an element.** `GetLocation`/`GetTitle` (`navigation.go`) and `GetJSValue` (`javascript.go`) are `Get*` getters that poll the *tab*: build the gcustom matcher over `*Biloba` (or over the expression string) and hand `b` itself to `pollOrImmediate` as the actual. The `Get` prefix tracks "polls and returns a value", not "takes a selector". Crucially, these read through CDP, and **a transient CDP error must be a retryable miss** — returning `(false, err)` — never a `Fatalf`. A `Fatalf` inside a poll is a Ginkgo `Fail`, which *panics out* of the surrounding `Eventually` instead of counting as a failed attempt, so the getter can't be polled at all. Any internal caller that needs a single-shot read gets an unguarded `location()`/`title()`-style substrate (cf. `Run`/`run`) so snapshot and failure-rendering paths never poll or fail.
 
 ### Atomic JS handler / MatcherResult semantics
 
@@ -233,14 +233,14 @@ Not every method polls. `guardConfig(name, allowed...)` enforces which config kn
 | **Polling** (Cat 1 actions, Cat 2 `Get*`) | `Click`, `SetValue`, `GetProperty` | all four — skip the guard, route through `pollOrImmediate` |
 | **Waiting command** (Cat 5a) | `Navigate`, `Capture*Screenshot*` | `guardConfig(name, knobTimeout, knobContext)` — keep own default deadline; `WithPolling`/`Immediate` hard-error |
 | **Snapshot** (Cat 3 `Current*ForEach`, `HasElement`/`Count`) | `CurrentPropertyForEach` | `guardConfig(name)` — no knobs |
-| **One-shot mutation** (Cat 5b, `Run`/`RunAsync`) | `SetCookie`, `Run` | `guardConfig(name)` — no knobs |
+| **One-shot mutation** (Cat 4 `*Immediately` actions, Cat 5b, `Run`/`RunAsync`) | `SetCookie`, `ClickEachImmediately`, `Run` | `guardConfig(name)` — no knobs |
 
 Snapshot/one-shot methods call `b.guardConfig("Name")` (no knobs) right after `b.gt.Helper()`; waiting commands pass `knobTimeout, knobContext`. A bare-matcher method (Cat 6) or the under-applied form of a dual method uses `guardBareMatcher` instead.
 
 **Naming conventions (poll-by-default).**
 - `Get*` (singular) → **polls** until the one element/value you asked about is present.
 - `Current*ForEach` → **snapshot** plural getter; no poll, `nil` per missing entry, empty slice when nothing matches (`CurrentPropertyForEach`, `CurrentAttributesForEach`, `CurrentValueForEach`, `CurrentInnerTextForEach`, `CurrentTextContentForEach`). Blessed wait pattern: `Eventually(sel).Should(b.HaveCount(n))` *then* read.
-- `*Immediately` → **snapshot** plural action; acts on the current set, no-op on zero, no poll (`ClickEachImmediately`, `SetPropertyForEachImmediately`, `InvokeOnEachImmediately`, `InvokeWithEachImmediately`, `SendKeysToWindowImmediately`). The double-suffix length is an intentional "know what you're doing" smell.
+- `*Immediately` → plural action (a one-shot mutation); acts on the current set, no-op on zero, no poll (`ClickEachImmediately`, `SetPropertyForEachImmediately`, `InvokeOnEachImmediately`, `InvokeWithEachImmediately`, `SendKeysToWindowImmediately`). The double-suffix length is an intentional "know what you're doing" smell.
 
 **First-vs-all naming.** If you add a first-element polling getter `GetFoo`, consider its snapshot `CurrentFooForEach` (returns a slice, empty when nothing matches) and/or `EachHaveFoo` matcher counterparts, mirroring `GetProperty`/`CurrentPropertyForEach` and `HaveProperty`/`EachHaveProperty`. The name tells the user which it is.
 
