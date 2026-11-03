@@ -147,3 +147,7 @@ func SetBilobaRegistrationForTest(register func(context.Context, string) error) 
 	registerBilobaOnNewDocument = register
 	return func() { registerBilobaOnNewDocument = previous }
 }
+
+// LiveScreencastWorkersForTest counts the screencast delivery goroutines still running, so a spec
+// can tell that every way a recording ends also ends its goroutine.
+func LiveScreencastWorkersForTest() int64 { return liveScreencastWorkers.Load() }

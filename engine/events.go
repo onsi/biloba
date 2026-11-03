@@ -46,8 +46,9 @@ type eventHub struct {
 	// listeners are keyed by session; the browser's own events have the empty session ID.  A list is
 	// never modified in place, so received can call a snapshot of it without holding mu.
 	listeners map[target.SessionID][]*eventListener
-	// pending listeners wait for the attachment to a target they were registered for.
-	pending map[target.ID][]*eventListener
+	// pending holds the listeners waiting for an attachment to a target, at most one attachment per
+	// target at a time (see pend).
+	pending map[target.ID]*pendingAttach
 	// attaching maps an in-flight Target.attachToTarget command to its target.
 	attaching map[int64]target.ID
 	// slowf, when set, is told about a listener that held the reader goroutine too long.  It is only
@@ -55,11 +56,21 @@ type eventHub struct {
 	slowf func(string, ...any)
 }
 
+// pendingAttach is one context's listeners, waiting for that context's attachment to a target.
+type pendingAttach struct {
+	owner     any // the chromedp context that will attach
+	listeners []*eventListener
+	settled   chan struct{} // closed once the attachment binds them, or they are abandoned
+}
+
 type eventListener struct {
 	ctx     context.Context
 	fn      func(any)
 	raw     func(method string, params jsonv2.Value)
 	methods []string // empty means every event
+	// ended, when set, is called once Chrome detaches the listener's session or the connection to the
+	// browser is lost: either way no more events will come.
+	ended func()
 }
 
 func (l *eventListener) wants(method string) bool {
@@ -73,7 +84,7 @@ const slowListenerThreshold = 100 * time.Millisecond
 func newEventHub(slowf func(string, ...any)) *eventHub {
 	return &eventHub{
 		listeners: map[target.SessionID][]*eventListener{},
-		pending:   map[target.ID][]*eventListener{},
+		pending:   map[target.ID]*pendingAttach{},
 		attaching: map[int64]target.ID{},
 		slowf:     slowf,
 	}
@@ -86,7 +97,26 @@ func registerHub(browser *chromedp.Browser, hub *eventHub) {
 	go func() {
 		<-browser.LostConnection
 		hubs.Delete(browser)
+		hub.connectionLost()
 	}()
+}
+
+// connectionLost ends every listener: no session sends anything more.
+func (h *eventHub) connectionLost() {
+	h.mu.Lock()
+	var ended []func()
+	for session, list := range h.listeners {
+		for _, l := range list {
+			if l.ended != nil {
+				ended = append(ended, l.ended)
+			}
+		}
+		delete(h.listeners, session)
+	}
+	h.mu.Unlock()
+	for _, end := range ended {
+		end()
+	}
 }
 
 func hubFor(ctx context.Context) (*eventHub, *chromedp.Context, error) {
@@ -114,8 +144,10 @@ func ListenTarget(ctx context.Context, fn func(any), methods ...string) error {
 
 // listenRaw is ListenTarget for a listener that hands its events to another goroutine: it gets the
 // undecoded params, so a big payload (a screencast frame) is not decoded on the reader goroutine.
-func listenRaw(ctx context.Context, fn func(method string, params jsonv2.Value), methods ...string) error {
-	return listen(ctx, &eventListener{ctx: ctx, raw: fn, methods: methods})
+// ended is called once the session can send nothing more (see eventListener.ended), so the goroutine
+// it hands events to can stop even when nobody stops it.
+func listenRaw(ctx context.Context, fn func(method string, params jsonv2.Value), ended func(), methods ...string) error {
+	return listen(ctx, &eventListener{ctx: ctx, raw: fn, ended: ended, methods: methods})
 }
 
 func listen(ctx context.Context, l *eventListener) error {
@@ -132,8 +164,11 @@ func listen(ctx context.Context, l *eventListener) error {
 
 /*
 ListenTargetFromAttach is ListenTarget for a context that has not attached yet: it registers fn for
-the session the next attachment to targetID creates, so fn sees the events the attachment itself
-provokes (Runtime.enable announcing the existing execution contexts).
+the session ctx's attachment to targetID creates, so fn sees the events the attachment itself
+provokes (Runtime.enable announcing the existing execution contexts).  Call ctx's first Run next.
+
+While another context's attachment to the same target is pending, it waits for that one to land (or
+be abandoned) first: two attachments to one target are otherwise indistinguishable on the wire.
 */
 func ListenTargetFromAttach(ctx context.Context, targetID target.ID, fn func(any), methods ...string) error {
 	hub, c, err := hubFor(ctx)
@@ -145,18 +180,42 @@ func ListenTargetFromAttach(ctx context.Context, targetID target.ID, fn func(any
 		hub.add(c.Target.SessionID, l)
 		return nil
 	}
-	hub.mu.Lock()
-	hub.pending[targetID] = append(slices.Clip(hub.pending[targetID]), l)
-	hub.mu.Unlock()
-	context.AfterFunc(ctx, func() {
-		hub.mu.Lock()
-		defer hub.mu.Unlock()
-		if remaining := slices.DeleteFunc(slices.Clone(hub.pending[targetID]), func(p *eventListener) bool { return p == l }); len(remaining) > 0 {
-			hub.pending[targetID] = remaining
-		} else {
-			delete(hub.pending, targetID)
+	return hub.pend(c, targetID, l)
+}
+
+// pend registers l to be bound to the session that owner's next attachment to targetID creates.
+func (h *eventHub) pend(owner any, targetID target.ID, l *eventListener) error {
+	var p *pendingAttach
+	for {
+		h.mu.Lock()
+		p = h.pending[targetID]
+		if p == nil {
+			p = &pendingAttach{owner: owner, settled: make(chan struct{})}
+			h.pending[targetID] = p
 		}
-		hub.removeLocked(l)
+		if p.owner == owner {
+			p.listeners = append(p.listeners, l)
+			h.mu.Unlock()
+			break
+		}
+		h.mu.Unlock()
+		select {
+		case <-p.settled:
+		case <-l.ctx.Done():
+			return l.ctx.Err()
+		}
+	}
+	context.AfterFunc(l.ctx, func() {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if h.pending[targetID] == p {
+			p.listeners = slices.DeleteFunc(p.listeners, func(waiting *eventListener) bool { return waiting == l })
+			if len(p.listeners) == 0 {
+				delete(h.pending, targetID)
+				close(p.settled)
+			}
+		}
+		h.removeLocked(l)
 	})
 	return nil
 }
@@ -196,14 +255,16 @@ func (h *eventHub) removeLocked(l *eventListener) {
 	}
 }
 
-// bindLocked moves the listeners waiting on targetID to the session that now attaches it.
+// bindLocked moves the listeners waiting on targetID to the session that now attaches it.  There is
+// only ever one pending attachment per target (see pend), so they are that attachment's.
 func (h *eventHub) bindLocked(targetID target.ID, session target.SessionID) {
-	waiting := h.pending[targetID]
-	if len(waiting) == 0 || session == "" {
+	p := h.pending[targetID]
+	if p == nil || session == "" {
 		return
 	}
 	delete(h.pending, targetID)
-	h.listeners[session] = append(slices.Clip(h.listeners[session]), waiting...)
+	h.listeners[session] = append(slices.Clip(h.listeners[session]), p.listeners...)
+	close(p.settled)
 }
 
 // sent notes the attachments Biloba's contexts ask for, so their sessions can be matched to the
@@ -219,7 +280,7 @@ func (h *eventHub) sent(msg *cdproto.Message) {
 		return
 	}
 	h.mu.Lock()
-	if len(h.pending[params.TargetID]) > 0 {
+	if h.pending[params.TargetID] != nil {
 		h.attaching[msg.ID] = params.TargetID
 	}
 	h.mu.Unlock()
@@ -245,6 +306,7 @@ func (h *eventHub) received(msg *cdproto.Message) {
 	list := h.listeners[msg.SessionID]
 	h.mu.Unlock()
 	var event any
+	var decodeErr error
 	decoded := false
 	for _, l := range list {
 		if !l.wants(method) {
@@ -258,11 +320,14 @@ func (h *eventHub) received(msg *cdproto.Message) {
 			l.raw(method, msg.Params)
 		} else {
 			if !decoded {
-				var err error
-				if event, err = cdproto.UnmarshalMessage(msg, chromedp.DefaultUnmarshalOptions); err != nil {
-					return
-				}
 				decoded = true
+				if event, decodeErr = cdproto.UnmarshalMessage(msg, chromedp.DefaultUnmarshalOptions); decodeErr != nil && h.slowf != nil {
+					h.slowf("biloba: could not decode a %s event for its listeners: %v", method, decodeErr)
+				}
+			}
+			// an event that does not decode skips the listeners that need it decoded, and only those
+			if decodeErr != nil {
+				continue
 			}
 			l.fn(event)
 		}
@@ -306,8 +371,15 @@ func (h *eventHub) sessionDetached(msg *cdproto.Message) {
 		return
 	}
 	h.mu.Lock()
+	list := h.listeners[params.SessionID]
 	delete(h.listeners, params.SessionID)
 	h.mu.Unlock()
+	// (on the reader goroutine: an ended hook must not block)
+	for _, l := range list {
+		if l.ended != nil {
+			l.ended()
+		}
+	}
 }
 
 func (h *eventHub) attachReplied(msg *cdproto.Message) {

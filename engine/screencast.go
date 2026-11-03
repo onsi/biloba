@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
@@ -89,7 +90,9 @@ func StartScreencastContext(ctx context.Context, params ScreencastParams, onFram
 		}
 		onFrame(frame)
 	})
-	if err := listenRaw(listenCtx, func(_ string, raw jsonv2.Value) { frames.push(raw) }, page.ScreencastFrame.Method); err != nil {
+	// A tab that goes away without a stop (a popup closing itself) ends the session's events: the
+	// queue ends then too, so its goroutine does not wait for a stop that never comes.
+	if err := listenRaw(listenCtx, func(_ string, raw jsonv2.Value) { frames.push(raw) }, frames.end, page.ScreencastFrame.Method); err != nil {
 		cancelListen()
 		frames.close()
 		return nil, err
@@ -148,6 +151,12 @@ func (q *screencastQueue) push(raw jsonv2.Value) {
 
 // close stops accepting frames and returns once every frame accepted before it has been delivered.
 func (q *screencastQueue) close() {
+	q.end()
+	<-q.delivered
+}
+
+// end stops accepting frames without waiting for the ones already accepted to be delivered.
+func (q *screencastQueue) end() {
 	q.mu.Lock()
 	q.closed = true
 	q.mu.Unlock()
@@ -155,10 +164,14 @@ func (q *screencastQueue) close() {
 	case q.wake <- struct{}{}:
 	default:
 	}
-	<-q.delivered
 }
 
+// liveScreencastWorkers counts the screencast delivery goroutines running, for specs.
+var liveScreencastWorkers atomic.Int64
+
 func (q *screencastQueue) deliver(handle func(jsonv2.Value)) {
+	liveScreencastWorkers.Add(1)
+	defer liveScreencastWorkers.Add(-1)
 	defer close(q.delivered)
 	for {
 		q.mu.Lock()

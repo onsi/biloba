@@ -215,9 +215,10 @@ func (b *Biloba) pageCrashed() bool {
 
 // browserGone reports whether the connection to the Chrome process itself has gone away.  chromedp
 // cancels every context under a browser when its websocket closes, so a done root-tab context means
-// the browser - not just this tab - is finished.
+// the browser - not just this tab - is finished.  It cancels them from a goroutine of its own, though,
+// so a command can fail on the lost connection first: the connection is checked directly too.
 func (b *Biloba) browserGone() bool {
-	return b.root != nil && b.root.Context != nil && b.root.Context.Err() != nil
+	return b.root != nil && b.root.Context != nil && (b.root.Context.Err() != nil || engine.BrowserLost(b.root.Context))
 }
 
 /*

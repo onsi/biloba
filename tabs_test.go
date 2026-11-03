@@ -3,6 +3,8 @@ package biloba_test
 import (
 	"time"
 
+	"github.com/chromedp/cdproto/target"
+	"github.com/chromedp/chromedp"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/gbytes"
@@ -60,6 +62,29 @@ var _ = Describe("Tabs", func() {
 				tab := b.AllSpawnedTabs().Find(b.TabMatching().WithURL(ContainSubstring("dom.html")))
 
 				Ω(b.BrowserContextID()).Should(Equal(tab.BrowserContextID()))
+			})
+		})
+
+		Context("when the tab that opened another closes", func() {
+			It("closes the tab it opened too", func() {
+				opener := b.NewTab().Navigate(fixtureServer + "/auto-open.html")
+				Eventually(opener).Should(opener.HaveSpawnedTab().WithURL(ContainSubstring("dom.html")))
+				popup := opener.AllSpawnedTabs().Find(opener.TabMatching().WithURL(ContainSubstring("dom.html")))
+				Ω(popup).ShouldNot(BeNil())
+				popupID := chromedp.FromContext(popup.Context).Target.TargetID
+
+				Ω(opener.Close()).Should(Succeed())
+				// ask Chrome, not AllTabs: a popup whose context ended reads as no match there even while
+				// Chrome still has it open
+				Eventually(func() []target.ID {
+					targets, err := chromedp.Targets(b.Context)
+					Ω(err).ShouldNot(HaveOccurred())
+					ids := []target.ID{}
+					for _, info := range targets {
+						ids = append(ids, info.TargetID)
+					}
+					return ids
+				}).ShouldNot(ContainElement(popupID))
 			})
 		})
 

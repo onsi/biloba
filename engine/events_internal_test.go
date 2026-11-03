@@ -77,7 +77,7 @@ var _ = ginkgo.Describe("eventHub", ginkgo.Label("no-browser"), func() {
 
 	ginkgo.It("binds a listener registered before the attach to the session the attachment's reply names", func() {
 		var seen []string
-		hub.pending["T1"] = []*eventListener{{ctx: ctx, fn: func(ev any) { seen = append(seen, methodOf(ev)) }}}
+		gomega.Expect(hub.pend("owner", "T1", &eventListener{ctx: ctx, fn: func(ev any) { seen = append(seen, methodOf(ev)) }})).To(gomega.Succeed())
 
 		hub.sent(&cdproto.Message{ID: 7, Method: cdproto.MethodType(target.AttachToTarget.Method), Params: jsonv2.Value(`{"targetId":"T1","flatten":true}`)})
 		hub.received(&cdproto.Message{ID: 7, Result: jsonv2.Value(`{"sessionId":"S1"}`)})
@@ -90,7 +90,7 @@ var _ = ginkgo.Describe("eventHub", ginkgo.Label("no-browser"), func() {
 
 	ginkgo.It("binds on the browser connection's attachedToTarget, which Chrome sends before the reply, and only once", func() {
 		var seen []string
-		hub.pending["T1"] = []*eventListener{{ctx: ctx, fn: func(ev any) { seen = append(seen, methodOf(ev)) }}}
+		gomega.Expect(hub.pend("owner", "T1", &eventListener{ctx: ctx, fn: func(ev any) { seen = append(seen, methodOf(ev)) }})).To(gomega.Succeed())
 
 		hub.sent(&cdproto.Message{ID: 7, Method: cdproto.MethodType(target.AttachToTarget.Method), Params: jsonv2.Value(`{"targetId":"T1","flatten":true}`)})
 		hub.received(event("", target.AttachedToTarget.Method, `{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page"},"waitingForDebugger":false}`))
@@ -103,13 +103,71 @@ var _ = ginkgo.Describe("eventHub", ginkgo.Label("no-browser"), func() {
 
 	ginkgo.It("leaves a waiting listener alone when Chrome auto-attaches the target under a page's session", func() {
 		var seen []string
-		hub.pending["T1"] = []*eventListener{{ctx: ctx, fn: func(ev any) { seen = append(seen, methodOf(ev)) }}}
+		gomega.Expect(hub.pend("owner", "T1", &eventListener{ctx: ctx, fn: func(ev any) { seen = append(seen, methodOf(ev)) }})).To(gomega.Succeed())
 
 		hub.received(event("PAGE", target.AttachedToTarget.Method, `{"sessionId":"AUTO","targetInfo":{"targetId":"T1","type":"iframe"},"waitingForDebugger":false}`))
 		hub.received(event("AUTO", runtime.ExecutionContextsCleared.Method, `{}`))
 
 		gomega.Expect(seen).To(gomega.BeEmpty())
 		gomega.Expect(hub.pending).To(gomega.HaveKey(target.ID("T1")))
+	})
+
+	ginkgo.It("binds each context's listeners to that context's own attachment when two attach the same target", func() {
+		var first, second []string
+		gomega.Expect(hub.pend("first", "T1", &eventListener{ctx: ctx, fn: func(ev any) { first = append(first, methodOf(ev)) }})).To(gomega.Succeed())
+		registered := make(chan error)
+		go func() {
+			registered <- hub.pend("second", "T1", &eventListener{ctx: ctx, fn: func(ev any) { second = append(second, methodOf(ev)) }})
+		}()
+		gomega.Consistently(registered, "50ms").ShouldNot(gomega.Receive(), "the second waits while the first attachment is pending")
+
+		hub.sent(&cdproto.Message{ID: 7, Method: cdproto.MethodType(target.AttachToTarget.Method), Params: jsonv2.Value(`{"targetId":"T1","flatten":true}`)})
+		hub.received(&cdproto.Message{ID: 7, Result: jsonv2.Value(`{"sessionId":"S1"}`)})
+		gomega.Eventually(registered).Should(gomega.Receive(gomega.BeNil()))
+		hub.sent(&cdproto.Message{ID: 8, Method: cdproto.MethodType(target.AttachToTarget.Method), Params: jsonv2.Value(`{"targetId":"T1","flatten":true}`)})
+		hub.received(&cdproto.Message{ID: 8, Result: jsonv2.Value(`{"sessionId":"S2"}`)})
+
+		hub.received(event("S1", runtime.ExecutionContextsCleared.Method, `{}`))
+		hub.received(event("", target.DetachedFromTarget.Method, `{"sessionId":"S1","targetId":"T1"}`)) // the first is discarded
+		hub.received(event("S2", inspector.TargetCrashed.Method, `{}`))
+
+		gomega.Expect(first).To(gomega.Equal([]string{"cleared"}))
+		gomega.Expect(second).To(gomega.Equal([]string{"crashed"}), "discarding the first attachment leaves the second's listeners in place")
+	})
+
+	ginkgo.It("lets a waiting context register once the pending attachment is abandoned", func() {
+		firstCtx, abandon := context.WithCancel(ctx)
+		gomega.Expect(hub.pend("first", "T1", &eventListener{ctx: firstCtx, fn: func(any) {}})).To(gomega.Succeed())
+		registered := make(chan error)
+		go func() { registered <- hub.pend("second", "T1", &eventListener{ctx: ctx, fn: func(any) {}}) }()
+		gomega.Consistently(registered, "50ms").ShouldNot(gomega.Receive())
+		abandon()
+		gomega.Eventually(registered).Should(gomega.Receive(gomega.BeNil()))
+		gomega.Expect(hub.pending["T1"].owner).To(gomega.Equal("second"))
+	})
+
+	ginkgo.It("still calls the raw and later listeners of an event that does not decode, and says so when debugging", func() {
+		var reports []string
+		hub = newEventHub(func(format string, args ...any) { reports = append(reports, format) })
+		var seen []string
+		hub.add("S1", &eventListener{ctx: ctx, fn: func(ev any) { seen = append(seen, "decoded") }})
+		hub.add("S1", &eventListener{ctx: ctx, raw: func(string, jsonv2.Value) { seen = append(seen, "raw") }})
+
+		hub.received(event("S1", page.FrameDetached.Method, `{"frameId":42}`))
+
+		gomega.Expect(seen).To(gomega.Equal([]string{"raw"}))
+		gomega.Expect(reports).To(gomega.ConsistOf(gomega.ContainSubstring("could not decode")))
+	})
+
+	ginkgo.It("tells a listener its session ended, when Chrome detaches it or the connection is lost", func() {
+		var ended []string
+		hub.add("S1", &eventListener{ctx: ctx, fn: func(any) {}, ended: func() { ended = append(ended, "S1") }})
+		hub.add("S2", &eventListener{ctx: ctx, fn: func(any) {}, ended: func() { ended = append(ended, "S2") }})
+
+		hub.received(event("", target.DetachedFromTarget.Method, `{"sessionId":"S1","targetId":"T1"}`))
+		gomega.Expect(ended).To(gomega.Equal([]string{"S1"}))
+		hub.connectionLost()
+		gomega.Expect(ended).To(gomega.Equal([]string{"S1", "S2"}))
 	})
 
 	ginkgo.It("drops a session's listeners when Chrome detaches it, and ignores what still arrives for it", func() {

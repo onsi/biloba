@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/chromedp"
 	ginkgo "github.com/onsi/ginkgo/v2"
 	gomega "github.com/onsi/gomega"
 )
@@ -108,6 +109,19 @@ var _ = ginkgo.Describe("diagnosing why a command failed", ginkgo.Label("no-brow
 		err := b.diagnoseCDPError("evaluate JavaScript in the page", time.Second, context.DeadlineExceeded)
 		gomega.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("page_crashed")))
 		gomega.Expect(err).NotTo(gomega.MatchError(gomega.ContainSubstring("deadline_exceeded")))
+	})
+
+	ginkgo.It("names a lost browser even before chromedp has cancelled the tab's context", func() {
+		// chromedp cancels the contexts of a lost browser from a goroutine of its own, so a command can
+		// fail on the lost connection first: hold the connection closed and the context live.
+		ctx, cancel := chromedp.NewContext(context.Background())
+		defer cancel()
+		lost := make(chan struct{})
+		close(lost)
+		chromedp.FromContext(ctx).Browser = &chromedp.Browser{LostConnection: lost}
+		b.Context, b.root = ctx, b
+		err := b.diagnoseCDPError("evaluate JavaScript in the page", time.Second, fmt.Errorf("lost the connection to the browser: EOF: %w", context.Canceled))
+		gomega.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("browser_gone: the connection to Chrome is closed")))
 	})
 
 	ginkgo.It("leaves an ordinary error alone rather than dressing it in wedge language", func() {

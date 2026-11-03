@@ -597,6 +597,22 @@ func newTabContext(parent context.Context, targetID target.ID) (context.Context,
 	return chromedp.NewContext(parent, chromedp.WithTargetID(targetID), chromedp.WithDetachOnCancel())
 }
 
+// BrowserLost reports whether the connection to the browser behind ctx is gone.  It is the dependable
+// signal for "Chrome is gone": chromedp cancels the contexts under a lost browser from a goroutine of
+// its own, so a command can fail on the lost connection before ctx reports an error.
+func BrowserLost(ctx context.Context) bool {
+	c := chromedp.FromContext(ctx)
+	if c == nil || c.Browser == nil {
+		return false
+	}
+	select {
+	case <-c.Browser.LostConnection:
+		return true
+	default:
+		return false
+	}
+}
+
 // NewTabContext is newTabContext for the Go client's tabs: a chromedp context attached to targetID
 // whose cancellation detaches from the target and leaves it open (close it with CloseTargetContext).
 func NewTabContext(parent context.Context, targetID target.ID) (context.Context, context.CancelFunc) {

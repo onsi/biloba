@@ -1555,15 +1555,22 @@ func newIsolatedBrowserContextAndTarget(ctx context.Context) (cdp.BrowserContext
 	return browserContextID, targetID, err
 }
 
-// tabContextFor attaches a chromedp context to targetID.  Cancelling it detaches and then closes the
-// target, the pair chromedp's own cancellation sent before v0.21 (which now follows its close by
-// polling Target.getTargets; Close and Prepare do their own waiting, see waitUntilTargetGone).
+// tabContextFor attaches a chromedp context to targetID.  When the context ends - cancelled itself,
+// or with its parent, as a spawned tab's does when the tab that opened it closes - it detaches and
+// then closes the target, the pair chromedp's own cancellation sent before v0.21 (which now follows
+// its close by polling Target.getTargets; Close and Prepare do their own waiting, see
+// waitUntilTargetGone).
 func tabContextFor(parent context.Context, targetID target.ID) (context.Context, context.CancelFunc) {
 	ctx, detach := engine.NewTabContext(parent, targetID)
-	return ctx, func() {
-		detach()
-		_ = engine.CloseTargetContext(parent, targetID)
+	var once sync.Once
+	closeTab := func() {
+		once.Do(func() {
+			detach() // waits for chromedp's detach, so the close follows it as it did
+			_ = engine.CloseTargetContext(parent, targetID)
+		})
 	}
+	context.AfterFunc(ctx, closeTab)
+	return ctx, closeTab
 }
 
 func (b *Biloba) registerTabFor(targetID target.ID, parent context.Context) *Biloba {

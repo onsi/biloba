@@ -18,9 +18,9 @@ func IsUsableCookieOrigin(location string) bool {
 // SetCookiesContext applies cookies to one isolated browser context using the
 // browser-level executor associated with targetCtx.
 func SetCookiesContext(targetCtx context.Context, browserContextID cdp.BrowserContextID, location string, cookies []Cookie) error {
-	params := make([]*network.CookieParam, len(cookies))
+	params := make([]*cookieParam, len(cookies))
 	for index, cookie := range cookies {
-		param := &network.CookieParam{
+		param := &cookieParam{
 			Name: cookie.Name, Value: cookie.Value, Domain: cookie.Domain, Path: cookie.Path,
 			Secure: cookie.Secure, HTTPOnly: cookie.HTTPOnly, SameSite: network.CookieSameSite(cookie.SameSite),
 		}
@@ -31,15 +31,34 @@ func SetCookiesContext(targetCtx context.Context, browserContextID cdp.BrowserCo
 			param.URL = location
 		}
 		if !cookie.Expires.IsZero() {
-			// whole seconds, as cdproto sent a TimeSinceEpoch before it became a plain number
-			param.Expires = cdp.TimeSinceEpoch(cookie.Expires.Unix())
+			// whole seconds, truncated, as cdproto sent a TimeSinceEpoch before it became a plain number
+			param.Expires = ptr(cdp.TimeSinceEpoch(cookie.Expires.UnixNano() / int64(time.Second)))
 		}
 		params[index] = param
 	}
 	return withBrowserExecutor(targetCtx, func(browserCtx context.Context, browser cdp.Session) error {
-		_, err := cdp.Call(browserCtx, browser, storage.SetCookies, storage.SetCookiesParams{Cookies: params, BrowserContextID: browserContextID})
-		return err
+		return browser.Call(browserCtx, storage.CommandSetCookies, setCookiesParams{Cookies: params, BrowserContextID: browserContextID}, nil)
 	})
+}
+
+// cookieParam is network.CookieParam with expires a pointer, as it was before cdproto v0.157.4, so an
+// expiry the caller set always goes on the wire.  cdproto's own leaves out an expiry of 0, which turns
+// a cookie meant to expire at the epoch (that is, at once) into a session cookie.
+type cookieParam struct {
+	Name     string                 `json:"name"`
+	Value    string                 `json:"value"`
+	URL      string                 `json:"url,omitempty"`
+	Domain   string                 `json:"domain,omitempty"`
+	Path     string                 `json:"path,omitempty"`
+	Secure   bool                   `json:"secure"`
+	HTTPOnly bool                   `json:"httpOnly"`
+	SameSite network.CookieSameSite `json:"sameSite,omitempty"`
+	Expires  *cdp.TimeSinceEpoch    `json:"expires,omitempty"`
+}
+
+type setCookiesParams struct {
+	Cookies          []*cookieParam       `json:"cookies"`
+	BrowserContextID cdp.BrowserContextID `json:"browserContextId,omitempty"`
 }
 
 // GetCookiesContext reads every cookie in one isolated browser context.

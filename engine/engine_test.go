@@ -724,6 +724,25 @@ var _ = Describe("browser engine", func() {
 		Expect(byName["persistent"].Expires).To(BeTemporally("~", expires, time.Second))
 	})
 
+	It("sends an expiry at the epoch, so the cookie expires rather than becoming a session cookie", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		Expect(session.Navigate(ctx, server.URL)).To(Succeed())
+		Expect(session.SetCookies(ctx, []engine.Cookie{
+			{Name: "kept", Value: "yes", Domain: "127.0.0.1", Path: "/"},
+			{Name: "expired", Value: "at-the-epoch", Domain: "127.0.0.1", Path: "/", Expires: time.Unix(0, 0)},
+		})).To(Succeed())
+
+		cookies, err := session.GetCookies(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		names := []string{}
+		for _, cookie := range cookies {
+			names = append(names, cookie.Name)
+		}
+		Expect(names).To(ConsistOf("kept"))
+	})
+
 	It("reads cookies only from its own browser context", func(ctx SpecContext) {
 		first, err := browser.OpenSession(ctx)
 		Expect(err).NotTo(HaveOccurred())

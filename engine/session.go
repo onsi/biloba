@@ -1082,7 +1082,7 @@ func (s *Session) serial(requestCtx context.Context, operation string, run func(
 	// opCtx descends from both the session and the request.  Telling them apart is the whole
 	// difference between "you asked me to stop" and "Chrome is gone": only the second is fatal, and
 	// only the second should stop a poll rather than be retried until the deadline.
-	if s.ctx.Err() != nil && requestCtx.Err() == nil {
+	if (s.ctx.Err() != nil || BrowserLost(s.ctx)) && requestCtx.Err() == nil {
 		return &Error{
 			Code:      CodeBrowserGone,
 			Operation: operation,

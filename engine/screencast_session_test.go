@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"time"
 
+	"github.com/chromedp/cdproto/target"
+	"github.com/chromedp/chromedp"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -140,5 +142,19 @@ var _ = Describe("Session screencasts", func() {
 		Expect(framesSoFar()).To(Equal(recorded))
 		_, err = tab.StopScreencast(ctx, id)
 		Expect(pointerErrorCode(err)).To(Equal(engine.CodeNotFound))
+	})
+
+	It("ends a recording's delivery when its tab goes away without a stop or a close", func(ctx SpecContext) {
+		before := engine.LiveScreencastWorkersForTest()
+		tab, err := session.NewTab(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = tab.StartScreencast(ctx, engine.ScreencastParams{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(engine.LiveScreencastWorkersForTest()).To(Equal(before + 1))
+
+		// as a popup closing itself would: nothing in Biloba stops or closes the recording
+		_, err = chromedp.CallBrowser(engine.SessionContextForTest(session), target.CloseTarget, target.CloseTargetParams{TargetID: tab.TargetID()})
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(engine.LiveScreencastWorkersForTest).WithTimeout(5 * time.Second).Should(Equal(before))
 	})
 })
