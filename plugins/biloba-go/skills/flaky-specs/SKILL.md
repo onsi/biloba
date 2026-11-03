@@ -100,7 +100,7 @@ Eventually(func(g Gomega) {
 
 Rule: **action inside a polling closure ⇒ `Immediate()`; action outside one ⇒ neither closure nor `Immediate()`.**
 
-**A conditional interaction is a spec smell.** `if collapsed { click }`, a `HasElement` branch before an action — it means the spec doesn't know its own state, and a check-then-act loop re-clicks every tick and oscillates a toggle. Fix determinism upstream: create your own element in a known state instead of inheriting one from an earlier `Ordered` spec, or barrier on app state (§3) before interacting. (Idempotence corollary: set-and-confirm re-fires its action, so it's correct for `SetValue` and a flake for a toggle click. There is deliberately no `ClickWhen` primitive.)
+**A conditional interaction is a spec smell.** `if collapsed { click }`, a `HasElement` branch before an action — it means the spec doesn't know its own state, and a check-then-act loop re-clicks every tick and oscillates a toggle. Fix determinism upstream: create your own element in a known state instead of inheriting one from an earlier `Ordered` spec, or barrier on app state (§3) before interacting. (Idempotence corollary: set-and-confirm re-fires its action, so it's correct for `SetValue` and a flake for a toggle click. There is deliberately no `ClickWhen` primitive.) A cycling control you must drive to a target state is the one exception, and its loop waits between clicks: outside any polling closure, read the state, click once, `Eventually` until the state changes, and repeat until it is the one you want.
 
 **Fast `Click` is occlusion-blind by design.** It polls on visible + enabled, then calls `element.click()` — it will click straight through a modal scrim. When an overlay is possible:
 

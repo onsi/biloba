@@ -25,7 +25,7 @@ Configuring the matcher (`b.WithTimeout(d).HaveScreenshot(...)`) is a hard error
 
 **Why the poll is the whole design.** A screenshot is the most layout-sensitive assertion in a suite (fonts loading, images decoding, a `ResizeObserver` re-applying, an rAF loop settling). Polling the *comparison* means the first passing attempt is by construction the settled one — don't hand-roll a barrier before it.
 
-An element subject's box is rounded outward to whole CSS pixels before capture, so a fractionally positioned or sized element is captured with every pixel it touches (Playwright's rule). Baselines written before this rounding was introduced may be a pixel smaller and need one regeneration.
+An element subject's box is rounded outward to whole CSS pixels before capture, so a fractionally positioned or sized element is captured with every pixel it touches (Playwright's rule).
 
 ## The baseline workflow
 
