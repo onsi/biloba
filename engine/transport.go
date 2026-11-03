@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto"
+	jsonv2 "github.com/chromedp/cdproto/cdp/jsonv2"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
@@ -27,7 +28,9 @@ sessions but one thing: once it sees the browser-level Target.detachedFromTarget
 drops whatever comes for that session afterwards.  So that message reaches chromedp from the end of
 the session's own queue, after the session's earlier messages (the hub forgets the session's
 listeners there too), while the browser's later messages go on without it.  A message that still
-arrives for the session joins the same queue behind it.
+arrives for the session joins the same queue behind it, or, once that queue is empty and its worker
+gone, goes straight to chromedp (which drops it) without making a worker that nothing would end: the
+transport remembers the most recent rememberedDetachedSessions detached sessions for that.
 
 When the connection fails, what was already read is handed over before Read reports the failure,
 waiting at most connectionDrainTimeout for listeners still running.
@@ -50,11 +53,20 @@ type orderedTransport struct {
 	closing   chan struct{}
 	closeOnce sync.Once
 
-	// mu guards workers and every sessionWorker's fields, and pending: the work queued and not yet done.
+	// mu guards workers and every sessionWorker's fields, pending (the work queued and not yet done),
+	// and the detached sessions.
 	mu      sync.Mutex
 	workers map[target.SessionID]*sessionWorker
 	pending int
+	// detached remembers the sessions Chrome detached whose workers are gone, the most recent
+	// rememberedDetachedSessions of them, so a late message for one makes no new worker.
+	detached      map[target.SessionID]struct{}
+	detachedOrder []target.SessionID
 }
+
+// rememberedDetachedSessions bounds how many detached sessions a connection remembers.  A message
+// for a session only arrives late by a few messages, so a recent window is all it takes.
+const rememberedDetachedSessions = 1024
 
 // connectionDrainTimeout bounds how long a failed connection waits for its sessions' queued
 // messages: a listener can be waiting on a reply that will never come now.
@@ -73,7 +85,7 @@ func newOrderedTransport(tr chromedp.Transport, hub *eventHub) *orderedTransport
 	return &orderedTransport{
 		Transport: tr, hub: hub,
 		out: make(chan *cdproto.Message), ended: make(chan struct{}), closing: make(chan struct{}),
-		workers: map[target.SessionID]*sessionWorker{},
+		workers: map[target.SessionID]*sessionWorker{}, detached: map[target.SessionID]struct{}{},
 	}
 }
 
@@ -107,10 +119,20 @@ func (t *orderedTransport) readConnection() {
 			return
 		}
 		if msg.SessionID != "" {
-			t.enqueue(msg.SessionID, func() {
+			if nested := detachedNestedSession(msg); nested != "" {
+				// a session Chrome attached under this one (auto-attach) is gone: chromedp has no target for
+				// it, so only its worker needs ending
+				if !t.enqueueDetach(nested, func() { t.hub.sessionEnded(nested) }) {
+					t.hub.sessionEnded(nested)
+					t.rememberDetached(nested)
+				}
+			}
+			if !t.enqueue(msg.SessionID, func() {
 				t.hub.dispatch(msg)
 				t.release(msg)
-			})
+			}) {
+				t.release(msg) // a late message for a detached session: its listeners are gone, and chromedp drops it
+			}
 			continue
 		}
 		// the browser's own message: its listeners run here, before anything read after it
@@ -123,9 +145,25 @@ func (t *orderedTransport) readConnection() {
 				continue
 			}
 			t.hub.sessionEnded(session) // nothing of the session's is queued
+			t.rememberDetached(session)
 		}
 		t.release(msg)
 	}
+}
+
+// detachedNestedSession is the session a Target.detachedFromTarget sent on another session names: one
+// Chrome attached under that session itself (auto-attach), or "".
+func detachedNestedSession(msg *cdproto.Message) target.SessionID {
+	if msg.SessionID == "" || string(msg.Method) != target.DetachedFromTarget.Method {
+		return ""
+	}
+	var params struct {
+		SessionID target.SessionID `json:"sessionId"`
+	}
+	if jsonv2.Unmarshal(msg.Params, &params, chromedp.DefaultUnmarshalOptions) != nil {
+		return ""
+	}
+	return params.SessionID
 }
 
 // release hands msg to Read, unless nothing will read it any more.
@@ -137,16 +175,40 @@ func (t *orderedTransport) release(msg *cdproto.Message) {
 	}
 }
 
-// enqueue adds work to session's queue, starting its worker when it is idle.
-func (t *orderedTransport) enqueue(session target.SessionID, work func()) {
+// enqueue adds work to session's queue, starting its worker when it is idle.  It reports false,
+// queueing nothing, for a session Chrome detached whose worker is gone.
+func (t *orderedTransport) enqueue(session target.SessionID, work func()) bool {
 	t.mu.Lock()
+	defer t.mu.Unlock()
 	worker := t.workers[session]
 	if worker == nil {
+		if _, gone := t.detached[session]; gone {
+			return false
+		}
 		worker = &sessionWorker{}
 		t.workers[session] = worker
 	}
 	t.pushLocked(session, worker, work)
-	t.mu.Unlock()
+	return true
+}
+
+func (t *orderedTransport) rememberDetached(session target.SessionID) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.rememberDetachedLocked(session)
+}
+
+func (t *orderedTransport) rememberDetachedLocked(session target.SessionID) {
+	if _, known := t.detached[session]; known {
+		return
+	}
+	t.detached[session] = struct{}{}
+	t.detachedOrder = append(t.detachedOrder, session)
+	if len(t.detachedOrder) > rememberedDetachedSessions {
+		delete(t.detached, t.detachedOrder[0])
+		t.detachedOrder[0] = ""
+		t.detachedOrder = t.detachedOrder[1:]
+	}
 }
 
 // enqueueDetach queues work at the end of session's queue and marks the session detached, so that its
@@ -180,6 +242,7 @@ func (t *orderedTransport) run(session target.SessionID, worker *sessionWorker) 
 			worker.running = false
 			if worker.detached && t.workers[session] == worker {
 				delete(t.workers, session)
+				t.rememberDetachedLocked(session)
 			}
 			t.mu.Unlock()
 			return

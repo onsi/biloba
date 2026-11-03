@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -274,6 +275,39 @@ var _ = ginkgo.Describe("orderedTransport", ginkgo.Label("no-browser"), func() {
 		lock.Lock()
 		defer lock.Unlock()
 		gomega.Expect(order).To(gomega.Equal([]string{"browser: crashed", "tab: navigated"}))
+	})
+
+	// Codex round 6, finding 2: a late message that arrived after the detached session's worker had
+	// drained and gone made a new worker, which nothing ever ended.
+	ginkgo.It("makes no worker for a message that arrives after a detached session's queue is gone", func() {
+		hasWorker := func(session target.SessionID) func() bool {
+			return func() bool {
+				transport.mu.Lock()
+				defer transport.mu.Unlock()
+				_, has := transport.workers[session]
+				return has
+			}
+		}
+		feed(reply("S1", 7))
+		gomega.Expect(readOne()).To(gomega.Equal("S1 reply"))
+		feed(detached("S1"))
+		gomega.Expect(readOne()).To(gomega.Equal(" " + target.DetachedFromTarget.Method))
+		gomega.Eventually(hasWorker("S1")).Should(gomega.BeFalse())
+
+		feed(crashed("S1"))
+		gomega.Expect(readOne()).To(gomega.Equal("S1 "+inspector.TargetCrashed.Method), "it still reaches chromedp, which drops it")
+		gomega.Expect(hasWorker("S1")()).To(gomega.BeFalse(), "and leaves no worker behind")
+
+		feed(reply("S2", 8))
+		gomega.Expect(readOne()).To(gomega.Equal("S2 reply"))
+		gomega.Expect(hasWorker("S2")()).To(gomega.BeTrue(), "a new session still gets one")
+
+		for i := range rememberedDetachedSessions + 100 {
+			transport.rememberDetached(target.SessionID(fmt.Sprintf("old-%d", i)))
+		}
+		transport.mu.Lock()
+		defer transport.mu.Unlock()
+		gomega.Expect(transport.detached).To(gomega.HaveLen(rememberedDetachedSessions), "what it remembers is bounded")
 	})
 
 	ginkgo.It("runs a session's worker only while it has work", func() {

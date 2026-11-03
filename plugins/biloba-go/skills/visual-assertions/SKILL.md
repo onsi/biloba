@@ -168,7 +168,7 @@ A *partly* clipped subject warns and still compares — capturing something that
 
 **The poll protects the comparison, not the write.** An assertion re-captures every attempt and rides out a late change; a baseline write passes on the first settled capture and has no second chance. The settle defeats anything *periodic* but cannot see a one-shot change that hasn't started — three captures agree because nothing has happened yet. Fonts are handled (`document.fonts.ready` is awaited before every capture, on both paths); anything else that lands late is yours to gate before generating.
 
-**Scrollbars (not solved).** Overlay vs classic scrollbars change layout width, and that varies by platform, by OS setting, and on macOS by whether a mouse is attached. Prefer **element** captures over whole-page ones. If you need the page, hide them yourself: `::-webkit-scrollbar { display: none }` in the page, or `emulation.SetScrollbarsHidden(true)` via `b.Context`.
+**Scrollbars (not solved).** Overlay vs classic scrollbars change layout width, and that varies by platform, by OS setting, and on macOS by whether a mouse is attached. Prefer **element** captures over whole-page ones. If you need the page, hide them yourself: `::-webkit-scrollbar { display: none }` in the page, or `chromedp.Call(b.Context, emulation.SetScrollbarsHidden, emulation.SetScrollbarsHiddenParams{Hidden: true})`.
 
 **Fonts across machines (not solved).** Subpixel antialiasing, hinting, and fallback differ between macOS and Linux — the same page produces a scattered diff in every glyph. **A baseline belongs to the platform that produced it.** Either generate baselines on the platform CI runs on, or split the directory:
 

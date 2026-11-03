@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
@@ -76,13 +77,17 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 	// OpenSession, openTab, Close, Sessions, target reconciliation - behind a round trip to a target
 	// that may be mid-teardown.  listenToSession's own comment says as much from the other side.
 	attached, detachTab := newTabContext(b.ctx, targetID)
-	// Discarding a tab closes it, as chromedp did when it cancelled the context of a target it had
-	// attached (see newTabContext).
+	// Discarding a tab closes it if this attachment got as far as attaching, as chromedp did when it
+	// cancelled the context of a target it had attached (see newTabContext).  A popup whose attach did
+	// not get that far - the caller gave up first - is the page's, and stays open.
+	var attachedThrough atomic.Bool
 	cancelTab := func() {
 		detachTab()
-		b.discardTarget(targetID)
+		if attachedThrough.Load() {
+			b.discardTarget(targetID)
+		}
 	}
-	if !attachProbeSucceeds(ctx, attached) {
+	if !attachProbeSucceeds(ctx, attached, &attachedThrough) {
 		cancelTab()
 		// A target that will not attach is skipped - it is almost always one Chrome is still
 		// reporting while it tears down.  The caller giving up is a different thing and stays an
@@ -237,7 +242,11 @@ func (b *Browser) registeredSessionForTarget(targetID, openerID target.ID) (sess
 // attachProbeSucceeds runs Runtime.evaluate against a freshly attached target, retrying a transient
 // failure on the same context.  It never cancels between attempts: once the attach has landed,
 // cancelling closes a healthy target out from under its owner.
-func attachProbeSucceeds(ctx context.Context, tabCtx context.Context) bool {
+//
+// attached is set once an attempt's Run has attached the target, read on the goroutine that ran it
+// (where chromedp set the context's Target).  An attempt still running when the probe gives up has
+// not reported attaching.
+func attachProbeSucceeds(ctx context.Context, tabCtx context.Context, attached *atomic.Bool) bool {
 	for attempt := range tabProbeAttempts {
 		if attempt > 0 {
 			select {
@@ -247,7 +256,13 @@ func attachProbeSucceeds(ctx context.Context, tabCtx context.Context) bool {
 			}
 		}
 		done := make(chan error, 1)
-		go func() { done <- chromedp.Do(tabCtx, chromedp.Evaluate[chromedp.Void]("1")) }()
+		go func() {
+			err := chromedp.Do(tabCtx, chromedp.Evaluate[chromedp.Void]("1"))
+			if c := chromedp.FromContext(tabCtx); c != nil && c.Target != nil {
+				attached.Store(true)
+			}
+			done <- err
+		}()
 		select {
 		case err := <-done:
 			if err == nil {

@@ -783,7 +783,7 @@ func (b *Biloba) bootstrapIsolatedTab(allocatorContext context.Context, bootstra
 			continue
 		}
 
-		tabCtx, cancelTab := tabContextFor(bootstrapCtx, isolatedTargetID)
+		tabCtx, cancelTab := tabContextFor(bootstrapCtx, isolatedTargetID, nil)
 		b.Context = tabCtx
 		if _, err := b.RunErr("1"); err != nil {
 			cancelTab()
@@ -1248,7 +1248,7 @@ func (b *Biloba) NewTab() *Biloba {
 			b.gt.Fatalf("failed to create new tab: %s", err.Error())
 			return nil
 		}
-		if tab := b.registerTabFor(tabTargetID, b.root.Context); tab != nil {
+		if tab := b.registerTabFor(tabTargetID, b.root.Context, true); tab != nil {
 			return tab
 		}
 	}
@@ -1282,7 +1282,7 @@ func (b *Biloba) tabsFor(targets []*target.Info) Tabs {
 			// this may be a new tab we've never seen before - is it ours?
 			opener := b.root.tabs[target.OpenerID]
 			if opener != nil {
-				tab = b.root.registerTabFor(target.TargetID, opener.Context)
+				tab = b.root.registerTabFor(target.TargetID, opener.Context, false)
 				if tab == nil {
 					continue
 				}
@@ -1575,22 +1575,36 @@ func newIsolatedBrowserContextAndTarget(ctx context.Context) (cdp.BrowserContext
 // then closes the target, the pair chromedp's own cancellation sent before v0.21 (which now follows
 // its close by polling Target.getTargets; Close and Prepare do their own waiting, see
 // waitUntilTargetGone).
-func tabContextFor(parent context.Context, targetID target.ID) (context.Context, context.CancelFunc) {
+//
+// shouldClose, when not nil, decides at that moment whether the target is this context's to close: a
+// popup is closed only if this context got as far as attaching it, as chromedp's own cancellation did.
+// A target Biloba created itself (nil) is always closed.
+func tabContextFor(parent context.Context, targetID target.ID, shouldClose func() bool) (context.Context, context.CancelFunc) {
 	ctx, detach := engine.NewTabContext(parent, targetID)
 	var once sync.Once
 	closeTab := func() {
 		once.Do(func() {
 			detach() // waits for chromedp's detach, so the close follows it as it did
-			_ = engine.CloseTargetContext(parent, targetID)
+			if shouldClose == nil || shouldClose() {
+				_ = engine.CloseTargetContext(parent, targetID)
+			}
 		})
 	}
 	context.AfterFunc(ctx, closeTab)
 	return ctx, closeTab
 }
 
-func (b *Biloba) registerTabFor(targetID target.ID, parent context.Context) *Biloba {
+// registerTabFor attaches a tab to targetID.  created says Biloba created the target (NewTab), so it
+// is closed whatever happens; a tab the page spawned is closed only once it has been attached.
+func (b *Biloba) registerTabFor(targetID target.ID, parent context.Context, created bool) *Biloba {
 	b.gt.Helper()
-	c, cancel := tabContextFor(parent, targetID)
+	// set by the probe below, on the goroutine whose Run attached the target
+	var attachedThrough atomic.Bool
+	shouldClose := attachedThrough.Load
+	if created {
+		shouldClose = nil
+	}
+	c, cancel := tabContextFor(parent, targetID, shouldClose)
 	newG := newBiloba(b.gt)
 	newG.Context = c
 	newG.ChromeConnection = b.ChromeConnection
@@ -1604,7 +1618,7 @@ func (b *Biloba) registerTabFor(targetID target.ID, parent context.Context) *Bil
 	//   - The attach *wedges*: this only happens for a target that is mid-teardown, and a context
 	//     timeout can't unblock it (chromedp binds the target listener to the first Run's context), so
 	//     we watchdog it and, on timeout, cancel() to unblock the wedged Run and discard the target.
-	//     cancel() abandons the dead attach and closes the target, which is going away anyway.
+	//     cancel() abandons the dead attach; it closes the target only if it was ours or got attached.
 	//   - The attach *errors* quickly: under heavy parallel load a healthy, live target can transiently
 	//     fail the probe.  Retrying on the same context recovers it.  Crucially we do NOT cancel()
 	//     between attempts: once attach has succeeded, cancel() *closes* the (healthy) target out from
@@ -1616,7 +1630,13 @@ func (b *Biloba) registerTabFor(targetID target.ID, parent context.Context) *Bil
 			time.Sleep(tabProbeRetryBackoff)
 		}
 		probeDone := make(chan error, 1)
-		go func() { _, err := newG.RunErr("1"); probeDone <- err }()
+		go func() {
+			_, err := newG.RunErr("1")
+			if c := chromedp.FromContext(newG.Context); c != nil && c.Target != nil {
+				attachedThrough.Store(true)
+			}
+			probeDone <- err
+		}()
 		select {
 		case probeErr = <-probeDone:
 			// got a result: nil => attached; non-nil => transient, retry on the same context

@@ -6,6 +6,7 @@ import (
 
 	"github.com/chromedp/cdproto/accessibility"
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/target"
 )
 
 type VisualOperationHooksForTest struct {
@@ -151,3 +152,14 @@ func SetBilobaRegistrationForTest(register func(context.Context, string) error) 
 // LiveScreencastWorkersForTest counts the screencast delivery goroutines still running, so a spec
 // can tell that every way a recording ends also ends its goroutine.
 func LiveScreencastWorkersForTest() int64 { return liveScreencastWorkers.Load() }
+
+// AttachSpawnedTabForTest attaches a session to targetID the way listing tabs does, and
+// SessionBrowserContextForTest reports the browser context a session's tabs open in, so a spec can
+// pin what a failed attach leaves behind.
+func AttachSpawnedTabForTest(ctx context.Context, root *Session, targetID target.ID) (*Session, error) {
+	return root.browser.sessionForTarget(ctx, targetID, "", root)
+}
+
+func SessionBrowserContextForTest(session *Session) cdp.BrowserContextID {
+	return session.browserContextID
+}
