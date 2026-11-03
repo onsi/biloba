@@ -2,7 +2,6 @@ package biloba
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"github.com/onsi/biloba/engine"
@@ -596,19 +595,19 @@ func (m *RequestModification) WithBody(body string) *RequestModification {
 	return m
 }
 
-func (m *RequestModification) apply(id fetch.RequestID) *fetch.ContinueRequestParams {
-	params := fetch.ContinueRequest(id)
+func (m *RequestModification) apply(id fetch.RequestID) fetch.ContinueRequestParams {
+	params := fetch.ContinueRequestParams{RequestID: id}
 	if m.url != nil {
-		params = params.WithURL(*m.url)
+		params.URL = *m.url
 	}
 	if m.method != nil {
-		params = params.WithMethod(*m.method)
+		params.Method = *m.method
 	}
 	if len(m.headers) > 0 {
-		params = params.WithHeaders(m.headers)
+		params.Headers = m.headers
 	}
 	if m.body != nil {
-		params = params.WithPostData(base64.StdEncoding.EncodeToString([]byte(*m.body)))
+		params.PostData = []byte(*m.body) // cdproto sends it base64-encoded
 	}
 	return params
 }
@@ -1508,31 +1507,30 @@ func (b *Biloba) handleRequestStagePause(ev *fetch.EventRequestPaused) {
 			b.state.rewrittenRequests[ev.RequestID] = ev.Request.URL
 			b.lock.Unlock()
 		}
-		var action chromedp.Action
+		var action chromedp.Action[chromedp.Void]
 		switch {
 		case handler == nil:
-			cr := fetch.ContinueRequest(ev.RequestID)
+			cr := fetch.ContinueRequestParams{RequestID: ev.RequestID}
 			if interceptResponse {
-				cr = cr.WithInterceptResponse(true)
+				cr.InterceptResponse = new(true)
 			}
-			action = cr
+			action = engine.Step(fetch.ContinueRequest, cr)
 		case handler.abort:
-			action = fetch.FailRequest(ev.RequestID, network.ErrorReasonBlockedByClient)
+			action = engine.Step(fetch.FailRequest, fetch.FailRequestParams{RequestID: ev.RequestID, ErrorReason: network.ErrorReasonBlockedByClient})
 		case handler.modify != nil:
 			cr := handler.modify.apply(ev.RequestID)
 			if interceptResponse {
-				cr = cr.WithInterceptResponse(true)
+				cr.InterceptResponse = new(true)
 			}
-			action = cr
+			action = engine.Step(fetch.ContinueRequest, cr)
 		case handler.stub != nil:
-			params := fetch.FulfillRequest(ev.RequestID, int64(handler.stub.Status)).
-				WithBody(base64.StdEncoding.EncodeToString([]byte(handler.stub.Body)))
+			params := fetch.FulfillRequestParams{RequestID: ev.RequestID, ResponseCode: int64(handler.stub.Status), Body: []byte(handler.stub.Body)}
 			if headers := handler.stub.headerEntries(); len(headers) > 0 {
-				params = params.WithResponseHeaders(headers)
+				params.ResponseHeaders = headers
 			}
-			action = params
+			action = engine.Step(fetch.FulfillRequest, params)
 		default:
-			action = fetch.ContinueRequest(ev.RequestID)
+			action = engine.Step(fetch.ContinueRequest, fetch.ContinueRequestParams{RequestID: ev.RequestID})
 		}
 		_ = b.runEngine("answer a paused network request", func(ctx context.Context) error {
 			return engine.RunActionContext(ctx, action)
@@ -1546,7 +1544,7 @@ func (b *Biloba) handleResponseStagePause(ev *fetch.EventRequestPaused) {
 		if handler == nil {
 			// Not ours to modify: hand the real response straight back to the page.
 			_ = b.runEngine("continue an unmodified network response", func(ctx context.Context) error {
-				return engine.RunActionContext(ctx, fetch.ContinueResponse(ev.RequestID))
+				return engine.RunActionContext(ctx, engine.Step(fetch.ContinueResponse, fetch.ContinueResponseParams{RequestID: ev.RequestID}))
 			})
 			return
 		}
@@ -1592,7 +1590,7 @@ func (b *Biloba) handleResponseStagePause(ev *fetch.EventRequestPaused) {
 			// than leave the page waiting on it
 			b.recordUnfulfilledResponse(handler, ev, err)
 			_ = b.runEngine("fail an unfulfilled network response", func(ctx context.Context) error {
-				return engine.RunActionContext(ctx, fetch.FailRequest(ev.RequestID, network.ErrorReasonFailed))
+				return engine.RunActionContext(ctx, engine.Step(fetch.FailRequest, fetch.FailRequestParams{RequestID: ev.RequestID, ErrorReason: network.ErrorReasonFailed}))
 			})
 		}
 	}()

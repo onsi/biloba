@@ -11,7 +11,7 @@ import (
 
 	"github.com/chromedp/cdproto"
 	"github.com/chromedp/cdproto/page"
-	"github.com/chromedp/cdproto/runtime"
+	"github.com/chromedp/chromedp"
 	"github.com/onsi/biloba/engine"
 	"github.com/onsi/gomega/gcustom"
 )
@@ -150,11 +150,11 @@ var returnKeyword = regexp.MustCompile(`\breturn\b`)
 // once it runs inside RunErrAsync's async wrapper rejects the promise instead, which Chrome reports as
 // "Uncaught (in promise) ..." - so a SyntaxError thrown by, say, JSON.parse is never mistaken for one.
 func isParseError(err error) bool {
-	var details *runtime.ExceptionDetails
-	if !errors.As(err, &details) || details.Exception == nil {
+	var exception *chromedp.ExceptionError
+	if !errors.As(err, &exception) || exception.ExceptionDetails == nil || exception.Exception == nil {
 		return false
 	}
-	return details.Text == "Uncaught" && details.Exception.ClassName == "SyntaxError"
+	return exception.Text == "Uncaught" && exception.Exception.ClassName == "SyntaxError"
 }
 
 // isUnreturnableValue reports whether err is Chrome refusing to return the script's value by value.

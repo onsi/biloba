@@ -30,12 +30,13 @@ import (
 // until Chrome misbehaves.  go vet cannot see this, and neither can a reviewer skimming a diff for
 // something that looks like the fifteen bounded calls around it.
 var _ = ginkgo.Describe("how Biloba's own source talks to Chrome", ginkgo.Label("no-browser"), func() {
-	// The tab context, unbounded, handed straight to chromedp along with at least one action.
-	// Whitespace-tolerant so a reformat cannot slip one past.  The trailing comma is what makes the
-	// one legitimate form - the no-action `chromedp.Run(b.Context)` in ensureChromedpAllocated, which
-	// exists precisely so a bounded context is never the one chromedp allocates the target on - fall
-	// outside the pattern rather than need an exemption list.
-	unboundedTabRun := regexp.MustCompile(`chromedp\.Run\(\s*(b|tab|h\.b|newG)\.Context\s*,`)
+	// The tab context, unbounded, handed straight to chromedp along with at least one action or
+	// command - chromedp.Run, Do, Call, or CallBrowser.  Whitespace-tolerant so a reformat cannot slip
+	// one past.  The trailing comma is what makes the one legitimate form - the no-action
+	// `chromedp.Do(b.Context)` in ensureChromedpAllocated, which exists precisely so a bounded context
+	// is never the one chromedp allocates the target on - fall outside the pattern rather than need an
+	// exemption list.
+	unboundedTabRun := regexp.MustCompile(`chromedp\.(Run|Do|Call|CallBrowser)(\[[^\]]*\])?\(\s*(b|tab|h\.b|newG)\.Context\s*,`)
 
 	ginkgo.It("never sends a command to a tab context without a deadline", func() {
 		sources, err := filepath.Glob("*.go")

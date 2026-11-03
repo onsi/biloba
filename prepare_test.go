@@ -8,8 +8,8 @@ import (
 
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/runtime"
-	"github.com/chromedp/chromedp"
 	"github.com/onsi/biloba"
+	"github.com/onsi/biloba/engine"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -47,14 +47,15 @@ var _ = Describe("Prepare resets per-spec state so it does not leak between spec
 		b.Navigate(fixtureServer + "/stragglers.html")
 		Eventually("#hello").Should(b.Exist())
 
-		// Watch the raw CDP events.  This listener is registered after Biloba's, and chromedp calls a
-		// target's listeners in order, so once it has seen an event Biloba has already handled it.
+		// Watch the raw CDP events.  This listener is registered after Biloba's, and a target's
+		// listeners run in order (engine.ListenTarget), so once it has seen an event Biloba has already
+		// handled it.
 		var watching atomic.Bool
 		watching.Store(true)
 		DeferCleanup(func() { watching.Store(false) })
 		var hangID, stragglerID atomic.Value
 		seen := make(chan string, 20)
-		chromedp.ListenTarget(b.Context, func(ev any) {
+		Expect(engine.ListenTarget(b.Context, func(ev any) {
 			if !watching.Load() {
 				return
 			}
@@ -87,7 +88,7 @@ var _ = Describe("Prepare resets per-spec state so it does not leak between spec
 					seen <- "thrown"
 				}
 			}
-		})
+		})).To(Succeed())
 
 		// a fetch that never answers stays in flight into Prepare
 		b.Run(`window.hang()`)

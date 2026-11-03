@@ -102,20 +102,20 @@ func (b *Biloba) ensureChromedpAllocated() {
 	if c := chromedp.FromContext(b.Context); c == nil || c.Target != nil {
 		return
 	}
-	chromedp.Run(b.Context)
+	_ = chromedp.Do(b.Context)
 }
 
 // runCDP runs actions against Chrome under the backstop deadline, turning a wedged, crashed, or
 // vanished browser into an actionable error instead of a hang.  what names the operation in the
 // failure message and reads as the tail of "Chrome did not ___": "evaluate JavaScript in the page",
 // "dispatch keyboard input", and so on.
-func (b *Biloba) runCDP(what string, actions ...chromedp.Action) error {
+func (b *Biloba) runCDP(what string, actions ...chromedp.Action[chromedp.Void]) error {
 	return b.runCDPWithin(cdpTimeout, what, actions...)
 }
 
 // runCDPWithin is runCDP with an explicit deadline, for the one class (an awaited promise) whose
 // duration the page rather than Chrome controls.
-func (b *Biloba) runCDPWithin(timeout time.Duration, what string, actions ...chromedp.Action) error {
+func (b *Biloba) runCDPWithin(timeout time.Duration, what string, actions ...chromedp.Action[chromedp.Void]) error {
 	ctx, cancel := b.cdpContext(timeout)
 	defer cancel()
 	return b.runCDPIn(ctx, timeout, what, actions...)
@@ -123,9 +123,9 @@ func (b *Biloba) runCDPWithin(timeout time.Duration, what string, actions ...chr
 
 // runCDPIn runs actions in an already-bounded context - the waiting commands build theirs with
 // waitingContext - so every path into Chrome funnels through one place that can diagnose a failure.
-func (b *Biloba) runCDPIn(ctx context.Context, timeout time.Duration, what string, actions ...chromedp.Action) error {
+func (b *Biloba) runCDPIn(ctx context.Context, timeout time.Duration, what string, actions ...chromedp.Action[chromedp.Void]) error {
 	return b.runEngineIn(ctx, timeout, what, func(runCtx context.Context) error {
-		return chromedp.Run(runCtx, actions...)
+		return chromedp.Do(runCtx, actions...)
 	})
 }
 

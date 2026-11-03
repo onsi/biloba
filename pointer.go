@@ -50,7 +50,7 @@ Pen() makes [Biloba.Pointer] return a pen: every event it dispatches reaches the
 Read https://onsi.github.io/biloba/#driving-the-pointer-directly to learn more about driving the pointer
 */
 func (b *Biloba) Pen() PointerHandleOption {
-	return func(p *Pointer) { p.pointerType = input.Pen }
+	return func(p *Pointer) { p.pointerType = input.DispatchMouseEventPointerTypePen }
 }
 
 /*
@@ -69,7 +69,7 @@ Pointer itself accepts every poll knob: the handle keeps the view it was made fr
 Read https://onsi.github.io/biloba/#driving-the-pointer-directly to learn more about driving the pointer
 */
 func (b *Biloba) Pointer(opts ...PointerHandleOption) *Pointer {
-	p := &Pointer{b: b, pointerType: input.Mouse}
+	p := &Pointer{b: b, pointerType: input.DispatchMouseEventPointerTypeMouse}
 	for _, opt := range opts {
 		opt(p)
 	}
@@ -141,7 +141,7 @@ func (p *Pointer) Down() {
 		p.b.gt.Fatalf("Pointer.Down: the pointer is already pressed - call Up first")
 		return
 	}
-	if err := p.dispatch(p.b, input.MousePressed); err != nil {
+	if err := p.dispatch(p.b, input.DispatchMouseEventTypeMousePressed); err != nil {
 		p.b.gt.Fatalf("Pointer.Down failed:\n%s", err.Error())
 		return
 	}
@@ -161,7 +161,7 @@ func (p *Pointer) Up() {
 		return
 	}
 	p.pressed = false
-	if err := p.dispatch(p.b, input.MouseReleased); err != nil {
+	if err := p.dispatch(p.b, input.DispatchMouseEventTypeMouseReleased); err != nil {
 		p.b.gt.Fatalf("Pointer.Up failed:\n%s", err.Error())
 	}
 }
@@ -169,12 +169,12 @@ func (p *Pointer) Up() {
 func (p *Pointer) move(method string, x, y float64) {
 	p.b.gt.Helper()
 	p.x, p.y = x, y
-	if err := p.dispatch(p.b, input.MouseMoved); err != nil {
+	if err := p.dispatch(p.b, input.DispatchMouseEventTypeMouseMoved); err != nil {
 		p.b.gt.Fatalf("%s failed:\n%s", method, err.Error())
 	}
 }
 
-func (p *Pointer) dispatch(on *Biloba, kind input.MouseType) error {
+func (p *Pointer) dispatch(on *Biloba, kind input.DispatchMouseEventType) error {
 	return on.runEngine("dispatch pointer input", func(ctx context.Context) error {
 		return engine.DispatchPointerContext(ctx, kind, p.x, p.y, p.pressed, p.pointerType)
 	})
@@ -192,7 +192,7 @@ func (p *Pointer) releaseAtSpecEnd() {
 	if on.frame != nil && !on.frame.outOfProcess {
 		on = on.frame.owner
 	}
-	_ = p.dispatch(on, input.MouseReleased)
+	_ = p.dispatch(on, input.DispatchMouseEventTypeMouseReleased)
 }
 
 // toTabPointInPlace maps a point in this frame's viewport into its tab's viewport, through the iframe

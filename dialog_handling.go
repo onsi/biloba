@@ -180,10 +180,7 @@ func (b *Biloba) handleEventJavascriptDialogOpening(ev *page.EventJavascriptDial
 
 func (b *Biloba) dismissDialog(response bool, text string) {
 	go func() {
-		action := page.HandleJavaScriptDialog(response)
-		if text != "" {
-			action = action.WithPromptText(text)
-		}
+		action := engine.Step(page.HandleJavaScriptDialog, page.HandleJavaScriptDialogParams{Accept: response, PromptText: text})
 		_ = b.runEngine("dismiss the JavaScript dialog", func(ctx context.Context) error {
 			return engine.RunActionContext(ctx, action)
 		})

@@ -6,6 +6,7 @@ import (
 	"github.com/onsi/biloba/engine"
 
 	"github.com/chromedp/cdproto/input"
+	"github.com/chromedp/chromedp"
 )
 
 /*
@@ -125,18 +126,18 @@ func (b *Biloba) realisticClickEach(selector any) error {
 }
 
 // modifierMask folds the requested keyboard modifiers into the CDP modifier bitmask.
-func modifierMask(modifiers []clickModifier) input.Modifier {
-	mask := input.ModifierNone
+func modifierMask(modifiers []clickModifier) chromedp.Modifier {
+	mask := chromedp.ModifierNone
 	for _, m := range modifiers {
 		switch m {
 		case modShift:
-			mask |= input.ModifierShift
+			mask |= chromedp.ModifierShift
 		case modControl:
-			mask |= input.ModifierCtrl
+			mask |= chromedp.ModifierCtrl
 		case modAlt:
-			mask |= input.ModifierAlt
+			mask |= chromedp.ModifierAlt
 		case modMeta:
-			mask |= input.ModifierMeta
+			mask |= chromedp.ModifierMeta
 		}
 	}
 	return mask
@@ -202,19 +203,19 @@ func (b *Biloba) realisticMouseClick(selector any, cfg pointerConfig, button inp
 }
 
 func (b *Biloba) realisticClick(selector any, cfg pointerConfig) (bool, error) {
-	return b.realisticMouseClick(selector, cfg, input.Left, 1)
+	return b.realisticMouseClick(selector, cfg, input.MouseButtonLeft, 1)
 }
 
 func (b *Biloba) realisticDblClick(selector any, cfg pointerConfig) (bool, error) {
-	return b.realisticMouseClick(selector, cfg, input.Left, 2)
+	return b.realisticMouseClick(selector, cfg, input.MouseButtonLeft, 2)
 }
 
 func (b *Biloba) realisticRightClick(selector any, cfg pointerConfig) (bool, error) {
-	return b.realisticMouseClick(selector, cfg, input.Right, 1)
+	return b.realisticMouseClick(selector, cfg, input.MouseButtonRight, 1)
 }
 
 func (b *Biloba) realisticMiddleClick(selector any, cfg pointerConfig) (bool, error) {
-	return b.realisticMouseClick(selector, cfg, input.Middle, 1)
+	return b.realisticMouseClick(selector, cfg, input.MouseButtonMiddle, 1)
 }
 
 // realisticTap implements Tap for realistic mode.  It resolves the actionable point (honoring any At

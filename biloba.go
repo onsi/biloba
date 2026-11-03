@@ -355,7 +355,9 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...SpinUpOption) ChromeConne
 		opts = append(opts, chromedp.ExecPath(shellPath))
 	}
 
-	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
+	// The other processes attach to this Chrome over its websocket, so it opens a debugging port (and
+	// writes DevToolsActivePort, read below) rather than talking to us over a pipe.
+	allocCtx, cancel := engine.NewExecAllocator(context.Background(), nil, opts...)
 	ginkgoT.DeferCleanup(cancel)
 
 	browserCtx, cancel := chromedp.NewContext(allocCtx)
@@ -680,7 +682,11 @@ func ConnectToChrome(ginkgoT GinkgoTInterface, options ...BilobaConfigOption) *B
 		}
 		b.ChromeConnection = cc
 	}
-	allocatorContext, cancel := chromedp.NewRemoteAllocator(context.Background(), b.ChromeConnection.WebSocketURL)
+	var slowListenerf func(string, ...any)
+	if b.debugLogging {
+		slowListenerf = b.gt.Logf
+	}
+	allocatorContext, cancel := engine.NewRemoteAllocator(context.Background(), b.ChromeConnection.WebSocketURL, true, slowListenerf)
 	b.gt.DeferCleanup(cancel)
 
 	// Chrome 149+ rejects Target.createTarget with a browserContextId unless newWindow:true is used,
@@ -763,10 +769,17 @@ func (b *Biloba) bootstrapIsolatedTab(allocatorContext context.Context, bootstra
 			continue
 		}
 
-		tabCtx, cancelTab := chromedp.NewContext(bootstrapCtx, chromedp.WithTargetID(isolatedTargetID))
+		tabCtx, cancelTab := tabContextFor(bootstrapCtx, isolatedTargetID)
 		// Frame handles look their documents up in this registry, and it has to be listening before the
 		// target's first Run, when Chrome announces the documents that already exist.
-		b.Context = engine.TrackFrameWorlds(tabCtx)
+		tracked, err := engine.TrackFrameWorlds(tabCtx, isolatedTargetID)
+		if err != nil {
+			cancelTab()
+			cancelBootstrap()
+			lastErr = err
+			continue
+		}
+		b.Context = tracked
 		if _, err := b.RunErr("1"); err != nil {
 			cancelTab()
 			cancelBootstrap()
@@ -1220,7 +1233,7 @@ func (b *Biloba) NewTab() *Biloba {
 			b.gt.Fatalf("failed to create new tab: %s", err.Error())
 			return nil
 		}
-		if tab := b.registerTabFor(chromedp.NewContext(b.root.Context, chromedp.WithTargetID(tabTargetID))); tab != nil {
+		if tab := b.registerTabFor(tabTargetID, b.root.Context); tab != nil {
 			return tab
 		}
 	}
@@ -1254,7 +1267,7 @@ func (b *Biloba) tabsFor(targets []*target.Info) Tabs {
 			// this may be a new tab we've never seen before - is it ours?
 			opener := b.root.tabs[target.OpenerID]
 			if opener != nil {
-				tab = b.root.registerTabFor(chromedp.NewContext(opener.Context, chromedp.WithTargetID(target.TargetID)))
+				tab = b.root.registerTabFor(target.TargetID, opener.Context)
 				if tab == nil {
 					continue
 				}
@@ -1542,10 +1555,27 @@ func newIsolatedBrowserContextAndTarget(ctx context.Context) (cdp.BrowserContext
 	return browserContextID, targetID, err
 }
 
-func (b *Biloba) registerTabFor(c context.Context, cancel context.CancelFunc) *Biloba {
+// tabContextFor attaches a chromedp context to targetID.  Cancelling it detaches and then closes the
+// target, the pair chromedp's own cancellation sent before v0.21 (which now follows its close by
+// polling Target.getTargets; Close and Prepare do their own waiting, see waitUntilTargetGone).
+func tabContextFor(parent context.Context, targetID target.ID) (context.Context, context.CancelFunc) {
+	ctx, detach := engine.NewTabContext(parent, targetID)
+	return ctx, func() {
+		detach()
+		_ = engine.CloseTargetContext(parent, targetID)
+	}
+}
+
+func (b *Biloba) registerTabFor(targetID target.ID, parent context.Context) *Biloba {
 	b.gt.Helper()
+	c, cancel := tabContextFor(parent, targetID)
+	tracked, err := engine.TrackFrameWorlds(c, targetID) // before the probe below: see bootstrapIsolatedTab
+	if err != nil {
+		cancel()
+		return nil
+	}
 	newG := newBiloba(b.gt)
-	newG.Context = engine.TrackFrameWorlds(c) // before the probe below: see bootstrapIsolatedTab
+	newG.Context = tracked
 	newG.ChromeConnection = b.ChromeConnection
 	newG.downloadDir = b.downloadDir
 	newG.root = b.root
@@ -1557,8 +1587,7 @@ func (b *Biloba) registerTabFor(c context.Context, cancel context.CancelFunc) *B
 	//   - The attach *wedges*: this only happens for a target that is mid-teardown, and a context
 	//     timeout can't unblock it (chromedp binds the target listener to the first Run's context), so
 	//     we watchdog it and, on timeout, cancel() to unblock the wedged Run and discard the target.
-	//     Attach never completed, so the tab has no chromedp Target and cancel() closes nothing - it
-	//     just abandons the dead attach.
+	//     cancel() abandons the dead attach and closes the target, which is going away anyway.
 	//   - The attach *errors* quickly: under heavy parallel load a healthy, live target can transiently
 	//     fail the probe.  Retrying on the same context recovers it.  Crucially we do NOT cancel()
 	//     between attempts: once attach has succeeded, cancel() *closes* the (healthy) target out from
@@ -1593,7 +1622,7 @@ func (b *Biloba) registerTabFor(c context.Context, cancel context.CancelFunc) *B
 	newG.targetID = chromedp.FromContext(newG.Context).Target.TargetID
 
 	var browserContextID cdp.BrowserContextID
-	err := retryTransientCDP(func() error {
+	err = retryTransientCDP(func() error {
 		var infoErr error
 		browserContextID, infoErr = engine.TargetBrowserContextContext(c)
 		return infoErr

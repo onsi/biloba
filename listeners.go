@@ -12,7 +12,6 @@ import (
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/target"
-	"github.com/chromedp/chromedp"
 	"github.com/onsi/biloba/engine"
 )
 
@@ -81,22 +80,40 @@ func (b *Biloba) installBilobaOnEveryDocument() {
 //
 // The event carries a TargetID because it is not scoped to a session, so it has to be filtered - every
 // tab sees every tab's crash otherwise.
-func (b *Biloba) listenForCrashOnTheBrowser() {
-	chromedp.ListenBrowser(b.Context, func(ev any) {
+func (b *Biloba) listenForCrashOnTheBrowser() error {
+	return engine.ListenBrowser(b.Context, func(ev any) {
 		if crashed, ok := ev.(*target.EventTargetCrashed); ok && crashed.TargetID == b.targetID {
 			b.handleEventTargetCrashed(nil)
 		}
-	})
+	}, target.TargetCrashed.Method)
 }
 
+// tabEvents are the events setUpListeners handles, and the ones b.boundary has to see.
+var tabEvents = []string{
+	runtime.ExecutionContextCreated.Method, runtime.ExecutionContextDestroyed.Method, runtime.ExecutionContextsCleared.Method,
+	page.JavascriptDialogOpening.Method,
+	runtime.ConsoleAPICalled.Method, runtime.ExceptionThrown.Method, cdplog.EntryAdded.Method,
+	page.FrameAttached.Method, page.FrameNavigated.Method, page.FrameDetached.Method,
+	browser.DownloadWillBegin.Method, browser.DownloadProgress.Method,
+	network.RequestWillBeSent.Method, network.ResponseReceived.Method, network.LoadingFinished.Method, network.LoadingFailed.Method,
+	fetch.RequestPaused.Method,
+	inspector.TargetCrashed.Method,
+}
+
+// setUpListeners wires the tab's event handlers.  They run on the connection's reader goroutine, in
+// the order Chrome sent the events (see engine.ListenTarget), so none of them may wait on Chrome:
+// the handlers that answer it (paused requests, dialogs) do so from a goroutine.
 func (b *Biloba) setUpListeners() {
 	b.configureDownloadBehavior()
 	b.enableCrashReporting()
 	b.installBilobaOnEveryDocument()
-	b.listenForCrashOnTheBrowser()
+	if err := b.listenForCrashOnTheBrowser(); err != nil {
+		b.gt.Fatalf("failed to listen for browser events: %s", err)
+		return
+	}
 
 	// the previous spec's page can still raise events after Prepare: drop them, unprinted and unrecorded
-	chromedp.ListenTarget(b.Context, func(ev any) {
+	err := engine.ListenTarget(b.Context, func(ev any) {
 		if b.boundary.Stale(ev) {
 			return
 		}
@@ -132,5 +149,8 @@ func (b *Biloba) setUpListeners() {
 		case *inspector.EventTargetCrashed:
 			b.handleEventTargetCrashed(ev)
 		}
-	})
+	}, tabEvents...)
+	if err != nil {
+		b.gt.Fatalf("failed to listen for tab events: %s", err)
+	}
 }

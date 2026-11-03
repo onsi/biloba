@@ -16,22 +16,22 @@ func (b *Biloba) handleEventConsoleAPICalled(ev *runtime.EventConsoleAPICalled) 
 	var color string
 	showStackTrace := ev.StackTrace != nil && len(ev.StackTrace.CallFrames) > 1
 	switch ev.Type {
-	case runtime.APITypeLog:
+	case runtime.ConsoleAPICalledTypeLog:
 		color = "{{/}}"
 		showStackTrace = false
-	case runtime.APITypeDebug:
+	case runtime.ConsoleAPICalledTypeDebug:
 		color = "{{light-gray}}"
 		showStackTrace = false
-	case runtime.APITypeInfo:
+	case runtime.ConsoleAPICalledTypeInfo:
 		color = "{{cyan}}"
 		showStackTrace = false
-	case runtime.APITypeError:
+	case runtime.ConsoleAPICalledTypeError:
 		color = "{{red}}"
 		showStackTrace = showStackTrace && true
-	case runtime.APITypeWarning:
+	case runtime.ConsoleAPICalledTypeWarning:
 		color = "{{coral}}"
 		showStackTrace = showStackTrace && true
-	case runtime.APITypeAssert:
+	case runtime.ConsoleAPICalledTypeAssert:
 		color = "{{red}}{{bold}}"
 		showStackTrace = showStackTrace && true
 	default:
@@ -53,16 +53,16 @@ func (b *Biloba) handleEventConsoleAPICalled(ev *runtime.EventConsoleAPICalled) 
 	} else {
 		message = strings.Join(out, " - ") + "\n"
 	}
-	b.gt.Printf(b.gt.F("{{gray}}[%s] "+color+"%s{{/}}", ev.Timestamp.Time().Format("15:04"), message))
+	b.gt.Printf(b.gt.F("{{gray}}[%s] "+color+"%s{{/}}", engine.TimestampTime(ev.Timestamp).Format("15:04"), message))
 	if showStackTrace {
 		b.gt.Printf(b.gt.Fi(1, b.renderStackTrace(ev.StackTrace)))
 	}
-	if ev.Type == runtime.APITypeError || ev.Type == runtime.APITypeAssert {
+	if ev.Type == runtime.ConsoleAPICalledTypeError || ev.Type == runtime.ConsoleAPICalledTypeAssert {
 		b.lock.Lock()
 		b.state.consoleErrors = append(b.state.consoleErrors, strings.TrimSuffix(message, "\n"))
 		b.lock.Unlock()
 	}
-	if ev.Type == runtime.APITypeAssert {
+	if ev.Type == runtime.ConsoleAPICalledTypeAssert {
 		defer func() { recover() }()
 		b.gt.Fatalf("Detected console.assert failure:\n%s", message)
 	}

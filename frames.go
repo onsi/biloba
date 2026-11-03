@@ -518,7 +518,7 @@ func (b *Biloba) frameTargetContext(id target.ID) (context.Context, error) {
 	root.lock.Unlock()
 	// The tab records and streams them, as it does its same-process frames' messages.
 	owner := b.tab()
-	chromedp.ListenTarget(ctx, func(ev any) {
+	if err := engine.ListenTarget(ctx, func(ev any) {
 		switch ev := ev.(type) {
 		case *runtime.EventConsoleAPICalled:
 			owner.handleEventConsoleAPICalled(ev)
@@ -527,7 +527,10 @@ func (b *Biloba) frameTargetContext(id target.ID) (context.Context, error) {
 		case *cdplog.EventEntryAdded:
 			owner.handleEventLogEntryAdded(ev)
 		}
-	})
+	}, runtime.ConsoleAPICalled.Method, runtime.ExceptionThrown.Method, cdplog.EntryAdded.Method); err != nil {
+		b.detachFrameTarget(id)
+		return nil, err
+	}
 	return ctx, nil
 }
 
@@ -607,7 +610,7 @@ func (b *Biloba) frameHandle(info engine.FrameInfo) *Biloba {
 func (b *Biloba) listenForFrameRequests() {
 	id := b.frame.id
 	loaderID := b.frame.loaderID
-	chromedp.ListenTarget(b.Context, func(ev any) {
+	_ = engine.ListenTarget(b.Context, func(ev any) {
 		switch ev := ev.(type) {
 		case *network.EventRequestWillBeSent:
 			if ev.FrameID == id && ev.LoaderID == loaderID {
@@ -628,7 +631,8 @@ func (b *Biloba) listenForFrameRequests() {
 		case *network.EventLoadingFailed:
 			b.handleEventLoadingFailed(ev)
 		}
-	})
+	}, network.RequestWillBeSent.Method, network.ResponseReceived.Method, runtime.ConsoleAPICalled.Method,
+		runtime.ExceptionThrown.Method, network.LoadingFinished.Method, network.LoadingFailed.Method)
 }
 
 // frameURL is the frame's URL as of the most recent discovery.
