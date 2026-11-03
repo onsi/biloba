@@ -32,6 +32,10 @@
     <textarea id="editor"></textarea>
     <div id="last-combo">none</div>
 
+    <!-- records every keydown, keypress and keyup as type:key:shift,ctrl,alt,meta flags, to assert which events a key produces -->
+    <input id="tracer" type="text" />
+    <ul id="key-trace"></ul>
+
     <!-- records keydowns seen at the document level, so we can assert focus-free / global-hotkey sends -->
     <div id="global-hotkey">none</div>
 
@@ -55,6 +59,15 @@
             if (e.metaKey) mods.push("Meta")
             lastCombo.innerText = [...mods, e.key].join("+")
         })
+
+        const trace = document.getElementById("key-trace")
+        for (const type of ["keydown", "keypress", "keyup"]) {
+            document.getElementById("tracer").addEventListener(type, (e) => {
+                const li = document.createElement("li")
+                li.innerText = `${type}:${e.key}:${e.shiftKey},${e.ctrlKey},${e.altKey},${e.metaKey}`
+                trace.appendChild(li)
+            })
+        }
 
         const globalHotkey = document.getElementById("global-hotkey")
         document.addEventListener("keydown", (e) => {

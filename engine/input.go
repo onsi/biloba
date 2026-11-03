@@ -38,9 +38,11 @@ func EmulateViewportMatchingScreenContext(ctx context.Context, width, height int
 
 // KeyEventContext dispatches keys as real keyboard events, so keydown/keypress/keyup all fire.
 //
-// It sends every event chromedp's encoder produces for a key, the char event included when Ctrl,
-// Alt, or Meta is held.  That is what chromedp.KeyEvent did before v0.18.0, which stopped sending
-// that char event; Biloba keeps the old behaviour until it decides to adopt the new one.
+// A key sent with Ctrl, Alt, or Meta held dispatches keydown and keyup but no char event, so the
+// page sees no keypress and no text is typed, which is what a shortcut does in Chrome and what
+// chromedp.KeyEvent has done since v0.18.0.  Shift alone still gets its char event.  Alt is treated
+// the same on every platform: the key encoding is a fixed US layout and does not model the
+// characters Option produces on macOS, so to type one, send the resulting character.
 func KeyEventContext(ctx context.Context, keys string, opts ...chromedp.KeyOption) error {
 	if keys == "" {
 		return nil
@@ -50,6 +52,9 @@ func KeyEventContext(ctx context.Context, keys string, opts ...chromedp.KeyOptio
 			for _, key := range kb.Encode(r) {
 				for _, o := range opts {
 					o(key)
+				}
+				if key.Type == kb.KeyChar && key.Modifiers&^int64(chromedp.ModifierShift) != 0 {
+					continue
 				}
 				if _, err := cdp.Call(ctx, t, input.DispatchKeyEvent, *key); err != nil {
 					return err

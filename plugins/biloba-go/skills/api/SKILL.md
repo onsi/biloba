@@ -204,7 +204,7 @@ Each produces a genuine `window.getSelection()` range and dispatches `mouseup` (
   - The matcher form can't mix leading text + trailing keys (`b.Type("hello", Keys.Enter)` reads as selector=`"hello"`). Use the polling form.
 - `b.SendKeysToWindowImmediately(...parts)` — **focus-free, no selector, no matcher, no poll**: lands on the focused element, else fires on `document`/window (global hotkeys). Gate it yourself: `Eventually(sel).Should(b.BeFocused())` then send. To type *into* an element use `b.Type`.
 - `biloba.Keys.{Enter,Tab,Escape,Backspace,Delete,Arrow{Up,Down,Left,Right},Home,End,PageUp,PageDown}`.
-- **Modifiers** `b.Shift()`/`b.Ctrl()`/`b.Alt()`/`b.Meta()` (same values as the pointer modifiers) work here too, in any position: `b.Type("textarea", biloba.Keys.Enter, b.Shift())`.
+- **Modifiers** `b.Shift()`/`b.Ctrl()`/`b.Alt()`/`b.Meta()` (same values as the pointer modifiers) work here too, in any position: `b.Type("textarea", biloba.Keys.Enter, b.Shift())`. With `Ctrl`/`Alt`/`Meta` held a key is a shortcut: `keydown`/`keyup` fire with the flag set, but there is no `keypress` and no text is typed (`b.Type("input", "a", b.Meta())` leaves the value alone). `Shift` alone still types. To type a character Option makes on macOS, send the character itself.
 
 ## Uploads
 

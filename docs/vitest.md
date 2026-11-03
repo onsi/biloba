@@ -301,6 +301,16 @@ await session.getByTestId("card-number").realistic().setValue("4242 4242 4242 42
 
 The realistic track covers clicks and click variants, tap, hover, typing and value changes, wheel input, and drag.  Biloba scrolls the target into view when it is not already fully on screen and topmost at its center, checks actionability, and uses real CDP input.  The fast default keeps each action atomic in the page runtime.
 
+`type()` on a locator and `sendKeys()` on a session send real key events; `Keys` (exported by `biloba`) names Enter, Escape, the arrows, and the rest.  Pass `modifiers` (`"Shift"`, `"Control"`, `"Alt"`, `"Meta"`) to hold keys down while they are sent:
+
+```ts
+await session.getByTestId("name").type("Ada");
+await session.getByTestId("editor").type(Keys.Enter, {modifiers: ["Shift"]});
+await session.sendKeys("k", {modifiers: ["Meta"]});   // a hotkey handled at the document level
+```
+
+A key sent with `Control`, `Alt`, or `Meta` held is a shortcut, as it is in Chrome: it fires `keydown` and `keyup` but no `keypress`, and no text is typed.  `type("a", {modifiers: ["Meta"]})` leaves the input's value alone.  `Shift` alone still types.  `Alt` behaves this way on every platform: Biloba encodes keys for a fixed US layout and does not model the characters Option produces on macOS, so to type one, send the character itself.
+
 An assertion resolves to an `AssertionResult` describing how it got there, which is occasionally useful and always available:
 
 ```ts

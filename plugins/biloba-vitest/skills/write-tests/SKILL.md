@@ -118,6 +118,8 @@ await session.getByTestId("menu").realistic().hover();
 
 The realistic track also covers click variants, tap, and wheel input. The fast default keeps find-and-act atomic in the page runtime.
 
+`locator.type(keys, {modifiers})` and `session.sendKeys(keys, {modifiers})` send real key events (`Keys.Enter` and the other named keys come from `biloba`). A key sent with `"Control"`, `"Alt"`, or `"Meta"` held is a shortcut: `keydown`/`keyup` fire with the flag set, but there is no `keypress` and no text is typed, so `type("a", {modifiers: ["Meta"]})` leaves an input's value alone. `"Shift"` alone still types. To type a character Option makes on macOS, send the character itself.
+
 For a gesture of your own (a pen stroke, a slider scrubbed while recording), drive a real pointer one event at a time:
 
 ```ts

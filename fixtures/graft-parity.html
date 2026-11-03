@@ -51,6 +51,7 @@
     <div id="drag-count">0</div>
     <div id="last-key"></div>
     <div id="key-modifiers"></div>
+    <div id="last-keypress"></div>
     <script>
       const input = document.querySelector('[data-testid="name"]')
       input.addEventListener('input', () => document.querySelector('#echo').textContent = input.value)
@@ -75,6 +76,7 @@
       })
       document.querySelector('#surface').customEcho = value => `surface:${value}`
       setTimeout(() => document.querySelector('#delayed').textContent = 'ready', 80)
+      document.addEventListener('keypress', event => document.querySelector('#last-keypress').textContent = event.key)
       document.addEventListener('keydown', event => {
         document.querySelector('#last-key').textContent = event.key
         document.querySelector('#key-modifiers').textContent = `${event.key}:${event.shiftKey}:${event.ctrlKey}`

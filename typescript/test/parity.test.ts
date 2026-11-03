@@ -1106,6 +1106,13 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     expect(await name.value()).toBe("Adaa");
     await session.sendKeys("x", {modifiers: ["Control"]});
     expect(await session.locator("#key-modifiers").textContent()).toBe("x:false:true");
+    // a key sent with Control, Alt, or Meta held is a shortcut: keydown fires, but no keypress and no text
+    expect(await session.locator("#last-keypress").textContent()).toBe("a");
+    for (const modifier of ["Control", "Alt", "Meta"] as const) {
+      await name.type("z", {modifiers: [modifier]});
+    }
+    expect(await name.value()).toBe("Adaa");
+    expect(await session.locator("#last-keypress").textContent()).toBe("a");
     await session.locator("#accepted").setValue(true);
     await session.locator("#accepted").expectChecked();
     await session.locator("#choice").selectOption(optionLabel("Beta"));

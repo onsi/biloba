@@ -169,5 +169,32 @@ var _ = Describe("Keyboard input", func() {
 			Eventually("#editor").Should(b.Type("a", b.Meta()))
 			Ω("#last-combo").Should(b.HaveInnerText("Meta+a"))
 		})
+
+		DescribeTable("a shortcut key types nothing and fires no keypress",
+			func(modifier func() biloba.Modifier, flags string) {
+				b.Type("#tracer", "a", modifier())
+				Ω("#tracer").Should(b.HaveValue(""))
+				Ω("#key-trace li").Should(b.EachHaveInnerText("keydown:a:"+flags, "keyup:a:"+flags))
+			},
+			Entry("Ctrl", func() biloba.Modifier { return b.Ctrl() }, "false,true,false,false"),
+			Entry("Alt", func() biloba.Modifier { return b.Alt() }, "false,false,true,false"),
+			Entry("Meta", func() biloba.Modifier { return b.Meta() }, "false,false,false,true"),
+		)
+
+		It("sends no character for a shortcut sent to the window either", func() {
+			b.Type("#tracer", "x") // focuses the tracer
+			b.SendKeysToWindowImmediately("a", b.Ctrl())
+			Ω("#tracer").Should(b.HaveValue("x"))
+			Ω("#key-trace li").Should(b.EachHaveInnerText(
+				"keydown:x:false,false,false,false", "keypress:x:false,false,false,false", "keyup:x:false,false,false,false",
+				"keydown:a:false,true,false,false", "keyup:a:false,true,false,false"))
+		})
+
+		It("still types the character for Shift alone", func() {
+			b.Type("#tracer", "a", b.Shift())
+			Ω("#tracer").Should(b.HaveValue("a"))
+			Ω("#key-trace li").Should(b.EachHaveInnerText(
+				"keydown:a:true,false,false,false", "keypress:a:true,false,false,false", "keyup:a:true,false,false,false"))
+		})
 	})
 })

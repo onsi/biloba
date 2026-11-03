@@ -149,6 +149,46 @@ var _ = Describe("typed DOM engine surface", func() {
 		Expect(session.ClearSelection(ctx)).To(Succeed())
 	})
 
+	DescribeTable("a key sent with a modifier held",
+		func(ctx SpecContext, modifiers engine.Modifier, typed string, events []any) {
+			// A shortcut fires keydown and keyup with the modifier set, but no keypress and no text.
+			// Shift is not a shortcut modifier, so it still types.
+			session := openDOMSurfaceSession(ctx)
+			_, err := session.Evaluate(ctx, `(() => {
+				const input = document.createElement("input")
+				input.id = "recorder"
+				window.keyEvents = []
+				for (const type of ["keydown", "keypress", "keyup"]) {
+					input.addEventListener(type, e => window.keyEvents.push(type + ":" + e.key + ":" + e.shiftKey + e.ctrlKey + e.altKey + e.metaKey))
+				}
+				document.body.appendChild(input)
+			})()`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(session.Focus(ctx, engine.CSS("#recorder"))).To(Succeed())
+
+			Expect(session.SendKeysWith(ctx, "a", modifiers)).To(Succeed())
+
+			value, err := session.Value(ctx, engine.CSS("#recorder"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(value.Value).To(Equal(typed))
+			recorded, err := session.Evaluate(ctx, `window.keyEvents`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(recorded).To(Equal(events))
+
+			// TypeWith goes through the same dispatch
+			Expect(session.Evaluate(ctx, `document.getElementById("recorder").value = ""; window.keyEvents = []`)).Error().NotTo(HaveOccurred())
+			Expect(session.TypeWith(ctx, engine.CSS("#recorder"), "a", engine.KeyboardOptions{Modifiers: modifiers, Mode: engine.Fast})).To(Succeed())
+			value, err = session.Value(ctx, engine.CSS("#recorder"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(value.Value).To(Equal(typed))
+		},
+		Entry("Ctrl types nothing", engine.ControlModifier, "", []any{"keydown:a:falsetruefalsefalse", "keyup:a:falsetruefalsefalse"}),
+		Entry("Alt types nothing", engine.AltModifier, "", []any{"keydown:a:falsefalsetruefalse", "keyup:a:falsefalsetruefalse"}),
+		Entry("Meta types nothing", engine.MetaModifier, "", []any{"keydown:a:falsefalsefalsetrue", "keyup:a:falsefalsefalsetrue"}),
+		Entry("Ctrl+Shift types nothing", engine.ControlModifier|engine.ShiftModifier, "", []any{"keydown:a:truetruefalsefalse", "keyup:a:truetruefalsefalse"}),
+		Entry("Shift alone still types", engine.ShiftModifier, "a", []any{"keydown:a:truefalsefalsefalse", "keypress:a:truefalsefalsefalse", "keyup:a:truefalsefalsefalse"}),
+	)
+
 	It("rejects invalid typed options before dispatch", func(ctx SpecContext) {
 		session := openDOMSurfaceSession(ctx)
 		Expect(session.ClickWith(ctx, engine.CSS("#action"), engine.ClickOptions{Count: 0})).To(MatchError(ContainSubstring("click count must be positive")))

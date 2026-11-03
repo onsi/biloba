@@ -295,6 +295,8 @@ Hold keyboard modifiers ([Biloba.Shift], [Biloba.Ctrl], [Biloba.Alt], [Biloba.Me
 
 	b.SendKeysToWindowImmediately(biloba.Keys.Enter, b.Meta()) // Cmd-Enter to the focused element
 
+A key sent with Ctrl, Alt, or Meta held is a shortcut: it fires keydown and keyup but no keypress, and types no text.  Shift alone still types.
+
 As the name says, SendKeysToWindowImmediately acts immediately and never polls - only you know what should be focused when it fires.  When the target appears asynchronously, gate it on a readiness anchor first:
 
 	Eventually("input.search").Should(b.BeFocused()) // wait until it really has focus

@@ -2557,6 +2557,8 @@ b.SendKeysToWindowImmediately(biloba.Keys.Enter, b.Meta())  // Cmd-Enter to the 
 
 The modifier flags ride on every dispatched key event, so an app reading `e.shiftKey`/`e.metaKey`/`e.ctrlKey`/`e.altKey` in a `keydown` handler sees exactly the combo you sent.  This is the path to reach for when your app is wired to hotkeys.
 
+A key sent with `Ctrl`, `Alt`, or `Meta` held is a shortcut, and behaves like one in Chrome: it fires `keydown` and `keyup` but no `keypress`, and no text is typed.  `b.Type("input", "a", b.Meta())` leaves the input's value alone; it does not select the text or replace it with an "a".  `Shift` alone still types: `b.Type("input", "a", b.Shift())` fires `keypress` and types the character.  `Alt` is treated this way on every platform.  Biloba encodes keys for a fixed US layout and does not model the characters Option produces on macOS, so to type one (an "é", say) send the character itself.
+
 ### Invoking JavaScript on and with selected elements
 
 At the end of the day, Biloba can give you a pile of DOM methods and matchers but you'll still come across a usecase that isn't implemented.  For that, you can head straight to JavaScript and get the job done yourself.  The [Running Arbitrary Javascript](#running-arbitrary-javascript) chapter below discusses how to run JavaScript with Biloba in _general_.  But in this section we focus on how to use Biloba to run JavaScript against selected DOM elements (which - of course, you can do with arbitrary JavaScript, but the API outlined here does the work of selecting elements for you using the same `selector` infrastructure we've discussed throughout this chapter).

@@ -184,7 +184,7 @@ b.Type("textarea", biloba.Keys.Enter, b.Shift())  // Shift-Enter — modifiers w
 
 **`b.Type` is THE element-targeted keyboard method** — text, named `biloba.Keys.*`, and held modifiers. `b.Type(sel, payload...)` polls; `b.Type(payload)` returns a matcher (a lone string, or one-or-more `Keys.*`). Exact disambiguation → `api`.
 
-`b.At(x,y)`/`b.Shift()`/`b.Ctrl()`/`b.Alt()`/`b.Meta()` (⌘/Win) are **pointer options** on `Click`/`DblClick`/`RightClick`/`MiddleClick`/`Tap` — after the selector, or in place of it in the matcher form (`Eventually(sel).Should(b.Click(b.At(x,y), b.Shift()))`). The modifiers double as keyboard modifiers on `b.Type`/`b.SendKeysToWindowImmediately`.
+`b.At(x,y)`/`b.Shift()`/`b.Ctrl()`/`b.Alt()`/`b.Meta()` (⌘/Win) are **pointer options** on `Click`/`DblClick`/`RightClick`/`MiddleClick`/`Tap` — after the selector, or in place of it in the matcher form (`Eventually(sel).Should(b.Click(b.At(x,y), b.Shift()))`). The modifiers double as keyboard modifiers on `b.Type`/`b.SendKeysToWindowImmediately`, where `Ctrl`/`Alt`/`Meta` make a shortcut: `keydown`/`keyup` fire but there is no `keypress` and no text is typed (`Shift` alone still types).
 
 **Two interactions don't poll — gate them by hand:** `b.SendKeysToWindowImmediately(...)` (focus-free global keystrokes — routes to the focused element, else `document`/window) and the `*Immediately` plural verbs.
 
