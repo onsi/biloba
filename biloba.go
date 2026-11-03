@@ -294,6 +294,10 @@ func (b *Biloba) applyFocusEmulation() error {
 	})
 }
 
+// launchAttemptTimeout is how long each of SpinUpChrome's launch attempts waits for Chrome's DevTools
+// line.  Zero is engine.DefaultLaunchAttemptTimeout; specs shorten it (see export_test.go).
+var launchAttemptTimeout time.Duration
+
 func gooseConfigPath(process int) string {
 	return fmt.Sprintf("./.biloba-config-%d", process)
 }
@@ -317,16 +321,10 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...SpinUpOption) ChromeConne
 		cfg.highFidelity = true
 	}
 
-	tmp := ginkgoT.TempDir()
+	// engine.LaunchChrome adds the profile directory and the time Chrome gets to print its DevTools
+	// websocket URL.
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.WindowSize(1024, 768),
-		chromedp.UserDataDir(tmp),
-		// chromedp gives Chrome 20s to print its DevTools websocket URL before giving up with
-		// "websocket url timeout reached". A cold full ("new") headless google-chrome on a loaded
-		// CI runner intermittently needs longer than that to come up, which flaked the high-fidelity
-		// lane at suite bring-up. The lightweight chrome-headless-shell starts well within 20s, so a
-		// roomier ceiling only ever buys slow launches headroom - it never slows a fast one.
-		chromedp.WSURLReadTimeout(60*time.Second),
 	)
 	opts = append(opts, cfg.execAllocatorOptions...)
 	if interactive {
@@ -355,21 +353,14 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...SpinUpOption) ChromeConne
 		opts = append(opts, chromedp.ExecPath(shellPath))
 	}
 
-	// The other processes attach to this Chrome over its websocket, so it opens a debugging port (and
-	// writes DevToolsActivePort, read below) rather than talking to us over a pipe.
-	allocCtx, cancel := engine.NewExecAllocator(context.Background(), nil, opts...)
-	ginkgoT.DeferCleanup(cancel)
-
-	browserCtx, cancel := chromedp.NewContext(allocCtx)
-	ginkgoT.DeferCleanup(cancel)
-
 	cc := ChromeConnection{HighFidelity: cfg.highFidelity}
 
-	// NOTE: the first-contact probes below deliberately run UNBOUNDED, unlike every command in cdp.go.
+	// NOTE: the first-contact probe below deliberately runs UNBOUNDED, unlike every command in cdp.go.
 	// chromedp allocates the browser (and its target) lazily, inside the first chromedp.Run on a
 	// context - so that Run's context OWNS the Chrome process, and cancelling it kills the browser.
 	// Putting a deadline here does not bound a hang, it tears Chrome down mid-suite.  Browser start-up
-	// has its own bound: chromedp.WSURLReadTimeout, set above.
+	// has its own bound: LaunchChrome's per-attempt wait for the DevTools line.
+	firstContact := engine.PingContext
 	if cfg.highFidelity {
 		// Full ("new") headless renders into a small virtual screen (default 800x600) regardless of
 		// --window-size, so an un-emulated tab reports window.innerHeight well below the requested
@@ -377,24 +368,37 @@ func SpinUpChrome(ginkgoT GinkgoTInterface, options ...SpinUpOption) ChromeConne
 		// EmulateViewport each tab back up to that size (see applyHighFidelityViewport).
 		// chrome-headless-shell has no such virtual-screen clamp, so this probe and the EmulateViewport
 		// workaround are skipped in the default mode.
-		outerWidth, outerHeight, err := engine.OuterWindowSizeContext(browserCtx)
-		if err != nil {
-			ginkgoT.Fatalf("failed to spin up chrome: %s", err)
-			return ChromeConnection{}
+		firstContact = func(ctx context.Context) error {
+			outerWidth, outerHeight, err := engine.OuterWindowSizeContext(ctx)
+			if err == nil && outerWidth > 0 && outerHeight > 0 {
+				cc.WindowWidth = outerWidth
+				cc.WindowHeight = outerHeight
+			}
+			return err
 		}
-		if outerWidth > 0 && outerHeight > 0 {
-			cc.WindowWidth = outerWidth
-			cc.WindowHeight = outerHeight
-		}
-	} else if err := engine.PingContext(browserCtx); err != nil {
+	}
+
+	// The other processes attach to this Chrome over its websocket, so it opens a debugging port (and
+	// writes DevToolsActivePort, read below) rather than talking to us over a pipe.  A Chrome that
+	// prints no DevTools line is killed, with anything still naming its profile, and launched once more.
+	launched, err := engine.LaunchChrome(context.Background(), engine.LaunchOptions{
+		ProfilePrefix:  "biloba-profile-",
+		Allocator:      opts,
+		AttemptTimeout: launchAttemptTimeout,
+		Logf:           func(format string, args ...any) { ginkgoT.Printf("Biloba: "+format+"\n", args...) },
+		Start:          firstContact,
+	})
+	if err != nil {
 		ginkgoT.Fatalf("failed to spin up chrome: %s", err)
 		return ChromeConnection{}
 	}
+	ginkgoT.DeferCleanup(launched.Cancel)
+	browserCtx := launched.Context
 
 	// We're connected; warn (once, here on the spin-up process) if this Chrome is too old.
 	warnIfChromeUnsupported(ginkgoT, browserCtx, cfg.highFidelity)
 
-	bs, err := os.ReadFile(filepath.Join(tmp, "DevToolsActivePort"))
+	bs, err := os.ReadFile(filepath.Join(launched.Profile, "DevToolsActivePort"))
 	if err != nil {
 		ginkgoT.Fatalf("failed to spin up chrome: %s", err)
 		return ChromeConnection{}

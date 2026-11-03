@@ -122,6 +122,15 @@ func SetNavigationTimeoutForTest(d time.Duration) func() {
 	return func() { navigationTimeout = prev }
 }
 
+// SetLaunchAttemptTimeoutForTest shortens how long each SpinUpChrome launch attempt waits for
+// Chrome's DevTools line, so a spec can drive the retry with a Chrome that never prints one.
+// Returns a restore func.
+func SetLaunchAttemptTimeoutForTest(d time.Duration) func() {
+	prev := launchAttemptTimeout
+	launchAttemptTimeout = d
+	return func() { launchAttemptTimeout = prev }
+}
+
 // SetCDPTimeoutsForTest shrinks the CDP backstop deadlines (see cdp.go) so cdp_test.go can exercise
 // the wedged-Chrome path in milliseconds instead of waiting out the production bounds.  Returns a
 // restore func.

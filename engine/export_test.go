@@ -113,6 +113,14 @@ func SetSandboxApparmorRestrictedForTest(restricted bool, err error) func() {
 	return func() { sandboxApparmorRestricted = previous }
 }
 
+// SetLaunchAttemptTimeoutForTest shortens how long each StartBrowser launch attempt waits for
+// Chrome's DevTools line, so a spec can drive the retry with a Chrome that never prints one.
+func SetLaunchAttemptTimeoutForTest(timeout time.Duration) func() {
+	previous := launchAttemptTimeout
+	launchAttemptTimeout = timeout
+	return func() { launchAttemptTimeout = previous }
+}
+
 // SetMinResponseBodyTimeoutForTest shortens the floor on intercepted body reads, so a spec can show a
 // longer TransformTimeout extending it without waiting five seconds.  Call before the response is
 // intercepted; the returned func restores the default.

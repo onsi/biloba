@@ -134,15 +134,9 @@ func StartBrowser(ctx context.Context, config BrowserConfig) (*Browser, error) {
 	if height <= 0 {
 		height = 768
 	}
-	profile, err := os.MkdirTemp("", "biloba-engine-profile-")
-	if err != nil {
-		return nil, typedError(CodeIO, "start browser", err)
-	}
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath(executablePath),
 		chromedp.WindowSize(width, height),
-		chromedp.UserDataDir(profile),
-		chromedp.WSURLReadTimeout(60*time.Second),
 	)
 	switch mode {
 	case ChromeModeHeadlessShell:
@@ -171,19 +165,24 @@ func StartBrowser(ctx context.Context, config BrowserConfig) (*Browser, error) {
 		}
 		debug.logf("chrome sandbox disabled: %s", sandboxReason)
 	}
-	allocCtx, cancelAllocator := NewExecAllocator(ctx, debug.slowListenerf(), opts...)
-	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx, debug.browserOptions()...)
-	cancel := func() {
+	launched, err := LaunchChrome(ctx, LaunchOptions{
+		ProfilePrefix: "biloba-engine-profile-",
+		Allocator:     opts,
+		Browser:       debug.browserOptions(),
+		Slowf:         debug.slowListenerf(),
+		Logf:          debug.logf,
+		Start:         allocateBrowserWithoutTab,
+	})
+	if err != nil {
 		debug.stop()
-		cancelBrowser()
-		cancelAllocator()
-		_ = os.RemoveAll(profile)
-	}
-	if err := allocateBrowserWithoutTab(browserCtx); err != nil {
-		cancel()
 		return nil, typedError(CodeBrowserStart, "start browser", err)
 	}
-	wsURL, err := readWebSocketURL(profile)
+	browserCtx := launched.Context
+	cancel := func() {
+		debug.stop()
+		launched.Cancel()
+	}
+	wsURL, err := readWebSocketURL(launched.Profile)
 	if err != nil {
 		cancel()
 		return nil, typedError(CodeBrowserStart, "read browser websocket URL", err)

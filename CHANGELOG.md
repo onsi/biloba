@@ -8,6 +8,7 @@
 
 ### Fixes
 
+- When Chrome hangs at launch without printing its DevTools line, `SpinUpChrome` (Go) and a self-launching daemon (TypeScript) now kill every process left using that launch's profile directory and try once more with a fresh one, within the same 60s budget. A hung launch used to fail after 60s and leave a Chrome process running.
 - `BeNetworkIdle` (Go) and `expectNetworkIdle()` (TypeScript) no longer wait forever on requests a page left in flight when it navigated away. Chrome cancels them without reporting a finish or a failure. A `keepalive` fetch or `sendBeacon` that outlives its page now stops counting when the page navigates.
 - The first query after a navigation no longer re-sends all of biloba.js, which cost about 1.4ms per navigation. Go's `Prepare` dropped the record that Chrome already runs it on every new document, and the TypeScript client never registered it.
 
