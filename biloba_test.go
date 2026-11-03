@@ -44,14 +44,16 @@ var _ = Describe("SpinUpChrome", Label("no-browser"), func() {
 			"sh -c 'while :; do sleep 1 >/dev/null 2>&1; done' biloba-silent-child \"$@\" &\n"+
 			"wait\n"), 0o755)).Should(Succeed())
 
-		connection := biloba.SpinUpChrome(gt, biloba.HeadlessShellPath(script))
+		// Its own bilobaT, so nothing this launch does can reach the suite's shared gt.
+		spinUpT := newBilobaT(GinkgoT())
+		connection := biloba.SpinUpChrome(spinUpT, biloba.HeadlessShellPath(script))
 
 		Ω(connection.WebSocketURL).Should(BeEmpty())
-		ExpectFailures(SatisfyAll(
+		Ω(spinUpT.failures).Should(ConsistOf(SatisfyAll(
 			ContainSubstring("failed to spin up chrome"),
 			ContainSubstring("two attempts, each with a fresh profile"),
 			ContainSubstring("websocket url timeout reached after 1s"),
-		))
+		)))
 		contents, err := os.ReadFile(attempts)
 		Ω(err).ShouldNot(HaveOccurred())
 		profiles := strings.Fields(string(contents))
