@@ -3774,6 +3774,8 @@ In keeping with Biloba's pragmatism, "idle" means the in-flight count has reache
 
 A request also stops counting when the page that made it is navigated away.  Chrome cancels that page's pending requests, and those of the iframes inside it, but reports neither a finish nor a failure for them, so Biloba drops them when the new page commits.  Navigating away from a page with a fetch in flight leaves the tab idle once the new page's own requests settle.  A `keepalive` fetch or `sendBeacon`, which can outlive its page, also stops counting at that point.
 
+Chrome reports a request only once the JavaScript task that made it has finished.  A fetch started in the middle of a long synchronous task reaches the server right away, but Chrome doesn't tell Biloba about it until the task returns.  Until then `HaveMadeRequest` doesn't see it and `BeNetworkIdle` passes.  The same holds for a frame handle.
+
 ## Window Size, Screenshots, Configuration, and Debugging
 
 There are a few other odds and ends to cover, let's dive in
