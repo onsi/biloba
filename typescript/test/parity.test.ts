@@ -1106,10 +1106,11 @@ describe.skipIf(process.env.BILOBA_SKIP_PARITY === "true")("Go and TypeScript pa
     expect(await name.value()).toBe("Adaa");
     await session.sendKeys("x", {modifiers: ["Control"]});
     expect(await session.locator("#key-modifiers").textContent()).toBe("x:false:true");
-    // a key sent with Control, Alt, or Meta held is a shortcut: keydown fires, but no keypress and no text
+    // a key sent with Control, Alt, or Meta held is a shortcut: keydown fires, but no keypress and no text.
+    // "q" is no editing shortcut on any platform (Ctrl+Z, say, would undo the last edit on Linux).
     expect(await session.locator("#last-keypress").textContent()).toBe("a");
     for (const modifier of ["Control", "Alt", "Meta"] as const) {
-      await name.type("z", {modifiers: [modifier]});
+      await name.type("q", {modifiers: [modifier]});
     }
     expect(await name.value()).toBe("Adaa");
     expect(await session.locator("#last-keypress").textContent()).toBe("a");
