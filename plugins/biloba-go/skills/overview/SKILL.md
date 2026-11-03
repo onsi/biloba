@@ -68,10 +68,10 @@ Biloba deliberately does not hide chromedp. Every tab exposes `b.Context` for a 
 ```go
 ctx, cancel := context.WithTimeout(b.Context, 30*time.Second)
 defer cancel()
-chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
-    return emulation.SetCPUThrottlingRate(4).Do(ctx)
-}))
+_, err := chromedp.Call(ctx, emulation.SetCPUThrottlingRate, emulation.SetCPUThrottlingRateParams{Rate: 4})
 ```
+
+Biloba uses chromedp v0.21, whose API changed in v0.17: `chromedp.Run(ctx, actions...)` is now `chromedp.Do`, a cdproto command is called as `chromedp.Call(ctx, page.Navigate, page.NavigateParams{...})` (browser-level ones with `chromedp.CallBrowser`), `ActionFunc` is `chromedp.Func`, and `ListenTarget` is `chromedp.Events(ctx, network.ResponseReceived)`, one event type per iterator. The docs' chromedp section lists the old and new forms.
 
 An override set this way is yours to undo — `Prepare()` doesn't know about it. (Cross-origin iframes have a native wrapper: `b.Frame`.) (For real `:hover`/occlusion/scroll, prefer `b.Realistic()`.)
 

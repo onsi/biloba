@@ -1,5 +1,9 @@
 ## Unreleased
 
+### Breaking Changes
+
+- Go: Biloba now uses chromedp v0.21.1 and cdproto v0.159.0, whose API changed in chromedp v0.17. Code that [drops to chromedp](https://onsi.github.io/biloba/#codechromedpcode-breaking-the-fourth-wall) through `b.Context` needs updating: `chromedp.Run` with several actions is `chromedp.Do`, a cdproto command is called with `chromedp.Call(b.Context, page.Navigate, page.NavigateParams{...})`, `ActionFunc` is `chromedp.Func`, and `ListenTarget` is `chromedp.Events`. The docs list the old and new forms. Chrome's launch flags no longer include the ignored `site-per-process` entry in `--disable-features`.
+
 ### Features
 
 ### Fixes
