@@ -882,11 +882,6 @@ type tabState struct {
 	// belongs to the tab, not the spec.
 	bilobaAutoInstalled bool
 
-	// targetCrashed records that Chrome told us this tab's renderer died (Inspector.targetCrashed), so
-	// a subsequent command failure can say WHY instead of just "context deadline exceeded".  Cleared
-	// by the next navigation - which gives the target a fresh renderer - and by Prepare.
-	targetCrashed bool
-
 	downloads       map[string]*Download
 	downloadHistory map[string]time.Time
 
@@ -981,6 +976,14 @@ type Biloba struct {
 	// state is everything this TAB owns, as opposed to the handle you hold onto it with.  It lives
 	// behind a pointer on purpose - see the note on tabState.
 	state *tabState
+
+	// crash records that Chrome told us this tab's renderer died (Inspector.targetCrashed or
+	// Target.targetCrashed).  While it is set, commands fail at once with page_crashed instead of
+	// waiting on a renderer that will never answer, and a command already waiting when the crash
+	// arrives is interrupted (see runEngineIn).  Cleared by the next navigation, which gives the target
+	// a fresh renderer.  It is set once per tab and never replaced, so reading it needs no lock, and it
+	// survives Prepare: Prepare's own navigation is what clears it.  Frame handles use their tab's.
+	crash *engine.CrashSignal
 
 	// realistic routes DOM interactions (Click/Hover) through real CDP input instead of the
 	// fast atomic JS simulations.  Set on the lightweight view returned by Realistic().
@@ -1090,6 +1093,7 @@ func newBiloba(ginkgoT GinkgoTInterface) *Biloba {
 		unreadableResponseBodies:  &unreadableResponseBodyRecorder{},
 		media:                     &mediaEmulation{},
 		boundary:                  &engine.DocumentBoundary{},
+		crash:                     &engine.CrashSignal{},
 	}
 	return b
 }
@@ -1142,6 +1146,13 @@ func (b *Biloba) Prepare() {
 		b.waitUntilTargetsGone(closedTargetIDs)
 		//closing all those tabs means we may have nuked our download config, so we reset it
 		b.configureDownloadBehavior()
+	}
+
+	// A tab whose renderer crashed fails every command but a navigation, so recover it before the
+	// reset below sends any.  The crashed page's localStorage is not cleared: clearing it needs that
+	// page's origin, and the crashed page is gone.
+	if b.pageCrashed() {
+		b.Navigate("about:blank")
 	}
 
 	b.lock.Lock()
@@ -1727,7 +1738,7 @@ func (b *Biloba) handleEventFrameNavigated(ev *page.EventFrameNavigated) {
 		b.state.bilobaIsInstalled = false
 	}
 	// A frame navigated, so this target has a live renderer again - whatever crash we recorded is over.
-	b.state.targetCrashed = false
+	b.crash.Clear()
 }
 
 // handleEventFrameAttached tells the in-flight set where a frame sits, so a navigation of its parent
@@ -1746,13 +1757,13 @@ func (b *Biloba) handleEventFrameDetached(ev *page.EventFrameDetached) {
 	b.state.inflight.FrameDetached(ev.FrameID)
 }
 
-// handleEventTargetCrashed records that this tab's renderer died so the next command that fails can
-// name the cause (see diagnoseCDPError).  window._biloba died with the page, so the install flag goes
-// with it.
+// handleEventTargetCrashed records that this tab's renderer died, which interrupts the commands
+// waiting on it and fails later ones with page_crashed (see runEngineIn and diagnoseCDPError).
+// window._biloba died with the page, so the install flag goes with it.
 func (b *Biloba) handleEventTargetCrashed(_ *inspector.EventTargetCrashed) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	b.state.targetCrashed = true
+	b.crash.Mark()
 	b.state.bilobaIsInstalled = false
 }
 

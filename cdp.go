@@ -138,7 +138,27 @@ func (b *Biloba) runEngine(what string, run func(context.Context) error) error {
 
 // runEngineIn is the engine-operation counterpart to runCDPIn for callers that already own the
 // waiting context and timeout.
+//
+// It is also where a crashed renderer is handled, the same way the daemon's Session does it.  CDP
+// does not fail a call to a dead renderer, it stops answering it, so once Chrome has announced the
+// crash a command fails at once with page_crashed, and a command already waiting when the
+// announcement arrives is interrupted rather than left to run out the backstop.  Navigation is how a
+// crashed tab recovers, so it goes through runEngineRecoveringIn instead.
 func (b *Biloba) runEngineIn(ctx context.Context, timeout time.Duration, what string, run func(context.Context) error) error {
+	crash := b.crashSignal()
+	if crash.Crashed() {
+		return b.diagnoseCDPError(what, timeout, errCommandNotSent)
+	}
+	ctx, cancel := crash.Interrupt(ctx)
+	defer cancel()
+	return b.runEngineRecoveringIn(ctx, timeout, what, run)
+}
+
+// errCommandNotSent is the underlying error of a command refused because the tab's renderer crashed.
+var errCommandNotSent = errors.New("the renderer had already crashed, so the command was not sent")
+
+// runEngineRecoveringIn is runEngineIn for the one command a crashed tab still accepts: a navigation.
+func (b *Biloba) runEngineRecoveringIn(ctx context.Context, timeout time.Duration, what string, run func(context.Context) error) error {
 	var err error
 	if simulateWedgedCDP != nil && simulateWedgedCDP() {
 		<-ctx.Done()
@@ -202,15 +222,18 @@ func frameDetachedError(what string, err error) error {
 }
 
 // pageCrashed reports whether Chrome has told us this tab's renderer died (Inspector.targetCrashed).
-// The flag is cleared by a subsequent navigation - which gives the target a fresh renderer - and by
-// Prepare, so it never outlives the crash it describes.
+// The flag is cleared by a subsequent navigation, which gives the target a fresh renderer, so it
+// never outlives the crash it describes.
 func (b *Biloba) pageCrashed() bool {
+	return b.crashSignal().Crashed()
+}
+
+// crashSignal is this tab's crash record; a frame handle shares its tab's.
+func (b *Biloba) crashSignal() *engine.CrashSignal {
 	if b.frame != nil {
-		return b.frame.owner.pageCrashed()
+		return b.frame.owner.crashSignal()
 	}
-	b.lock.Lock()
-	defer b.lock.Unlock()
-	return b.state.targetCrashed
+	return b.crash
 }
 
 // browserGone reports whether the connection to the Chrome process itself has gone away.  chromedp

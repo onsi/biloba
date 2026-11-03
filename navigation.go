@@ -68,9 +68,10 @@ func (b *Biloba) navigateWithStatus(url string, status int) *Biloba {
 	nctx, ncancel := b.waitingContext(navigationTimeout)
 	defer ncancel()
 	var result engine.NavigationResult
-	err := b.runEngineIn(nctx, timeout, "navigate to "+url, func(ctx context.Context) error {
+	// a navigation is how a crashed tab recovers, so it is the one command a crashed tab still sends
+	err := b.runEngineRecoveringIn(nctx, timeout, "navigate to "+url, func(ctx context.Context) error {
 		var err error
-		result, err = engine.NavigateContext(ctx, url)
+		result, err = engine.NavigateRecoveringContext(ctx, url, b.crashSignal())
 		return err
 	})
 

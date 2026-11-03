@@ -1,8 +1,11 @@
 package biloba_test
 
 import (
+	"context"
 	"time"
 
+	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/chromedp"
 	"github.com/onsi/biloba"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -18,8 +21,7 @@ import (
 // SetCDPTimeoutsForTest and the wedge itself is injected rather than real.  A genuinely wedged
 // renderer (`while(true){}`) is reproducible but unrecoverable: it would keep a CPU pegged for the
 // rest of the run, which under `make stress-test`'s 41 repeats is not a price worth paying for one
-// assertion.  A real renderer crash is not exercised here either; the comment at the bottom of this
-// Describe says why.
+// assertion.  A real renderer crash is exercised at the bottom of this Describe, on a tab of its own.
 var _ = Describe("bounding the commands Biloba sends to Chrome", func() {
 	Describe("when Chrome accepts a command and never answers", func() {
 		BeforeEach(func() {
@@ -71,23 +73,69 @@ var _ = Describe("bounding the commands Biloba sends to Chrome", func() {
 		})
 	})
 
-	// There is deliberately no spec here that crashes a real renderer, and the reason is worth keeping.
+	// A real renderer crash, with two things learned the hard way built in.
 	//
-	// Two things about a crashed tab turn out to be Chrome's behaviour rather than Biloba's, and they
-	// differ by platform.  Chrome announces the crash late on Linux and promptly on macOS - late enough
-	// that a three-second sample sees nothing.  And the tab the old spec crashed did not come back: it
-	// sent Page.crash and navigated before Linux had announced the crash, and every later command on
-	// that tab failed, including the ones Prepare issues during teardown (CI run 33589422597, both
-	// lanes; the high-fidelity lane reported page_crashed only after the navigation).  The TypeScript
-	// crash e2e, which kills the renderer and waits for PAGE_CRASHED before navigating, recovers on
-	// Linux - so the timing of the navigation is the likely difference.  The unrecovered tab is what
-	// rules the spec out.  A tab that
-	// cannot be recovered poisons the harness it was created in - gt.failures picks up the teardown
-	// failures and the next spec inherits them - which is precisely the class of suite-wide flake the
-	// rest of this session went to fix.
+	// Chrome announces a crash promptly on macOS and several seconds later on Linux.  An earlier
+	// version of this spec sent Page.crash and navigated before Linux had announced the crash, and the
+	// tab never came back: every later command on it failed, including the ones Prepare issued during
+	// teardown, and those failures landed in the next spec (CI run 33589422597, both lanes).  The
+	// TypeScript crash e2e kills the renderer, waits for PAGE_CRASHED, then navigates, and it recovers
+	// on Linux.  So this spec waits for the announcement before navigating.
 	//
-	// So the crash path is covered where it can be covered honestly and cheaply: diagnoseCDPError's
-	// vocabulary in cdp_internal_test.go, where the flag is set directly and the verdict is identical on
-	// every platform, and the bounded-failure behaviour by the injected wedge above, which exercises the
-	// same runCDP deadline end-to-end against real Chrome without leaving a corpse behind.
+	// The crash itself is a navigation to chrome://kill, which has the browser kill the tab's renderer
+	// process: the in-browser counterpart of the e2e's SIGKILL.  The e2e can SIGKILL every renderer
+	// because it owns its Chrome; this suite shares one Chrome across parallel processes, and CDP does
+	// not say which process renders which tab.  The tab is a b.NewTab(), whose own browser context
+	// gives it a renderer no other tab uses, so nothing else is touched.  If the tab does not come back,
+	// the spec fails naming the cause and closes the tab, so the next spec's Prepare never sees it.
+	Describe("when a tab's renderer crashes", func() {
+		It("fails fast with page_crashed once Chrome announces it, and the tab recovers on the next navigation", func() {
+			tab := b.NewTab()
+			recovered := false
+			DeferCleanup(func() {
+				if !recovered {
+					Expect(tab.Close()).To(Succeed())
+				}
+			})
+			tab.Navigate(fixtureServer + "/dom.html")
+			Eventually("#hello").Should(tab.Exist())
+
+			By("leaving a command waiting on the renderer when it dies")
+			inFlight := make(chan error, 1)
+			go func() {
+				defer GinkgoRecover()
+				_, err := tab.RunErrAsync("window.waiting = true; await new Promise(() => {}); return 1")
+				inFlight <- err
+			}()
+			Eventually(func() any { waiting, _ := tab.RunErr("window.waiting"); return waiting }).Should(Equal(true))
+
+			// chrome://kill never answers: the renderer it would answer from is gone.  So it goes out on
+			// a context that is thrown away rather than waited on.
+			killCtx, cancel := context.WithTimeout(tab.Context, time.Second)
+			chromedp.Call(killCtx, page.Navigate, page.NavigateParams{URL: "chrome://kill"})
+			cancel()
+
+			By("waiting for Chrome to announce the crash")
+			Eventually(tab.PageCrashedForTest).WithTimeout(30*time.Second).Should(BeTrue(), "Chrome never announced the crash")
+			Eventually(inFlight).Should(Receive(MatchError(ContainSubstring("page_crashed: this tab's renderer crashed"))),
+				"the waiting command is interrupted by the announcement rather than left to its two-minute bound")
+
+			By("failing later commands at once, without sending them")
+			start := time.Now()
+			_, err := tab.RunErr("1+1")
+			Expect(time.Since(start)).To(BeNumerically("<", time.Second))
+			Expect(err).To(MatchError(ContainSubstring("page_crashed: this tab's renderer crashed, so Chrome could not evaluate JavaScript in the page")))
+
+			By("navigating, which gives the tab a fresh renderer")
+			tab.Navigate(fixtureServer + "/dom.html")
+			navigationFailures := gt.failures
+			gt.failures = []string{}
+			Expect(navigationFailures).To(BeEmpty(), "the crashed tab did not recover on navigation")
+			Expect(tab.PageCrashedForTest()).To(BeFalse())
+			Eventually("#hello").Should(tab.Exist())
+			Expect(tab.Run("1+1")).To(BeEquivalentTo(2))
+			Expect(gt.failures).To(BeEmpty(), "the recovered tab still fails commands")
+			recovered = true
+		})
+	})
 })

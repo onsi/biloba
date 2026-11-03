@@ -11,7 +11,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
+	"github.com/onsi/biloba/engine"
 	ginkgo "github.com/onsi/ginkgo/v2"
 	gomega "github.com/onsi/gomega"
 )
@@ -71,17 +74,15 @@ var _ = ginkgo.Describe("how Biloba's own source talks to Chrome", ginkgo.Label(
 // diagnoseCDPError is what turns a bounded failure into an actionable one, and its three verdicts are
 // asserted here rather than against real Chrome on purpose.
 //
-// page_crashed depends on Chrome announcing the crash, and Chrome's timing varies: it announces a
-// crash promptly on macOS and several seconds later on Linux, so a command in between reports
-// deadline_exceeded.  A spec that crashed a real renderer and demanded the wording would therefore
-// assert a Chrome behaviour rather than a Biloba one.  So the vocabulary is tested here, where setting
-// the flag is deterministic everywhere, and cdp_test.go explains why there is no real-crash spec.
+// page_crashed depends on Chrome announcing the crash, which it does promptly on macOS and several
+// seconds later on Linux.  The vocabulary is tested here, where setting the flag is deterministic
+// everywhere; cdp_test.go crashes a real renderer and waits for the announcement.
 var _ = ginkgo.Describe("diagnosing why a command failed", ginkgo.Label("no-browser"), func() {
 	var b *Biloba
 	underlying := errors.New("some underlying failure")
 
 	ginkgo.BeforeEach(func() {
-		b = &Biloba{lock: &sync.Mutex{}, state: newTabState()}
+		b = &Biloba{lock: &sync.Mutex{}, state: newTabState(), crash: &engine.CrashSignal{}}
 	})
 
 	ginkgo.It("passes a healthy call through as nil", func() {
@@ -89,7 +90,7 @@ var _ = ginkgo.Describe("diagnosing why a command failed", ginkgo.Label("no-brow
 	})
 
 	ginkgo.It("names a crashed renderer, and says how to recover", func() {
-		b.state.targetCrashed = true
+		b.crash.Mark()
 		err := b.diagnoseCDPError("evaluate JavaScript in the page", time.Second, underlying)
 		gomega.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("page_crashed: this tab's renderer crashed, so Chrome could not evaluate JavaScript in the page")))
 		gomega.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("Navigate the tab again to get a fresh renderer")))
@@ -103,7 +104,7 @@ var _ = ginkgo.Describe("diagnosing why a command failed", ginkgo.Label("no-brow
 	})
 
 	ginkgo.It("prefers the crash to the deadline, since the crash is the reason for the deadline", func() {
-		b.state.targetCrashed = true
+		b.crash.Mark()
 		err := b.diagnoseCDPError("evaluate JavaScript in the page", time.Second, context.DeadlineExceeded)
 		gomega.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("page_crashed")))
 		gomega.Expect(err).NotTo(gomega.MatchError(gomega.ContainSubstring("deadline_exceeded")))
@@ -132,6 +133,56 @@ var _ = ginkgo.Describe("diagnosing why a command failed", ginkgo.Label("no-brow
 		cancel()
 		b.pollingCtx = ctx
 		gomega.Expect(b.diagnoseCDPError("evaluate JavaScript in the page", time.Second, context.DeadlineExceeded)).To(gomega.MatchError(context.DeadlineExceeded))
+	})
+})
+
+// The real-crash spec in cdp_test.go cannot control when Chrome announces the crash relative to the
+// commands it sends, so the two orderings are pinned here: a crash already announced refuses the
+// command, and a crash announced while a command waits interrupts it.
+var _ = ginkgo.Describe("running a command on a crashed tab", ginkgo.Label("no-browser"), func() {
+	var b *Biloba
+
+	ginkgo.BeforeEach(func() {
+		b = &Biloba{lock: &sync.Mutex{}, state: newTabState(), crash: &engine.CrashSignal{}}
+	})
+
+	ginkgo.It("refuses the command at once, without sending it, once Chrome has announced the crash", func() {
+		b.crash.Mark()
+		sent := false
+		err := b.runEngineIn(context.Background(), time.Minute, "evaluate JavaScript in the page", func(context.Context) error {
+			sent = true
+			return nil
+		})
+		gomega.Expect(sent).To(gomega.BeFalse())
+		gomega.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("page_crashed: this tab's renderer crashed, so Chrome could not evaluate JavaScript in the page")))
+	})
+
+	ginkgo.It("interrupts a command waiting on the renderer when the crash is announced, rather than at its deadline", func() {
+		time.AfterFunc(50*time.Millisecond, func() { b.handleEventTargetCrashed(nil) })
+		start := time.Now()
+		err := b.runEngineIn(context.Background(), time.Minute, "evaluate JavaScript in the page", func(ctx context.Context) error {
+			<-ctx.Done() // a renderer that never answers
+			return ctx.Err()
+		})
+		gomega.Expect(time.Since(start)).To(gomega.BeNumerically("<", 5*time.Second))
+		gomega.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("page_crashed: this tab's renderer crashed")))
+	})
+
+	ginkgo.It("still sends a navigation, which is how a crashed tab recovers", func() {
+		b.crash.Mark()
+		sent := false
+		err := b.runEngineRecoveringIn(context.Background(), time.Minute, "navigate", func(context.Context) error {
+			sent = true
+			return nil
+		})
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		gomega.Expect(sent).To(gomega.BeTrue())
+	})
+
+	ginkgo.It("lets commands through again once a frame navigates", func() {
+		b.crash.Mark()
+		b.handleEventFrameNavigated(&page.EventFrameNavigated{Frame: &cdp.Frame{ID: "main"}})
+		gomega.Expect(b.runEngineIn(context.Background(), time.Minute, "evaluate JavaScript in the page", func(context.Context) error { return nil })).To(gomega.Succeed())
 	})
 })
 

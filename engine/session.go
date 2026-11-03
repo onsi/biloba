@@ -144,13 +144,9 @@ type Session struct {
 	// frameTab is, on a frame handle, the tab session it was found from: the one whose page clock
 	// covers it.
 	frameTab *Session
-	// crashed is closed by Chrome's Inspector.targetCrashed listener, which runs on chromedp's event
-	// goroutine rather than under mu - hence its own lock.  A channel rather than a bool because an
-	// operation already in flight has to be interrupted, not merely refused next time: CDP does not
-	// fail calls to a dead renderer, it stops answering them, so anything already waiting would sit
-	// there until its deadline and report a timeout.  Recovery replaces the channel.
-	crashMu sync.Mutex
-	crashed chan struct{}
+	// crash is marked by Chrome's Inspector.targetCrashed listener, which runs on chromedp's event
+	// goroutine rather than under mu; CrashSignal has its own lock.  A recovering navigation clears it.
+	crash CrashSignal
 }
 
 // ContextID identifies the isolated browser context shared by this session and its descendants.
@@ -171,27 +167,8 @@ func (s *Session) OpenerID() target.ID { return s.openerID }
 // OwnsContext reports whether closing this session disposes its isolated browser context.
 func (s *Session) OwnsContext() bool { return s.ownsContext }
 
-// crashSignal is closed once this session's renderer dies, and replaced when a navigation recovers.
-func (s *Session) crashSignal() <-chan struct{} {
-	s.crashMu.Lock()
-	defer s.crashMu.Unlock()
-	if s.crashed == nil {
-		s.crashed = make(chan struct{})
-	}
-	return s.crashed
-}
-
 func (s *Session) markCrashed() {
-	s.crashMu.Lock()
-	defer s.crashMu.Unlock()
-	if s.crashed == nil {
-		s.crashed = make(chan struct{})
-	}
-	select {
-	case <-s.crashed: // already reported
-	default:
-		close(s.crashed)
-	}
+	s.crash.Mark()
 	// eventsEnabled already stops recording and delivery, so the subscriptions can simply go quiet
 	// and resume when the recovery navigation turns it back on.  Closing them here would end them
 	// permanently - closeConsoleSubscriptions deletes the map entry - so a listener registered before
@@ -203,20 +180,9 @@ func (s *Session) markCrashed() {
 	s.cancelActiveDownloads()
 }
 
-func (s *Session) clearCrashed() {
-	s.crashMu.Lock()
-	defer s.crashMu.Unlock()
-	s.crashed = make(chan struct{})
-}
+func (s *Session) clearCrashed() { s.crash.Clear() }
 
-func (s *Session) hasCrashed() bool {
-	select {
-	case <-s.crashSignal():
-		return true
-	default:
-		return false
-	}
-}
+func (s *Session) hasCrashed() bool { return s.crash.Crashed() }
 
 func (s *Session) Close() error {
 	// Refusing because a sibling tab is mid-download is a retryable answer, not a close - callers are
@@ -507,14 +473,7 @@ func (s *Session) NavigateWithStatus(ctx context.Context, destination string, ex
 			width = int64(s.restoreViewport.Width)
 			height = int64(s.restoreViewport.Height)
 		}
-		result, err := NavigateContext(opCtx, destination)
-		// A navigation gives the target a fresh renderer, which is how a crashed page recovers - but
-		// Chrome needs a beat to spawn one, and a navigation issued before it exists comes back
-		// ERR_ABORTED.  Retrying once is what makes "navigate again to recover it" true advice
-		// rather than something that works only if you happen to wait first.
-		if err != nil && s.hasCrashed() {
-			result, err = NavigateContext(opCtx, destination)
-		}
+		result, err := NavigateRecoveringContext(opCtx, destination, &s.crash)
 		// a registered tab's new document already has _biloba, unless it is not a page the registration
 		// reaches (a failed navigation's error page) or the renderer is new
 		if !s.bilobaRegistered || recoveringCrash || (err != nil && !result.HTTPFailure) {
@@ -1043,14 +1002,9 @@ func (s *Session) serial(requestCtx context.Context, operation string, run func(
 	if !recovers {
 		// Interrupt an operation that is already waiting on the renderer when it dies.  Without this
 		// the crash is only noticed by the *next* call, and this one still burns its whole deadline.
-		crashed := s.crashSignal()
-		go func() {
-			select {
-			case <-crashed:
-				cancel()
-			case <-opCtx.Done():
-			}
-		}()
+		var cancelOnCrash context.CancelFunc
+		opCtx, cancelOnCrash = s.crash.Interrupt(opCtx)
+		defer cancelOnCrash()
 	}
 	err := run(opCtx)
 	if err == nil {

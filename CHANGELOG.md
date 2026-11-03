@@ -4,6 +4,9 @@
 
 ### Fixes
 
+- Go: once Chrome announces that a tab's renderer crashed, every command on that tab except a navigation fails at once with `page_crashed`, and a command already waiting on the dead renderer is interrupted. They used to wait out the 30s backstop. `Prepare` navigates a crashed root tab before resetting it, instead of sending its reset commands to the dead renderer.
+- Go: navigating a crashed tab now retries once when Chrome refuses the navigation because the new renderer doesn't exist yet, as the TypeScript client already did.
+
 ## 0.21.0
 
 ### Breaking Changes
