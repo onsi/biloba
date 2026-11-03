@@ -135,6 +135,7 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 		cancelTab()
 		return nil, contextError("configure downloads", err)
 	}
+	session.registerBiloba(tabCtx)
 	b.sessions[session] = struct{}{}
 	return session, nil
 }

@@ -132,6 +132,13 @@ type Session struct {
 	screencasts        map[string]*sessionScreencast
 	recording          *sessionScreencast
 	screencastSequence uint64
+	// bilobaRegistered records that Chrome accepted the standing "run biloba.js at the start of every
+	// document" registration (registerBiloba).  It is what lets a navigation or Prepare leave
+	// installed alone: the next document has _biloba before its own scripts run.  False means the
+	// registration did not take, and the tab re-sends the script after each navigation as before.
+	// Set once, when the tab session is set up, and never cleared: Prepare removes the init scripts
+	// and the page clock it was asked for, not this registration.
+	bilobaRegistered bool
 	// clock is the tab's page clock (InstallClock), nil until one is installed.
 	clock *PageClock
 	// frameTab is, on a frame handle, the tab session it was found from: the one whose page clock
@@ -455,7 +462,10 @@ func (s *Session) Prepare(ctx context.Context) error {
 			return err
 		}
 		s.restoreViewport = nil
-		s.installed = false
+		// the about:blank page Prepare left behind has _biloba when the registration runs it
+		if !s.bilobaRegistered || wasCrashed {
+			s.installed = false
+		}
 		s.clearCrashed()
 		return nil
 	})
@@ -504,7 +514,11 @@ func (s *Session) NavigateWithStatus(ctx context.Context, destination string, ex
 		if err != nil && s.hasCrashed() {
 			result, err = NavigateContext(opCtx, destination)
 		}
-		s.installed = false
+		// a registered tab's new document already has _biloba, unless it is not a page the registration
+		// reaches (a failed navigation's error page) or the renderer is new
+		if !s.bilobaRegistered || recoveringCrash || (err != nil && !result.HTTPFailure) {
+			s.installed = false
+		}
 		if err == nil {
 			s.clearCrashed()
 			s.eventsEnabled.Store(true)
@@ -969,10 +983,29 @@ func (s *Session) actionablePoint(ctx context.Context, selector Selector) (actio
 	return translated, nil
 }
 
+// registerBilobaOnNewDocument hands Chrome the script to run at the start of every document of a tab.
+// A variable so a spec can make the registration fail.
+var registerBilobaOnNewDocument = InstallScriptOnNewDocumentContext
+
+// bilobaSends counts the times ensureBiloba sent the whole of biloba.js into a page.
+var bilobaSends atomic.Int64
+
+// registerBiloba asks Chrome to run biloba.js at the start of every document this tab creates from
+// here on, which is what makes "window._biloba exists on every page load" something Chrome keeps
+// true rather than something Biloba repairs after each navigation.  The document already open when
+// the session is set up has no copy, so ensureBiloba still installs there on first use.  A failed
+// registration is not an error: the tab keeps the per-navigation reinstall, and runHandlerWithAwait
+// still reinstalls and retries when a handler call finds _biloba missing.  Not for frame handles,
+// which are scoped to one document.
+func (s *Session) registerBiloba(ctx context.Context) {
+	s.bilobaRegistered = registerBilobaOnNewDocument(ctx, bilobaJS) == nil
+}
+
 func (s *Session) ensureBiloba(ctx context.Context) error {
 	if s.installed {
 		return nil
 	}
+	bilobaSends.Add(1)
 	if err := EvaluateContext(ctx, bilobaJS, false, nil); err != nil {
 		return err
 	}

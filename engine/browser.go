@@ -447,6 +447,7 @@ func (b *Browser) openTabLocked(ctx context.Context, browserContextID cdp.Browse
 		}
 		return nil, contextError("configure downloads", err)
 	}
+	session.registerBiloba(tabCtx)
 	b.sessions[session] = struct{}{}
 	return session, nil
 }

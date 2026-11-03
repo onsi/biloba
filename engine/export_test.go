@@ -135,3 +135,15 @@ func ScreencastFramesSoFarForTest(session *Session, id string) func() int {
 	rec := session.screencasts[id]
 	return rec.framesSoFar
 }
+
+// BilobaSendsForTest is how many times a session has sent the whole of biloba.js into a page in this
+// process, so a spec can tell a navigation that cost a re-send from one that did not.
+func BilobaSendsForTest() int64 { return bilobaSends.Load() }
+
+// SetBilobaRegistrationForTest replaces the call that registers biloba.js to run at the start of
+// every new document, so a spec can make the registration fail.  Returns a restore func.
+func SetBilobaRegistrationForTest(register func(context.Context, string) error) func() {
+	previous := registerBilobaOnNewDocument
+	registerBilobaOnNewDocument = register
+	return func() { registerBilobaOnNewDocument = previous }
+}
