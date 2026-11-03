@@ -22,7 +22,8 @@ import (
 
 // TrackFrameWorlds records each frame document's page JavaScript context as targetID announces it,
 // which is what ScopeToFrameContext looks frames up in. Call it on the target's chromedp context before
-// that context's first Run: Runtime.enable announces the existing contexts then.
+// that context's first Run (Runtime.enable announces the existing contexts then), and ConfirmAttached
+// once that Run has succeeded.
 func TrackFrameWorlds(ctx context.Context, targetID target.ID) (context.Context, error) {
 	return trackFrameWorlds(ctx, targetID)
 }

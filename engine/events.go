@@ -30,14 +30,17 @@ synchronously, on chromedp's reader goroutine:
     its events recorded.
 
 A listener registered before its context is attached (ListenTargetFromAttach) is bound to that
-context's own session, at the first command chromedp sends on it - Runtime.enable, which is also what
-makes Chrome announce the existing execution contexts.  Nothing on the wire says which context an
-attachment belongs to (two contexts can attach one target at once, and chromedp hands the transport
-its own context, not the caller's), but by then chromedp has set the context's Target, so the hub
-asks each waiting context which session it is attached through.  It is never bound to a session
-chromedp's flatten auto-attach opens under a page: no chromedp context owns those, Runtime is not
-enabled on them, and Biloba never listened to them under chromedp.ListenTarget either.  Biloba's own
-out-of-process frame attachments are contexts of their own, so they are bound.
+context's own session when the context confirms it (ConfirmAttached, after its first Run).  Nothing
+on the wire says which context an attachment belongs to - two contexts can attach one target at once,
+and chromedp hands the transport its own context, not the caller's - and chromedp keeps the lock it
+sets a context's Target under to itself, so only the context's own goroutine, once its Run has
+returned, can read which session it got.  Until then the hub queues the events of every new session
+(one it sees a first command go out on while a context is waiting): chromedp attaches and only then
+sends the session Runtime.enable, so nothing the session raises is missed, and the confirmation
+replays the queue in order before going live.  A session nobody confirms - chromedp's flatten
+auto-attach under a page, which no chromedp context owns and Biloba never listened to under
+chromedp.ListenTarget either - is forgotten once nobody is waiting.  Biloba's own out-of-process
+frame attachments are contexts of their own, so they confirm.
 
 Running on the reader goroutine means a listener must not block - not on a CDP reply, and not on a
 lock that code waiting on one holds - or the whole connection stalls with it, every tab of the
@@ -53,16 +56,23 @@ type eventHub struct {
 	// pending holds, for each context that is not attached yet, the listeners waiting for its
 	// attachment (see pend).
 	pending map[any]*pendingAttach
+	// unclaimed queues, by session, the events of sessions that may belong to a pending context.
+	unclaimed map[target.SessionID]*unclaimedSession
 	// slowf, when set, is told about a listener that held the reader goroutine too long.  It is only
 	// set for a connection with debug logging on, so timing costs nothing otherwise.
 	slowf func(string, ...any)
 }
 
-// pendingAttach is one context's listeners, waiting for that context's own attachment.
+// pendingAttach is one context's listeners, waiting for that context to confirm its attachment.
 type pendingAttach struct {
-	// session is the session the context is attached through, or "" while it is not.
-	session   func() target.SessionID
 	listeners []*eventListener
+}
+
+// unclaimedSession queues the events of a session that may be a waiting context's, until that
+// context confirms it (claimed is set from then on) or nobody is waiting any more.
+type unclaimedSession struct {
+	events  []*cdproto.Message
+	claimed bool
 }
 
 type eventListener struct {
@@ -87,6 +97,7 @@ func newEventHub(slowf func(string, ...any)) *eventHub {
 	return &eventHub{
 		listeners: map[target.SessionID][]*eventListener{},
 		pending:   map[any]*pendingAttach{},
+		unclaimed: map[target.SessionID]*unclaimedSession{},
 		slowf:     slowf,
 	}
 }
@@ -166,9 +177,9 @@ func listen(ctx context.Context, l *eventListener) error {
 /*
 ListenTargetFromAttach is ListenTarget for a context that has not attached yet: it registers fn for
 the session ctx's own attachment creates, so fn sees the events the attachment itself provokes
-(Runtime.enable announcing the existing execution contexts).  Call ctx's first Run next.  targetID
-documents which target ctx attaches; the binding goes by ctx, so contexts attaching one target at
-once each get their own session.  It never waits.
+(Runtime.enable announcing the existing execution contexts).  Call ctx's first Run next, and
+ConfirmAttached once it has succeeded.  targetID documents which target ctx attaches; the binding
+goes by ctx, so contexts attaching one target at once each get their own session.  It never waits.
 */
 func ListenTargetFromAttach(ctx context.Context, targetID target.ID, fn func(any), methods ...string) error {
 	hub, c, err := hubFor(ctx)
@@ -180,26 +191,34 @@ func ListenTargetFromAttach(ctx context.Context, targetID target.ID, fn func(any
 		hub.add(c.Target.SessionID, l)
 		return nil
 	}
-	hub.pend(c, func() target.SessionID {
-		// Sound without chromedp's targetMu: chromedp sets c.Target before it sends the session its
-		// first command, and that send reaches Write through a channel.  A context still attaching reads
-		// as nil or as its new Target, and either way names a different session.
-		if attached := c.Target; attached != nil {
-			return attached.SessionID
-		}
-		return ""
-	}, l)
+	hub.pend(c, l)
 	return nil
 }
 
-// pend registers l to be bound to the session owner turns out to be attached through (see sent).  A
-// registration whose context never attaches - its attach failed and it is not retried - stays until
-// its context ends, holding nothing up.
-func (h *eventHub) pend(owner any, session func() target.SessionID, l *eventListener) {
+/*
+ConfirmAttached binds the listeners ListenTargetFromAttach registered on ctx to the session ctx is now
+attached through, and hands them every event that session has raised so far.  Call it once ctx's
+first Run has returned successfully, from a goroutine that run happens before (the caller's own, or
+one that received its result over a channel): that is what makes reading ctx's chromedp Target safe,
+chromedp keeping the lock it writes Target under to itself.  A Run that failed may be retried on ctx
+before confirming.
+*/
+func ConfirmAttached(ctx context.Context) {
+	hub, c, err := hubFor(ctx)
+	if err != nil || c.Target == nil {
+		return
+	}
+	hub.confirm(c, c.Target.SessionID)
+}
+
+// pend registers l to be bound to owner's session when owner confirms it (see ConfirmAttached).  It
+// never waits.  A registration whose context never attaches - its attach failed and is not retried -
+// stays until its context ends, holding nothing up.
+func (h *eventHub) pend(owner any, l *eventListener) {
 	h.mu.Lock()
 	p := h.pending[owner]
 	if p == nil {
-		p = &pendingAttach{session: session}
+		p = &pendingAttach{}
 		h.pending[owner] = p
 	}
 	p.listeners = append(p.listeners, l)
@@ -211,10 +230,68 @@ func (h *eventHub) pend(owner any, session func() target.SessionID, l *eventList
 			p.listeners = slices.DeleteFunc(p.listeners, func(waiting *eventListener) bool { return waiting == l })
 			if len(p.listeners) == 0 {
 				delete(h.pending, owner)
+				h.dropUnclaimedLocked()
 			}
 		}
 		h.removeLocked(l)
 	})
+}
+
+// confirm binds owner's waiting listeners to session.  The events the session raised before the
+// confirmation are delivered first, here, in order; the reader goroutine keeps queueing the session's
+// new events behind them until the queue is empty, and only then hands the session over.
+func (h *eventHub) confirm(owner any, session target.SessionID) {
+	h.mu.Lock()
+	p := h.pending[owner]
+	if p == nil || session == "" {
+		h.mu.Unlock()
+		return
+	}
+	delete(h.pending, owner)
+	queued := h.unclaimed[session]
+	if queued == nil {
+		// nothing queued (the session's events were not held back): it is live from here
+		h.listeners[session] = append(slices.Clip(h.listeners[session]), p.listeners...)
+		h.dropUnclaimedLocked()
+		h.mu.Unlock()
+		return
+	}
+	queued.claimed = true
+	h.mu.Unlock()
+	for {
+		h.mu.Lock()
+		var batch []*cdproto.Message
+		if queued != nil {
+			batch, queued.events = queued.events, nil
+		}
+		if len(batch) == 0 {
+			if h.unclaimed[session] == queued {
+				delete(h.unclaimed, session)
+			}
+			h.listeners[session] = append(slices.Clip(h.listeners[session]), p.listeners...)
+			if len(h.pending) == 0 {
+				h.dropUnclaimedLocked()
+			}
+			h.mu.Unlock()
+			return
+		}
+		h.mu.Unlock()
+		for _, msg := range batch {
+			h.deliver(msg, p.listeners)
+		}
+	}
+}
+
+// dropUnclaimedLocked forgets the events of sessions nobody is waiting to claim any more.
+func (h *eventHub) dropUnclaimedLocked() {
+	if len(h.pending) > 0 {
+		return
+	}
+	for session, queued := range h.unclaimed {
+		if !queued.claimed {
+			delete(h.unclaimed, session)
+		}
+	}
 }
 
 // ListenBrowser is ListenTarget for the browser's own events (target discovery, crashes).
@@ -252,20 +329,24 @@ func (h *eventHub) removeLocked(l *eventListener) {
 	}
 }
 
-// sent binds the listeners of a context that is waiting for its attachment once a command goes out
-// on the session it turns out to be attached through.  chromedp attaches and only then sends that
-// session its first command (Runtime.enable), so the session's events all arrive after the binding.
+// sent starts queueing the events of a session the hub has not seen before, while some context is
+// waiting to confirm its attachment: it may be that context's.  chromedp attaches and only then sends
+// the new session its first command (Runtime.enable), so every event the session raises arrives after
+// the queue exists.
 func (h *eventHub) sent(msg *cdproto.Message) {
 	if msg.SessionID == "" {
 		return
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for owner, p := range h.pending {
-		if p.session() == msg.SessionID {
-			delete(h.pending, owner)
-			h.listeners[msg.SessionID] = append(slices.Clip(h.listeners[msg.SessionID]), p.listeners...)
-		}
+	if len(h.pending) == 0 {
+		return
+	}
+	if _, bound := h.listeners[msg.SessionID]; bound {
+		return
+	}
+	if _, queued := h.unclaimed[msg.SessionID]; !queued {
+		h.unclaimed[msg.SessionID] = &unclaimedSession{}
 	}
 }
 
@@ -275,13 +356,23 @@ func (h *eventHub) received(msg *cdproto.Message) {
 	if msg.Method == "" {
 		return
 	}
-	method := string(msg.Method)
-	if method == target.DetachedFromTarget.Method {
+	if string(msg.Method) == target.DetachedFromTarget.Method {
 		defer h.sessionDetached(msg)
 	}
 	h.mu.Lock()
+	if queued := h.unclaimed[msg.SessionID]; queued != nil {
+		queued.events = append(queued.events, msg)
+		h.mu.Unlock()
+		return
+	}
 	list := h.listeners[msg.SessionID]
 	h.mu.Unlock()
+	h.deliver(msg, list)
+}
+
+// deliver runs the listeners in list for msg, without the hub's lock.
+func (h *eventHub) deliver(msg *cdproto.Message, list []*eventListener) {
+	method := string(msg.Method)
 	var event any
 	var decodeErr error
 	decoded := false
@@ -328,6 +419,7 @@ func (h *eventHub) sessionDetached(msg *cdproto.Message) {
 	h.mu.Lock()
 	list := h.listeners[params.SessionID]
 	delete(h.listeners, params.SessionID)
+	delete(h.unclaimed, params.SessionID)
 	h.mu.Unlock()
 	// (on the reader goroutine: an ended hook must not block)
 	for _, l := range list {

@@ -789,6 +789,8 @@ func (b *Biloba) bootstrapIsolatedTab(allocatorContext context.Context, bootstra
 			continue
 		}
 
+		engine.ConfirmAttached(b.Context) // hands the frame-world registry what the attach announced
+
 		// success - keep the bootstrap connection and isolated tab alive for the life of the spec
 		// (LIFO cleanup: tab detaches first, then the bootstrap connection tears down)
 		b.gt.DeferCleanup(cancelBootstrap)
@@ -1628,6 +1630,7 @@ func (b *Biloba) registerTabFor(targetID target.ID, parent context.Context) *Bil
 		cancel()
 		return nil
 	}
+	engine.ConfirmAttached(newG.Context) // the probe's attach ran before probeDone delivered its result
 	newG.targetID = chromedp.FromContext(newG.Context).Target.TargetID
 
 	var browserContextID cdp.BrowserContextID

@@ -97,6 +97,7 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 		}
 		return nil, nil
 	}
+	ConfirmAttached(tabCtx) // the probe's attach ran before it reported success
 	b.mu.Lock()
 	// Re-check under the lock: the browser may have closed, the target may have been destroyed, or
 	// another goroutine may have attached to it while we were probing.

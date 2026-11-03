@@ -627,5 +627,6 @@ func AttachFrameTargetContext(ctx, lifetime context.Context, targetID target.ID)
 		cancelTarget()
 		return nil, nil, contextError("attach frame target", err)
 	}
+	ConfirmAttached(chromeCtx) // the attach ran before attachDone delivered its result
 	return targetCtx, cancelTarget, nil
 }

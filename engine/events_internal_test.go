@@ -76,23 +76,8 @@ var _ = ginkgo.Describe("eventHub", ginkgo.Label("no-browser"), func() {
 		gomega.Expect(raw).To(gomega.Equal([]string{page.FrameDetached.Method + ` {"frameId":"F","reason":"remove"}`}))
 	})
 
-	// owner stands in for a chromedp context: the session it is attached through, once it is.
-	type owner struct {
-		mu      sync.Mutex
-		session target.SessionID
-	}
-	attachedThrough := func(o *owner) func() target.SessionID {
-		return func() target.SessionID {
-			o.mu.Lock()
-			defer o.mu.Unlock()
-			return o.session
-		}
-	}
-	attach := func(o *owner, session target.SessionID) {
-		o.mu.Lock()
-		o.session = session
-		o.mu.Unlock()
-	}
+	// a and b stand in for two chromedp contexts: the hub keys a waiting registration by its context.
+	a, b := new(int), new(int)
 	attachCommand := func(id int64) *cdproto.Message {
 		return &cdproto.Message{ID: id, Method: cdproto.MethodType(target.AttachToTarget.Method), Params: jsonv2.Value(`{"targetId":"T1","flatten":true}`)}
 	}
@@ -105,69 +90,92 @@ var _ = ginkgo.Describe("eventHub", ginkgo.Label("no-browser"), func() {
 	runtimeEnable := func(session target.SessionID) *cdproto.Message {
 		return &cdproto.Message{ID: 99, SessionID: session, Method: cdproto.MethodType(runtime.Enable.Method)}
 	}
+	unclaimed := func() int {
+		hub.mu.Lock()
+		defer hub.mu.Unlock()
+		return len(hub.unclaimed)
+	}
 
-	ginkgo.It("binds a context's waiting listeners when chromedp sends the first command on the session the context is attached through", func() {
+	ginkgo.It("queues a new session's events while a context waits, and hands them over in order when it confirms", func() {
 		var seen []string
-		a := &owner{}
-		hub.pend(a, attachedThrough(a), &eventListener{ctx: ctx, fn: func(ev any) { seen = append(seen, methodOf(ev)) }})
+		hub.pend(a, &eventListener{ctx: ctx, fn: func(ev any) { seen = append(seen, methodOf(ev)) }})
 
 		hub.sent(attachCommand(7))
 		hub.received(attachedEvent("S1"))
 		hub.received(attachReply(7, "S1"))
-		gomega.Expect(hub.pending).To(gomega.HaveLen(1), "neither the event nor the reply says whose attachment it is")
-
-		attach(a, "S1") // chromedp sets the context's Target, then sends Runtime.enable on it
-		hub.sent(runtimeEnable("S1"))
+		hub.sent(runtimeEnable("S1")) // chromedp's first command on the new session
 		hub.received(event("S1", runtime.ExecutionContextsCleared.Method, `{}`))
+		hub.received(event("S1", inspector.TargetCrashed.Method, `{}`))
+		gomega.Expect(seen).To(gomega.BeEmpty(), "nothing says whose session it is until its context confirms")
 
-		gomega.Expect(seen).To(gomega.Equal([]string{"cleared"}))
+		hub.confirm(a, "S1")
+		gomega.Expect(seen).To(gomega.Equal([]string{"cleared", "crashed"}))
+		hub.received(detached("F"))
+		gomega.Expect(seen).To(gomega.Equal([]string{"cleared", "crashed", "detached"}))
 		gomega.Expect(hub.pending).To(gomega.BeEmpty())
+		gomega.Expect(unclaimed()).To(gomega.BeZero())
 	})
 
 	ginkgo.It("keeps two contexts attaching one target apart, however their attachments, registrations, and replies interleave", func() {
 		var first, second []string
-		a, b := &owner{}, &owner{}
-		hub.pend(a, attachedThrough(a), &eventListener{ctx: ctx, fn: func(ev any) { first = append(first, methodOf(ev)) }})
+		hub.pend(a, &eventListener{ctx: ctx, fn: func(ev any) { first = append(first, methodOf(ev)) }})
 		hub.sent(attachCommand(7))
 		hub.received(attachedEvent("S1")) // the first attachment's event...
-		hub.pend(b, attachedThrough(b), &eventListener{ctx: ctx, fn: func(ev any) { second = append(second, methodOf(ev)) }})
+		hub.pend(b, &eventListener{ctx: ctx, fn: func(ev any) { second = append(second, methodOf(ev)) }})
 		hub.sent(attachCommand(8))
 		hub.received(attachReply(7, "S1")) // ...and its reply, with the second registered in between
-		hub.received(attachedEvent("S2"))
-		hub.received(attachReply(8, "S2"))
-
-		attach(b, "S2")
-		hub.sent(runtimeEnable("S2"))
-		attach(a, "S1")
 		hub.sent(runtimeEnable("S1"))
 		hub.received(event("S1", runtime.ExecutionContextsCleared.Method, `{}`))
-		hub.received(event("", target.DetachedFromTarget.Method, `{"sessionId":"S1","targetId":"T1"}`)) // the first is discarded
+		hub.received(attachedEvent("S2"))
+		hub.received(attachReply(8, "S2"))
+		hub.sent(runtimeEnable("S2"))
 		hub.received(event("S2", inspector.TargetCrashed.Method, `{}`))
 
+		hub.confirm(b, "S2")
+		hub.confirm(a, "S1")
+		hub.received(event("", target.DetachedFromTarget.Method, `{"sessionId":"S1","targetId":"T1"}`)) // the first is discarded
+		hub.received(event("S2", page.FrameDetached.Method, `{"frameId":"F","reason":"remove"}`))
+
 		gomega.Expect(first).To(gomega.Equal([]string{"cleared"}))
-		gomega.Expect(second).To(gomega.Equal([]string{"crashed"}), "discarding the first attachment leaves the second's listeners in place")
+		gomega.Expect(second).To(gomega.Equal([]string{"crashed", "detached"}), "discarding the first attachment leaves the second's listeners in place")
 	})
 
-	ginkgo.It("leaves a waiting listener alone when Chrome auto-attaches the target under a page's session", func() {
+	ginkgo.It("lets a context retry its first Run before confirming, whether or not the failed attempt attached", func() {
 		var seen []string
-		a := &owner{}
-		hub.pend(a, attachedThrough(a), &eventListener{ctx: ctx, fn: func(ev any) { seen = append(seen, methodOf(ev)) }})
+		hub.pend(a, &eventListener{ctx: ctx, fn: func(ev any) { seen = append(seen, methodOf(ev)) }})
+		hub.sent(attachCommand(7))
+		hub.received(&cdproto.Message{ID: 7, Error: &cdproto.Error{Code: -32000, Message: "No target with given id found"}})
+		hub.sent(attachCommand(8)) // the retry attaches
+		hub.received(attachReply(8, "S1"))
+		hub.sent(runtimeEnable("S1"))
+		hub.received(event("S1", runtime.ExecutionContextsCleared.Method, `{}`))
+		hub.sent(&cdproto.Message{ID: 100, SessionID: "S1", Method: "Runtime.evaluate"}) // a probe that fails, retried
+		hub.received(event("S1", inspector.TargetCrashed.Method, `{}`))
+
+		hub.confirm(a, "S1")
+		gomega.Expect(seen).To(gomega.Equal([]string{"cleared", "crashed"}))
+	})
+
+	ginkgo.It("never hands a waiting context a session it does not confirm, and forgets one nobody confirms", func() {
+		var seen []string
+		hub.pend(a, &eventListener{ctx: ctx, fn: func(ev any) { seen = append(seen, methodOf(ev)) }})
 
 		hub.received(event("PAGE", target.AttachedToTarget.Method, `{"sessionId":"AUTO","targetInfo":{"targetId":"T1","type":"iframe"},"waitingForDebugger":false}`))
 		hub.sent(&cdproto.Message{ID: 9, SessionID: "AUTO", Method: "Runtime.runIfWaitingForDebugger"})
 		hub.received(event("AUTO", runtime.ExecutionContextsCleared.Method, `{}`))
+		hub.sent(runtimeEnable("S1"))
+		hub.confirm(a, "S1")
 
 		gomega.Expect(seen).To(gomega.BeEmpty())
-		gomega.Expect(hub.pending).To(gomega.HaveKey(a))
+		gomega.Expect(unclaimed()).To(gomega.BeZero(), "with nobody waiting, the auto-attached session's queue is dropped")
 	})
 
 	ginkgo.It("never waits to register, and lets go of a registration whose attachment failed when its context ends", func() {
 		failedCtx, abandon := context.WithCancel(ctx)
-		a, b := &owner{}, &owner{}
-		hub.pend(a, attachedThrough(a), &eventListener{ctx: failedCtx, fn: func(any) {}})
+		hub.pend(a, &eventListener{ctx: failedCtx, fn: func(any) {}})
 		hub.sent(attachCommand(7))
 		hub.received(&cdproto.Message{ID: 7, Error: &cdproto.Error{Code: -32000, Message: "No target with given id found"}})
-		hub.pend(b, attachedThrough(b), &eventListener{ctx: ctx, fn: func(any) {}}) // returns at once
+		hub.pend(b, &eventListener{ctx: ctx, fn: func(any) {}}) // returns at once
 
 		abandon()
 		gomega.Eventually(func() map[any]*pendingAttach {
@@ -175,6 +183,37 @@ var _ = ginkgo.Describe("eventHub", ginkgo.Label("no-browser"), func() {
 			defer hub.mu.Unlock()
 			return maps.Clone(hub.pending)
 		}).Should(gomega.And(gomega.HaveLen(1), gomega.HaveKey(b)))
+	})
+
+	ginkgo.It("keeps an event the reader receives during the confirmation's replay behind the replayed ones", func() {
+		var lock sync.Mutex
+		var seen []string
+		record := func(name string) {
+			lock.Lock()
+			defer lock.Unlock()
+			seen = append(seen, name)
+		}
+		hub.pend(a, &eventListener{ctx: ctx, fn: func(ev any) {
+			record(methodOf(ev))
+			if methodOf(ev) == "cleared" {
+				// the reader goroutine receives the next event while the replay is under way
+				done := make(chan struct{})
+				go func() {
+					hub.received(event("S1", inspector.TargetCrashed.Method, `{}`))
+					close(done)
+				}()
+				<-done
+			}
+		}})
+		hub.sent(runtimeEnable("S1"))
+		hub.received(event("S1", runtime.ExecutionContextsCleared.Method, `{}`))
+
+		hub.confirm(a, "S1")
+		hub.received(detached("F"))
+
+		lock.Lock()
+		defer lock.Unlock()
+		gomega.Expect(seen).To(gomega.Equal([]string{"cleared", "crashed", "detached"}))
 	})
 
 	ginkgo.It("still calls the raw and later listeners of an event that does not decode, and says so when debugging", func() {

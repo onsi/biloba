@@ -421,6 +421,7 @@ func (b *Browser) openTabLocked(ctx, opCtx context.Context, browserContextID cdp
 		cancelTab()
 		return nil, contextError("open tab", err)
 	}
+	ConfirmAttached(tabCtx) // the attach ran before attachDone delivered its result
 	session := &Session{
 		browser: b, ctx: tabCtx, cancel: detachTab, browserContextID: browserContextID,
 		targetID: targetID, ownsContext: ownsContext, artifactDir: b.artifactDir, root: root,
