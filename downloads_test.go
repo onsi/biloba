@@ -42,11 +42,11 @@ var _ = Describe("Downloading Files", func() {
 	It("throttles DOM interactions against Chrome's download limit", func(ctx SpecContext) {
 		limit := biloba.ChromeDownloadLimitForTest()
 		for range limit {
-			b.Click("#download")
+			b.WithContext(ctx).Click("#download")
 		}
 		Eventually(ctx, b.AllCompleteDownloads).Should(HaveLen(limit))
 
-		b.Click("#download")
+		b.WithContext(ctx).Click("#download")
 
 		Eventually(ctx, b.AllCompleteDownloads).Should(HaveLen(limit+1),
 			"Chrome dropped the download past its %d-per-second limit, which means the DOM interaction that triggered it did not wait the limit out", limit)
@@ -55,45 +55,54 @@ var _ = Describe("Downloading Files", func() {
 	It("can handle many downloads", func(ctx SpecContext) {
 		t := time.Now()
 		for i := 1; i < 15; i++ {
-			b.Click("#download")
+			b.WithContext(ctx).Click("#download")
 			Eventually(ctx, b.AllCompleteDownloads).Should(HaveLen(i))
 		}
 		Ω(time.Since(t)).Should(BeNumerically(">", time.Second), "we should have waited around a bit for chrome's 10-download/second limit to complete")
 	}, SpecTimeout(30*time.Second))
 
 	It("can handle many downloads (simulating multiple tabs)", func(ctx SpecContext) {
-		tab := b.NewTab().Navigate(fixtureServer + "/downloads.html")
-		Eventually("#download").Should(tab.Exist())
+		tab := b.NewTab()
+		tab.WithContext(ctx).Navigate(fixtureServer + "/downloads.html")
+		Eventually(ctx, "#download").Should(tab.Exist())
 
 		t := time.Now()
 		for i := 1; i <= 14; i++ {
-			tab.Click("#download")
+			tab.WithContext(ctx).Click("#download")
 			Eventually(ctx, tab.AllCompleteDownloads).Should(HaveLen(i))
 		}
 		Ω(time.Since(t)).Should(BeNumerically(">", time.Second), "rate limiting should have slowed down 14 downloads across 2 tabs")
 	}, SpecTimeout(30*time.Second))
 
 	It("can handle many downloads (when the downloads come from a tab spawned from the root tab)", func(ctx SpecContext) {
-		b.Click(b.XPath("a").WithTextContains("Open in New Tab"))
-		Eventually(b).Should(b.HaveSpawnedTab().WithTitle("Downloads Testpage"))
+		b.WithContext(ctx).Click(b.XPath("a").WithTextContains("Open in New Tab"))
+		Eventually(ctx, b).Should(b.HaveSpawnedTab().WithTitle("Downloads Testpage"))
 		newTab := b.AllSpawnedTabs().Find(b.TabMatching().WithTitle("Downloads Testpage"))
 		Ω(newTab).ShouldNot(BeNil())
 
 		t := time.Now()
 		for i := 1; i <= 14; i++ {
-			newTab.Click("#download")
+			newTab.WithContext(ctx).Click("#download")
 			Eventually(ctx, newTab.AllCompleteDownloads).Should(HaveLen(i))
 		}
 		Ω(time.Since(t)).Should(BeNumerically(">", time.Second), "rate limiting should have slowed down 14 downloads from a spawned tab")
 	}, SpecTimeout(30*time.Second))
 
 	It("can handle many downloads (simulating multiple processes)", func(ctx SpecContext) {
-		gOtherProcess := biloba.ConnectToChrome(gt).Navigate(fixtureServer + "/downloads.html")
-		Eventually("#download").Should(gOtherProcess.Exist())
+		// ConnectToChrome takes no context, so if this spec times out mid-connect the connect keeps
+		// going after Ginkgo moves on.  Its own bilobaT keeps whatever that connect records out of
+		// the shared gt, where it would land in the next spec on this process.
+		otherT := newBilobaT(GinkgoT())
+		gOtherProcess := biloba.ConnectToChrome(otherT)
+		Ω(otherT.failures).Should(BeEmpty(), "ConnectToChrome failed")
+		gOtherProcess.WithContext(ctx).Navigate(fixtureServer + "/downloads.html")
+		Ω(otherT.failures).Should(BeEmpty())
+		Eventually(ctx, "#download").Should(gOtherProcess.Exist())
 
 		t := time.Now()
 		for i := 1; i <= 14; i++ {
-			gOtherProcess.Click("#download")
+			gOtherProcess.WithContext(ctx).Click("#download")
+			Ω(otherT.failures).Should(BeEmpty())
 			Eventually(ctx, gOtherProcess.AllCompleteDownloads).Should(HaveLen(i))
 		}
 		Ω(time.Since(t)).Should(BeNumerically(">", time.Second), "rate limiting should have slowed down 14 downloads from a simulated separate process")

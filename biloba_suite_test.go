@@ -93,8 +93,38 @@ var _ = BeforeEach(func() {
 }, OncePerOrdered)
 
 var _ = AfterEach(func() {
-	Ω(gt.failures).Should(BeEmpty(), "Did you forget to call ExpectFailures?")
+	Ω(gt.failures).Should(BeEmpty(), func() string { return "Did you forget to call ExpectFailures?" + leakedSpecNote() })
 })
+
+// leakedSpec is the last spec on this process whose node outlived its timeout's grace period.  Ginkgo
+// can't stop a goroutine, so it moves on and leaves the node running; any Biloba call still going in
+// it records its failure into the shared gt while a later spec runs, and that spec gets charged with
+// it.  Nothing in the failure itself can say where it came from (the shared b's gt is the same object
+// for every spec), so the harness names the leaked spec whenever a later one fails on unexpected
+// Biloba failures.  The fix for the leaking spec is to bind its Biloba calls to the spec's ctx
+// (WithContext), which makes them return within the grace period, and to give any Biloba it connects
+// itself (ConnectToChrome takes no context) a bilobaT of its own.
+var leakedSpec struct {
+	text string
+	at   time.Time
+}
+
+var _ = ReportAfterEach(func(report SpecReport) {
+	for _, progressReport := range report.ProgressReports {
+		// Ginkgo's own wording for a node that did not exit within its grace period
+		if strings.Contains(progressReport.Message, "failed to exit in time") {
+			leakedSpec.text, leakedSpec.at = report.FullText(), report.EndTime
+		}
+	}
+})
+
+func leakedSpecNote() string {
+	if leakedSpec.text == "" {
+		return ""
+	}
+	return fmt.Sprintf("\n\nNote: %q timed out and was left running on this process %s before this spec started.  A Biloba call still running there records its failure into whichever spec is current, so some of these may be its.",
+		leakedSpec.text, CurrentSpecReport().StartTime.Sub(leakedSpec.at).Round(time.Millisecond))
+}
 
 func ExpectFailures(expectedFailures ...any) {
 	GinkgoHelper()
@@ -102,7 +132,7 @@ func ExpectFailures(expectedFailures ...any) {
 	for _, failure := range expectedFailures {
 		matchers = append(matchers, matcherOrEqual(failure))
 	}
-	Expect(gt.failures).To(ConsistOf(matchers...))
+	Expect(gt.failures).To(ConsistOf(matchers...), leakedSpecNote)
 	gt.failures = []string{}
 }
 
