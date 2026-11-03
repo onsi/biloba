@@ -306,31 +306,42 @@ var _ = Describe("Cross-origin iframes", func() {
 
 	Describe("frame documents", func() {
 		It("observes requests and network idle while the frame's JavaScript thread is busy", func() {
-			started := make(chan struct{}, 1)
-			signal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			checkout.Run(`fetch("/api/before-busy")`)
+			Eventually(checkout).Should(checkout.HaveMadeRequest(ContainSubstring("/api/before-busy")))
+			Eventually(checkout).Should(checkout.BeNetworkIdle())
+
+			started, ended := make(chan struct{}, 1), make(chan struct{}, 1)
+			signal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusNoContent)
 				w.(http.Flusher).Flush()
-				started <- struct{}{}
+				if r.URL.Path == "/busy-start" {
+					started <- struct{}{}
+				} else {
+					ended <- struct{}{}
+				}
 			}))
 			DeferCleanup(signal.Close)
 
-			// The server signal proves the scheduled callback has begun before either observation. The
-			// loop is bounded so a failed assertion cannot leave this shared renderer wedged.
+			// A fetch reaches the server while the loop runs (an Image would only load once it ends).  The
+			// renderer answers no command until the loop ends, 300ms after it sends /busy-end, so an
+			// observation that asked it anything would return after the server saw /busy-end.  The loop is
+			// bounded so a failed assertion cannot leave this shared renderer wedged.
 			checkout.Run(`setTimeout(() => {
-				const signal = new Image();
-				signal.src = "` + signal.URL + `/busy-start";
-				const until = performance.now() + 1500;
-				while (performance.now() < until) {}
+				const begun = performance.now();
+				fetch("` + signal.URL + `/busy-start", {mode: "no-cors"});
+				while (performance.now() < begun + 1200) {}
+				fetch("` + signal.URL + `/busy-end", {mode: "no-cors"});
+				while (performance.now() < begun + 1500) {}
 			}, 0)`)
-			Eventually(started).WithTimeout(2 * time.Second).Should(Receive())
+			Eventually(started).WithTimeout(5 * time.Second).Should(Receive())
 
-			observationStarted := time.Now()
-			Eventually(checkout).WithTimeout(500 * time.Millisecond).WithPolling(10 * time.Millisecond).
-				Should(checkout.HaveMadeRequest(ContainSubstring("/busy-start")))
-			Eventually(checkout).WithTimeout(500 * time.Millisecond).WithPolling(10 * time.Millisecond).
-				Should(checkout.BeNetworkIdle())
-			Ω(time.Since(observationStarted)).Should(BeNumerically("<", time.Second),
-				"cached network observations must not wait for the renderer's busy loop")
+			Ω(checkout).Should(checkout.HaveMadeRequest(ContainSubstring("/api/before-busy")))
+			Ω(ended).ShouldNot(Receive(), "HaveMadeRequest must not wait for the renderer's busy loop")
+			Ω(checkout).Should(checkout.BeNetworkIdle(),
+				"Chrome sends the busy task's network events once the task ends, so the frame is idle unless BeNetworkIdle waited for the renderer's busy loop")
+			Ω(ended).ShouldNot(Receive(), "BeNetworkIdle must not wait for the renderer's busy loop")
+
+			Eventually(checkout).WithTimeout(5 * time.Second).Should(checkout.HaveMadeRequest(ContainSubstring("/busy-start")))
 		})
 
 		It("fails a handle whose document has gone, and finds the replacement", func() {
