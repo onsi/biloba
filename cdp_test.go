@@ -18,8 +18,8 @@ import (
 // SetCDPTimeoutsForTest and the wedge itself is injected rather than real.  A genuinely wedged
 // renderer (`while(true){}`) is reproducible but unrecoverable: it would keep a CPU pegged for the
 // rest of the run, which under `make stress-test`'s 41 repeats is not a price worth paying for one
-// assertion.  The one thing that IS exercised against real Chrome is the renderer crash, because
-// there the tab recovers.
+// assertion.  A real renderer crash is not exercised here either; the comment at the bottom of this
+// Describe says why.
 var _ = Describe("bounding the commands Biloba sends to Chrome", func() {
 	Describe("when Chrome accepts a command and never answers", func() {
 		BeforeEach(func() {
@@ -75,9 +75,13 @@ var _ = Describe("bounding the commands Biloba sends to Chrome", func() {
 	//
 	// Two things about a crashed tab turn out to be Chrome's behaviour rather than Biloba's, and they
 	// differ by platform.  Chrome announces the crash late on Linux and promptly on macOS - late enough
-	// that a three-second sample sees nothing.  And the tab does not come back: on Linux a navigation
-	// after the crash does not get a fresh renderer, so every later command on that tab fails, including
-	// the ones Prepare issues during teardown.  That last part is what rules the spec out.  A tab that
+	// that a three-second sample sees nothing.  And the tab the old spec crashed did not come back: it
+	// sent Page.crash and navigated before Linux had announced the crash, and every later command on
+	// that tab failed, including the ones Prepare issues during teardown (CI run 33589422597, both
+	// lanes; the high-fidelity lane reported page_crashed only after the navigation).  The TypeScript
+	// crash e2e, which kills the renderer and waits for PAGE_CRASHED before navigating, recovers on
+	// Linux - so the timing of the navigation is the likely difference.  The unrecovered tab is what
+	// rules the spec out.  A tab that
 	// cannot be recovered poisons the harness it was created in - gt.failures picks up the teardown
 	// failures and the next spec inherits them - which is precisely the class of suite-wide flake the
 	// rest of this session went to fix.

@@ -71,13 +71,11 @@ var _ = ginkgo.Describe("how Biloba's own source talks to Chrome", ginkgo.Label(
 // diagnoseCDPError is what turns a bounded failure into an actionable one, and its three verdicts are
 // asserted here rather than against real Chrome on purpose.
 //
-// page_crashed depends on Chrome announcing the crash, and Chrome does not do that dependably: with
-// the Inspector domain enabled, neither Page.crash nor a chrome://crash navigation produces
-// inspector.targetCrashed or target.targetCrashed on Linux, on either the page session or the browser
-// connection, while both arrive on macOS.  A spec that crashed a real renderer and demanded the
-// wording would therefore assert a Chrome behaviour rather than a Biloba one, and would fail on the
-// platform most suites run on.  So the trigger is tested against real Chrome (cdp_test.go) and the
-// vocabulary is tested here, where setting the flag is deterministic everywhere.
+// page_crashed depends on Chrome announcing the crash, and Chrome's timing varies: it announces a
+// crash promptly on macOS and several seconds later on Linux, so a command in between reports
+// deadline_exceeded.  A spec that crashed a real renderer and demanded the wording would therefore
+// assert a Chrome behaviour rather than a Biloba one.  So the vocabulary is tested here, where setting
+// the flag is deterministic everywhere, and cdp_test.go explains why there is no real-crash spec.
 var _ = ginkgo.Describe("diagnosing why a command failed", ginkgo.Label("no-browser"), func() {
 	var b *Biloba
 	underlying := errors.New("some underlying failure")

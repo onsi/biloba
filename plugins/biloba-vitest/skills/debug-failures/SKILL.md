@@ -31,7 +31,7 @@ A timeout whose message ends `This tab's page clock is paused at <t>; timers and
 | `NAVIGATION` | The response status did not match the requested navigation status. Waiting will not fix it; use `navigateWithStatus` when the error page is the page under test. |
 | `JAVASCRIPT_ERROR` | Page evaluation threw. |
 | `INVALID_ARGUMENT` | The request itself is malformed (e.g. a cookie with no domain and no navigated origin). |
-| `PAGE_CRASHED` | This session's renderer died; the browser is fine. Navigate again to recover. |
+| `PAGE_CRASHED` | This session's renderer died; the browser is fine. Navigate again to recover. Chrome can take several seconds to announce a crash on Linux, and a call in that window fails with a different code; navigate after `PAGE_CRASHED`, not before, since a navigation sent before the announcement may leave the session dead. |
 | `BROWSER_GONE` | The shared Chrome exited or crashed. |
 | `DRIVER_CLOSED` | This worker's daemon died; inspect `daemonDetail` and stderr. |
 

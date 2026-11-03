@@ -224,11 +224,10 @@ await session.locator("#hold-expired").expectVisible();
 `expectScreenshot(name, options)` supports masks, pixel and channel tolerances, automatic animation freezing, animated opt-out, light/dark schemes, baseline update mode, diff artifacts, and structured diagnosis.
 
 ```ts
-const result = await session.getByTestId("chart").expectScreenshot("revenue-chart", {
+await session.getByTestId("chart").expectScreenshot("revenue-chart", {
   mask: [session.getByTestId("timestamp")],
   colorSchemes: ["light", "dark"],
-});
-expect(result.match).toBe(true);
+}); // a mismatch throws; nothing to assert on the result
 ```
 
 Record what Chrome draws with a screencast:

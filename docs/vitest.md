@@ -436,15 +436,14 @@ const header = await session.captureScreenshot({clip: {x: 0, y: 0, width: 800, h
 `expectScreenshot()` supports page and element baselines (an element's box is rounded outward to whole CSS pixels, so a fractionally sized element is captured with every pixel it touches), masks, exact or tolerant pixel comparison, animation freezing with an opt-out, light and dark color schemes, update mode, diff artifacts, and structured diagnosis.
 
 ```ts
-const result = await session.getByTestId("chart").expectScreenshot("revenue-chart", {
+await session.getByTestId("chart").expectScreenshot("revenue-chart", {
   mask: [session.getByTestId("last-updated")],
   colorSchemes: ["light", "dark"],
   pixelTolerance: 0.001,
 });
-expect(result.match).toBe(true);
 ```
 
-A mismatch throws, and the message carries the pixel counts, amplitude verdict, and baseline, actual, and diff paths, so a CI log tells you what changed without opening anything. Capture warnings (a baseline that never settled, two color schemes that rendered identically) go to stderr; pass `onScreenshotWarning` to `connect` to route them somewhere else.
+A mismatch throws, and the message carries the pixel counts, amplitude verdict, and baseline, actual, and diff paths, so a CI log tells you what changed without opening anything.  Because of that, the result needs no assertion: it resolves only when the screenshot matched or, in update mode, when the baseline was written, and its `match` is `true` either way.  `updated` says whether the call wrote a baseline, and each entry in `schemes` carries a `status` (`matched`, `created`, `updated`, or `unchanged`). Capture warnings (a baseline that never settled, two color schemes that rendered identically) go to stderr; pass `onScreenshotWarning` to `connect` to route them somewhere else.
 
 When you need to absorb rendering noise, reach for `channelTolerance` before `pixelTolerance`: rasterization differences are a small delta spread over many pixels, while a pixel budget lets a handful of pixels change by any amount - which is exactly the one-pixel border or small glyph worth catching.
 
@@ -570,7 +569,7 @@ The Vitest hooks replay the test's console errors and page errors after it finis
 | `NAVIGATION` | The page loaded with a status you didn't ask for.  Waiting will never fix it; see `navigateWithStatus`. |
 | `JAVASCRIPT_ERROR` | Your expression threw in the page. |
 | `INVALID_ARGUMENT` | The request was malformed - a cookie with no domain, say. |
-| `PAGE_CRASHED` | This session's renderer died.  The browser is fine; navigate again to recover. |
+| `PAGE_CRASHED` | This session's renderer died.  The browser is fine; navigate again to recover.  Chrome can take several seconds to announce a crash on Linux, and a call in that window fails with a different code; navigate after a call has failed with `PAGE_CRASHED`, since a navigation sent before the announcement may leave the session dead. |
 | `BROWSER_GONE` | The shared Chrome exited or crashed underneath this worker. |
 | `DRIVER_CLOSED` | This worker's daemon died.  `daemonDetail` carries its stderr. |
 
