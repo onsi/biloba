@@ -308,7 +308,7 @@ that's it.
 
 > Wat
 
-Biloba hands Chrome a piece of javascript once per tab, to run at the start of every document that tab creates - so a global `_biloba` object is on `window` before any of the page's own scripts run.  Chrome maintains that, rather than Biloba noticing after each navigation that the object is gone and putting it back; a page that navigates itself mid-command can't leave a command looking at a document that never had it.
+Biloba hands Chrome a piece of javascript once per tab, to run at the start of every document that tab creates - so a global `_biloba` object is on `window` before any of the page's own scripts run.  Chrome maintains that, rather than Biloba noticing after each navigation that the object is gone and putting it back; a page that navigates itself mid-command can't leave a command looking at a document that never had it.  It also means a navigation, or the `Prepare` between specs, doesn't cost a second copy of the script being sent to the page.
 
 That covers the tab's child frames as well as its main document.  A tab only ever *uses* the main frame's copy, reaching into a same-origin child frame from there; a [frame handle](#working-with-cross-origin-iframes) uses the copy in its own frame's document (and installs one if Chrome didn't).  Whether Chrome even puts one there depends on the build: `chrome-headless-shell` injects into an opaque origin, full headless Chrome doesn't.  Neither is worth doing anything about; it's noted because "every document" is otherwise easy to read as a promise about frames.
 
