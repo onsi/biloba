@@ -71,6 +71,10 @@ var _ = ginkgo.Describe("the connection's frame-world records", ginkgo.Label("no
 			var msg cdproto.Message
 			gomega.ExpectWithOffset(1, conn.Read(context.Background(), &msg)).To(gomega.Succeed())
 		}
+		for len(conn.backlog) > 0 { // what the connection put ahead of a detach
+			var msg cdproto.Message
+			gomega.ExpectWithOffset(1, conn.Read(context.Background(), &msg)).To(gomega.Succeed())
+		}
 	}
 	world := func(session target.SessionID, frame string) frameWorld {
 		conn.mu.Lock()

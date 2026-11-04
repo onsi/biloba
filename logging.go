@@ -11,6 +11,11 @@ import (
 	"github.com/onsi/biloba/engine"
 )
 
+// handleEventConsoleAPICalled records a console call and streams it to the GinkgoWriter, from the tab's
+// listener, so the output is there by the time the command that caused it returns, in order with the
+// spec's own.  The GinkgoWriter is a buffer in memory except when it streams to stdout (-v in a serial
+// run), and a stdout that falls behind holds up the listener, and with it every tab once 1024 of a
+// tab's messages wait (see engine.ListenTarget): the same stdout holds up the spec's own writes too.
 func (b *Biloba) handleEventConsoleAPICalled(ev *runtime.EventConsoleAPICalled) {
 	b.recordConsoleMessage(ev)
 	var color string

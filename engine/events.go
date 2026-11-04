@@ -24,9 +24,13 @@ ListenTarget and ListenBrowser are thin layers over it:
 
 A target's listeners run on the goroutine chromedp reads that target's messages on, which also
 delivers its replies: a listener must not run a command on its own target or wait on one, must not
-register a listener, and holds up that target's messages for as long as it runs.  Other targets carry
-on.  A browser listener runs on chromedp's reader, before the next message of any session is read,
-and must not wait on anything.  Hand slow work to a goroutine.
+register a listener, and holds up that target's messages for as long as it runs.  chromedp queues
+1024 messages for a target, and once that many are waiting, the one loop that routes every target's
+messages and sends every command waits too, so a listener that waits can hold up every tab on the
+connection.  A browser listener runs on chromedp's reader, before the next message of any session is
+read, and must not wait on anything.  A listener records under locks no CDP caller holds and hands
+anything that waits on Chrome (answering a dialog or a paused request) to a goroutine, a Handoff when
+the order matters.
 
 A listener sees the events that arrive after it is registered, on a target chromedp has already
 attached, so it misses what the target announced while chromedp attached it.  The one thing Biloba

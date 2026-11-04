@@ -33,9 +33,14 @@ A command chromedp sends on a session returns only when its answer arrives (or i
 chromedp drops whatever arrives for a session once it has seen the session detach.  Chrome does not
 always answer a command whose target goes away under it (an evaluation that closes its own window),
 and chromedp can let the detach overtake an answer Chrome did send.  So the connection keeps the
-commands each session has not answered, and when Chrome detaches the session it hands chromedp an
-answer for each, with the error Chrome gives a command whose target goes away, and then a message
-that only makes sure those answers reached the session before the detach does.
+commands each session has not answered, and when Chrome detaches a session it hands chromedp an
+answer for each, with the error Chrome gives a command whose target goes away, and then, whether or
+not there were any, a message that only makes sure everything for the session reached it before the
+detach does.  A command whose caller gave up stays unanswered; maxUnanswered bounds how many of
+those a session keeps.
+
+When the connection fails, the messages chromedp had read and not yet routed are lost with it: the
+browser is gone, and what Biloba reports then is that, not the page's last few events.
 
 Write passes every command through writeHook, the seam specs use to see and hold commands.
 */
@@ -85,10 +90,18 @@ func (c *connection) Write(ctx context.Context, msg *cdproto.Message) error {
 	tracked := msg.SessionID != "" && msg.ID != 0
 	if tracked {
 		c.mu.Lock()
-		if c.unanswered[msg.SessionID] == nil {
-			c.unanswered[msg.SessionID] = map[int64]bool{}
+		pending := c.unanswered[msg.SessionID]
+		if pending == nil {
+			pending = map[int64]bool{}
+			c.unanswered[msg.SessionID] = pending
 		}
-		c.unanswered[msg.SessionID][msg.ID] = true
+		pending[msg.ID] = true
+		if len(pending) > maxUnanswered {
+			// chromedp's ids count up, so the oldest are the smallest
+			for _, id := range slices.Sorted(maps.Keys(pending))[:len(pending)-maxUnanswered/2] {
+				delete(pending, id)
+			}
+		}
 		c.mu.Unlock()
 	}
 	if hook := writeHook.Load(); hook != nil && (*hook)(c, msg) {
@@ -115,9 +128,15 @@ func (c *connection) answered(session target.SessionID, id int64) {
 // detachedSessionGoneError is what Chrome answers a command whose target goes away under it.
 var detachedSessionGoneError = cdproto.Error{Code: -32000, Message: "Inspected target navigated or closed"}
 
-// barrierMessageID marks the message that follows the answers to a detached session's commands.
-// chromedp's own ids count up from 1, so nothing waits for it.
+// barrierMessageID marks the message that goes ahead of a session's detach.  chromedp's own ids
+// count up from 1, so nothing waits for it.
 const barrierMessageID = -1
+
+// maxUnanswered bounds the unanswered commands a session keeps.  Past it, the oldest half go: a
+// command still unanswered behind that many newer ones is one whose caller gave up (an evaluation
+// awaiting a promise that never settles), and a session that never detaches would otherwise keep
+// every one of them.
+const maxUnanswered = 1024
 
 // sendHeld sends the commands a writeHook held back, which take returns while no other command is
 // being written.
@@ -154,7 +173,7 @@ func (c *connection) Read(ctx context.Context, msg *cdproto.Message) error {
 		pending := c.unanswered[session]
 		delete(c.unanswered, session)
 		c.mu.Unlock()
-		if msg.SessionID == "" && len(pending) > 0 {
+		if msg.SessionID == "" {
 			c.answerBeforeDetach(session, pending, msg)
 		}
 	case msg.SessionID != "" && frameWorldEvent(method):
@@ -164,9 +183,10 @@ func (c *connection) Read(ctx context.Context, msg *cdproto.Message) error {
 }
 
 // answerBeforeDetach puts an answer for each of a detached session's pending commands, and then a
-// barrier, ahead of the detach in msg.  chromedp's reader hands a session's message to the loop that
-// routes it before it reads the next, but the loop takes a detach as soon as the one before it, so the
-// barrier, which chromedp may drop, makes sure the last answer was routed before the detach.
+// barrier, ahead of the detach in msg.  chromedp's reader hands its routing loop one session message
+// at a time, and the next only once the loop has taken the last, but the loop can take a detach ahead
+// of the message still waiting for it, Chrome's own answer just read included.  The barrier, which
+// chromedp may drop, is the one left waiting, so everything before it has been routed by then.
 func (c *connection) answerBeforeDetach(session target.SessionID, pending map[int64]bool, detach *cdproto.Message) {
 	ids := slices.Sorted(maps.Keys(pending))
 	for _, id := range ids {

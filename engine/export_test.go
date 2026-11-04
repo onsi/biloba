@@ -160,9 +160,9 @@ func SetBilobaRegistrationForTest(register func(context.Context, string) error) 
 	return func() { registerBilobaOnNewDocument = previous }
 }
 
-// LiveScreencastWorkersForTest counts the screencast delivery goroutines still running, so a spec
-// can tell that every way a recording ends also ends its goroutine.
-func LiveScreencastWorkersForTest() int64 { return liveScreencastWorkers.Load() }
+// LiveHandoffWorkersForTest counts the Handoff goroutines still running (a screencast's frame
+// delivery, in the engine), so a spec can tell that every way a recording ends also ends its goroutine.
+func LiveHandoffWorkersForTest() int64 { return liveHandoffWorkers.Load() }
 
 // AttachSpawnedTabForTest attaches a session to targetID the way listing tabs does, and
 // SessionBrowserContextForTest reports the browser context a session's tabs open in, so a spec can

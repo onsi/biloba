@@ -88,6 +88,39 @@ var _ = ginkgo.Describe("a session that detaches with commands unanswered", gink
 		gomega.Expect(conn.unanswered).To(gomega.BeEmpty(), "what was answered, and the detached session, are forgotten")
 	})
 
+	ginkgo.It("puts a barrier between Chrome's own last answer and the detach, though nothing is left unanswered", func() {
+		script := &scriptedConnection{}
+		conn := newConnection(script, nil)
+		gomega.Expect(conn.Write(context.Background(), &cdproto.Message{ID: 7, SessionID: "S1", Method: "Runtime.evaluate"})).To(gomega.Succeed())
+		answer := &cdproto.Message{ID: 7, SessionID: "S1", Result: jsonv2.Value(`{}`)}
+		detach := protocolEvent("", target.DetachedFromTarget.Method, `{"sessionId":"S1","targetId":"T1"}`)
+		script.messages = []*cdproto.Message{answer, detach}
+		var got []cdproto.Message
+		for {
+			var msg cdproto.Message
+			if conn.Read(context.Background(), &msg) != nil {
+				break
+			}
+			got = append(got, msg)
+		}
+		gomega.Expect(got).To(gomega.Equal([]cdproto.Message{
+			*answer,
+			{ID: barrierMessageID, SessionID: "S1", Result: jsonv2.Value(`{}`)},
+			*detach,
+		}), "chromedp's routing loop could otherwise take the detach ahead of the answer and drop the answer")
+	})
+
+	ginkgo.It("keeps a bounded number of the commands nobody will hear back about, dropping the oldest", func() {
+		conn := newConnection(&scriptedConnection{}, nil)
+		for id := int64(1); id <= maxUnanswered+1; id++ {
+			gomega.Expect(conn.Write(context.Background(), &cdproto.Message{ID: id, SessionID: "S1", Method: "Runtime.evaluate"})).To(gomega.Succeed())
+		}
+		pending := conn.unanswered["S1"]
+		gomega.Expect(len(pending)).To(gomega.BeNumerically("<=", maxUnanswered))
+		gomega.Expect(pending).To(gomega.HaveKey(int64(maxUnanswered+1)), "the newest stay")
+		gomega.Expect(pending).NotTo(gomega.HaveKey(int64(1)), "the oldest go")
+	})
+
 	ginkgo.It("answers nothing for a session Chrome detaches under another, which chromedp does not drive", func() {
 		script := &scriptedConnection{}
 		conn := newConnection(script, nil)
