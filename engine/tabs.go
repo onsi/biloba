@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
@@ -107,6 +108,33 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 		cancelTab()
 		return nil, contextError("attach tab", err)
 	}
+	// The target can close while it is being set up (a popup closing itself), and nothing answers a
+	// command sent to a session Chrome has detached.  removeDestroyedTarget only reaches a registered
+	// session, and Chrome may have reported the target destroyed before this attach took b.mu, so the
+	// session is watched from here for as long as it lives (WatchTargetGone also sees a detach that
+	// came before the watch).  Its setup commands run on a context the watch ends; a target that goes
+	// before it is registered is skipped, as one that will not attach is, and one that goes after is
+	// marked destroyed.
+	setupCtx, stopSetup := context.WithCancel(tabCtx)
+	defer stopSetup()
+	var gone CrashSignal
+	var registered atomic.Pointer[Session]
+	if err := WatchTargetGone(tabCtx, func() {
+		gone.Mark()
+		stopSetup()
+		if session := registered.Load(); session != nil {
+			go session.markTargetDestroyed()
+		}
+	}); err != nil {
+		cancelTab()
+		return nil, contextError("attach tab", err)
+	}
+	// (asking the connection too: a setup command its target took with it fails before the watch runs)
+	isGone := func() bool { return gone.Crashed() || targetGone(tabCtx) }
+	skipGone := func() (*Session, error) {
+		cancelTab()
+		return nil, nil
+	}
 	b.mu.Lock()
 	// Re-check under the lock: the browser may have closed, the target may have been destroyed, or
 	// another goroutine may have attached to it while we were probing.
@@ -139,14 +167,20 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 		highFidelity: b.mode == ChromeModeHeadless, cacheEnabled: true,
 	}
 	if session.initialWidth <= 0 || session.initialHeight <= 0 {
-		width, height, sizeErr := ViewportDimensionsContext(tabCtx)
+		width, height, sizeErr := ViewportDimensionsContext(setupCtx)
 		if sizeErr != nil {
+			if isGone() {
+				return skipGone()
+			}
 			cancelTab()
 			return nil, contextError("read initial window size", sizeErr)
 		}
 		session.initialWidth, session.initialHeight = int(width), int(height)
 	}
-	if err := session.applyViewport(tabCtx, session.initialWidth, session.initialHeight); err != nil {
+	if err := session.applyViewport(setupCtx, session.initialWidth, session.initialHeight); err != nil {
+		if isGone() {
+			return skipGone()
+		}
 		cancelTab()
 		return nil, contextError("apply initial viewport", err)
 	}
@@ -155,11 +189,19 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 		cancelTab()
 		return nil, contextError("listen to tab", err)
 	}
-	if err := session.setupDownloads(tabCtx); err != nil {
+	if err := session.setupDownloads(setupCtx); err != nil {
+		if isGone() {
+			return skipGone()
+		}
 		cancelTab()
 		return nil, contextError("configure downloads", err)
 	}
-	session.registerBiloba(tabCtx)
+	session.registerBiloba(setupCtx)
+	registered.Store(session)
+	if isGone() { // the watch may have run before it could see the session
+		registered.Store(nil)
+		return skipGone()
+	}
 	b.sessions[session] = struct{}{}
 	return session, nil
 }

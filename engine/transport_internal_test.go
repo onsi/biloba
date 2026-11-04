@@ -134,6 +134,29 @@ var _ = ginkgo.Describe("a session that detaches with commands unanswered", gink
 	})
 })
 
+var _ = ginkgo.Describe("the sessions a connection saw detach", ginkgo.Label("no-browser"), func() {
+	ginkgo.It("are remembered as the reader reads the detach, the most recent of them only", func() {
+		script := &scriptedConnection{}
+		conn := newConnection(script, nil)
+		for i := range rememberedDetachedSessions + 1 {
+			script.messages = append(script.messages, protocolEvent("", target.DetachedFromTarget.Method, `{"sessionId":"S`+jsonv2Int(i)+`","targetId":"T"}`))
+		}
+		// nested: a session Chrome auto-attached under another, which chromedp does not drive
+		script.messages = append(script.messages, protocolEvent("S1", target.DetachedFromTarget.Method, `{"sessionId":"NESTED","targetId":"T"}`))
+		for {
+			var msg cdproto.Message
+			if conn.Read(context.Background(), &msg) != nil {
+				break
+			}
+		}
+		gomega.Expect(conn.sessionDetached("S0")).To(gomega.BeFalse(), "the oldest is forgotten")
+		gomega.Expect(conn.sessionDetached("S1")).To(gomega.BeTrue())
+		gomega.Expect(conn.sessionDetached(target.SessionID("S" + jsonv2Int(rememberedDetachedSessions)))).To(gomega.BeTrue())
+		gomega.Expect(conn.sessionDetached("NESTED")).To(gomega.BeFalse())
+		gomega.Expect(conn.detached).To(gomega.HaveLen(rememberedDetachedSessions))
+	})
+})
+
 var _ = ginkgo.Describe("timing listeners", ginkgo.Label("no-browser"), func() {
 	ginkgo.It("reports a listener that holds its target's messages too long, when debugging is on", func() {
 		var reports []string

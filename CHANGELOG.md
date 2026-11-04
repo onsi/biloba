@@ -11,7 +11,7 @@
 - A command on a tab or frame whose target goes away before Chrome answers it (an evaluation that closes its own popup, for one) now fails at once with Chrome's `Inspected target navigated or closed` error. Chrome sometimes sends no answer then, and the command used to wait for its deadline, or for ever without one.
 - Go: once a tab closes (the page closed itself, its opener closed it, or `Close()` did), every command on it fails at once with `tab_closed`, a navigation included, and a command already waiting on it is interrupted. They used to wait out the 30s backstop. Its cleanups (window size, emulation, init scripts, page clock, screencast) skip the closed tab, and `Close()` on it still succeeds.
 - Go: downloads keep working after a spec in which a popup closed by itself or was closed by its opener. Chrome resets a browser context's download behaviour when one of its tabs closes, and `Prepare` now sets it again then too, not only after closing tabs itself.
-- TypeScript: an action still waiting on a tab or frame when Chrome closes it now fails at once with `TARGET_NOT_FOUND`, and an action that fails is run again only when the page was missing biloba.js, as in Go. A click on a popup's close button could wait for ever, because the action ran again on the closed popup.
+- TypeScript: an action still waiting on a tab or frame when Chrome closes it now fails at once with `TARGET_NOT_FOUND`, and an action that fails is run again only when the page was missing biloba.js, as in Go. A click on a popup's close button could wait for ever, because the action ran again on the closed popup. A popup that closes while Biloba is attaching to it is now left out of the tab list, where it could stall every session on the daemon.
 
 ## 0.21.0
 

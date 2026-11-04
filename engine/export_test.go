@@ -304,6 +304,49 @@ func swallowNextCommand(session *Session, method string, forget bool) (<-chan st
 	return done, sentAfter, func() { writeHook.CompareAndSwap(&hook, previous) }
 }
 
+// LoseCommandOnTargetForTest is LoseNextCommandForTest for a session not attached yet: the next
+// command with method sent on the next session attached to targetID never reaches Chrome, and the
+// connection forgets it, as it would a command sent after chromedp took the session's detach.
+func LoseCommandOnTargetForTest(ctx context.Context, root *Session, targetID target.ID, method string) (lost <-chan struct{}, restore func(), err error) {
+	listenCtx, stop := context.WithCancel(root.ctx)
+	context.AfterFunc(ctx, stop)
+	done := make(chan struct{})
+	var lock sync.Mutex
+	var session target.SessionID
+	taken := false
+	err = ListenBrowser(listenCtx, func(event any) {
+		attached, ok := event.(*target.EventAttachedToTarget)
+		if !ok || attached.TargetInfo == nil || attached.TargetInfo.TargetID != targetID {
+			return
+		}
+		lock.Lock()
+		defer lock.Unlock()
+		if session == "" {
+			session = attached.SessionID
+		}
+	})
+	if err != nil {
+		stop()
+		return nil, nil, err
+	}
+	hook := func(conn *connection, msg *cdproto.Message) bool {
+		lock.Lock()
+		defer lock.Unlock()
+		if taken || session == "" || msg.SessionID != session || string(msg.Method) != method {
+			return false
+		}
+		taken = true
+		close(done)
+		conn.answered(msg.SessionID, msg.ID)
+		return true
+	}
+	previous := writeHook.Swap(&hook)
+	return done, func() {
+		stop()
+		writeHook.CompareAndSwap(&hook, previous)
+	}, nil
+}
+
 // HasFrameWorldsForTest reports whether root's connection still keeps a frame-world record for
 // session.
 func HasFrameWorldsForTest(root *Session, session target.SessionID) bool {

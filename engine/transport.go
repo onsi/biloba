@@ -56,6 +56,11 @@ type connection struct {
 	sessions map[target.SessionID]*sessionWorlds
 	// unanswered holds the commands sent on each session that Chrome has not answered yet.
 	unanswered map[target.SessionID]map[int64]bool
+	// detached remembers the most recent rememberedDetachedSessions sessions Chrome detached at browser
+	// level, recorded before chromedp's listeners see the detach, so WatchTargetGone can tell that a
+	// session went before its listener existed.
+	detached      map[target.SessionID]struct{}
+	detachedOrder []target.SessionID
 
 	// backlog is what Read hands chromedp before it reads the connection again; only Read uses it.
 	backlog []*cdproto.Message
@@ -77,7 +82,32 @@ func newConnection(tr chromedp.Transport, slowf func(string, ...any)) *connectio
 	return &connection{
 		Transport: tr, slowf: slowf,
 		sessions: map[target.SessionID]*sessionWorlds{}, unanswered: map[target.SessionID]map[int64]bool{},
+		detached: map[target.SessionID]struct{}{},
 	}
+}
+
+// rememberedDetachedSessions bounds how many detached sessions a connection remembers.  A session is
+// asked about just after it attached, so a recent window is all it takes.
+const rememberedDetachedSessions = 1024
+
+func (c *connection) rememberDetachedLocked(session target.SessionID) {
+	if _, known := c.detached[session]; known {
+		return
+	}
+	c.detached[session] = struct{}{}
+	c.detachedOrder = append(c.detachedOrder, session)
+	if len(c.detachedOrder) > rememberedDetachedSessions {
+		delete(c.detached, c.detachedOrder[0])
+		c.detachedOrder[0] = ""
+		c.detachedOrder = c.detachedOrder[1:]
+	}
+}
+
+func (c *connection) sessionDetached(session target.SessionID) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, gone := c.detached[session]
+	return gone
 }
 
 // writeHook, when set, sees every command a connection sends Chrome, and keeps it back by returning
@@ -177,6 +207,9 @@ func (c *connection) Read(ctx context.Context, msg *cdproto.Message) error {
 		delete(c.sessions, session)
 		pending := c.unanswered[session]
 		delete(c.unanswered, session)
+		if msg.SessionID == "" {
+			c.rememberDetachedLocked(session)
+		}
 		c.mu.Unlock()
 		if msg.SessionID == "" {
 			c.answerBeforeDetach(session, pending, msg)

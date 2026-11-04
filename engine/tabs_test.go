@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 	. "github.com/onsi/ginkgo/v2"
@@ -44,6 +45,29 @@ var _ = Describe("attaching a tab the page spawned", func() {
 			_ = engine.CloseTargetContext(rootCtx, popup)
 			Eventually(listed).Should(BeFalse())
 		})
+	})
+
+	It("skips a tab that closes while it is being set up, rather than waiting on it", func(ctx SpecContext) {
+		// the setup's viewport command goes unanswered, as one sent after chromedp took the detach does
+		lost, restore, err := engine.LoseCommandOnTargetForTest(ctx, root, popup, emulation.SetDeviceMetricsOverride.Method)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(restore)
+		type attachment struct {
+			tab *engine.Session
+			err error
+		}
+		done := make(chan attachment, 1)
+		go func() {
+			tab, err := engine.AttachSpawnedTabForTest(ctx, root, popup)
+			done <- attachment{tab, err}
+		}()
+		Eventually(lost).WithTimeout(5*time.Second).Should(BeClosed(), "the attach got as far as setting the tab up")
+		Expect(engine.CloseTargetContext(rootCtx, popup)).To(Succeed())
+
+		var attached attachment
+		Eventually(done).WithTimeout(5*time.Second).Should(Receive(&attached), "the setup holds the browser's lock: waiting on the closed tab would stall every session")
+		Expect(attached.err).NotTo(HaveOccurred())
+		Expect(attached.tab).To(BeNil(), "a tab gone before it was registered is skipped, as one that will not attach is")
 	})
 
 	It("leaves the tab open when the caller gives up before the attach gets anywhere", func(ctx SpecContext) {
