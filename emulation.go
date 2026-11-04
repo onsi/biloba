@@ -354,14 +354,42 @@ func (b *Biloba) SetPermissions(origin string, permissions map[Permission]Permis
 	maps.Copy(grants[origin], permissions)
 	record.grants = grants
 	b.root.lock.Unlock()
-	b.gt.DeferCleanup(func() {
-		if b.tabClosed() {
-			return
+	b.gt.DeferCleanup(func() { b.restorePermissionsAtSpecEnd(previous) })
+}
+
+// restorePermissionsAtSpecEnd is the cleanup SetPermissions and ResetPermissions defer.  Permissions
+// belong to the browser context, which outlives a popup that closed (its opener shares it), so they
+// are restored through a tab of the context still open; only a context whose last tab closed, and its
+// permissions with it, is left alone.
+func (b *Biloba) restorePermissionsAtSpecEnd(previous map[string]map[Permission]PermissionState) {
+	keeper := b.contextKeeper()
+	if keeper == nil {
+		return
+	}
+	if err := keeper.restorePermissions(previous); err != nil {
+		b.gt.Fatalf("failed to restore permissions: %s", err.Error())
+	}
+}
+
+// contextKeeper is a tab of b's browser context that is still open - b itself, the root, or another
+// tab - to send the context's commands through, or nil when none is.
+func (b *Biloba) contextKeeper() *Biloba {
+	if !b.tabClosed() {
+		return b
+	}
+	root := b.root
+	root.lock.Lock()
+	tabs := []*Biloba{root}
+	for _, tab := range root.tabs {
+		tabs = append(tabs, tab)
+	}
+	root.lock.Unlock()
+	for _, tab := range tabs {
+		if tab.browserContextID == b.browserContextID && !tab.tabClosed() {
+			return tab
 		}
-		if err := b.restorePermissions(previous); err != nil {
-			b.gt.Fatalf("failed to restore permissions: %s", err.Error())
-		}
-	})
+	}
+	return nil
 }
 
 /*
@@ -383,14 +411,7 @@ func (b *Biloba) ResetPermissions() {
 		b.gt.Fatalf("failed to reset permissions: %s", err.Error())
 		return
 	}
-	b.gt.DeferCleanup(func() {
-		if b.tabClosed() {
-			return
-		}
-		if err := b.restorePermissions(previous); err != nil {
-			b.gt.Fatalf("failed to restore permissions: %s", err.Error())
-		}
-	})
+	b.gt.DeferCleanup(func() { b.restorePermissionsAtSpecEnd(previous) })
 }
 
 // permissionRecord is what SetPermissions has set in one browser context since its last reset.  Like

@@ -213,6 +213,21 @@ var _ = Describe("Emulation", func() {
 			Ω(permissionState(b, "notifications")).ShouldNot(Equal("granted"))
 		})
 
+		It("unwinds a ResetPermissions made through a popup that has closed since, through its opener", func() {
+			b.SetPermissions(fixtureServer, permissions(biloba.PermissionNotifications, biloba.PermissionGranted))
+			DeferCleanup(func() {
+				Ω(permissionState(b, "notifications")).Should(Equal("granted"), "the popup's cleanup restores the grant in the context it shares with its opener")
+			})
+			b.Run(`window.popup = window.open("/dom.html?popup", "_blank"); null`)
+			Eventually(b).Should(b.HaveSpawnedTab().WithURL(ContainSubstring("popup")))
+			popup := b.AllSpawnedTabs().Find(b.TabMatching().WithURL(ContainSubstring("popup")))
+			Eventually("#hello").Should(popup.Exist())
+			popup.ResetPermissions()
+			Ω(permissionState(b, "notifications")).ShouldNot(Equal("granted"))
+			b.Run(`window.popup.close(); null`)
+			Eventually(popup.TabClosedForTest).Should(BeTrue())
+		})
+
 		It("is shared with the tabs a page opens, but not with a new tab", func() {
 			b.SetPermissions("", permissions(biloba.PermissionNotifications, biloba.PermissionDenied))
 			b.Navigate(fixtureServer + "/auto-open.html")
