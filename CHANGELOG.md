@@ -9,6 +9,7 @@
 - Go: once Chrome announces that a tab's renderer crashed, every command on that tab except a navigation fails at once with `page_crashed`, and a command already waiting on the dead renderer is interrupted. They used to wait out the 30s backstop. `Prepare` navigates a crashed root tab before resetting it, instead of sending its reset commands to the dead renderer.
 - Go: navigating a crashed tab now retries once when Chrome refuses the navigation because the new renderer doesn't exist yet, as the TypeScript client already did.
 - A command on a tab or frame whose target goes away before Chrome answers it (an evaluation that closes its own popup, for one) now fails at once with Chrome's `Inspected target navigated or closed` error. Chrome sometimes sends no answer then, and the command used to wait for its deadline, or for ever without one.
+- TypeScript: an action still waiting on a tab or frame when Chrome closes it now fails at once with `TARGET_NOT_FOUND`, and an action that fails is run again only when the page was missing biloba.js, as in Go. A click on a popup's close button could wait for ever, because the action ran again on the closed popup.
 
 ## 0.21.0
 

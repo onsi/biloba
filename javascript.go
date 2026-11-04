@@ -77,7 +77,7 @@ func (b *Biloba) runErr(script string, awaitPromise bool, args ...any) (any, err
 	}
 	err := b.runEngineIn(ctx, timeout, what, evaluate)
 	if err != nil {
-		if strings.Contains(err.Error(), "_biloba is not defined") {
+		if engine.BilobaMissing(err, "") {
 			b.reloadBiloba()
 			err = b.runEngineIn(ctx, timeout, what, evaluate)
 		}

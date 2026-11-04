@@ -78,7 +78,7 @@ func (b *Biloba) runBilobaHandler(name string, selector any, args ...any) *bilob
 		engineResult, runErr = engine.RunHandlerContext(ctx, name, encoded, args...)
 		return runErr
 	})
-	if err != nil && strings.Contains(err.Error(), "_biloba is not defined") {
+	if engine.BilobaMissing(err, name) {
 		b.reloadBiloba()
 		err = b.runEngine("evaluate JavaScript in the page", func(ctx context.Context) error {
 			var runErr error

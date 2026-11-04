@@ -86,7 +86,7 @@ var _ = Describe("lifecycle engine foundations", func() {
 		defer cancel()
 		_, err = popup.Evaluate(closing, `window.close()`)
 		if err != nil {
-			Expect(err).To(MatchError(ContainSubstring("Inspected target navigated or closed")))
+			Expect(err).To(targetGone())
 		}
 		Eventually(func() []string { return sessionTargetIDs(browser.Sessions()) }).ShouldNot(ContainElement(string(popup.TargetID())))
 		Expect(popup.Close()).To(Succeed())

@@ -147,6 +147,10 @@ type Session struct {
 	// crash is marked by Chrome's Inspector.targetCrashed listener, which runs on chromedp's event
 	// goroutine rather than under mu; CrashSignal has its own lock.  A recovering navigation clears it.
 	crash CrashSignal
+	// destroyed is marked once Chrome destroys the target, and never cleared: it is the same kind of
+	// announcement as crash, and serial interrupts an operation waiting on the target with it, since
+	// nothing answers a command sent to a target chromedp has seen detach.
+	destroyed CrashSignal
 }
 
 // ContextID identifies the isolated browser context shared by this session and its descendants.
@@ -263,6 +267,8 @@ func (s *Session) Close() error {
 }
 
 func (s *Session) markTargetDestroyed() {
+	// before the lock: an operation waiting on the target holds it, and only this ends that wait
+	s.destroyed.Mark()
 	s.eventsEnabled.Store(false)
 	s.closeEventSubscriptions()
 	s.releaseAllResponseHolds()
@@ -883,15 +889,17 @@ func (s *Session) runHandlerWithAwait(ctx context.Context, name string, selector
 		run = RunHandlerAsyncContext
 	}
 	response, err := run(ctx, name, encodedSelector, args...)
-	if err != nil {
+	// the document turned over before biloba.js was in it: install it and run the handler again.  Any
+	// other error is the answer - a retry on a target that has gone away would wait for ever.
+	if BilobaMissing(err, name) {
 		s.installed = false
 		if installErr := s.ensureBiloba(ctx); installErr != nil {
 			return response, installErr
 		}
 		response, err = run(ctx, name, encodedSelector, args...)
-		if err != nil {
-			return response, err
-		}
+	}
+	if err != nil {
+		return response, err
 	}
 	if response.Err != "" {
 		code := CodeActionFailed
@@ -989,8 +997,19 @@ func (s *Session) serial(requestCtx context.Context, operation string, run func(
 	if !recovers && s.hasCrashed() {
 		return pageCrashed()
 	}
+	targetDestroyed := func() *Error {
+		return &Error{Code: CodeSessionClosed, Operation: operation, Message: "the session's target was closed"}
+	}
+	if s.destroyed.Crashed() {
+		return targetDestroyed()
+	}
 	opCtx, cancel := executorContext(s.ctx, requestCtx)
 	defer cancel()
+	// Interrupt an operation waiting on the target when Chrome destroys it: a command sent after
+	// chromedp saw the target detach is never answered, and markTargetDestroyed, which would otherwise
+	// end the wait, needs mu.
+	opCtx, cancelOnDestroyed := s.destroyed.Interrupt(opCtx)
+	defer cancelOnDestroyed()
 	if s.frameID != "" {
 		if err := s.validateFrameDocument(opCtx); err != nil {
 			return err
@@ -1012,6 +1031,9 @@ func (s *Session) serial(requestCtx context.Context, operation string, run func(
 	}
 	if !recovers && s.hasCrashed() {
 		return pageCrashed()
+	}
+	if s.destroyed.Crashed() {
+		return targetDestroyed()
 	}
 	if requestCtx.Err() != nil {
 		return requestContextError(operation, requestCtx, err)

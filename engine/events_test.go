@@ -113,6 +113,16 @@ var _ = Describe("a target's listeners", func() {
 	})
 })
 
+// targetGone matches the two ways an operation on a target that went away fails: the connection's
+// answer (Chrome's own target-gone error), or the session closing once it learns the target was
+// destroyed, whichever reaches the operation first.
+func targetGone() OmegaMatcher {
+	return SatisfyAny(
+		MatchError(ContainSubstring("Inspected target navigated or closed")),
+		WithTransform(pointerErrorCode, Equal(engine.CodeSessionClosed)),
+	)
+}
+
 var _ = Describe("a command whose target goes away before Chrome answers it", func() {
 	It("fails as soon as Chrome detaches the target, rather than waiting for an answer that cannot come", func(ctx SpecContext) {
 		session, err := browser.OpenSession(ctx)
@@ -121,7 +131,7 @@ var _ = Describe("a command whose target goes away before Chrome answers it", fu
 		tab, err := session.NewTab(ctx)
 		Expect(err).NotTo(HaveOccurred())
 
-		swallowed, restore := engine.SwallowNextCommandForTest(tab, runtime.Evaluate.Method)
+		swallowed, _, restore := engine.SwallowNextCommandForTest(tab, runtime.Evaluate.Method)
 		DeferCleanup(restore)
 		done := make(chan error, 1)
 		go func() {
@@ -135,7 +145,70 @@ var _ = Describe("a command whose target goes away before Chrome answers it", fu
 		Expect(err).NotTo(HaveOccurred())
 		var evaluated error
 		Eventually(done).WithTimeout(5 * time.Second).Should(Receive(&evaluated))
-		Expect(evaluated).To(MatchError(ContainSubstring("Inspected target navigated or closed")))
+		Expect(evaluated).To(targetGone())
+	})
+
+	It("ends an operation still waiting on a target Chrome destroys, though nothing will answer it", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		tab, err := session.NewTab(ctx)
+		Expect(err).NotTo(HaveOccurred())
+
+		// as a command sent after chromedp took the detach: neither Chrome nor the connection answers it
+		lost, restore := engine.LoseNextCommandForTest(tab, runtime.Evaluate.Method)
+		DeferCleanup(restore)
+		done := make(chan error, 1)
+		go func() {
+			_, err := tab.Evaluate(ctx, `1`)
+			done <- err
+		}()
+		Eventually(lost).Should(BeClosed())
+
+		_, err = chromedp.CallBrowser(engine.SessionContextForTest(session), target.CloseTarget, target.CloseTargetParams{TargetID: tab.TargetID()})
+		Expect(err).NotTo(HaveOccurred())
+		var evaluated error
+		Eventually(done).WithTimeout(5*time.Second).Should(Receive(&evaluated), "the operation holds the session's lock, which the cleanup of a destroyed target takes")
+		Expect(pointerErrorCode(evaluated)).To(Equal(engine.CodeSessionClosed))
+	})
+
+	It("does not run a click again on a popup that closed under it", func(ctx SpecContext) {
+		site := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			response.Header().Set("Content-Type", "text/html")
+			if request.URL.Path == "/popup" {
+				_, _ = response.Write([]byte(`<!doctype html><button id="close" onclick="window.close()">close</button>`))
+				return
+			}
+			_, _ = response.Write([]byte(`<!doctype html><title>opener</title>`))
+		}))
+		DeferCleanup(site.Close)
+		root, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(root.Close)
+		Expect(root.Navigate(ctx, site.URL)).To(Succeed())
+		_, err = root.Evaluate(ctx, `void window.open("/popup", "_blank")`)
+		Expect(err).NotTo(HaveOccurred())
+		popup, err := root.WaitForTab(ctx, engine.TabQuery{
+			SpawnedOnly: true, HasElement: selectorPtr(engine.CSS("#close")),
+		}, engine.PollPolicy{Timeout: 2 * time.Second, Interval: 5 * time.Millisecond})
+		Expect(err).NotTo(HaveOccurred())
+
+		// The click's evaluation goes unanswered, as when the window closes before Chrome answers it,
+		// and the popup goes away: the connection answers it with Chrome's target-gone error.
+		swallowed, sentAfter, restore := engine.SwallowNextCommandForTest(popup, runtime.Evaluate.Method)
+		DeferCleanup(restore)
+		done := make(chan error, 1)
+		go func() { done <- popup.Click(ctx, engine.CSS("#close")) }()
+		Eventually(swallowed).Should(BeClosed())
+		_, err = chromedp.CallBrowser(engine.SessionContextForTest(root), target.CloseTarget, target.CloseTargetParams{TargetID: popup.TargetID()})
+		Expect(err).NotTo(HaveOccurred())
+
+		var clicked error
+		Eventually(done).WithTimeout(5 * time.Second).Should(Receive(&clicked))
+		Expect(clicked).To(targetGone())
+		// The retry this guards against can also be cut short by the session learning the target was
+		// destroyed, so this catches it often rather than always; BilobaMissing's own spec pins the rule.
+		Expect(sentAfter()).NotTo(ContainElement(runtime.Evaluate.Method), "a target that went away is not a page missing biloba.js: nothing reinstalls it and clicks again")
 	})
 })
 

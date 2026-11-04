@@ -37,7 +37,9 @@ commands each session has not answered, and when Chrome detaches a session it ha
 answer for each, with the error Chrome gives a command whose target goes away, and then, whether or
 not there were any, a message that only makes sure everything for the session reached it before the
 detach does.  A command whose caller gave up stays unanswered; maxUnanswered bounds how many of
-those a session keeps.
+those a session keeps.  A command sent after chromedp has taken the detach cannot be answered at all,
+by Chrome or by the connection: chromedp has stopped routing the session's messages by then, and
+drops a command whose write fails.  The engine's Session ends such a wait itself (Session.destroyed).
 
 When the connection fails, the messages chromedp had read and not yet routed are lost with it: the
 browser is gone, and what Biloba reports then is that, not the page's last few events.
@@ -132,11 +134,14 @@ var detachedSessionGoneError = cdproto.Error{Code: -32000, Message: "Inspected t
 // count up from 1, so nothing waits for it.
 const barrierMessageID = -1
 
-// maxUnanswered bounds the unanswered commands a session keeps.  Past it, the oldest half go: a
-// command still unanswered behind that many newer ones is one whose caller gave up (an evaluation
-// awaiting a promise that never settles), and a session that never detaches would otherwise keep
-// every one of them.
-const maxUnanswered = 1024
+// maxUnanswered bounds the unanswered commands a session keeps.  A command whose caller gave up (an
+// evaluation awaiting a promise that never settles) is never answered, and a session that never
+// detaches would otherwise keep every one.  Past the bound the oldest half go, at about 10 bytes an
+// entry.  The connection cannot tell a caller that gave up from one still waiting, so an evicted
+// command whose caller still waits gets no answer when its session detaches and waits for its own
+// deadline instead, as every command did before the connection answered them; it takes that many
+// commands left unanswered on one session at once.
+const maxUnanswered = 65536
 
 // sendHeld sends the commands a writeHook held back, which take returns while no other command is
 // being written.

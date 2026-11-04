@@ -255,21 +255,53 @@ func StallAttachForTest(ctx context.Context, root *Session, targetID target.ID) 
 }
 
 // SwallowNextCommandForTest keeps the next command with method that is sent on session's target from
-// reaching Chrome, so Chrome never answers it.  swallowed is closed once it has.
-func SwallowNextCommandForTest(session *Session, method string) (swallowed <-chan struct{}, restore func()) {
+// reaching Chrome, so Chrome never answers it; the connection still answers it if the session
+// detaches.  swallowed is closed once it has been kept back; sentAfter lists the methods of the
+// commands sent on the session after it.
+func SwallowNextCommandForTest(session *Session, method string) (swallowed <-chan struct{}, sentAfter func() []string, restore func()) {
+	return swallowNextCommand(session, method, false)
+}
+
+// LoseNextCommandForTest is SwallowNextCommandForTest for a command the connection forgets too, as it
+// would a command sent after chromedp took its session's detach: nothing will ever answer it.
+func LoseNextCommandForTest(session *Session, method string) (lost <-chan struct{}, restore func()) {
+	lost, _, restore = swallowNextCommand(session, method, true)
+	return lost, restore
+}
+
+func swallowNextCommand(session *Session, method string, forget bool) (<-chan struct{}, func() []string, func()) {
 	sessionID := chromedp.FromContext(session.ctx).Target.SessionID
 	done := make(chan struct{})
-	var once sync.Once
-	hook := func(_ *connection, msg *cdproto.Message) bool {
-		if msg.SessionID != sessionID || string(msg.Method) != method {
+	var lock sync.Mutex
+	swallowed := false
+	var after []string
+	hook := func(conn *connection, msg *cdproto.Message) bool {
+		if msg.SessionID != sessionID {
 			return false
 		}
-		took := false
-		once.Do(func() { took = true; close(done) })
-		return took
+		lock.Lock()
+		defer lock.Unlock()
+		if swallowed {
+			after = append(after, string(msg.Method))
+			return false
+		}
+		if string(msg.Method) != method {
+			return false
+		}
+		swallowed = true
+		close(done)
+		if forget {
+			conn.answered(msg.SessionID, msg.ID)
+		}
+		return true
 	}
 	previous := writeHook.Swap(&hook)
-	return done, func() { writeHook.CompareAndSwap(&hook, previous) }
+	sentAfter := func() []string {
+		lock.Lock()
+		defer lock.Unlock()
+		return append([]string(nil), after...)
+	}
+	return done, sentAfter, func() { writeHook.CompareAndSwap(&hook, previous) }
 }
 
 // HasFrameWorldsForTest reports whether root's connection still keeps a frame-world record for

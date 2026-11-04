@@ -108,6 +108,19 @@ func EncodeArgs(args ...any) (string, error) {
 	return out, nil
 }
 
+// BilobaMissing reports whether err, from calling biloba.js's handler (or, with handler "", from a
+// script), is a page without biloba.js: a document that turned over before it was installed in it, or
+// a page that cleared _biloba.  It is the one failure both clients reinstall biloba.js and run again
+// for.  Anything else, a target that has gone away included, is the answer.
+func BilobaMissing(err error, handler string) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "_biloba is not defined") ||
+		(handler != "" && strings.Contains(message, "Cannot read properties of undefined (reading '"+handler+"')"))
+}
+
 // RunHandlerContext invokes one existing biloba.js handler atomically with an encoded selector.
 func RunHandlerContext(ctx context.Context, name string, encodedSelector string, args ...any) (HandlerResponse, error) {
 	return runHandlerContext(ctx, name, encodedSelector, false, args...)
