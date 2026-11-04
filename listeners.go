@@ -90,9 +90,10 @@ func (b *Biloba) listenForCrashOnTheBrowser() error {
 
 // watchForTheTabClosing records the tab closing: Chrome detaches the tab's session when its target
 // goes away, whoever closed it, and when Close detaches it.  A renderer crash leaves the session
-// attached, so a crashed tab can still be navigated back.  It is the first thing setUpListeners
-// does, and engine.WatchTargetGone also catches a tab that closed before it was watched (a popup that
-// closed while it was being attached), so no setup command waits on a tab that is gone.
+// attached, so a crashed tab can still be navigated back.  It is registered right after the tab's
+// attach, before its first setup command (ConnectToChrome, registerTabFor), and engine.WatchTargetGone
+// also catches a tab that closed before it was watched (a popup that closed while it was being
+// attached), so no setup command waits on a tab that is gone.
 func (b *Biloba) watchForTheTabClosing() error {
 	return engine.WatchTargetGone(b.Context, func() {
 		b.destroyed.Mark()
@@ -107,12 +108,10 @@ func (b *Biloba) watchForTheTabClosing() error {
 // messages, in the order Chrome sent the events (see engine.ListenTarget), which also delivers the
 // tab's replies, so none of them may wait on the tab's own commands: the handlers that answer Chrome
 // (paused requests, dialogs) do so from a goroutine.
+//
+// The tab is already watched for closing (watchForTheTabClosing): its caller registers that before the
+// tab's first setup command.
 func (b *Biloba) setUpListeners() {
-	// first: it sends no command, and every command below waits on a tab that may already be gone
-	if err := b.watchForTheTabClosing(); err != nil {
-		b.gt.Fatalf("failed to watch for the tab closing: %s", err)
-		return
-	}
 	b.configureDownloadBehavior()
 	b.enableCrashReporting()
 	b.installBilobaOnEveryDocument()

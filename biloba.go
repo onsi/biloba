@@ -242,7 +242,7 @@ func (b *Biloba) applyHighFidelityViewport() error {
 	if !b.ChromeConnection.HighFidelity || b.ChromeConnection.WindowWidth <= 0 || b.ChromeConnection.WindowHeight <= 0 {
 		return nil
 	}
-	return retryTransientCDP(func() error {
+	return b.retryTransientCDP(func() error {
 		return b.runEngine("apply the high-fidelity viewport emulation", func(ctx context.Context) error {
 			return engine.EmulateViewportContext(ctx,
 				b.ChromeConnection.WindowWidth,
@@ -287,7 +287,7 @@ func (b *Biloba) reassertViewportForCompositor() {
 // and spawned) must opt in; it is harmless in the chrome-headless-shell lane, which already treats its
 // page as focused.
 func (b *Biloba) applyFocusEmulation() error {
-	return retryTransientCDP(func() error {
+	return b.retryTransientCDP(func() error {
 		return b.runEngine("enable focus emulation", func(ctx context.Context) error {
 			return engine.SetFocusEmulationContext(ctx)
 		})
@@ -709,6 +709,11 @@ func ConnectToChrome(ginkgoT GinkgoTInterface, options ...BilobaConfigOption) *B
 		ginkgoT.Fatalf("failed to connect to chrome: %s", err)
 		return nil
 	}
+	// before the root's first setup command, as for every tab (see watchForTheTabClosing)
+	if err := b.watchForTheTabClosing(); err != nil {
+		ginkgoT.Fatalf("failed to watch the root tab: %s", err)
+		return nil
+	}
 
 	// Give this root tab the high-fidelity viewport emulation (see applyHighFidelityViewport); a no-op
 	// in the default chrome-headless-shell lane.
@@ -823,8 +828,9 @@ func (b *Biloba) bootstrapIsolatedTab(allocatorContext context.Context, bootstra
 // parallel load any one can transiently fail - and because they sit *outside* the bootstrap retry, an
 // un-retried failure surfaces as a spurious connect/tab-setup failure (and, in the failure-capturing
 // test harness, a nil tab).  Returns nil on the first success, or the last error after exhausting
-// attempts.
-func retryTransientCDP(fn func() error) error {
+// attempts.  A tab that closed is not transient: the error is returned at once, since every attempt
+// after it would be refused, or would wait on a target that will never answer.
+func (b *Biloba) retryTransientCDP(fn func() error) error {
 	var lastErr error
 	for attempt := range connectAttempts {
 		if attempt > 0 {
@@ -833,6 +839,9 @@ func retryTransientCDP(fn func() error) error {
 		}
 		if lastErr = fn(); lastErr == nil {
 			return nil
+		}
+		if b.targetGone() {
+			return lastErr
 		}
 	}
 	return lastErr
@@ -1688,6 +1697,11 @@ func (b *Biloba) registerTabFor(targetID target.ID, parent context.Context, crea
 		if probeErr == nil {
 			break
 		}
+		if engine.TargetGone(c) {
+			// it closed under the attach (a popup closing itself): another attempt would wait on nothing
+			cancel()
+			return nil
+		}
 	}
 	if probeErr != nil {
 		cancel()
@@ -1706,11 +1720,22 @@ func (b *Biloba) registerTabFor(targetID target.ID, parent context.Context, crea
 	newG.Context = tracked
 	newG.targetID = chromedp.FromContext(newG.Context).Target.TargetID
 
+	// The tab can close while it is set up (a popup closing itself), and nothing answers a command sent
+	// to a session Chrome has detached.  So it is watched before its first setup command (the watch
+	// also sees a detach from before it), every setup command goes through runEngine, which bounds it
+	// and refuses or interrupts it once the tab has closed, and a tab that closes before it is
+	// registered is skipped, as one that will not attach is.
+	if err := newG.watchForTheTabClosing(); err != nil || newG.targetGone() {
+		cancel()
+		return nil
+	}
 	var browserContextID cdp.BrowserContextID
-	err = retryTransientCDP(func() error {
-		var infoErr error
-		browserContextID, infoErr = engine.TargetBrowserContextContext(c)
-		return infoErr
+	err = newG.retryTransientCDP(func() error {
+		return newG.runEngine("look up the tab's browser context", func(ctx context.Context) error {
+			var infoErr error
+			browserContextID, infoErr = engine.TargetBrowserContextContext(ctx)
+			return infoErr
+		})
 	})
 	if err != nil {
 		cancel()
@@ -1726,6 +1751,10 @@ func (b *Biloba) registerTabFor(targetID target.ID, parent context.Context, crea
 		return nil
 	}
 	newG.setUpListeners()
+	if newG.targetGone() {
+		cancel()
+		return nil
+	}
 
 	b.root.lock.Lock()
 	b.root.tabs[newG.targetID] = newG

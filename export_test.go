@@ -144,6 +144,12 @@ func SetCDPTimeoutsForTest(command time.Duration, await time.Duration) func() {
 // accepts a command and never answers - without actually wedging a renderer, which would peg a CPU
 // for the rest of the run.  Returns a restore func.
 func SetWedgedCDPForTest(fn func() bool) func() {
+	return SetWedgedCDPWhenForTest(func(string) bool { return fn() })
+}
+
+// SetWedgedCDPWhenForTest is SetWedgedCDPForTest for the commands fn picks by what they do (the
+// description runEngine is given: "look up the tab's browser context").  Returns a restore func.
+func SetWedgedCDPWhenForTest(fn func(what string) bool) func() {
 	prev := simulateWedgedCDP
 	simulateWedgedCDP = fn
 	return func() { simulateWedgedCDP = prev }

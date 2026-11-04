@@ -1,6 +1,7 @@
 package biloba_test
 
 import (
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -151,6 +152,50 @@ var _ = Describe("Tabs", func() {
 				popup.StartScreencast(biloba.ScreencastOptions{})
 				closeThePopup()
 				Expect(popup.Close()).To(Succeed())
+			})
+		})
+
+		Context("when a spawned tab closes while Biloba is setting it up", func() {
+			It("leaves it out of the tabs, without waiting on it or retrying its setup", func() {
+				b.Navigate(fixtureServer + "/dom.html")
+				Eventually("#hello").Should(b.Exist())
+				// the popup's setup lookup goes unanswered until something ends it
+				var lookups atomic.Int32
+				DeferCleanup(biloba.SetWedgedCDPWhenForTest(func(what string) bool {
+					if what == "look up the tab's browser context" {
+						lookups.Add(1)
+						return true
+					}
+					return false
+				}))
+				b.Run(`window.popup = window.open("/dom.html?closing", "_blank"); null`)
+				var popupID target.ID
+				Eventually(func() target.ID {
+					targets, err := chromedp.Targets(b.Context)
+					Ω(err).ShouldNot(HaveOccurred())
+					for _, info := range targets {
+						if strings.Contains(info.URL, "closing") {
+							popupID = info.TargetID
+						}
+					}
+					return popupID
+				}).ShouldNot(BeEmpty())
+
+				done := make(chan biloba.Tabs, 1)
+				go func() {
+					defer GinkgoRecover()
+					done <- b.AllSpawnedTabs()
+				}()
+				Eventually(lookups.Load).Should(BeNumerically(">", 0), "the registration got as far as setting the popup up")
+				start := time.Now()
+				_, err := chromedp.CallBrowser(b.Context, target.CloseTarget, target.CloseTargetParams{TargetID: popupID})
+				Ω(err).ShouldNot(HaveOccurred())
+
+				var tabs biloba.Tabs
+				Eventually(done).WithTimeout(5 * time.Second).Should(Receive(&tabs))
+				Ω(time.Since(start)).Should(BeNumerically("<", 5*time.Second), "well under the 30s backstop")
+				Ω(tabs.Find(b.TabMatching().WithURL(ContainSubstring("closing")))).Should(BeNil(), "a tab gone before it was registered is skipped")
+				Ω(lookups.Load()).Should(Equal(int32(1)), "a tab that closed is not retried")
 			})
 		})
 

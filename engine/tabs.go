@@ -130,7 +130,7 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 		return nil, contextError("attach tab", err)
 	}
 	// (asking the connection too: a setup command its target took with it fails before the watch runs)
-	isGone := func() bool { return gone.Crashed() || targetGone(tabCtx) }
+	isGone := func() bool { return gone.Crashed() || TargetGone(tabCtx) }
 	skipGone := func() (*Session, error) {
 		cancelTab()
 		return nil, nil
@@ -312,6 +312,9 @@ func attachProbeSucceeds(ctx context.Context, tabCtx context.Context, probe *Att
 		case err := <-done:
 			if err == nil {
 				return true
+			}
+			if TargetGone(tabCtx) {
+				return false // it closed under the attach: another attempt would wait on nothing
 			}
 		case <-time.After(tabAttachTimeout):
 			return false // a genuine wedge; a context timeout cannot unblock it

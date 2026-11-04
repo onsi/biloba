@@ -66,8 +66,9 @@ var cdpAwaitTimeout = 2 * time.Minute
 // of dispatching to Chrome.  It is the seam cdp_test.go uses to exercise the wedge path without
 // actually wedging a renderer - a real infinite-loop renderer would keep a CPU pegged for the rest of
 // the run, which under `make stress-test`'s 41 repeats is an unacceptable price for one spec.  nil
-// (the default) means "dispatch for real".  Overridden from tests via SetWedgedCDPForTest.
-var simulateWedgedCDP func() bool
+// (the default) means "dispatch for real".  It is told what the command does.  Overridden from tests
+// via SetWedgedCDPForTest and SetWedgedCDPWhenForTest.
+var simulateWedgedCDP func(what string) bool
 
 // cdpContext bounds a single low-level CDP command with timeout.  The returned context is always
 // parented on b.Context so chromedp's executor stays in the chain (a user's WithContext is typically
@@ -169,13 +170,13 @@ once with tab_closed, and one already waiting is interrupted, as the daemon's Se
 */
 func (b *Biloba) runEngineRecoveringIn(ctx context.Context, timeout time.Duration, what string, run func(context.Context) error) error {
 	destroyed := b.destroyedSignal()
-	if destroyed.Crashed() {
+	if b.targetGone() {
 		return b.diagnoseCDPError(what, timeout, errTabClosedNotSent)
 	}
 	ctx, cancel := destroyed.Interrupt(ctx)
 	defer cancel()
 	var err error
-	if simulateWedgedCDP != nil && simulateWedgedCDP() {
+	if simulateWedgedCDP != nil && simulateWedgedCDP(what) {
 		<-ctx.Done()
 		err = ctx.Err()
 	} else {
@@ -196,7 +197,7 @@ func (b *Biloba) diagnoseCDPError(what string, timeout time.Duration, err error)
 	}
 	// Each diagnosis is built as a plain string and handed to wrapCDPError, which does the one
 	// error-wrapping fmt.Errorf in this file.
-	if b.destroyedSignal().Crashed() && !b.browserGone() {
+	if b.targetGone() && !b.browserGone() {
 		return wrapCDPError(fmt.Sprintf("tab_closed: this tab was closed, so Chrome could not %s.\n"+
 			"Chrome detached the tab's target - the page closed itself (window.close()), its opener closed it, or Close() did.\n"+
 			"A closed tab cannot come back: run the rest of the spec on another tab.", what), err)
@@ -264,11 +265,31 @@ func (b *Biloba) destroyedSignal() *engine.CrashSignal {
 	return b.destroyed
 }
 
+// targetGone reports whether Chrome has detached this tab, as soon as the connection has read it
+// (engine.TargetGone), which can be before the tab's own listener has marked destroyed: a command
+// whose answer the target took with it fails just ahead of that listener.  It marks destroyed then.
+// A frame handle asks about its tab: an out-of-process frame's own target is the frame's to report.
+func (b *Biloba) targetGone() bool {
+	destroyed := b.destroyedSignal()
+	if destroyed.Crashed() {
+		return true
+	}
+	tab := b
+	if b.frame != nil {
+		tab = b.frame.owner
+	}
+	if tab != nil && tab.Context != nil && engine.TargetGone(tab.Context) {
+		destroyed.Mark()
+		return true
+	}
+	return false
+}
+
 // tabClosed reports whether this tab is gone: closed through Biloba (its context is done) or closed
 // by the page or its opener (Chrome detached it).  A cleanup that would restore something on the tab
 // skips a closed one: what it would restore went with it.
 func (b *Biloba) tabClosed() bool {
-	return b.Context.Err() != nil || b.destroyedSignal().Crashed()
+	return b.Context.Err() != nil || b.targetGone()
 }
 
 // browserGone reports whether the connection to the Chrome process itself has gone away.  chromedp
