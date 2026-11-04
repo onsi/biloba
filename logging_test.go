@@ -108,6 +108,15 @@ var _ = Describe("Console messages and page errors", func() {
 		})
 
 		It("keeps the most recent 1000 of each", func() {
+			// The fixture's own failed requests are logged too, and under load one can land in the middle
+			// of the burst below: let them arrive first, so the burst is the last thing recorded.
+			Eventually(func() []string {
+				texts := []string{}
+				for _, message := range b.AllConsoleMessages() {
+					texts = append(texts, message.Text)
+				}
+				return texts
+			}).Should(ContainElements(ContainSubstring("status of 404"), ContainSubstring("status of 500")))
 			b.Run(`for (let i = 0; i < 1005; i++) { console.debug(i); setTimeout(() => { throw new Error("boom " + i) }) }`)
 			Eventually(func() string { m := b.AllConsoleMessages(); return m[len(m)-1].Text }).Should(Equal("1004"))
 			Ω(b.AllConsoleMessages()).Should(HaveLen(1000))
