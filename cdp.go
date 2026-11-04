@@ -157,8 +157,23 @@ func (b *Biloba) runEngineIn(ctx context.Context, timeout time.Duration, what st
 // errCommandNotSent is the underlying error of a command refused because the tab's renderer crashed.
 var errCommandNotSent = errors.New("the renderer had already crashed, so the command was not sent")
 
-// runEngineRecoveringIn is runEngineIn for the one command a crashed tab still accepts: a navigation.
+// errTabClosedNotSent is the underlying error of a command refused because the tab had closed.
+var errTabClosedNotSent = errors.New("the tab had already closed, so the command was not sent")
+
+/*
+runEngineRecoveringIn is runEngineIn for the one command a crashed tab still accepts: a navigation.
+
+A closed tab accepts nothing, a navigation included.  Chrome answers no command sent to a target it
+has detached, and chromedp drops whatever arrives for it, so once the tab closes a command fails at
+once with tab_closed, and one already waiting is interrupted, as the daemon's Session does.
+*/
 func (b *Biloba) runEngineRecoveringIn(ctx context.Context, timeout time.Duration, what string, run func(context.Context) error) error {
+	destroyed := b.destroyedSignal()
+	if destroyed.Crashed() {
+		return b.diagnoseCDPError(what, timeout, errTabClosedNotSent)
+	}
+	ctx, cancel := destroyed.Interrupt(ctx)
+	defer cancel()
 	var err error
 	if simulateWedgedCDP != nil && simulateWedgedCDP() {
 		<-ctx.Done()
@@ -171,8 +186,8 @@ func (b *Biloba) runEngineRecoveringIn(ctx context.Context, timeout time.Duratio
 
 // diagnoseCDPError explains WHY a command failed when Biloba can tell, and otherwise hands the error
 // back untouched.  A deadline alone stops the hang; naming the cause is what makes the failure
-// actionable, so the three cases the issue asks for get their own vocabulary - page_crashed,
-// browser_gone, deadline_exceeded.  Every other error (a thrown JS exception, a missing binding, a
+// actionable, so the cases Biloba can tell get their own vocabulary - tab_closed, page_crashed,
+// browser_gone, deadline_exceeded (and frame_detached for a frame handle).  Every other error (a thrown JS exception, a missing binding, a
 // transient "target navigated or closed") passes through verbatim: callers pattern-match on some of
 // them, and wrapping an ordinary bug in wedge language would be worse than saying nothing.
 func (b *Biloba) diagnoseCDPError(what string, timeout time.Duration, err error) error {
@@ -181,6 +196,11 @@ func (b *Biloba) diagnoseCDPError(what string, timeout time.Duration, err error)
 	}
 	// Each diagnosis is built as a plain string and handed to wrapCDPError, which does the one
 	// error-wrapping fmt.Errorf in this file.
+	if b.destroyedSignal().Crashed() && !b.browserGone() {
+		return wrapCDPError(fmt.Sprintf("tab_closed: this tab was closed, so Chrome could not %s.\n"+
+			"Chrome detached the tab's target - the page closed itself (window.close()), its opener closed it, or Close() did.\n"+
+			"A closed tab cannot come back: run the rest of the spec on another tab.", what), err)
+	}
 	if b.frame != nil && (engine.FrameContextGone(err) || b.Context.Err() != nil) {
 		return frameDetachedError(what, err)
 	}
@@ -234,6 +254,21 @@ func (b *Biloba) crashSignal() *engine.CrashSignal {
 		return b.frame.owner.crashSignal()
 	}
 	return b.crash
+}
+
+// destroyedSignal is this tab's record that its target went away; a frame handle shares its tab's.
+func (b *Biloba) destroyedSignal() *engine.CrashSignal {
+	if b.frame != nil {
+		return b.frame.owner.destroyedSignal()
+	}
+	return b.destroyed
+}
+
+// tabClosed reports whether this tab is gone: closed through Biloba (its context is done) or closed
+// by the page or its opener (Chrome detached it).  A cleanup that would restore something on the tab
+// skips a closed one: what it would restore went with it.
+func (b *Biloba) tabClosed() bool {
+	return b.Context.Err() != nil || b.destroyedSignal().Crashed()
 }
 
 // browserGone reports whether the connection to the Chrome process itself has gone away.  chromedp

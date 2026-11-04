@@ -486,6 +486,14 @@ browser_gone: the connection to Chrome is closed, so Chrome could not capture th
 The browser process is no longer there - it crashed, ran out of memory, or was killed.
 ```
 
+```
+tab_closed: this tab was closed, so Chrome could not evaluate JavaScript in the page.
+Chrome detached the tab's target - the page closed itself (window.close()), its opener closed it, or Close() did.
+A closed tab cannot come back: run the rest of the spec on another tab.
+```
+
+Chrome answers nothing sent to a tab it has closed, so once it closes, a command on it fails at once with `tab_closed`, a navigation included, and a command that was already waiting on it is interrupted.  The tab's cleanups (restoring its window size or emulation, stopping its screencast) are skipped, since what they would restore went with it, and `Close()` on it still succeeds.
+
 Once Chrome has announced the crash, Biloba sends that tab nothing but a navigation.  Every other command fails at once with `page_crashed`, and a command that was already waiting on the renderer is interrupted when the announcement arrives.  Chrome announces a crash promptly on macOS and can take several seconds to do so on Linux, so a command issued in between waits for the announcement and then reports `page_crashed`; only a crash Chrome never announces runs out the backstop and reports `deadline_exceeded`.  A polling method such as `b.Click` keeps retrying until its own deadline, and its timeout message carries the `page_crashed` cause.
 
 Navigating the tab is how it comes back: the navigation is still sent, gives the tab a fresh renderer, and clears the crash.  Chrome refuses a navigation sent before that new renderer exists, so while a crash is recorded Biloba retries a failed navigation once.  `Prepare` navigates a crashed root tab before it resets anything else.  Wait for `page_crashed` before you navigate: on Linux, a tab navigated before Chrome announced the crash has stayed dead in our testing, with every later command on it failing.  Once Chrome has announced it, navigating brings the tab back on macOS and Linux.  Running the rest of the spec on a new tab (`b.NewTab()`) is always sound too.  A gone browser is not recoverable at all.

@@ -65,7 +65,7 @@ var _ = ginkgo.Describe("how Biloba's own source talks to Chrome", ginkgo.Label(
 			"A tab's Context carries no deadline, so a command sent straight to it waits on a wedged Chrome\n"+
 				"forever - the hang in issue #9, where the suite died on its own timeout with no failing spec.\n"+
 				"Send it through b.runCDP(\"what it does\", actions...) instead, which applies the backstop\n"+
-				"deadline and names the cause (page_crashed / browser_gone / deadline_exceeded).  A command\n"+
+				"deadline and names the cause (tab_closed / page_crashed / browser_gone / deadline_exceeded).  A command\n"+
 				"whose wait IS the user's wait - a Cat 5a waiting command - uses b.waitingContext(default)\n"+
 				"and b.runCDPIn.  See cdp.go.  Offending lines:\n  %s", strings.Join(offenders, "\n  "))
 	})
@@ -82,7 +82,7 @@ var _ = ginkgo.Describe("diagnosing why a command failed", ginkgo.Label("no-brow
 	underlying := errors.New("some underlying failure")
 
 	ginkgo.BeforeEach(func() {
-		b = &Biloba{lock: &sync.Mutex{}, state: newTabState(), crash: &engine.CrashSignal{}}
+		b = &Biloba{lock: &sync.Mutex{}, state: newTabState(), crash: &engine.CrashSignal{}, destroyed: &engine.CrashSignal{}}
 	})
 
 	ginkgo.It("passes a healthy call through as nil", func() {
@@ -101,6 +101,23 @@ var _ = ginkgo.Describe("diagnosing why a command failed", ginkgo.Label("no-brow
 		err := b.diagnoseCDPError("dispatch keyboard input", 250*time.Millisecond, context.DeadlineExceeded)
 		gomega.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("deadline_exceeded: Chrome did not dispatch keyboard input within 250ms")))
 		gomega.Expect(errors.Is(err, context.DeadlineExceeded)).To(gomega.BeTrue())
+	})
+
+	ginkgo.It("names a closed tab, and says it cannot come back", func() {
+		b.destroyed.Mark()
+		err := b.diagnoseCDPError("evaluate JavaScript in the page", time.Second, underlying)
+		gomega.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("tab_closed: this tab was closed, so Chrome could not evaluate JavaScript in the page")))
+		gomega.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("A closed tab cannot come back")))
+		gomega.Expect(errors.Is(err, underlying)).To(gomega.BeTrue())
+	})
+
+	ginkgo.It("prefers the closed tab to a crash or a deadline, since nothing recovers it", func() {
+		b.destroyed.Mark()
+		b.crash.Mark()
+		err := b.diagnoseCDPError("evaluate JavaScript in the page", time.Second, context.DeadlineExceeded)
+		gomega.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("tab_closed")))
+		gomega.Expect(err).NotTo(gomega.MatchError(gomega.ContainSubstring("page_crashed")))
+		gomega.Expect(err).NotTo(gomega.MatchError(gomega.ContainSubstring("deadline_exceeded")))
 	})
 
 	ginkgo.It("prefers the crash to the deadline, since the crash is the reason for the deadline", func() {
@@ -143,7 +160,7 @@ var _ = ginkgo.Describe("running a command on a crashed tab", ginkgo.Label("no-b
 	var b *Biloba
 
 	ginkgo.BeforeEach(func() {
-		b = &Biloba{lock: &sync.Mutex{}, state: newTabState(), crash: &engine.CrashSignal{}}
+		b = &Biloba{lock: &sync.Mutex{}, state: newTabState(), crash: &engine.CrashSignal{}, destroyed: &engine.CrashSignal{}}
 	})
 
 	ginkgo.It("refuses the command at once, without sending it, once Chrome has announced the crash", func() {
@@ -183,6 +200,41 @@ var _ = ginkgo.Describe("running a command on a crashed tab", ginkgo.Label("no-b
 		b.crash.Mark()
 		b.handleEventFrameNavigated(&page.EventFrameNavigated{Frame: &cdp.Frame{ID: "main"}})
 		gomega.Expect(b.runEngineIn(context.Background(), time.Minute, "evaluate JavaScript in the page", func(context.Context) error { return nil })).To(gomega.Succeed())
+	})
+})
+
+// A closed tab is the crash's counterpart with no way back: Chrome answers nothing sent to a target it
+// detached, so the same two orderings are pinned, and a navigation is refused too.
+var _ = ginkgo.Describe("running a command on a closed tab", ginkgo.Label("no-browser"), func() {
+	var b *Biloba
+
+	ginkgo.BeforeEach(func() {
+		b = &Biloba{lock: &sync.Mutex{}, state: newTabState(), crash: &engine.CrashSignal{}, destroyed: &engine.CrashSignal{}}
+	})
+
+	ginkgo.It("refuses a command, a navigation included, at once and without sending it", func() {
+		b.destroyed.Mark()
+		sent := false
+		send := func(context.Context) error {
+			sent = true
+			return nil
+		}
+		err := b.runEngineIn(context.Background(), time.Minute, "evaluate JavaScript in the page", send)
+		gomega.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("tab_closed: this tab was closed, so Chrome could not evaluate JavaScript in the page")))
+		err = b.runEngineRecoveringIn(context.Background(), time.Minute, "navigate", send)
+		gomega.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("tab_closed: this tab was closed, so Chrome could not navigate")))
+		gomega.Expect(sent).To(gomega.BeFalse())
+	})
+
+	ginkgo.It("interrupts a command waiting on the tab when it closes, rather than at its deadline", func() {
+		time.AfterFunc(50*time.Millisecond, b.destroyed.Mark)
+		start := time.Now()
+		err := b.runEngineIn(context.Background(), time.Minute, "evaluate JavaScript in the page", func(ctx context.Context) error {
+			<-ctx.Done() // a command nothing will answer
+			return ctx.Err()
+		})
+		gomega.Expect(time.Since(start)).To(gomega.BeNumerically("<", 5*time.Second))
+		gomega.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("tab_closed: this tab was closed")))
 	})
 })
 

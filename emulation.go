@@ -74,6 +74,9 @@ func (b *Biloba) SetMedia(media Media) {
 		return
 	}
 	b.gt.DeferCleanup(func() {
+		if b.tabClosed() {
+			return // the tab is closed, and its emulation with it
+		}
 		if err := b.setMedia(previous); err != nil {
 			b.gt.Fatalf("failed to reset the emulated media: %s", err.Error())
 		}
@@ -159,6 +162,9 @@ func (b *Biloba) SetUserAgent(userAgent string) {
 		return
 	}
 	b.gt.DeferCleanup(func() {
+		if b.tabClosed() {
+			return // the tab is closed, and its user agent with it
+		}
 		if err := b.setUserAgent(previous); err != nil {
 			b.gt.Fatalf("failed to reset the user agent: %s", err.Error())
 		}
@@ -349,7 +355,7 @@ func (b *Biloba) SetPermissions(origin string, permissions map[Permission]Permis
 	record.grants = grants
 	b.root.lock.Unlock()
 	b.gt.DeferCleanup(func() {
-		if b.Context.Err() != nil {
+		if b.tabClosed() {
 			return
 		}
 		if err := b.restorePermissions(previous); err != nil {
@@ -378,7 +384,7 @@ func (b *Biloba) ResetPermissions() {
 		return
 	}
 	b.gt.DeferCleanup(func() {
-		if b.Context.Err() != nil {
+		if b.tabClosed() {
 			return
 		}
 		if err := b.restorePermissions(previous); err != nil {
@@ -625,7 +631,7 @@ func emulate[T comparable](b *Biloba, method, noun string, setting func(*emulati
 		return
 	}
 	b.gt.DeferCleanup(func() {
-		if b.Context.Err() != nil {
+		if b.tabClosed() {
 			return // the tab is closed, and its emulation with it
 		}
 		if err := applyEmulation(b, noun, setting, previous, send); err != nil {

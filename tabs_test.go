@@ -1,6 +1,7 @@
 package biloba_test
 
 import (
+	"sync/atomic"
 	"time"
 
 	"github.com/chromedp/cdproto/target"
@@ -86,6 +87,61 @@ var _ = Describe("Tabs", func() {
 					}
 					return ids
 				}).ShouldNot(ContainElement(popupID))
+			})
+		})
+
+		Context("when a spawned tab closes without Biloba closing it", func() {
+			var popup *biloba.Biloba
+			BeforeEach(func() {
+				b.Navigate(fixtureServer + "/dom.html")
+				Eventually("#hello").Should(b.Exist())
+				b.Run(`window.popup = window.open("/dom.html?popup", "_blank"); null`)
+				Eventually(b).Should(b.HaveSpawnedTab().WithURL(ContainSubstring("popup")))
+				popup = b.AllSpawnedTabs().Find(b.TabMatching().WithURL(ContainSubstring("popup")))
+				Eventually("#hello").Should(popup.Exist())
+			})
+
+			// its opener closes it, which is deterministic where the page closing itself is not
+			closeThePopup := func() {
+				GinkgoHelper()
+				b.Run(`window.popup.close(); null`)
+				Eventually(popup.TabClosedForTest).Should(BeTrue())
+			}
+
+			It("fails a command on it at once, naming the cause, and refuses a navigation", func() {
+				closeThePopup()
+				start := time.Now()
+				popup.Run("1+1")
+				Expect(time.Since(start)).To(BeNumerically("<", 2*time.Second), "well under the 30s backstop")
+				ExpectFailures(ContainSubstring("tab_closed: this tab was closed, so Chrome could not evaluate JavaScript in the page"))
+				popup.Navigate(fixtureServer + "/dom.html")
+				ExpectFailures(ContainSubstring("tab_closed: this tab was closed, so Chrome could not navigate"))
+			})
+
+			It("interrupts a command already waiting on it when it closes", func() {
+				// the popup's next command waits until something ends it, as one Chrome never answers does
+				var wedgeNext atomic.Bool
+				wedgeNext.Store(true)
+				DeferCleanup(biloba.SetWedgedCDPForTest(func() bool { return wedgeNext.CompareAndSwap(true, false) }))
+				done := make(chan struct{})
+				go func() {
+					defer GinkgoRecover()
+					defer close(done)
+					popup.Run("1+1")
+				}()
+				Eventually(wedgeNext.Load).Should(BeFalse(), "the popup's command is waiting")
+				start := time.Now()
+				closeThePopup()
+				Eventually(done).WithTimeout(5 * time.Second).Should(BeClosed())
+				Expect(time.Since(start)).To(BeNumerically("<", 5*time.Second), "well under the 30s backstop")
+				ExpectFailures(ContainSubstring("tab_closed: this tab was closed"))
+			})
+
+			It("closes quietly, and the spec's cleanups on it stay quiet too", func() {
+				popup.SetWindowSize(900, 700)
+				popup.StartScreencast(biloba.ScreencastOptions{})
+				closeThePopup()
+				Expect(popup.Close()).To(Succeed())
 			})
 		})
 

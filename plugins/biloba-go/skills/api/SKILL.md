@@ -60,7 +60,7 @@ Shallow `*Biloba` clones (like `Realistic()`); not reset by `Prepare()`. Use per
 
 Configuring anything that resolves to a **bare matcher** — a `(matcher)` method (`b.HaveScreenshot(name)`, `b.Exist()`, …), or the under-applied dual form (`b.WithTimeout(d).Click()`) — is also a hard error. Configure the `Eventually`, not the matcher.
 
-**Separate from all four: the CDP backstop.** Every command Biloba sends Chrome carries a deadline (30s; 2min for `RunAsync`, whose length is set by the promise your page awaits) so an unresponsive Chrome fails the spec instead of hanging the suite. Not configurable and not a knob — `WithTimeout` bounds retries, not liveness, and does **not** shorten it. Every bucket gets it, including the two that reject every knob. Failures read `deadline_exceeded` / `page_crashed` / `browser_gone` → `debug-failures`.
+**Separate from all four: the CDP backstop.** Every command Biloba sends Chrome carries a deadline (30s; 2min for `RunAsync`, whose length is set by the promise your page awaits) so an unresponsive Chrome fails the spec instead of hanging the suite. Not configurable and not a knob — `WithTimeout` bounds retries, not liveness, and does **not** shorten it. Every bucket gets it, including the two that reject every knob. Failures read `deadline_exceeded` / `page_crashed` / `tab_closed` / `browser_gone` → `debug-failures`.
 
 ## `.Capture(&target)`
 

@@ -984,6 +984,12 @@ type Biloba struct {
 	// a fresh renderer.  It is set once per tab and never replaced, so reading it needs no lock, and it
 	// survives Prepare: Prepare's own navigation is what clears it.  Frame handles use their tab's.
 	crash *engine.CrashSignal
+	// destroyed records that Chrome detached this tab's session: the tab closed, by itself, by its
+	// opener, or by Close.  It is never cleared, since nothing brings a closed tab back.  While it is
+	// set, every command, a navigation included, fails at once with tab_closed, and a command already
+	// waiting when the tab closes is interrupted (see runEngineRecoveringIn).  Frame handles use their
+	// tab's.
+	destroyed *engine.CrashSignal
 
 	// realistic routes DOM interactions (Click/Hover) through real CDP input instead of the
 	// fast atomic JS simulations.  Set on the lightweight view returned by Realistic().
@@ -1094,6 +1100,7 @@ func newBiloba(ginkgoT GinkgoTInterface) *Biloba {
 		media:                     &mediaEmulation{},
 		boundary:                  &engine.DocumentBoundary{},
 		crash:                     &engine.CrashSignal{},
+		destroyed:                 &engine.CrashSignal{},
 	}
 	return b
 }

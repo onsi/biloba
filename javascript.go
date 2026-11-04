@@ -282,6 +282,9 @@ func (b *Biloba) AddInitScript(script string) {
 		return
 	}
 	b.gt.DeferCleanup(func() {
+		if b.tabClosed() {
+			return // the tab is closed, and its init scripts with it
+		}
 		err := b.runEngine("remove an init script", func(ctx context.Context) error {
 			return engine.RemoveInitScriptContext(ctx, identifier)
 		})

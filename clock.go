@@ -264,7 +264,7 @@ func (b *Biloba) uninstallClock(installed *tabClock) error {
 		b.state.clock = nil
 	}
 	b.lock.Unlock()
-	if b.Context.Err() != nil {
+	if b.tabClosed() {
 		return nil
 	}
 	return b.runEngine("uninstall the page clock", func(ctx context.Context) error {

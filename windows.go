@@ -82,6 +82,9 @@ func (b *Biloba) SetWindowSize(width, height int, opts ...DeviceOption) {
 	}
 
 	b.gt.DeferCleanup(func() {
+		if b.tabClosed() {
+			return // the tab is closed, and its window size with it
+		}
 		resetOpts := []chromedp.EmulateViewportOption{}
 		if b.ChromeConnection.HighFidelity {
 			resetOpts = append(resetOpts, emulateViewportMatchingScreen)

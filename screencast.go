@@ -174,13 +174,16 @@ func (rec *ScreencastRecording) Stop() []ScreencastFrame {
 	rec.stopped = true
 	rec.lock.Unlock()
 	if !alreadyStopped {
-		if b.Context.Err() == nil {
+		if !b.tabClosed() {
 			if err := b.runEngine("stop the screencast", rec.stop); err != nil {
 				b.gt.Fatalf("failed to stop the screencast: %s", err.Error())
 			}
 		} else {
-			// A closed tab sends no more frames and cannot answer a stop; this only drops the listener.
-			_ = rec.stop(b.Context)
+			// A closed tab sends no more frames and cannot answer a stop; this only drops the listener,
+			// with a context that is already done so the stop command fails at once.
+			gone, cancel := context.WithCancel(b.Context)
+			cancel()
+			_ = rec.stop(gone)
 		}
 		b.lock.Lock()
 		if b.state.screencast == rec {

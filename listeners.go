@@ -12,6 +12,7 @@ import (
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/target"
+	"github.com/chromedp/chromedp"
 	"github.com/onsi/biloba/engine"
 )
 
@@ -80,10 +81,22 @@ func (b *Biloba) installBilobaOnEveryDocument() {
 //
 // The event carries a TargetID because it is not scoped to a session, so it has to be filtered - every
 // tab sees every tab's crash otherwise.
+//
+// The same listener records the tab closing: Chrome detaches the tab's session (browser-level
+// Target.detachedFromTarget) when its target goes away, whoever closed it, and when Close detaches it.
+// A renderer crash leaves the session attached, so a crashed tab can still be navigated back.
 func (b *Biloba) listenForCrashOnTheBrowser() error {
+	session := chromedp.FromContext(b.Context).Target.SessionID
 	return engine.ListenBrowser(b.Context, func(ev any) {
-		if crashed, ok := ev.(*target.EventTargetCrashed); ok && crashed.TargetID == b.targetID {
-			b.handleEventTargetCrashed(nil)
+		switch ev := ev.(type) {
+		case *target.EventTargetCrashed:
+			if ev.TargetID == b.targetID {
+				b.handleEventTargetCrashed(nil)
+			}
+		case *target.EventDetachedFromTarget:
+			if ev.SessionID == session {
+				b.destroyed.Mark()
+			}
 		}
 	})
 }

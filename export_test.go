@@ -152,6 +152,9 @@ func SetWedgedCDPForTest(fn func() bool) func() {
 // PageCrashedForTest exposes this tab's Inspector.targetCrashed flag for cdp_test.go.
 func (b *Biloba) PageCrashedForTest() bool { return b.pageCrashed() }
 
+// TabClosedForTest reports whether Biloba has seen Chrome detach this tab, for tabs_test.go.
+func (b *Biloba) TabClosedForTest() bool { return b.destroyedSignal().Crashed() }
+
 // SetTransientReadErrorForTest overrides the location()/title() read-error injection seam so
 // navigation_test.go can simulate the transient CDP error a live navigation can legitimately throw
 // (e.g. a target swapped mid-navigation) without reproducing the underlying race.  Returns a restore
