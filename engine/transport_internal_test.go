@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto"
+	jsonv2 "github.com/chromedp/cdproto/cdp/jsonv2"
 	"github.com/chromedp/cdproto/target"
 	ginkgo "github.com/onsi/ginkgo/v2"
 	gomega "github.com/onsi/gomega"
@@ -45,6 +46,58 @@ var _ = ginkgo.Describe("a connection's writes", ginkgo.Label("no-browser"), fun
 
 		conn.sendHeld(context.Background(), func() []*cdproto.Message { return held })
 		gomega.Expect(written()).To(gomega.Equal([]int64{1, 3, 2, 4}))
+	})
+})
+
+var _ = ginkgo.Describe("a session that detaches with commands unanswered", ginkgo.Label("no-browser"), func() {
+	ginkgo.It("has them answered with Chrome's target-gone error, then a barrier, before chromedp sees the detach", func() {
+		script := &scriptedConnection{}
+		conn := newConnection(script, nil)
+		for _, msg := range []*cdproto.Message{
+			{ID: 7, SessionID: "S1", Method: "Runtime.evaluate"},
+			{ID: 8, SessionID: "S1", Method: "Runtime.evaluate"},
+			{ID: 9, SessionID: "S1", Method: "Page.reload"},
+			{ID: 10, SessionID: "S2", Method: "Runtime.evaluate"},
+			{ID: 11, Method: "Target.getTargets"},
+		} {
+			gomega.Expect(conn.Write(context.Background(), msg)).To(gomega.Succeed())
+		}
+		detach := protocolEvent("", target.DetachedFromTarget.Method, `{"sessionId":"S1","targetId":"T1"}`)
+		script.messages = []*cdproto.Message{
+			{ID: 8, SessionID: "S1", Result: jsonv2.Value(`{}`)}, // answered before the detach
+			detach,
+			{ID: 10, SessionID: "S2", Result: jsonv2.Value(`{}`)},
+		}
+		var got []cdproto.Message
+		for {
+			var msg cdproto.Message
+			if conn.Read(context.Background(), &msg) != nil {
+				break
+			}
+			got = append(got, msg)
+		}
+		gone := detachedSessionGoneError
+		gomega.Expect(got).To(gomega.Equal([]cdproto.Message{
+			{ID: 8, SessionID: "S1", Result: jsonv2.Value(`{}`)},
+			{ID: 7, SessionID: "S1", Error: &gone},
+			{ID: 9, SessionID: "S1", Error: &gone},
+			{ID: barrierMessageID, SessionID: "S1", Result: jsonv2.Value(`{}`)},
+			*detach,
+			{ID: 10, SessionID: "S2", Result: jsonv2.Value(`{}`)},
+		}))
+		gomega.Expect(conn.unanswered).To(gomega.BeEmpty(), "what was answered, and the detached session, are forgotten")
+	})
+
+	ginkgo.It("answers nothing for a session Chrome detaches under another, which chromedp does not drive", func() {
+		script := &scriptedConnection{}
+		conn := newConnection(script, nil)
+		gomega.Expect(conn.Write(context.Background(), &cdproto.Message{ID: 7, SessionID: "S2", Method: "Runtime.evaluate"})).To(gomega.Succeed())
+		nested := protocolEvent("S1", target.DetachedFromTarget.Method, `{"sessionId":"S2","targetId":"T2"}`)
+		script.messages = []*cdproto.Message{nested}
+		var msg cdproto.Message
+		gomega.Expect(conn.Read(context.Background(), &msg)).To(gomega.Succeed())
+		gomega.Expect(msg).To(gomega.Equal(*nested))
+		gomega.Expect(conn.Read(context.Background(), &msg)).NotTo(gomega.Succeed())
 	})
 })
 

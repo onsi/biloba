@@ -9,6 +9,7 @@ import (
 	"github.com/chromedp/cdproto/accessibility"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/target"
+	"github.com/chromedp/chromedp"
 )
 
 type VisualOperationHooksForTest struct {
@@ -251,6 +252,24 @@ func StallAttachForTest(ctx context.Context, root *Session, targetID target.ID) 
 		return session
 	}
 	return holding, held, release, nil
+}
+
+// SwallowNextCommandForTest keeps the next command with method that is sent on session's target from
+// reaching Chrome, so Chrome never answers it.  swallowed is closed once it has.
+func SwallowNextCommandForTest(session *Session, method string) (swallowed <-chan struct{}, restore func()) {
+	sessionID := chromedp.FromContext(session.ctx).Target.SessionID
+	done := make(chan struct{})
+	var once sync.Once
+	hook := func(_ *connection, msg *cdproto.Message) bool {
+		if msg.SessionID != sessionID || string(msg.Method) != method {
+			return false
+		}
+		took := false
+		once.Do(func() { took = true; close(done) })
+		return took
+	}
+	previous := writeHook.Swap(&hook)
+	return done, func() { writeHook.CompareAndSwap(&hook, previous) }
 }
 
 // HasFrameWorldsForTest reports whether root's connection still keeps a frame-world record for

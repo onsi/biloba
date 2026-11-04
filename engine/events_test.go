@@ -10,6 +10,7 @@ import (
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/runtime"
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -109,6 +110,32 @@ var _ = Describe("a target's listeners", func() {
 		defer lock.Unlock()
 		Expect(seen).To(HaveLen(4), "the console call came before the evaluation's answer")
 		Expect(seen[3]).To(Equal(`"evaluated"`))
+	})
+})
+
+var _ = Describe("a command whose target goes away before Chrome answers it", func() {
+	It("fails as soon as Chrome detaches the target, rather than waiting for an answer that cannot come", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		tab, err := session.NewTab(ctx)
+		Expect(err).NotTo(HaveOccurred())
+
+		swallowed, restore := engine.SwallowNextCommandForTest(tab, runtime.Evaluate.Method)
+		DeferCleanup(restore)
+		done := make(chan error, 1)
+		go func() {
+			_, err := tab.Evaluate(ctx, `1`)
+			done <- err
+		}()
+		Eventually(swallowed).Should(BeClosed())
+		Consistently(done, 200*time.Millisecond).ShouldNot(Receive(), "Chrome never saw the command, so nothing answers it")
+
+		_, err = chromedp.CallBrowser(engine.SessionContextForTest(session), target.CloseTarget, target.CloseTargetParams{TargetID: tab.TargetID()})
+		Expect(err).NotTo(HaveOccurred())
+		var evaluated error
+		Eventually(done).WithTimeout(5 * time.Second).Should(Receive(&evaluated))
+		Expect(evaluated).To(MatchError(ContainSubstring("Inspected target navigated or closed")))
 	})
 })
 

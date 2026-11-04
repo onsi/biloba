@@ -79,8 +79,15 @@ var _ = Describe("lifecycle engine foundations", func() {
 		}, engine.PollPolicy{Timeout: time.Second, Interval: 5 * time.Millisecond})
 		Expect(err).NotTo(HaveOccurred())
 
-		_, err = popup.Evaluate(ctx, `window.close()`)
-		Expect(err).NotTo(HaveOccurred())
+		// Chrome answers an evaluation that closes its own window, or, when the window goes first,
+		// detaches the target without answering, and the evaluation fails as the target is gone.
+		// Either way it returns: bounded, so a regression fails here instead of hanging.
+		closing, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		_, err = popup.Evaluate(closing, `window.close()`)
+		if err != nil {
+			Expect(err).To(MatchError(ContainSubstring("Inspected target navigated or closed")))
+		}
 		Eventually(func() []string { return sessionTargetIDs(browser.Sessions()) }).ShouldNot(ContainElement(string(popup.TargetID())))
 		Expect(popup.Close()).To(Succeed())
 		Expect(root.Prepare(ctx)).To(Succeed())

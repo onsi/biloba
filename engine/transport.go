@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -28,6 +29,14 @@ ahead of a target's listeners, so a registry it kept would tell a listener handl
 console message that the frame's document is already gone.)  A session's record goes when Chrome
 detaches the session.
 
+A command chromedp sends on a session returns only when its answer arrives (or its context ends), and
+chromedp drops whatever arrives for a session once it has seen the session detach.  Chrome does not
+always answer a command whose target goes away under it (an evaluation that closes its own window),
+and chromedp can let the detach overtake an answer Chrome did send.  So the connection keeps the
+commands each session has not answered, and when Chrome detaches the session it hands chromedp an
+answer for each, with the error Chrome gives a command whose target goes away, and then a message
+that only makes sure those answers reached the session before the detach does.
+
 Write passes every command through writeHook, the seam specs use to see and hold commands.
 */
 type connection struct {
@@ -38,6 +47,11 @@ type connection struct {
 
 	mu       sync.Mutex
 	sessions map[target.SessionID]*sessionWorlds
+	// unanswered holds the commands sent on each session that Chrome has not answered yet.
+	unanswered map[target.SessionID]map[int64]bool
+
+	// backlog is what Read hands chromedp before it reads the connection again; only Read uses it.
+	backlog []*cdproto.Message
 
 	// writeMu serializes chromedp's writes with a spec's sending of the commands a hook held back.
 	writeMu sync.Mutex
@@ -53,7 +67,10 @@ type sessionWorlds struct {
 }
 
 func newConnection(tr chromedp.Transport, slowf func(string, ...any)) *connection {
-	return &connection{Transport: tr, slowf: slowf, sessions: map[target.SessionID]*sessionWorlds{}}
+	return &connection{
+		Transport: tr, slowf: slowf,
+		sessions: map[target.SessionID]*sessionWorlds{}, unanswered: map[target.SessionID]map[int64]bool{},
+	}
 }
 
 // writeHook, when set, sees every command a connection sends Chrome, and keeps it back by returning
@@ -63,11 +80,44 @@ var writeHook atomic.Pointer[func(*connection, *cdproto.Message) bool]
 func (c *connection) Write(ctx context.Context, msg *cdproto.Message) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	// recorded before it is sent, since its answer can be read before Write returns, and before a hook
+	// holds it back, since for chromedp it has been sent
+	tracked := msg.SessionID != "" && msg.ID != 0
+	if tracked {
+		c.mu.Lock()
+		if c.unanswered[msg.SessionID] == nil {
+			c.unanswered[msg.SessionID] = map[int64]bool{}
+		}
+		c.unanswered[msg.SessionID][msg.ID] = true
+		c.mu.Unlock()
+	}
 	if hook := writeHook.Load(); hook != nil && (*hook)(c, msg) {
 		return nil
 	}
-	return c.Transport.Write(ctx, msg)
+	err := c.Transport.Write(ctx, msg)
+	if err != nil && tracked {
+		c.answered(msg.SessionID, msg.ID)
+	}
+	return err
 }
+
+func (c *connection) answered(session target.SessionID, id int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if pending := c.unanswered[session]; pending != nil {
+		delete(pending, id)
+		if len(pending) == 0 {
+			delete(c.unanswered, session)
+		}
+	}
+}
+
+// detachedSessionGoneError is what Chrome answers a command whose target goes away under it.
+var detachedSessionGoneError = cdproto.Error{Code: -32000, Message: "Inspected target navigated or closed"}
+
+// barrierMessageID marks the message that follows the answers to a detached session's commands.
+// chromedp's own ids count up from 1, so nothing waits for it.
+const barrierMessageID = -1
 
 // sendHeld sends the commands a writeHook held back, which take returns while no other command is
 // being written.
@@ -79,23 +129,54 @@ func (c *connection) sendHeld(ctx context.Context, take func() []*cdproto.Messag
 	}
 }
 
-// Read is chromedp's: it records a session's frame worlds before chromedp routes the message.
+// Read is chromedp's: it records what the connection keeps before chromedp routes the message.
 func (c *connection) Read(ctx context.Context, msg *cdproto.Message) error {
+	if len(c.backlog) > 0 {
+		*msg = *c.backlog[0]
+		c.backlog[0] = nil
+		c.backlog = c.backlog[1:]
+		return nil
+	}
 	if err := c.Transport.Read(ctx, msg); err != nil {
 		return err
 	}
 	switch method := string(msg.Method); {
+	case msg.ID != 0 && msg.SessionID != "":
+		c.answered(msg.SessionID, msg.ID)
 	case method == target.DetachedFromTarget.Method:
 		// on the browser's session, or on a session for one Chrome attached under it (auto-attach)
-		if session := detachedSession(msg); session != "" {
-			c.mu.Lock()
-			delete(c.sessions, session)
-			c.mu.Unlock()
+		session := detachedSession(msg)
+		if session == "" {
+			break
+		}
+		c.mu.Lock()
+		delete(c.sessions, session)
+		pending := c.unanswered[session]
+		delete(c.unanswered, session)
+		c.mu.Unlock()
+		if msg.SessionID == "" && len(pending) > 0 {
+			c.answerBeforeDetach(session, pending, msg)
 		}
 	case msg.SessionID != "" && frameWorldEvent(method):
 		c.record(msg)
 	}
 	return nil
+}
+
+// answerBeforeDetach puts an answer for each of a detached session's pending commands, and then a
+// barrier, ahead of the detach in msg.  chromedp's reader hands a session's message to the loop that
+// routes it before it reads the next, but the loop takes a detach as soon as the one before it, so the
+// barrier, which chromedp may drop, makes sure the last answer was routed before the detach.
+func (c *connection) answerBeforeDetach(session target.SessionID, pending map[int64]bool, detach *cdproto.Message) {
+	ids := slices.Sorted(maps.Keys(pending))
+	for _, id := range ids {
+		gone := detachedSessionGoneError
+		c.backlog = append(c.backlog, &cdproto.Message{ID: id, SessionID: session, Error: &gone})
+	}
+	detached := *detach
+	c.backlog = append(c.backlog, &cdproto.Message{ID: barrierMessageID, SessionID: session, Result: jsonv2.Value(`{}`)}, &detached)
+	*detach = *c.backlog[0]
+	c.backlog = c.backlog[1:]
 }
 
 func (c *connection) record(msg *cdproto.Message) {
