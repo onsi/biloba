@@ -137,6 +137,15 @@ var _ = Describe("Tabs", func() {
 				ExpectFailures(ContainSubstring("tab_closed: this tab was closed"))
 			})
 
+			It("leaves the next spec's downloads working: its closing reset them, and Prepare sets them again", func() {
+				closeThePopup()
+				b.Prepare() // as the next spec's would
+				b.Navigate(fixtureServer + "/downloads.html")
+				Eventually("#download").Should(b.Exist())
+				b.Click("#download")
+				Eventually(b.AllCompleteDownloads).Should(HaveLen(1))
+			})
+
 			It("closes quietly, and the spec's cleanups on it stay quiet too", func() {
 				popup.SetWindowSize(900, 700)
 				popup.StartScreencast(biloba.ScreencastOptions{})

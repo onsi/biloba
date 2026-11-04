@@ -96,6 +96,10 @@ func (b *Biloba) listenForCrashOnTheBrowser() error {
 		case *target.EventDetachedFromTarget:
 			if ev.SessionID == session {
 				b.destroyed.Mark()
+				if b.root != nil && b.root != b {
+					// a tab closing resets its browser context's download behaviour: Prepare restores it
+					b.root.tabsWentAway.Store(true)
+				}
 			}
 		}
 	})

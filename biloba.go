@@ -990,6 +990,9 @@ type Biloba struct {
 	// waiting when the tab closes is interrupted (see runEngineRecoveringIn).  Frame handles use their
 	// tab's.
 	destroyed *engine.CrashSignal
+	// tabsWentAway, on the root, records that one of its tabs closed since the last Prepare, which then
+	// sets the download behaviour again (see Prepare).
+	tabsWentAway *atomic.Bool
 
 	// realistic routes DOM interactions (Click/Hover) through real CDP input instead of the
 	// fast atomic JS simulations.  Set on the lightweight view returned by Realistic().
@@ -1101,6 +1104,7 @@ func newBiloba(ginkgoT GinkgoTInterface) *Biloba {
 		boundary:                  &engine.DocumentBoundary{},
 		crash:                     &engine.CrashSignal{},
 		destroyed:                 &engine.CrashSignal{},
+		tabsWentAway:              &atomic.Bool{},
 	}
 	return b
 }
@@ -1151,7 +1155,11 @@ func (b *Biloba) Prepare() {
 		// Closing is async (see Close): wait until Chrome has truly destroyed these targets so a
 		// fast-following spec's AllTabs() can't re-discover a dying tab and wedge attaching to it.
 		b.waitUntilTargetsGone(closedTargetIDs)
-		//closing all those tabs means we may have nuked our download config, so we reset it
+	}
+	// Closing a tab resets its browser context's download behaviour, so it is set again when this
+	// Prepare closed tabs, or a tab closed by itself (a popup's window.close(), its opener closing it)
+	// since the last one, which nothing else would set it again for.
+	if wentAway := b.tabsWentAway.Swap(false); len(closedTargetIDs) > 0 || wentAway {
 		b.configureDownloadBehavior()
 	}
 
