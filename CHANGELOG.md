@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Features
+
+### Fixes
+
+## 0.22.0
+
 ### Breaking Changes
 
 - Go: Biloba requires chromedp v0.22.0 or later (see Features).
