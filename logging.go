@@ -58,9 +58,9 @@ func (b *Biloba) handleEventConsoleAPICalled(ev *runtime.EventConsoleAPICalled) 
 	} else {
 		message = strings.Join(out, " - ") + "\n"
 	}
-	b.gt.Printf(b.gt.F("{{gray}}[%s] "+color+"%s{{/}}", engine.TimestampTime(ev.Timestamp).Format("15:04"), message))
+	b.gt.Printf("%s", b.gt.F("{{gray}}[%s] "+color+"%s{{/}}", engine.TimestampTime(ev.Timestamp).Format("15:04"), message))
 	if showStackTrace {
-		b.gt.Printf(b.gt.Fi(1, b.renderStackTrace(ev.StackTrace)))
+		b.gt.Printf("%s", b.gt.Fi(1, b.renderStackTrace(ev.StackTrace)))
 	}
 	if ev.Type == runtime.ConsoleAPICalledTypeError || ev.Type == runtime.ConsoleAPICalledTypeAssert {
 		b.lock.Lock()
@@ -253,7 +253,7 @@ func (b *Biloba) handleEventLogEntryAdded(ev *cdplog.EventEntryAdded) {
 	if timestamp.IsZero() {
 		timestamp = time.Now()
 	}
-	b.gt.Printf(b.gt.F("{{gray}}[%s] "+color+"%s{{/}}\n", timestamp.Format("15:04"), text))
+	b.gt.Printf("%s", b.gt.F("{{gray}}[%s] "+color+"%s{{/}}\n", timestamp.Format("15:04"), text))
 }
 
 // recordPageError adds an uncaught exception to this tab's (or frame's) history without streaming it.
@@ -281,10 +281,10 @@ func (b *Biloba) handleEventExceptionThrown(ev *runtime.EventExceptionThrown) {
 	if timestamp.IsZero() {
 		timestamp = time.Now()
 	}
-	b.gt.Printf(b.gt.F("{{gray}}[%s] {{red}}%s{{/}}\n", timestamp.Format("15:04"), message))
+	b.gt.Printf("%s", b.gt.F("{{gray}}[%s] {{red}}%s{{/}}\n", timestamp.Format("15:04"), message))
 	// like console.error, a one-frame stack adds nothing to the location already printed
 	if ev.ExceptionDetails != nil && ev.ExceptionDetails.StackTrace != nil && len(ev.ExceptionDetails.StackTrace.CallFrames) > 1 {
-		b.gt.Printf(b.gt.Fi(1, b.renderStackTrace(ev.ExceptionDetails.StackTrace)))
+		b.gt.Printf("%s", b.gt.Fi(1, b.renderStackTrace(ev.ExceptionDetails.StackTrace)))
 	}
 	b.lock.Lock()
 	b.state.consoleErrors = append(b.state.consoleErrors, message)

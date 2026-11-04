@@ -173,7 +173,7 @@ func (b *Biloba) handleEventJavascriptDialogOpening(ev *page.EventJavascriptDial
 	b.state.dialogs = append(b.state.dialogs, d)
 	b.lock.Unlock()
 	if handler == nil {
-		b.gt.Printf(b.gt.F("Biloba automatically handled an {{red}}unhandled dialog{{/}} - you should add an explicit dialog handler: %s - %s", d.Type, d.Message))
+		b.gt.Printf("%s", b.gt.F("Biloba automatically handled an {{red}}unhandled dialog{{/}} - you should add an explicit dialog handler: %s - %s", d.Type, d.Message))
 	}
 	b.dismissDialog(response, text)
 }
