@@ -1,5 +1,10 @@
 ## Unreleased
 
+### Breaking Changes
+
+- Go: Biloba requires chromedp v0.22.0 or later (see Features).
+- `engine.ListenTarget` and `engine.ListenBrowser` no longer take method names to filter on: the listener gets every event and type-switches on the ones it wants.
+
 ### Features
 
 - Go: Biloba now uses chromedp v0.22.0, so code that drops to chromedp needs v0.22.0 or later. v0.22.0 brings back an ordered listener, `chromedp.Listen(b.Context, fn)`, the replacement for `ListenTarget` when you need events in order across types. Biloba's behavior does not change; it now uses that listener in place of its own.
