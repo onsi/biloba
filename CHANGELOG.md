@@ -4,6 +4,8 @@
 
 ### Fixes
 
+- Go: Biloba now uses chromedp v0.22.1, which ends a command still waiting on a tab that closes, so Biloba no longer does this itself. Code that drops to chromedp gets an error wrapping `chromedp.ErrTargetDetached` in that case.
+
 ## 0.22.0
 
 ### Breaking Changes

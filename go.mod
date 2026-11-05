@@ -5,7 +5,7 @@ go 1.26
 require (
 	github.com/BourgeoisBear/rasterm v1.1.2
 	github.com/chromedp/cdproto v0.159.0
-	github.com/chromedp/chromedp v0.22.0
+	github.com/chromedp/chromedp v0.22.1
 	github.com/jehiah/agentdetection v0.0.0-20260504180809-d55902bec14c
 	github.com/onsi/ginkgo/v2 v2.34.0
 	github.com/onsi/gomega v1.41.0

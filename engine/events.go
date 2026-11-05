@@ -124,8 +124,8 @@ func WatchTargetGone(ctx context.Context, onGone func()) error {
 
 // TargetGone reports whether Chrome has detached the session ctx's target is attached on, as far as
 // the connection has read, or false for a context not attached yet.  The connection records a detach
-// before it hands chromedp the answers it gives the session's unanswered commands, so a command
-// failing because its target went away already sees it, before any listener has run.  It sends no
+// before chromedp sees it and ends the session's waiting commands, so a command failing because its
+// target went away already sees it, before any listener has run.  It sends no
 // command.
 func TargetGone(ctx context.Context) bool {
 	conn, c, err := connectionFor(ctx)

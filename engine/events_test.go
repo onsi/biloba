@@ -119,6 +119,7 @@ var _ = Describe("a target's listeners", func() {
 func targetGone() OmegaMatcher {
 	return SatisfyAny(
 		MatchError(ContainSubstring("Inspected target navigated or closed")),
+		MatchError(chromedp.ErrTargetDetached),
 		WithTransform(pointerErrorCode, Equal(engine.CodeSessionClosed)),
 	)
 }
@@ -155,7 +156,7 @@ var _ = Describe("a command whose target goes away before Chrome answers it", fu
 		tab, err := session.NewTab(ctx)
 		Expect(err).NotTo(HaveOccurred())
 
-		// as a command sent after chromedp took the detach: neither Chrome nor the connection answers it
+		// Chrome never answers it: the engine reports the target closed, not chromedp's error
 		lost, restore := engine.LoseNextCommandForTest(tab, runtime.Evaluate.Method)
 		DeferCleanup(restore)
 		done := make(chan error, 1)
@@ -194,7 +195,7 @@ var _ = Describe("a command whose target goes away before Chrome answers it", fu
 		Expect(err).NotTo(HaveOccurred())
 
 		// The click's evaluation goes unanswered, as when the window closes before Chrome answers it,
-		// and the popup goes away: the connection answers it with Chrome's target-gone error.
+		// and the popup goes away: chromedp ends it with ErrTargetDetached.
 		swallowed, sentAfter, restore := engine.SwallowNextCommandForTest(popup, runtime.Evaluate.Method)
 		DeferCleanup(restore)
 		done := make(chan error, 1)

@@ -148,8 +148,7 @@ type Session struct {
 	// goroutine rather than under mu; CrashSignal has its own lock.  A recovering navigation clears it.
 	crash CrashSignal
 	// destroyed is marked once Chrome destroys the target, and never cleared: it is the same kind of
-	// announcement as crash, and serial interrupts an operation waiting on the target with it, since
-	// nothing answers a command sent to a target chromedp has seen detach.
+	// announcement as crash, and serial interrupts an operation waiting on the target with it.
 	destroyed CrashSignal
 }
 
@@ -1005,9 +1004,7 @@ func (s *Session) serial(requestCtx context.Context, operation string, run func(
 	}
 	opCtx, cancel := executorContext(s.ctx, requestCtx)
 	defer cancel()
-	// Interrupt an operation waiting on the target when Chrome destroys it: a command sent after
-	// chromedp saw the target detach is never answered, and markTargetDestroyed, which would otherwise
-	// end the wait, needs mu.
+	// Interrupt an operation waiting on the target when Chrome destroys it.
 	opCtx, cancelOnDestroyed := s.destroyed.Interrupt(opCtx)
 	defer cancelOnDestroyed()
 	if s.frameID != "" {
@@ -1032,7 +1029,9 @@ func (s *Session) serial(requestCtx context.Context, operation string, run func(
 	if !recovers && s.hasCrashed() {
 		return pageCrashed()
 	}
-	if s.destroyed.Crashed() {
+	// chromedp ends a command Chrome never answered when the target detaches, which can be before
+	// markTargetDestroyed runs.  A frame's own target going away is its frame's, reported below.
+	if s.destroyed.Crashed() || (s.frameID == "" && errors.Is(err, chromedp.ErrTargetDetached)) {
 		return targetDestroyed()
 	}
 	if requestCtx.Err() != nil {

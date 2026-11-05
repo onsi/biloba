@@ -48,7 +48,7 @@ var _ = Describe("attaching a tab the page spawned", func() {
 	})
 
 	It("skips a tab that closes while it is being set up, rather than waiting on it", func(ctx SpecContext) {
-		// the setup's viewport command goes unanswered, as one sent after chromedp took the detach does
+		// the setup's viewport command goes unanswered, as one does when its tab closes under it
 		lost, restore, err := engine.LoseCommandOnTargetForTest(ctx, root, popup, emulation.SetDeviceMetricsOverride.Method)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(restore)

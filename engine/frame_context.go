@@ -128,6 +128,9 @@ func frameWorldCurrent(ctx context.Context, id cdp.FrameID, expected frameWorld)
 // Chrome can reject evaluation before it announces context destruction. Restrict
 // this classification to protocol errors; page-thrown exceptions keep their meaning.
 func frameContextGone(err error) bool {
+	if errors.Is(err, chromedp.ErrTargetDetached) {
+		return true // chromedp's for a command Chrome never answered: the target went away under it
+	}
 	var protocolErr *cdproto.Error
 	if !errors.As(err, &protocolErr) {
 		return false

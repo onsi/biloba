@@ -255,27 +255,26 @@ func StallAttachForTest(ctx context.Context, root *Session, targetID target.ID) 
 }
 
 // SwallowNextCommandForTest keeps the next command with method that is sent on session's target from
-// reaching Chrome, so Chrome never answers it; the connection still answers it if the session
-// detaches.  swallowed is closed once it has been kept back; sentAfter lists the methods of the
+// reaching Chrome, so Chrome never answers it; chromedp ends it if the session detaches.  swallowed is closed once it has been kept back; sentAfter lists the methods of the
 // commands sent on the session after it.
 func SwallowNextCommandForTest(session *Session, method string) (swallowed <-chan struct{}, sentAfter func() []string, restore func()) {
-	return swallowNextCommand(session, method, false)
+	return swallowNextCommand(session, method)
 }
 
-// LoseNextCommandForTest is SwallowNextCommandForTest for a command the connection forgets too, as it
-// would a command sent after chromedp took its session's detach: nothing will ever answer it.
+// LoseNextCommandForTest is SwallowNextCommandForTest for a spec that only needs the command to go
+// unanswered: Chrome never answers it, and only the session's detach ends the wait.
 func LoseNextCommandForTest(session *Session, method string) (lost <-chan struct{}, restore func()) {
-	lost, _, restore = swallowNextCommand(session, method, true)
+	lost, _, restore = swallowNextCommand(session, method)
 	return lost, restore
 }
 
-func swallowNextCommand(session *Session, method string, forget bool) (<-chan struct{}, func() []string, func()) {
+func swallowNextCommand(session *Session, method string) (<-chan struct{}, func() []string, func()) {
 	sessionID := chromedp.FromContext(session.ctx).Target.SessionID
 	done := make(chan struct{})
 	var lock sync.Mutex
 	swallowed := false
 	var after []string
-	hook := func(conn *connection, msg *cdproto.Message) bool {
+	hook := func(_ *connection, msg *cdproto.Message) bool {
 		if msg.SessionID != sessionID {
 			return false
 		}
@@ -290,9 +289,6 @@ func swallowNextCommand(session *Session, method string, forget bool) (<-chan st
 		}
 		swallowed = true
 		close(done)
-		if forget {
-			conn.answered(msg.SessionID, msg.ID)
-		}
 		return true
 	}
 	previous := writeHook.Swap(&hook)
@@ -305,8 +301,8 @@ func swallowNextCommand(session *Session, method string, forget bool) (<-chan st
 }
 
 // LoseCommandOnTargetForTest is LoseNextCommandForTest for a session not attached yet: the next
-// command with method sent on the next session attached to targetID never reaches Chrome, and the
-// connection forgets it, as it would a command sent after chromedp took the session's detach.
+// command with method sent on the next session attached to targetID never reaches Chrome, so only the
+// session's detach ends the wait.
 func LoseCommandOnTargetForTest(ctx context.Context, root *Session, targetID target.ID, method string) (lost <-chan struct{}, restore func(), err error) {
 	listenCtx, stop := context.WithCancel(root.ctx)
 	context.AfterFunc(ctx, stop)
@@ -329,7 +325,7 @@ func LoseCommandOnTargetForTest(ctx context.Context, root *Session, targetID tar
 		stop()
 		return nil, nil, err
 	}
-	hook := func(conn *connection, msg *cdproto.Message) bool {
+	hook := func(_ *connection, msg *cdproto.Message) bool {
 		lock.Lock()
 		defer lock.Unlock()
 		if taken || session == "" || msg.SessionID != session || string(msg.Method) != method {
@@ -337,7 +333,6 @@ func LoseCommandOnTargetForTest(ctx context.Context, root *Session, targetID tar
 		}
 		taken = true
 		close(done)
-		conn.answered(msg.SessionID, msg.ID)
 		return true
 	}
 	previous := writeHook.Swap(&hook)
