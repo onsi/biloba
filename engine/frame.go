@@ -582,7 +582,8 @@ func (b *Browser) frameTargetContext(ctx context.Context, targetID target.ID) (c
 }
 
 // AttachFrameTargetContext attaches to an out-of-process frame's renderer target and returns a
-// chromedp context for it, already tracked by TrackFrameWorlds, with the function that detaches it.
+// chromedp context for it, carrying its frame-world registry (see NewTabContext), with the function
+// that detaches it.
 // lifetime is the context the attachment lives under - the browser, or the tab that embeds the frame -
 // and cancelling it detaches too; ctx bounds only the attach.  Detaching never closes the target: it
 // belongs to the page that embeds the frame.
@@ -623,10 +624,5 @@ func AttachFrameTargetContext(ctx, lifetime context.Context, targetID target.ID)
 		cancelTarget()
 		return nil, nil, contextError("attach frame target", err)
 	}
-	tracked, err := trackFrameWorlds(targetCtx)
-	if err != nil {
-		cancelTarget()
-		return nil, nil, contextError("attach frame target", err)
-	}
-	return tracked, cancelTarget, nil
+	return targetCtx, cancelTarget, nil
 }

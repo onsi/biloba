@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
 
@@ -35,8 +34,8 @@ the order matters.
 
 A listener sees the events that arrive after it is registered, on a target chromedp has already
 attached, so it misses what the target announced while chromedp attached it.  The one thing Biloba
-needs from that time, the frame-world registry, the connection records itself (see connection in
-transport.go).
+needs from that time, the frame-world registry, is given to chromedp with the context instead
+(chromedp.WithListener; see newTabContext), and sees the target's events from its first.
 */
 
 var connections sync.Map // *chromedp.Browser -> *connection
@@ -93,43 +92,45 @@ func ListenBrowser(ctx context.Context, fn func(any)) error {
 
 /*
 WatchTargetGone calls onGone, once, when Chrome detaches the session ctx's target is attached on (its
-target closed, or the session was detached), or at once if Chrome already has, until ctx is done.
-A listener sees only what arrives after it is registered, so it also asks the connection, which
-records each detach before chromedp's listeners see it: a session that went while it was being set
-up is not missed.  onGone may run on chromedp's reader, so it must not wait on anything.
+target closed, or the session was detached), or soon after the call if Chrome already has, until ctx
+is done.  It waits on chromedp.Detached, so it calls onGone after the target has handed its listeners
+every event, and its commands every answer, that Chrome sent before the detach: by then TargetGone
+reports the target gone, and a command still waiting has failed with chromedp.ErrTargetDetached or is
+about to.  onGone runs on a goroutine of its own.
 */
 func WatchTargetGone(ctx context.Context, onGone func()) error {
-	conn, c, err := connectionFor(ctx)
-	if err != nil {
-		return err
-	}
-	if c.Target == nil {
+	detached, err := chromedp.Detached(ctx)
+	if errors.Is(err, chromedp.ErrNoTarget) {
 		return errors.New("watching a target needs an attached target: run the context once first")
-	}
-	session := c.Target.SessionID
-	var once sync.Once
-	gone := func() { once.Do(onGone) }
-	if err := chromedp.ListenBrowser(ctx, func(ev any) {
-		if detached, ok := ev.(*target.EventDetachedFromTarget); ok && detached.SessionID == session {
-			gone()
-		}
-	}); err != nil {
+	} else if err != nil {
 		return err
 	}
-	if conn.sessionDetached(session) {
-		gone()
-	}
+	go func() {
+		select {
+		case <-detached:
+			onGone()
+		case <-ctx.Done():
+		}
+	}()
 	return nil
 }
 
-// TargetGone reports whether Chrome has detached the session ctx's target is attached on, as far as
-// the connection has read, or false for a context not attached yet.  The connection records a detach
-// before chromedp sees it and ends the session's waiting commands, so a command failing because its
-// target went away already sees it, before any listener has run.  It sends no
-// command.
+// TargetGone reports whether Chrome has detached the session ctx's target is attached on, or false for
+// a context not attached yet.  chromedp marks the detach once the target has handled every message
+// Chrome sent before it, and before it fails the target's waiting commands with
+// chromedp.ErrTargetDetached, so a command failing because its target went away already sees it.  It
+// sends no command and does not wait.
 func TargetGone(ctx context.Context) bool {
-	conn, c, err := connectionFor(ctx)
-	return err == nil && c.Target != nil && conn.sessionDetached(c.Target.SessionID)
+	detached, err := chromedp.Detached(ctx)
+	if err != nil {
+		return false
+	}
+	select {
+	case <-detached:
+		return true
+	default:
+		return false
+	}
 }
 
 // slowListenerThreshold is how long a listener may hold its target's messages before a debug-enabled

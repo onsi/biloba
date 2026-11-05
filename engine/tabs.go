@@ -80,7 +80,7 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 	// The probe runs unlocked.  Holding b.mu across it puts every other session on this worker -
 	// OpenSession, openTab, Close, Sessions, target reconciliation - behind a round trip to a target
 	// that may be mid-teardown.  listenToSession's own comment says as much from the other side.
-	attached, detachTab := newTabContext(b.ctx, targetID)
+	tabCtx, detachTab := newTabContext(b.ctx, targetID)
 	// Discarding a tab closes it if this attachment got as far as attaching, as chromedp did when it
 	// cancelled the context of a target it had attached (see newTabContext).  A popup whose attach did
 	// not get that far - the caller gave up first - is the page's, and stays open.
@@ -93,7 +93,7 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 			}
 		})
 	}
-	if !attachProbeSucceeds(ctx, attached, probe) {
+	if !attachProbeSucceeds(ctx, tabCtx, probe) {
 		cancelTab()
 		// A target that will not attach is skipped - it is almost always one Chrome is still
 		// reporting while it tears down.  The caller giving up is a different thing and stays an
@@ -102,11 +102,6 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 			return nil, contextError("attach tab", ctx.Err())
 		}
 		return nil, nil
-	}
-	tabCtx, err := trackFrameWorlds(attached)
-	if err != nil {
-		cancelTab()
-		return nil, contextError("attach tab", err)
 	}
 	// The target can close while it is being set up (a popup closing itself), and nothing answers a
 	// command sent to a session Chrome has detached.  removeDestroyedTarget only reaches a registered
@@ -129,7 +124,8 @@ func (b *Browser) sessionForTarget(ctx context.Context, targetID, openerID targe
 		cancelTab()
 		return nil, contextError("attach tab", err)
 	}
-	// (asking the connection too: a setup command its target took with it fails before the watch runs)
+	// (asking chromedp too: the watch calls onGone from a goroutine, which a setup command its target took
+	// with it can fail ahead of)
 	isGone := func() bool { return gone.Crashed() || TargetGone(tabCtx) }
 	skipGone := func() (*Session, error) {
 		cancelTab()

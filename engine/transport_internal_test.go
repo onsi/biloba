@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto"
-	jsonv2 "github.com/chromedp/cdproto/cdp/jsonv2"
 	"github.com/chromedp/cdproto/target"
 	ginkgo "github.com/onsi/ginkgo/v2"
 	gomega "github.com/onsi/gomega"
@@ -46,65 +45,6 @@ var _ = ginkgo.Describe("a connection's writes", ginkgo.Label("no-browser"), fun
 
 		conn.sendHeld(context.Background(), func() []*cdproto.Message { return held })
 		gomega.Expect(written()).To(gomega.Equal([]int64{1, 3, 2, 4}))
-	})
-})
-
-var _ = ginkgo.Describe("a session that detaches", ginkgo.Label("no-browser"), func() {
-	readAll := func(conn *connection) []cdproto.Message {
-		var got []cdproto.Message
-		for {
-			var msg cdproto.Message
-			if conn.Read(context.Background(), &msg) != nil {
-				return got
-			}
-			got = append(got, msg)
-		}
-	}
-
-	ginkgo.It("has a barrier between Chrome's own last answer and the detach", func() {
-		script := &scriptedConnection{}
-		conn := newConnection(script, nil)
-		answer := &cdproto.Message{ID: 7, SessionID: "S1", Result: jsonv2.Value(`{}`)}
-		detach := protocolEvent("", target.DetachedFromTarget.Method, `{"sessionId":"S1","targetId":"T1"}`)
-		later := &cdproto.Message{ID: 10, SessionID: "S2", Result: jsonv2.Value(`{}`)}
-		script.messages = []*cdproto.Message{answer, detach, later}
-		gomega.Expect(readAll(conn)).To(gomega.Equal([]cdproto.Message{
-			*answer,
-			{ID: barrierMessageID, SessionID: "S1", Result: jsonv2.Value(`{}`)},
-			*detach,
-			*later,
-		}), "chromedp's routing loop could otherwise take the detach ahead of the answer and drop the answer")
-	})
-
-	ginkgo.It("has no barrier for a session Chrome detaches under another, which chromedp does not drive", func() {
-		script := &scriptedConnection{}
-		conn := newConnection(script, nil)
-		nested := protocolEvent("S1", target.DetachedFromTarget.Method, `{"sessionId":"S2","targetId":"T2"}`)
-		script.messages = []*cdproto.Message{nested}
-		gomega.Expect(readAll(conn)).To(gomega.Equal([]cdproto.Message{*nested}))
-	})
-})
-
-var _ = ginkgo.Describe("the sessions a connection saw detach", ginkgo.Label("no-browser"), func() {
-	ginkgo.It("are remembered as the reader reads the detach, the most recent of them only", func() {
-		script := &scriptedConnection{}
-		conn := newConnection(script, nil)
-		for i := range rememberedDetachedSessions + 1 {
-			script.messages = append(script.messages, protocolEvent("", target.DetachedFromTarget.Method, `{"sessionId":"S`+jsonv2Int(i)+`","targetId":"T"}`))
-		}
-		// nested: a session Chrome auto-attached under another, which chromedp does not drive
-		script.messages = append(script.messages, protocolEvent("S1", target.DetachedFromTarget.Method, `{"sessionId":"NESTED","targetId":"T"}`))
-		for {
-			var msg cdproto.Message
-			if conn.Read(context.Background(), &msg) != nil {
-				break
-			}
-		}
-		gomega.Expect(conn.sessionDetached("S0")).To(gomega.BeFalse(), "the oldest is forgotten")
-		gomega.Expect(conn.sessionDetached("S1")).To(gomega.BeTrue())
-		gomega.Expect(conn.sessionDetached(target.SessionID("S" + jsonv2Int(rememberedDetachedSessions)))).To(gomega.BeTrue())
-		gomega.Expect(conn.sessionDetached("NESTED")).To(gomega.BeFalse())
-		gomega.Expect(conn.detached).To(gomega.HaveLen(rememberedDetachedSessions))
 	})
 })
 

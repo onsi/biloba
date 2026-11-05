@@ -24,10 +24,12 @@ frameWorlds is the frame-world registry of one session: the page JavaScript cont
 document, as the session announces them.  It belongs to the renderer attachment, not to any one frame
 handle.
 
-A listener on the session's target keeps it, so the session's other listeners see it as of the event
-they are handed.  connection.worldsFor registers that listener and seeds the registry with the
-contexts the target announced while chromedp attached it, so nothing asks Chrome to announce them
-again.
+newTabContext makes one for each chromedp context it makes, gives chromedp its apply as the context's
+first listener (chromedp.WithListener), and puts it on the context.  chromedp registers apply before
+it sends the target its first command, so the registry sees the contexts the target already had,
+which Chrome announces in reply to chromedp's Runtime.enable, and nothing asks Chrome to announce them
+again.  Being the first listener, it is up to date with the event each of the session's other
+listeners is handed.  It lives as long as the context that holds it.
 */
 type frameWorlds struct {
 	mu      sync.RWMutex
@@ -38,27 +40,8 @@ func newFrameWorlds() *frameWorlds {
 	return &frameWorlds{byFrame: map[cdp.FrameID]frameWorld{}}
 }
 
-// frameWorldEvent reports whether a method changes the frame-world registry.
-func frameWorldEvent(method string) bool {
-	switch method {
-	case runtime.ExecutionContextCreated.Method, runtime.ExecutionContextDestroyed.Method, runtime.ExecutionContextsCleared.Method:
-		return true
-	}
-	return false
-}
-
 // apply is the registry's listener.
 func (w *frameWorlds) apply(ev any) {
-	switch ev.(type) {
-	case *runtime.EventExecutionContextCreated, *runtime.EventExecutionContextDestroyed, *runtime.EventExecutionContextsCleared:
-		w.mu.Lock()
-		defer w.mu.Unlock()
-		applyFrameWorldEvent(w.byFrame, ev)
-	}
-}
-
-// applyFrameWorldEvent applies one context event to a registry's frames.
-func applyFrameWorldEvent(byFrame map[cdp.FrameID]frameWorld, ev any) {
 	switch ev := ev.(type) {
 	case *runtime.EventExecutionContextCreated:
 		if ev.Context == nil {
@@ -72,46 +55,35 @@ func applyFrameWorldEvent(byFrame map[cdp.FrameID]frameWorld, ev any) {
 			return
 		}
 		if aux.IsDefault && aux.FrameID != "" {
-			byFrame[aux.FrameID] = frameWorld{id: ev.Context.ID, uniqueID: ev.Context.UniqueID}
+			w.mu.Lock()
+			defer w.mu.Unlock()
+			w.byFrame[aux.FrameID] = frameWorld{id: ev.Context.ID, uniqueID: ev.Context.UniqueID}
 		}
 	case *runtime.EventExecutionContextDestroyed:
-		for id, world := range byFrame {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		for id, world := range w.byFrame {
 			if world.uniqueID == ev.ExecutionContextUniqueID {
-				delete(byFrame, id)
+				delete(w.byFrame, id)
 			}
 		}
 	case *runtime.EventExecutionContextsCleared:
-		clear(byFrame)
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		clear(w.byFrame)
 	}
-}
-
-// trackFrameWorlds gives an attached target's context its session's frame-world registry (see
-// connection.worldsFor).  It sends no command.  Call it after the first Run on ctx, on the goroutine
-// that ran it or after it, since that Run sets the context's target.
-func trackFrameWorlds(ctx context.Context) (context.Context, error) {
-	conn, c, err := connectionFor(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if c.Target == nil {
-		return nil, errors.New("tracking frame worlds needs an attached target: run the context once first")
-	}
-	worlds, err := conn.worldsFor(ctx, c.Target.SessionID)
-	if err != nil {
-		return nil, err
-	}
-	return context.WithValue(ctx, frameWorldsKey{}, worlds), nil
 }
 
 func mainFrameWorld(ctx context.Context, id cdp.FrameID) (frameWorld, error) {
 	worlds, _ := ctx.Value(frameWorldsKey{}).(*frameWorlds)
-	if worlds != nil {
-		worlds.mu.RLock()
-		world, found := worlds.byFrame[id]
-		worlds.mu.RUnlock()
-		if found && world.id != 0 && world.uniqueID != "" {
-			return world, nil
-		}
+	if worlds == nil {
+		return frameWorld{}, &Error{Code: CodeInvalidArgument, Operation: "attach frame", Message: "the context has no frame-world registry: its target was not attached through NewTabContext"}
+	}
+	worlds.mu.RLock()
+	world, found := worlds.byFrame[id]
+	worlds.mu.RUnlock()
+	if found && world.id != 0 && world.uniqueID != "" {
+		return world, nil
 	}
 	// Creation/navigation can briefly expose a frame before its context exists.
 	// Never fall back to the target's default context, which could be the parent.

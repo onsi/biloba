@@ -392,7 +392,7 @@ func (b *Browser) openTabLocked(ctx, opCtx context.Context, browserContextID cdp
 		return nil, contextError("open tab", err)
 	}
 	targetID := opened.TargetID
-	attached, detachTab := newTabContext(b.ctx, targetID)
+	tabCtx, detachTab := newTabContext(b.ctx, targetID)
 	// A tab that fails to come up is closed, as it was when chromedp closed the targets of the
 	// contexts it cancelled.
 	cancelTab := func() {
@@ -403,7 +403,7 @@ func (b *Browser) openTabLocked(ctx, opCtx context.Context, browserContextID cdp
 	go func() {
 		// The first Run owns chromedp's target executor for the session lifetime. It must use the
 		// persistent tab context; binding it to a request deadline tears the executor down afterward.
-		attachDone <- chromedp.Do(attached, chromedp.Evaluate[chromedp.Void]("1"))
+		attachDone <- chromedp.Do(tabCtx, chromedp.Evaluate[chromedp.Void]("1"))
 	}()
 	select {
 	case err = <-attachDone:
@@ -411,11 +411,6 @@ func (b *Browser) openTabLocked(ctx, opCtx context.Context, browserContextID cdp
 		cancelTab()
 		err = ctx.Err()
 	}
-	if err != nil {
-		cancelTab()
-		return nil, contextError("open tab", err)
-	}
-	tabCtx, err := trackFrameWorlds(attached)
 	if err != nil {
 		cancelTab()
 		return nil, contextError("open tab", err)
@@ -580,8 +575,14 @@ func (b *Browser) listenToFrameDocument(session *Session) error {
 // newTabContext is a chromedp context for targetID that detaches from the target when it is
 // cancelled but leaves the target open.  Biloba closes the targets it owns itself: since v0.21
 // chromedp follows its own Target.closeTarget by polling Target.getTargets until the target is gone.
+//
+// The context carries the session's frame-world registry, which follows the target's JavaScript
+// contexts from the target's first message (see frameWorlds), so frames can be scoped in any context
+// that descends from it once its first Run has attached the target.
 func newTabContext(parent context.Context, targetID target.ID) (context.Context, context.CancelFunc) {
-	return chromedp.NewContext(parent, chromedp.WithTargetID(targetID), chromedp.WithDetachOnCancel())
+	worlds := newFrameWorlds()
+	ctx, cancel := chromedp.NewContext(parent, chromedp.WithTargetID(targetID), chromedp.WithDetachOnCancel(), chromedp.WithListener(worlds.apply))
+	return context.WithValue(ctx, frameWorldsKey{}, worlds), cancel
 }
 
 // BrowserLost reports whether the connection to the browser behind ctx is gone.  It is the dependable
@@ -602,6 +603,7 @@ func BrowserLost(ctx context.Context) bool {
 
 // NewTabContext is newTabContext for the Go client's tabs: a chromedp context attached to targetID
 // whose cancellation detaches from the target and leaves it open (close it with CloseTargetContext).
+// It carries the frame-world registry ScopeToFrameContext looks frames up in.
 func NewTabContext(parent context.Context, targetID target.ID) (context.Context, context.CancelFunc) {
 	return newTabContext(parent, targetID)
 }

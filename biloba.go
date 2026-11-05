@@ -800,17 +800,6 @@ func (b *Biloba) bootstrapIsolatedTab(allocatorContext context.Context, bootstra
 			lastErr = err
 			continue
 		}
-		// Frame handles look their documents up in this registry, which the engine has kept since the
-		// tab's session sent its first message (see engine.TrackFrameWorlds).
-		tracked, err := engine.TrackFrameWorlds(tabCtx)
-		if err != nil {
-			cancelTab()
-			cancelBootstrap()
-			lastErr = err
-			continue
-		}
-		b.Context = tracked
-
 		// success - keep the bootstrap connection and isolated tab alive for the life of the spec
 		// (LIFO cleanup: tab detaches first, then the bootstrap connection tears down)
 		b.gt.DeferCleanup(cancelBootstrap)
@@ -1619,7 +1608,8 @@ func newIsolatedBrowserContextAndTarget(ctx context.Context) (cdp.BrowserContext
 // or with its parent, as a spawned tab's does when the tab that opened it closes - it detaches and
 // then closes the target, the pair chromedp's own cancellation sent before v0.21 (which now follows
 // its close by polling Target.getTargets; Close and Prepare do their own waiting, see
-// waitUntilTargetGone).
+// waitUntilTargetGone).  The context carries the tab's frame-world registry, which frame handles look
+// their documents up in (see engine.NewTabContext).
 //
 // probe, when not nil, decides whether the target is this context's to close: a popup is closed only
 // if one of the probe's attempts got as far as attaching it, as chromedp's own cancellation did.  A
@@ -1711,13 +1701,6 @@ func (b *Biloba) registerTabFor(targetID target.ID, parent context.Context, crea
 		cancel()
 		return nil
 	}
-	// frame handles look the tab's documents up in its frame-world registry (see bootstrapIsolatedTab)
-	tracked, err := engine.TrackFrameWorlds(c)
-	if err != nil {
-		cancel()
-		return nil
-	}
-	newG.Context = tracked
 	newG.targetID = chromedp.FromContext(newG.Context).Target.TargetID
 
 	// The tab can close while it is set up (a popup closing itself), and nothing answers a command sent
@@ -1730,7 +1713,7 @@ func (b *Biloba) registerTabFor(targetID target.ID, parent context.Context, crea
 		return nil
 	}
 	var browserContextID cdp.BrowserContextID
-	err = newG.retryTransientCDP(func() error {
+	err := newG.retryTransientCDP(func() error {
 		return newG.runEngine("look up the tab's browser context", func(ctx context.Context) error {
 			var infoErr error
 			browserContextID, infoErr = engine.TargetBrowserContextContext(ctx)

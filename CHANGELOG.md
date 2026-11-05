@@ -1,10 +1,15 @@
 ## Unreleased
 
+### Breaking Changes
+
+- Go: Biloba requires chromedp v0.23.0 or later.
+- `engine.TrackFrameWorlds` is gone: a context from `engine.NewTabContext` already tracks its frames' JavaScript contexts.
+
 ### Features
 
 ### Fixes
 
-- Go: Biloba now uses chromedp v0.22.1, which ends a command still waiting on a tab that closes, so Biloba no longer does this itself. Code that drops to chromedp gets an error wrapping `chromedp.ErrTargetDetached` in that case.
+- Go: Biloba now uses chromedp v0.23.0, which ends a command still waiting on a tab that closes and reports the close only after the tab has handled every message Chrome sent before it, so Biloba no longer does either itself. Code that drops to chromedp gets an error wrapping `chromedp.ErrTargetDetached` in that case, and can wait for the close with `chromedp.Detached`.
 
 ## 0.22.0
 

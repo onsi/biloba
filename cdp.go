@@ -265,9 +265,11 @@ func (b *Biloba) destroyedSignal() *engine.CrashSignal {
 	return b.destroyed
 }
 
-// targetGone reports whether Chrome has detached this tab, as soon as the connection has read it
-// (engine.TargetGone), which can be before the tab's own listener has marked destroyed: a command
-// whose answer the target took with it fails just ahead of that listener.  It marks destroyed then.
+// targetGone reports whether Chrome has detached this tab (engine.TargetGone: chromedp marks the detach
+// once the tab has handled every message Chrome sent before it, and before it fails a command still
+// waiting), which can be before the tab's watch has marked destroyed: the watch runs on a goroutine of
+// its own, and a command whose answer the target took with it can fail just ahead of it.  It marks
+// destroyed then.
 // A frame handle asks about its tab: an out-of-process frame's own target is the frame's to report.
 func (b *Biloba) targetGone() bool {
 	destroyed := b.destroyedSignal()

@@ -20,19 +20,12 @@ import (
 // runner calls them for its frame handles. Each takes a ctx scoped to the frame by ScopeToFrameContext,
 // since the frame-local measurements they need run as JavaScript in the frame's document.
 
-// TrackFrameWorlds gives ctx the frame-world registry of the target it is attached to: each frame
-// document's page JavaScript context, which is what ScopeToFrameContext looks frames up in.  The event
-// hub has kept it since the target's session sent its first message, so it sends no command.  Call it
-// once ctx's first Run has attached the target.
-func TrackFrameWorlds(ctx context.Context) (context.Context, error) {
-	return trackFrameWorlds(ctx)
-}
-
 // ScopeToFrameContext pins JavaScript evaluation in ctx (EvaluateContext, RunHandlerContext, and the
-// helpers built on them) to frameID's current document. ctx must descend from a context passed to
-// TrackFrameWorlds. Evaluation is pinned to the document rather than the frame: once the iframe is
-// removed or navigated, evaluation fails and FrameContextGone reports it, rather than quietly running
-// in whatever document replaced it.
+// helpers built on them) to frameID's current document. ctx must descend from a context made by
+// NewTabContext (or AttachFrameTargetContext), which carries the registry of each frame document's
+// page JavaScript context that frames are looked up in. Evaluation is pinned to the document rather
+// than the frame: once the iframe is removed or navigated, evaluation fails and FrameContextGone
+// reports it, rather than quietly running in whatever document replaced it.
 func ScopeToFrameContext(ctx context.Context, frameID cdp.FrameID) (context.Context, error) {
 	world, err := mainFrameWorld(ctx, frameID)
 	if err != nil {

@@ -593,7 +593,7 @@ _, err := chromedp.Call(ctx, emulation.SetCPUThrottlingRate, emulation.SetCPUThr
 
 Derive it from `b.Context` (not `context.Background()`) so chromedp's session for this tab stays in the chain.
 
-Biloba uses chromedp v0.22 and cdproto v0.159.  chromedp changed its API in v0.17, so escape-hatch code written against earlier versions needs updating.  The common patterns, old and new (chromedp's [migration guide](https://github.com/chromedp/chromedp/blob/main/docs/MIGRATION.md) has the rest):
+Biloba uses chromedp v0.23 and cdproto v0.159.  chromedp changed its API in v0.17, so escape-hatch code written against earlier versions needs updating.  The common patterns, old and new (chromedp's [migration guide](https://github.com/chromedp/chromedp/blob/main/docs/MIGRATION.md) has the rest):
 
 - `chromedp.Run(b.Context, actions...)` becomes `chromedp.Do(b.Context, actions...)`.  `chromedp.Run` now runs one action and returns its value: `title, err := chromedp.Run(b.Context, chromedp.Title())`.
 - A command is a value, not a function: `page.Navigate(url).Do(ctx)` becomes `chromedp.Call(b.Context, page.Navigate, page.NavigateParams{URL: url})`, which returns the result struct.  The `With...` setters are gone; set the params fields, and an optional field is a pointer (`new(true)`).

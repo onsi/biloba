@@ -17,8 +17,8 @@ import (
 	"github.com/onsi/biloba/engine"
 )
 
-// The frame-world registry a frame handle looks its document up in starts from what the connection
-// recorded from the session's first message, so attaching a tab costs no extra commands.
+// The frame-world registry a frame handle looks its document up in sees the session's events from its
+// first message (chromedp.WithListener), so attaching a tab costs no extra commands.
 var _ = Describe("frame-world registries", func() {
 	var root *engine.Session
 	var rootCtx context.Context
@@ -143,10 +143,6 @@ var _ = Describe("frame-world registries", func() {
 		DeferCleanup(detachSecond)
 		Eventually(firstDone).Should(Receive(BeNil()))
 		Eventually(secondDone).Should(Receive(BeNil()))
-		first, err = engine.TrackFrameWorlds(first)
-		Expect(err).NotTo(HaveOccurred())
-		second, err = engine.TrackFrameWorlds(second)
-		Expect(err).NotTo(HaveOccurred())
 		firstSession := chromedp.FromContext(first).Target.SessionID
 		Expect(chromedp.FromContext(second).Target.SessionID).NotTo(Equal(firstSession), "each attach is a session of its own")
 
@@ -157,41 +153,13 @@ var _ = Describe("frame-world registries", func() {
 		Expect(secondWorld).To(Equal(firstWorld), "both sessions name the same document")
 
 		detachFirst()
-		Eventually(func() bool { return engine.HasFrameWorldsForTest(root, firstSession) }).Should(BeFalse(), "a detached session's registry goes with it")
 		secondWorld, err = engine.FrameWorldForTest(second, frame.FrameID())
 		Expect(err).NotTo(HaveOccurred(), "the other attach keeps its registry")
 		Expect(secondWorld).To(Equal(firstWorld))
-	})
-
-	It("leaves no registry behind for an attach the caller gave up on", func(ctx SpecContext) {
-		created, err := chromedp.CallBrowser(rootCtx, target.CreateTarget, target.CreateTargetParams{
-			URL: "about:blank", BrowserContextID: engine.SessionBrowserContextForTest(root), NewWindow: new(true),
-		})
+		scoped, err := engine.ScopeToFrameContext(second, frame.FrameID())
 		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(func() { _ = engine.CloseTargetContext(rootCtx, created.TargetID) })
-		stalled, held, release, err := engine.StallAttachForTest(ctx, root, created.TargetID)
-		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(release)
-
-		gaveUp, cancel := context.WithCancel(ctx)
-		recordedWhileStalled := make(chan bool, 1)
-		go func() {
-			select {
-			case <-stalled:
-				recordedWhileStalled <- engine.HasFrameWorldsForTest(root, held())
-			case <-ctx.Done():
-			}
-			cancel()
-		}()
-		tab, err := engine.AttachSpawnedTabForTest(gaveUp, root, created.TargetID)
-		Expect(tab).To(BeNil())
-		Expect(err).To(HaveOccurred())
-		Expect(stalled).To(BeClosed(), "the attach got through and had a session")
-		Expect(recordedWhileStalled).To(Receive(BeTrue()), "the attach had Chrome announce the tab's contexts before it stalled")
-		release()
-
-		session := held()
-		Expect(session).NotTo(BeEmpty())
-		Eventually(func() bool { return engine.HasFrameWorldsForTest(root, session) }).Should(BeFalse())
+		var value string
+		Expect(engine.EvaluateContext(scoped, "window.frameValue", false, &value)).To(Succeed())
+		Expect(value).To(Equal("page-window"), "and evaluates in the frame's document through it")
 	})
 })

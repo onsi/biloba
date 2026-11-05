@@ -342,20 +342,7 @@ func LoseCommandOnTargetForTest(ctx context.Context, root *Session, targetID tar
 	}, nil
 }
 
-// HasFrameWorldsForTest reports whether root's connection still keeps a frame-world record for
-// session.
-func HasFrameWorldsForTest(root *Session, session target.SessionID) bool {
-	conn, _, err := connectionFor(root.ctx)
-	if err != nil {
-		return false
-	}
-	conn.mu.Lock()
-	defer conn.mu.Unlock()
-	_, ok := conn.sessions[session]
-	return ok
-}
-
-// FrameWorldForTest is the unique id of frameID's page world in the registry ctx was tracked with.
+// FrameWorldForTest is the unique id of frameID's page world in the registry ctx carries.
 func FrameWorldForTest(ctx context.Context, frameID cdp.FrameID) (string, error) {
 	world, err := mainFrameWorld(ctx, frameID)
 	return world.uniqueID, err

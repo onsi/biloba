@@ -213,6 +213,54 @@ var _ = Describe("a command whose target goes away before Chrome answers it", fu
 	})
 })
 
+var _ = Describe("watching a target go away", func() {
+	It("tells a watch of the target's detach, once, whether it came after the watch or before it", func(ctx SpecContext) {
+		session, err := browser.OpenSession(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(session.Close)
+		sessionCtx := engine.SessionContextForTest(session)
+		created, err := chromedp.CallBrowser(sessionCtx, target.CreateTarget, target.CreateTargetParams{
+			URL: "about:blank", BrowserContextID: engine.SessionBrowserContextForTest(session), NewWindow: new(true),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		attached, detach := engine.NewTabContext(sessionCtx, created.TargetID)
+		DeferCleanup(detach)
+		Expect(engine.TargetGone(attached)).To(BeFalse(), "a context not attached yet is not gone")
+		Expect(chromedp.FromContext(attached).Target).To(BeNil(), "and asking does not attach it")
+		Expect(chromedp.Do(attached, chromedp.Evaluate[chromedp.Void]("1"))).To(Succeed())
+		Expect(engine.TargetGone(attached)).To(BeFalse())
+
+		var lock sync.Mutex
+		calls := map[string]int{}
+		watch := func(name string) {
+			Expect(engine.WatchTargetGone(attached, func() {
+				lock.Lock()
+				defer lock.Unlock()
+				calls[name]++
+			})).To(Succeed())
+		}
+		count := func(name string) func() int {
+			return func() int {
+				lock.Lock()
+				defer lock.Unlock()
+				return calls[name]
+			}
+		}
+		watch("before")
+		Consistently(count("before"), 100*time.Millisecond).Should(BeZero())
+
+		Expect(engine.CloseTargetContext(sessionCtx, created.TargetID)).To(Succeed())
+		Eventually(func() bool { return engine.TargetGone(attached) }).WithTimeout(5 * time.Second).Should(BeTrue())
+		Eventually(count("before")).Should(Equal(1))
+		_, err = chromedp.Run(attached, chromedp.Evaluate[chromedp.Void]("1"))
+		Expect(err).To(MatchError(chromedp.ErrTargetDetached), "a command on the detached target fails at once")
+
+		watch("after")
+		Eventually(count("after")).Should(Equal(1), "a watch of a target that already went is told too")
+		Consistently(func() []int { return []int{count("before")(), count("after")()} }, 100*time.Millisecond).Should(Equal([]int{1, 1}))
+	})
+})
+
 var _ = Describe("event listeners on an allocator's connections", func() {
 	It("keep a connection's listeners when another connection from the same allocator goes away", func() {
 		// A retried bootstrap is the case: one allocator, a first connection given up on, a second kept.
