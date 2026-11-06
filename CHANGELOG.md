@@ -1,11 +1,15 @@
 ## Unreleased
 
+### Features
+
+### Fixes
+
+## 0.23.0
+
 ### Breaking Changes
 
 - Go: Biloba requires chromedp v0.23.0 or later.
 - `engine.TrackFrameWorlds` is gone: a context from `engine.NewTabContext` already tracks its frames' JavaScript contexts.
-
-### Features
 
 ### Fixes
 
