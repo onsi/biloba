@@ -57,5 +57,6 @@ Install `installBilobaVitestHooks` from `biloba/vitest` in a Vitest setup file. 
 - A timed-out `expectNetworkIdle()` names each request still in flight (method, URL, resource type, age). The one that never finishes is usually a long poll, a stream, or a request the app abandoned. A request of a page that has navigated away no longer counts.
 - Pass `debugLog` to `connect` for bounded structured daemon/CDP records.
 - Configure screenshots, outlines, artifact paths, inline output, viewport, byte limits, and trajectories under `diagnostics`.
+- A page that reacts late to `scrollIntoView()`: the call returns once the page has scrolled, but the page's `scroll` handlers run in its next frame, and under load Chrome can hold a tab to about one frame a second. Wait on what the page does in response, with a timeout that allows for a second or more.
 
 Preventing recurrence → `biloba-vitest:flaky-tests`. Visual mismatch details → `biloba-vitest:visual-assertions`. Docs: <https://onsi.github.io/biloba/vitest.html#when-something-fails>.
