@@ -322,7 +322,7 @@ Eventually(b.Run).WithArguments(`isReady()`).Should(BeTrue())
 Eventually(b.Run).WithArguments(`document.querySelectorAll(".card").length`).Should(BeNumerically("==", 3))
 ```
 
-For an interpolated/multi-line expr, pre-build the string (`expr := fmt.Sprintf(...)`) or poll a closure returning the decoded value.
+For an interpolated/multi-line expr, pre-build the string (`expr := fmt.Sprintf(...)`) or poll a closure returning the decoded value. **A poll that spans a navigation** (a click that loads a new page, say) polls `b.RunErr` instead: `b.Run` fails the spec on any error, including the transient `Inspected target navigated or closed`, while `Eventually(b.RunErr).WithArguments(expr)` retries it.
 
 **Don't hand-roll `getBoundingClientRect`/`scrollTop` through `b.Run`** — the geometry getters (`b.GetBoundingBox`/`GetScrollOffset`/`GetOffsetTopWithin` + `Have*` matchers) wait for layout before reading; relational layout has the pairwise matchers and `b.GetGapBetween`; on-screen-ness `b.BeInViewport()`; document order `b.BePrecededBy`/`BeFollowedBy`; computed style `b.GetComputedStyle`. → `api`
 

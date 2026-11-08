@@ -47,7 +47,7 @@ Eventually(b.Run).WithArguments(`document.querySelector("#card").getBoundingClie
     Should(BeNumerically("~", 40, 1))   // JSON numbers decode to float64 — never Equal(intLiteral)
 ```
 
-`WithArguments` needs a pre-built string. For an interpolated or multi-line expr, build it first (`expr := fmt.Sprintf(...)`) or poll a closure that returns the decoded value.
+`WithArguments` needs a pre-built string. For an interpolated or multi-line expr, build it first (`expr := fmt.Sprintf(...)`) or poll a closure that returns the decoded value. **A poll that spans a navigation** (a click that loads a new page, say) polls `b.RunErr` instead: `b.Run` fails the spec on any error, including the transient `Inspected target navigated or closed`, while `Eventually(b.RunErr).WithArguments(expr)` retries it.
 
 **Grep detector.** Anchor on the *decode target*, not on `b.Run(` — multi-line scripts put `, &x)` lines away from the call and slip the obvious regex:
 
@@ -86,6 +86,8 @@ b.Click("#go")                                // polls until clickable, clicks o
 b.WithTimeout(5*time.Second).Click("#go")     // tune the wait
 Eventually("#out").Should(b.HaveClass("open"))// assert the observable outcome
 ```
+
+**Exists isn't interactive.** A page that hydrates (React, Astro islands, anything that renders server HTML first) shows a clickable button before its handlers are attached, so an early click lands on dead HTML. A component that reads state after mounting (auth, say) first renders a default twin with the same label. Wait on a marker the app sets when it's ready (a `data-ready` from the mount effect, or a state-specific attribute), not on the element or its text.
 
 The matcher form (`Eventually(sel).Should(b.Click())`) is for when you want to own the poll (custom `Consistently`, `.And()` composition). It dispatches once on first success and never re-fires, so it's safe on a toggle.
 
@@ -353,10 +355,11 @@ clock.RunFor(300 * time.Millisecond)   // the debounce fires now, deterministica
 Ω(b.GetInnerText("#status")).Should(Equal("saved"))
 ```
 
-`RunFor` runs every due timer and animation frame in order with promise callbacks in between, then returns; `FastForward` jumps and fires each due timer once. Two traps:
+`RunFor` runs every due timer and animation frame in order with promise callbacks in between, then returns; `FastForward` jumps and fires each due timer once. Three traps:
 
 - **Polling does not move a paused clock.** Biloba runs on real time; the page doesn't. An `Eventually` waiting for a timer-driven change times out, and the failure ends with `This tab's page clock is paused at <t>; timers and animation frames won't run until you call RunFor, FastForward, or Resume.` (for your own `Eventually`, it's the "Page clock paused" report entry). Advance the clock, then assert.
 - **Installed after `Navigate`, the clock misses timers the page already scheduled** — those keep running on real time. Install first.
+- **`InstallClock` alone doesn't stop time.** It flows from `t0` at the real rate, so a chain of timers can finish before your first `Eventually` looks. `PauseAt` right after installing, as above, then step with `RunFor`.
 
 CSS animations and transitions aren't on the clock (the screenshot freeze handles those); frames in another process (full Chrome's cross-site iframes) run on real time.
 
