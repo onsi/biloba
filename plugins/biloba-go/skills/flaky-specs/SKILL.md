@@ -361,5 +361,7 @@ clock.RunFor(300 * time.Millisecond)   // the debounce fires now, deterministica
 - **Installed after `Navigate`, the clock misses timers the page already scheduled** — those keep running on real time. Install first.
 - **`InstallClock` alone doesn't stop time.** It flows from `t0` at the real rate, so a chain of timers can finish before your first `Eventually` looks. `PauseAt` right after installing, as above, then step with `RunFor`.
 
+**A trailing debounce never fires on a page that never goes quiet.** An observer behind `clearTimeout(t); t = setTimeout(sync, 120)` is reset by every DOM change, so on a page that streams or animates (a live feed, a ticker) the derived UI never updates and the poll times out. Whether a quiet gap appears depends on load, so the spec can pass alone and fail in every full run. It's a product bug: throttle instead (`if (!t) t = setTimeout(() => { t = 0; sync() }, 120)`), and add a spec that churns the DOM while it acts.
+
 CSS animations and transitions aren't on the clock (the screenshot freeze handles those); frames in another process (full Chrome's cross-site iframes) run on real time.
 
