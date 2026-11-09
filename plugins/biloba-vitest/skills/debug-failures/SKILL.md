@@ -58,5 +58,6 @@ Install `installBilobaVitestHooks` from `biloba/vitest` in a Vitest setup file. 
 - Pass `debugLog` to `connect` for bounded structured daemon/CDP records.
 - Configure screenshots, outlines, artifact paths, inline output, viewport, byte limits, and trajectories under `diagnostics`.
 - A page that reacts late to `scrollIntoView()`: the call returns once the page has scrolled, but the page's `scroll` handlers run in its next frame, and under load Chrome can hold a tab to about one frame a second. Wait on what the page does in response, with a timeout that allows for a second or more.
+- Hover-only styling that passes locally and fails on CI: Chrome takes `(hover: …)` and `(pointer: …)` from the machine's input devices, and a CI runner with no mouse can report `(hover: none)`. Media emulation can't change them. Pin a mouse at launch with `startSharedBrowser({chromeArgs: ["--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4"]})`, and test the no-hover layout with `setDeviceMetrics({..., touch: true})`.
 
 Preventing recurrence → `biloba-vitest:flaky-tests`. Visual mismatch details → `biloba-vitest:visual-assertions`. Docs: <https://onsi.github.io/biloba/vitest.html#when-something-fails>.

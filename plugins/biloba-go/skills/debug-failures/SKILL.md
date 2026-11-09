@@ -169,11 +169,12 @@ Keep the `?? null` so a crashed page doesn't turn the snapshot itself into a fai
 
 **Page `console.*` streams to the `GinkgoWriter`**, each argument rendered space-separated, and so do uncaught page errors (in red, with their stack). `b.AllConsoleMessages()`/`b.AllPageErrors()` hand you the same as data. Objects come from CDP's **shallow** preview, so nested/large objects log lossily. Build the string yourself when you need the whole value: `console.log('state ' + JSON.stringify(obj))`.
 
-## Three headless quirks that look like Biloba bugs
+## Four headless quirks that look like Biloba bugs
 
 - **`HaveInnerText`/`GetInnerText` timing out on text that's plainly in the outline.** `innerText` is computed from layout and can return a stale/partial value before a paint settles. Switch to `HaveTextContent`/`GetTextContent` (reads `textContent` off the tree) or to a plain existence assertion.
 - **`requestAnimationFrame` never firing.** On a **fully static page**, `chrome-headless-shell` can leave rAF unscheduled after the first scroll (nothing animating ⇒ no frames), wedging app code driven off an rAF loop. Shape: a hang/timeout only in the default headless lane. Confirm with a counter read through a **coalescing `b.Run`** — `b.Run("window.__rafTicks ?? 0")`, **not** `b.GetJSValue`, which would sit waiting for a counter that never appears. Fix: drive the work off a real event, or run that spec under `HighFidelityHeadless()`/`BILOBA_INTERACTIVE=true`.
 - **A scroll the page reacts to late.** `b.ScrollIntoView` returns once the page has scrolled, but the page's `scroll` handlers run in its next frame, and under load Chrome can hold a tab to about one frame a second. Wait on what the page does in response, with a timeout that allows for a second or more, not on a fixed delay after the scroll.
+- **Hover-only styling that passes locally and fails on CI.** Chrome takes `(hover: …)` and `(pointer: …)` from the machine's input devices, and a CI runner with no mouse can report `(hover: none)`. `SetMedia` can't change them. Pin a mouse at launch with `biloba.ChromeFlags(chromedp.Flag("blink-settings", "primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4"))`, and test the no-hover layout with `b.TouchScreen()`.
 
 ## Env vars
 
